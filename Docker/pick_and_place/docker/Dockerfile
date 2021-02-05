@@ -12,6 +12,7 @@ COPY ./ROS/src/niryo_moveit $ROS_WORKSPACE/src/niryo_moveit
 COPY ./ROS/src/niryo_one_ros $ROS_WORKSPACE/src/niryo_one_ros
 COPY ./ROS/src/niryo_one_urdf $ROS_WORKSPACE/src/niryo_one_urdf
 COPY ./ROS/src/ros_tcp_endpoint $ROS_WORKSPACE/src/ros_tcp_endpoint
+COPY ./ROS/src/start.sh $ROS_WORKSPACE/src/start.sh
 
 COPY ./docker/set-up-workspace /setup.sh
 COPY docker/tutorial /
