@@ -230,4 +230,9 @@ public class TrajectoryPlanner : MonoBehaviour
         rightGripper = rightGripperGameObject.GetComponent<ArticulationBody>();
         leftGripper = leftGripperGameObject.GetComponent<ArticulationBody>();
     }
+
+    public void ResetScene()
+    {
+        Application.LoadLevel(Application.loadedLevel);
+    }
 }
