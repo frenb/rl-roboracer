@@ -1,8 +1,8 @@
-FROM ros:melodic-ros-base
+FROM ros:noetic-ros-base
 
-RUN sudo apt-get update && sudo apt-get install -y vim iputils-ping net-tools python-pip ros-melodic-robot-state-publisher ros-melodic-moveit ros-melodic-rosbridge-suite ros-melodic-joy ros-melodic-ros-control ros-melodic-ros-controllers ros-melodic-tf2-web-republisher dos2unix
-
-RUN sudo -H pip install rospkg jsonpickle
+RUN sudo apt-get update && sudo apt-get install -y vim iputils-ping net-tools python3-pip ros-noetic-robot-state-publisher ros-noetic-moveit ros-noetic-rosbridge-suite ros-noetic-joy ros-noetic-ros-control ros-noetic-ros-controllers dos2unix
+RUN sudo -H pip3 install rospkg jsonpickle
+RUN sudo ln -s /usr/bin/python3 /usr/bin/python
 
 ENV ROS_WORKSPACE=/catkin_ws
 
