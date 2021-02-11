@@ -33,6 +33,7 @@ catkin_install_python(PROGRAMS
   scripts/mover.py
   scripts/server_endpoint.py
   scripts/trajectory_subscriber.py
+  scripts/remote_logic.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
