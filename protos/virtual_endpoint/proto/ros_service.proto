@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package virtual_endpoint;
+
+message SubscribeRequest {
+ string topic = 1;
+ string msg_type = 2;
+}
+
+message TopicMessage {
+  string data = 1;
+}
+
+service RosNode {
+  rpc Subscribe(SubscribeRequest) returns (stream TopicMessage);
+}
