@@ -7,6 +7,7 @@ import rospy
 import sys
 import copy
 import math
+import asyncio
 import moveit_commander
 
 import moveit_msgs.msg
@@ -20,17 +21,14 @@ from std_msgs.msg import String
 from moveit_commander.conversions import pose_to_list
 
 from niryo_moveit.srv import MoverService, MoverServiceRequest, MoverServiceResponse
+from virtual_endpoint import VirtualNode
 
-def callback(scene_data):
-    rospy.loginfo(rospy.get_caller_id() + "I Logic Received:\n%s", scene_data)
-
-def logic():
+def remote_logic():
     rospy.loginfo(rospy.get_caller_id() + "I Logic Started")
-    rospy.init_node('logic', anonymous=True)
-    rospy.Subscriber("SceneData", SceneData, callback)
-
-    # spin() simply keeps python from exiting until this node is stopped
-    rospy.spin()
+    rospy.init_node('remote_logic', anonymous=True)
+    v_node = VirtualNode()
+    v_node.register_msg_type('niryo_moveit/SceneData', SceneData)
+    asyncio.run(v_node.main())
 
 if __name__ == "__main__":
-    logic()
+    remote_logic()

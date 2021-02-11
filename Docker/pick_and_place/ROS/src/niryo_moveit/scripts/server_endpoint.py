@@ -15,7 +15,7 @@ def main():
     # Start the Server Endpoint with a ROS communication objects dictionary for routing messages
     tcp_server.start({
         'SourceDestination_input': RosPublisher('SourceDestination', NiryoMoveitJoints, queue_size=10),
-        'SceneData_input': RosPublisher('SceneData', SceneData, queue_size=10),
+        'SceneData_input': RosPublisher('scene_data', SceneData, queue_size=10),
         'NiryoTrajectory': RosSubscriber('NiryoTrajectory', NiryoTrajectory, tcp_server),
         'niryo_moveit': RosService('niryo_moveit', MoverService),
     })
