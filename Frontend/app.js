@@ -11,7 +11,7 @@ var messages = require('./proto/virtual_endpoint/proto/ros_service_pb');
 var indexRouter = require('./routes/index');
 var usersRouter = require('./routes/users');
 
-// Set up connection to container
+// Subscribe to scene data topic and print streaming scene data to console.
 var client = new services.RosNodeClient('localhost:50051',grpc.credentials.createInsecure());
 var subscribeRequest = new messages.SubscribeRequest();
 subscribeRequest.setTopic('scene_data');
