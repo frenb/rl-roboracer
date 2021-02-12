@@ -7,6 +7,8 @@ import rospy
 from virtual_endpoint.proto import ros_service_pb2_grpc
 from virtual_endpoint.proto import ros_service_pb2
 
+from rospy_message_converter import json_message_converter
+
 from typing import AsyncIterable, Iterable
 from collections import defaultdict
 
@@ -17,8 +19,8 @@ class RpcSubscriber:
         self.rpc_server = rpc_server
     
     def callback(self, in_data):
-        # TODO: testing only - generically serialize.
-        message = ros_service_pb2.TopicMessage(data="joint_00 = " + str(in_data.joint_00))
+        json_str = json_message_converter.convert_ros_message_to_json(in_data)
+        message = ros_service_pb2.TopicMessage(data=json_str)
         self.rpc_server.put_topic_message_thread_safe(self.topic, message)
 
 

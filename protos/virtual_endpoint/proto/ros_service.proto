@@ -8,6 +8,7 @@ message SubscribeRequest {
 }
 
 message TopicMessage {
+  // JSON version of message data.
   string data = 1;
 }
 
