@@ -14,6 +14,7 @@ COPY ./ROS/src/niryo_one_ros $ROS_WORKSPACE/src/niryo_one_ros
 COPY ./ROS/src/niryo_one_urdf $ROS_WORKSPACE/src/niryo_one_urdf
 COPY ./ROS/src/ros_tcp_endpoint $ROS_WORKSPACE/src/ros_tcp_endpoint
 COPY ./ROS/src/virtual_endpoint $ROS_WORKSPACE/src/virtual_endpoint
+COPY ./ROS/src/rospy_message_converter $ROS_WORKSPACE/src/rospy_message_converter
 COPY ./ROS/src/start.sh $ROS_WORKSPACE/src/start.sh
 
 COPY ./docker/set-up-workspace /setup.sh
