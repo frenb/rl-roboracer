@@ -22842,7 +22842,7 @@ MonoBehaviour:
     click:
       m_PersistentCalls:
         m_Calls:
-        - m_Target: {fileID: 1091775769}
+        - m_Target: {fileID: 0}
           m_TargetAssemblyTypeName: TrajectoryPlanner, Unity.Template.RenderStreaming.Runtime
           m_MethodName: PublishJoints
           m_Mode: 1
@@ -22858,7 +22858,7 @@ MonoBehaviour:
     click:
       m_PersistentCalls:
         m_Calls:
-        - m_Target: {fileID: 1091775769}
+        - m_Target: {fileID: 0}
           m_TargetAssemblyTypeName: TrajectoryPlanner, Unity.Template.RenderStreaming.Runtime
           m_MethodName: ResetScene
           m_Mode: 1
@@ -25191,11 +25191,10 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 1091775771}
-  - component: {fileID: 1091775770}
-  - component: {fileID: 1091775769}
   - component: {fileID: 1091775772}
+  - component: {fileID: 1091775769}
   m_Layer: 0
-  m_Name: Publisher
+  m_Name: RosNode
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -25210,29 +25209,11 @@ MonoBehaviour:
   m_GameObject: {fileID: 1091775768}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 2cc370a05e6a34dc89fa420c66acc852, type: 3}
+  m_Script: {fileID: 11500000, guid: 181c1f38aca13422b8d486431461b049, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  rosServiceName: niryo_moveit
+  service_name: move_executor
   niryoOne: {fileID: 388558977}
-  target: {fileID: 446270608}
-  targetPlacement: {fileID: 958780366}
---- !u!114 &1091775770
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1091775768}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 45633aac835664b59bdc71dba2dabdc7, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  topicName: SourceDestination_input
-  niryoOne: {fileID: 388558977}
-  target: {fileID: 446270608}
-  targetPlacement: {fileID: 958780366}
 --- !u!4 &1091775771
 Transform:
   m_ObjectHideFlags: 0
@@ -36533,7 +36514,7 @@ MonoBehaviour:
   m_OnClick:
     m_PersistentCalls:
       m_Calls:
-      - m_Target: {fileID: 1091775769}
+      - m_Target: {fileID: 0}
         m_TargetAssemblyTypeName: TrajectoryPlanner, Assembly-CSharp
         m_MethodName: PublishJoints
         m_Mode: 1

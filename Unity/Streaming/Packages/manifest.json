@@ -7,7 +7,7 @@
     "com.unity.render-pipelines.high-definition": "10.2.2",
     "com.unity.render-pipelines.high-definition-config": "file:../LocalPackages/com.unity.render-pipelines.high-definition-config",
     "com.unity.renderstreaming": "2.2.2-preview",
-    "com.unity.robotics.ros-tcp-connector": "https://github.com/Unity-Technologies/ROS-TCP-Connector.git#v0.1.2",
+    "com.unity.robotics.ros-tcp-connector": "https://github.com/IdeaMogul/ROS-TCP-Connector.git",
     "com.unity.robotics.urdf-importer": "https://github.com/Unity-Technologies/URDF-Importer.git",
     "com.unity.test-framework": "1.1.20",
     "com.unity.textmeshpro": "3.0.1",

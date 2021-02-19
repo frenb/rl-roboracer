@@ -71,10 +71,7 @@ public class SceneDataPublisher : MonoBehaviour
         sceneDataMessage.joint_04 = jointArticulationBodies[4].xDrive.target;
         sceneDataMessage.joint_05 = jointArticulationBodies[5].xDrive.target;
 
-        // Object
-
-
-        // Target
+        // Object & Target
         sceneDataMessage.object_location = target.transform.position.To<FLU>();
         sceneDataMessage.target_location = targetPlacement.transform.position.To<FLU>();
 

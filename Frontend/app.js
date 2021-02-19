@@ -9,16 +9,26 @@ var services = require('./proto/virtual_endpoint/proto/ros_service_grpc_pb');
 var messages = require('./proto/virtual_endpoint/proto/ros_service_pb');
 
 var indexRouter = require('./routes/index');
+var poseRouter = require('./routes/pose');
 var usersRouter = require('./routes/users');
+var sceneDataRouter = require('./routes/sceneData')
 
-// Set up connection to container
 var client = new services.RosNodeClient('localhost:50051',grpc.credentials.createInsecure());
+console.log("Connected to ROS node");
+
+var sceneData = {latest: {}};
+
+// Subscribe to scene data topic and print streaming scene data to console.
 var subscribeRequest = new messages.SubscribeRequest();
 subscribeRequest.setTopic('scene_data');
 subscribeRequest.setMsgType('niryo_moveit/SceneData');
 var call = client.subscribe(subscribeRequest);
 call.on('data', function(topicMessage) {
-  console.log('Received message: ' + topicMessage.toString());
+  try {
+    sceneData.latest = JSON.parse(topicMessage.getData())
+  } catch (e) {
+    console.log(e);
+  }
 });
 call.on('end', function() {
   console.log('end');
@@ -32,6 +42,7 @@ call.on('status', function(status) {
   console.log('status: ' + status);
 });
 
+
 var app = express();
 
 // view engine setup
@@ -44,8 +55,20 @@ app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.use('/', indexRouter);
 app.use('/users', usersRouter);
+app.use('/pose', function (req, res, next) {
+  req.ros = {
+      client: client
+  }
+  next();
+}, poseRouter);
+app.use('/sceneData', function (req, res, next) {
+  req.ros = {
+      sceneData: sceneData
+  }
+  next();
+}, sceneDataRouter);
+app.use('/', indexRouter);
 
 // catch 404 and forward to error handler
 app.use(function(req, res, next) {
