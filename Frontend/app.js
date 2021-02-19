@@ -9,9 +9,13 @@ var services = require('./proto/virtual_endpoint/proto/ros_service_grpc_pb');
 var messages = require('./proto/virtual_endpoint/proto/ros_service_pb');
 
 var indexRouter = require('./routes/index');
+var poseRouter = require('./routes/pose');
 var usersRouter = require('./routes/users');
 
 var client = new services.RosNodeClient('localhost:50051',grpc.credentials.createInsecure());
+console.log("Connected to ROS node");
+
+/*
 // Subscribe to scene data topic and print streaming scene data to console.
 var subscribeRequest = new messages.SubscribeRequest();
 subscribeRequest.setTopic('scene_data');
@@ -31,25 +35,7 @@ call.on('error', function(e) {
 call.on('status', function(status) {
   console.log('status: ' + status);
 });
-
-// Call Pose Executor.
-var serviceRequest = new messages.ServiceRequest();
-
-serviceRequest.setServiceName('pose_executor');
-serviceRequest.setServiceType('niryo_moveit/PoseExecutorService');
-
-var posePoint = {x: -0.15, y: -0.21, z: 0.64}
-var poseOrientation = {x: 0.0, y: 0.0, z: 0.0, w: 0.0};
-var poseValue = {position: posePoint, orientation: poseOrientation};
-serviceRequest.setRequest(JSON.stringify({pose: poseValue}));
-
-client.callService(serviceRequest, function(err, result) {
-  if (err) {
-    console.log('error calling pose service: ' + err);
-  } else {
-    console.log('succeeded calling pose service');
-  }
-})
+*/
 
 var app = express();
 
@@ -63,8 +49,14 @@ app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.use('/', indexRouter);
 app.use('/users', usersRouter);
+app.use('/pose', function (req, res, next) {
+  req.rpc = {
+      client: client
+  }
+  next();
+}, poseRouter);
+app.use('/', indexRouter);
 
 // catch 404 and forward to error handler
 app.use(function(req, res, next) {
