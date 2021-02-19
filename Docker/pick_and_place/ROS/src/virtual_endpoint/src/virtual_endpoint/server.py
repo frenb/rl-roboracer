@@ -3,6 +3,7 @@ import time
 import grpc
 import asyncio
 import rospy
+import concurrent
 
 from virtual_endpoint.proto import ros_service_pb2_grpc
 from virtual_endpoint.proto import ros_service_pb2
@@ -26,11 +27,13 @@ class RpcSubscriber:
 
 class RpcServer(ros_service_pb2_grpc.RosNodeServicer):
     
-    def __init__(self, msg_types):
+    def __init__(self, types):
         self.topics = {}
         self.subscribers = defaultdict(list)
         self.loop = asyncio.get_running_loop()
-        self.msg_types = msg_types
+        self.types = types
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+
 
     def put_topic_message_thread_safe(self, topic, message):
         self.loop.call_soon_threadsafe(self.put_topic_message, topic, message)
@@ -45,8 +48,15 @@ class RpcServer(ros_service_pb2_grpc.RosNodeServicer):
 
     def _new_subscriber(self, topic, msg_type):
         rpc_subscriber = RpcSubscriber(topic, self)
-        rospy.Subscriber(topic, self.msg_types[msg_type], rpc_subscriber.callback)
+        rospy.Subscriber(topic, self.types[msg_type], rpc_subscriber.callback)
         return rpc_subscriber
+
+    async def _wait_for_service_non_blocking(self, service_name):
+        await self.loop.run_in_executor(self.executor, rospy.wait_for_service, service_name)
+
+    async def _call_proxy_non_blocking(self, proxy, request):
+        result = await self.loop.run_in_executor(self.executor, proxy, request)
+        return result
 
     async def Subscribe(self, request, unused_context):
         self.subscribers[request.topic].append(self._new_subscriber(request.topic, request.msg_type))
@@ -54,3 +64,18 @@ class RpcServer(ros_service_pb2_grpc.RosNodeServicer):
         while True:
             message = await topic_queue.get()
             yield message
+
+    async def CallService(self, request, unused_context):
+        await self._wait_for_service_non_blocking(request.service_name)
+
+        proxy = rospy.ServiceProxy(
+            request.service_name,
+            self.types[request.service_type])
+
+        request_obj = json_message_converter.convert_json_to_ros_message(request.service_type, request.request, kind='request')
+        rospy.loginfo(rospy.get_caller_id() + " I Received request for pose " + str(request_obj))
+        
+        response_obj = await self._call_proxy_non_blocking(proxy, request_obj)
+        
+        response_serialized = json_message_converter.convert_ros_message_to_json(response_obj)
+        return ros_service_pb2.ServiceResponse(response=response_serialized)

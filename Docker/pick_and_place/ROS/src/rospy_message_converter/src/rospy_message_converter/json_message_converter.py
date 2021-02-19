@@ -3,7 +3,7 @@ import json
 from rospy_message_converter import message_converter
 
 
-def convert_json_to_ros_message(message_type, json_message, strict_mode=True):
+def convert_json_to_ros_message(message_type, json_message, kind='message', strict_mode=True):
     """
     Takes in the message type and a JSON-formatted string and returns a ROS
     message.
@@ -24,7 +24,7 @@ def convert_json_to_ros_message(message_type, json_message, strict_mode=True):
         data: "Hello, Robot"
     """
     dictionary = json.loads(json_message)
-    return message_converter.convert_dictionary_to_ros_message(message_type, dictionary, strict_mode=strict_mode)
+    return message_converter.convert_dictionary_to_ros_message(message_type, dictionary, kind=kind, strict_mode=strict_mode)
 
 
 def convert_ros_message_to_json(message, binary_array_as_bytes=True):
