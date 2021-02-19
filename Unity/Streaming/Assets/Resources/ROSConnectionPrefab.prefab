@@ -45,7 +45,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   rosIPAddress: 127.0.0.1
   rosPort: 10000
-  overrideUnityIP: 
+  overrideUnityIP: host.docker.internal
   unityPort: 5005
   awaitDataMaxRetries: 10
   awaitDataSleepSeconds: 1
