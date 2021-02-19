@@ -19,13 +19,26 @@ class RosNodeStub(object):
                 request_serializer=virtual__endpoint_dot_proto_dot_ros__service__pb2.SubscribeRequest.SerializeToString,
                 response_deserializer=virtual__endpoint_dot_proto_dot_ros__service__pb2.TopicMessage.FromString,
                 )
+        self.CallService = channel.unary_unary(
+                '/virtual_endpoint.RosNode/CallService',
+                request_serializer=virtual__endpoint_dot_proto_dot_ros__service__pb2.ServiceRequest.SerializeToString,
+                response_deserializer=virtual__endpoint_dot_proto_dot_ros__service__pb2.ServiceResponse.FromString,
+                )
 
 
 class RosNodeServicer(object):
     """Missing associated documentation comment in .proto file."""
 
     def Subscribe(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """Subscribe to a ROS topic.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CallService(self, request, context):
+        """Call a ROS service.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -37,6 +50,11 @@ def add_RosNodeServicer_to_server(servicer, server):
                     servicer.Subscribe,
                     request_deserializer=virtual__endpoint_dot_proto_dot_ros__service__pb2.SubscribeRequest.FromString,
                     response_serializer=virtual__endpoint_dot_proto_dot_ros__service__pb2.TopicMessage.SerializeToString,
+            ),
+            'CallService': grpc.unary_unary_rpc_method_handler(
+                    servicer.CallService,
+                    request_deserializer=virtual__endpoint_dot_proto_dot_ros__service__pb2.ServiceRequest.FromString,
+                    response_serializer=virtual__endpoint_dot_proto_dot_ros__service__pb2.ServiceResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -62,5 +80,22 @@ class RosNode(object):
         return grpc.experimental.unary_stream(request, target, '/virtual_endpoint.RosNode/Subscribe',
             virtual__endpoint_dot_proto_dot_ros__service__pb2.SubscribeRequest.SerializeToString,
             virtual__endpoint_dot_proto_dot_ros__service__pb2.TopicMessage.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def CallService(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/virtual_endpoint.RosNode/CallService',
+            virtual__endpoint_dot_proto_dot_ros__service__pb2.ServiceRequest.SerializeToString,
+            virtual__endpoint_dot_proto_dot_ros__service__pb2.ServiceResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)

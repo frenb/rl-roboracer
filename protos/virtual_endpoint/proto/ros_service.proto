@@ -8,10 +8,29 @@ message SubscribeRequest {
 }
 
 message TopicMessage {
-  // JSON version of message data.
+  // JSON serialization of message data.
   string data = 1;
 }
 
+message ServiceRequest {
+  string service_name = 1;
+
+  // ROS Type name for service.
+  string service_type = 2;
+
+  // JSON serialization of service request message.
+  string request = 4;
+}
+
+message ServiceResponse {
+  // JSON serialization of service response message.
+  string response = 1;
+}
+
 service RosNode {
+  // Subscribe to a ROS topic.
   rpc Subscribe(SubscribeRequest) returns (stream TopicMessage);
+  
+  // Call a ROS service.
+  rpc CallService(ServiceRequest) returns (ServiceResponse);
 }

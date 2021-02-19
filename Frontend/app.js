@@ -11,14 +11,14 @@ var messages = require('./proto/virtual_endpoint/proto/ros_service_pb');
 var indexRouter = require('./routes/index');
 var usersRouter = require('./routes/users');
 
-// Subscribe to scene data topic and print streaming scene data to console.
 var client = new services.RosNodeClient('localhost:50051',grpc.credentials.createInsecure());
+// Subscribe to scene data topic and print streaming scene data to console.
 var subscribeRequest = new messages.SubscribeRequest();
 subscribeRequest.setTopic('scene_data');
 subscribeRequest.setMsgType('niryo_moveit/SceneData');
 var call = client.subscribe(subscribeRequest);
 call.on('data', function(topicMessage) {
-  console.log('Received message: ' + topicMessage.toString());
+  // console.log('Received message: ' + topicMessage.toString());
 });
 call.on('end', function() {
   console.log('end');
@@ -31,6 +31,25 @@ call.on('error', function(e) {
 call.on('status', function(status) {
   console.log('status: ' + status);
 });
+
+// Call Pose Executor.
+var serviceRequest = new messages.ServiceRequest();
+
+serviceRequest.setServiceName('pose_executor');
+serviceRequest.setServiceType('niryo_moveit/PoseExecutorService');
+
+var posePoint = {x: -0.15, y: -0.21, z: 0.64}
+var poseOrientation = {x: 0.0, y: 0.0, z: 0.0, w: 0.0};
+var poseValue = {position: posePoint, orientation: poseOrientation};
+serviceRequest.setRequest(JSON.stringify({pose: poseValue}));
+
+client.callService(serviceRequest, function(err, result) {
+  if (err) {
+    console.log('error calling pose service: ' + err);
+  } else {
+    console.log('succeeded calling pose service');
+  }
+})
 
 var app = express();
 
