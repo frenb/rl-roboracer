@@ -26,7 +26,7 @@ router.get('/', function(req, res, next) {
   serviceRequest.setServiceType('niryo_moveit/PoseExecutorService');
   serviceRequest.setRequest(JSON.stringify({pose: poseValue}));
 
-  req.rpc.client.callService(serviceRequest, function(err, result) {
+  req.ros.client.callService(serviceRequest, function(err, result) {
     if (err) {
       console.log('error calling pose service: ' + err);
     } else {
