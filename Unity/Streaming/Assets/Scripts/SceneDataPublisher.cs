@@ -5,6 +5,7 @@ using ROSGeometry;
 using System.Collections;
 
 using Transform = UnityEngine.Transform;
+using Quaternion = UnityEngine.Quaternion;
 
 public class SceneDataPublisher : MonoBehaviour
 {
@@ -84,7 +85,13 @@ public class SceneDataPublisher : MonoBehaviour
 
         // Effector Pose.
         sceneDataMessage.effector_pose.position = gripperBase.transform.position.To<FLU>();
-        sceneDataMessage.effector_pose.orientation = gripperBase.transform.rotation.To<FLU>();
+
+        // TODO: orientation of gripperBase object in unity needs to be rotated to match
+        // axis used by ROS. Don't totally understand the conversion, but this rotation seems
+        // to work.
+        var gribber_rotation = gripperBase.transform.rotation;
+        gribber_rotation *= new Quaternion(0.5f, -0.5f, 0.5f, 0.5f);
+        sceneDataMessage.effector_pose.orientation = gribber_rotation.To<FLU>();
 
         ros.Send(topicName, sceneDataMessage);
     }
