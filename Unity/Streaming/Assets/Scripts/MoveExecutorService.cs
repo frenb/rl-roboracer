@@ -66,20 +66,19 @@ public class MoveExecutorService : MonoBehaviour
     private IEnumerator ExecuteTrajectories(RobotTrajectory trajectory)
     {
         // For every robot pose in trajectory plan
-        for (int jointIndex = 0; jointIndex < trajectory.joint_trajectory.points.Length; jointIndex++)
+        foreach(var point in trajectory.joint_trajectory.points)
         {
-            var positionsRad = trajectory.joint_trajectory.points[jointIndex].positions;
-            float[] positionsDeg = positionsRad.Select(r => (float)r * Mathf.Rad2Deg).ToArray();
-
+            float[] jointAngles = point.positions.Select(r => (float)r * Mathf.Rad2Deg).ToArray();
             // Set the joint values for every joint
             for (int joint = 0; joint < jointArticulationBodies.Length; joint++)
             {
                 var joint1XDrive = jointArticulationBodies[joint].xDrive;
-                joint1XDrive.target = positionsDeg[joint];
+                joint1XDrive.target = jointAngles[joint];
                 jointArticulationBodies[joint].xDrive = joint1XDrive;
             }
             // Wait for robot to achieve pose for all joint assignments
             yield return new WaitForSeconds(jointAssignmentWait);
+
         }
     }
 }
