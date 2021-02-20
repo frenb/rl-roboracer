@@ -34,3 +34,9 @@ $ cd ./WebApp
 $ npm start
 ```
 
+## Protos & GRPC
+If changing the virtual node RPC service or protos under protos, to update the generated code:
+```console
+$ ./gen_protos.sh
+```
+
