@@ -4,6 +4,8 @@ using UnityEngine;
 using ROSGeometry;
 using System.Collections;
 
+using Transform = UnityEngine.Transform;
+
 public class SceneDataPublisher : MonoBehaviour
 {
     // ROS Connector
@@ -19,6 +21,8 @@ public class SceneDataPublisher : MonoBehaviour
 
     // Articulation Bodies
     private ArticulationBody[] jointArticulationBodies;
+
+    private Transform gripperBase;
 
     /// <summary>
     /// 
@@ -47,6 +51,9 @@ public class SceneDataPublisher : MonoBehaviour
         string hand_link = wrist_link + "/hand_link";
         jointArticulationBodies[5] = niryoOne.transform.Find(hand_link).GetComponent<ArticulationBody>();
 
+        string gripper_base = hand_link + "/tool_link/gripper_base/Collisions/unnamed";
+        gripperBase = niryoOne.transform.Find(gripper_base);
+
         StartCoroutine(DoPublish());
 
     }
@@ -74,6 +81,10 @@ public class SceneDataPublisher : MonoBehaviour
         // Object & Target
         sceneDataMessage.object_location = target.transform.position.To<FLU>();
         sceneDataMessage.target_location = targetPlacement.transform.position.To<FLU>();
+
+        // Effector Pose.
+        sceneDataMessage.effector_pose.position = gripperBase.transform.position.To<FLU>();
+        sceneDataMessage.effector_pose.orientation = gripperBase.transform.rotation.To<FLU>();
 
         ros.Send(topicName, sceneDataMessage);
     }

@@ -1,5 +1,6 @@
 geometry_msgs/Point object_location
 geometry_msgs/Point target_location
+geometry_msgs/Pose effector_pose
 float64 joint_00
 float64 joint_01
 float64 joint_02
