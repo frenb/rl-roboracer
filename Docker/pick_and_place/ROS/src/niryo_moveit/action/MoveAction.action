@@ -1,0 +1,8 @@
+# goal
+niryo_moveit/MoveCommand cmd
+---
+# result
+int32 result
+---
+# feedback
+float64 progress
