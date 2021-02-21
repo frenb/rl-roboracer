@@ -4,6 +4,7 @@ import grpc
 import asyncio
 import rospy
 import concurrent
+import roslib.message
 
 from virtual_endpoint.proto import ros_service_pb2_grpc
 from virtual_endpoint.proto import ros_service_pb2
@@ -27,11 +28,10 @@ class RpcSubscriber:
 
 class RpcServer(ros_service_pb2_grpc.RosNodeServicer):
     
-    def __init__(self, types):
+    def __init__(self):
         self.topics = {}
         self.subscribers = defaultdict(list)
         self.loop = asyncio.get_running_loop()
-        self.types = types
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
 
 
@@ -48,7 +48,8 @@ class RpcServer(ros_service_pb2_grpc.RosNodeServicer):
 
     def _new_subscriber(self, topic, msg_type):
         rpc_subscriber = RpcSubscriber(topic, self)
-        rospy.Subscriber(topic, self.types[msg_type], rpc_subscriber.callback)
+        msg_class = roslib.message.get_message_class(msg_type)
+        rospy.Subscriber(topic, msg_class, rpc_subscriber.callback)
         return rpc_subscriber
 
     async def _wait_for_service_non_blocking(self, service_name):
@@ -67,10 +68,10 @@ class RpcServer(ros_service_pb2_grpc.RosNodeServicer):
 
     async def CallService(self, request, unused_context):
         await self._wait_for_service_non_blocking(request.service_name)
-
+        service_class = roslib.message.get_service_class(request.service_type)
         proxy = rospy.ServiceProxy(
             request.service_name,
-            self.types[request.service_type])
+            service_class)
 
         request_obj = json_message_converter.convert_json_to_ros_message(request.service_type, request.request, kind='request')
         rospy.loginfo(rospy.get_caller_id() + " I Received request for pose " + str(request_obj))

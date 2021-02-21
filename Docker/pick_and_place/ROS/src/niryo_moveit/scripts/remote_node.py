@@ -14,8 +14,6 @@ def remote_node():
     rospy.init_node('remote_node', anonymous=True)
     rospy.loginfo(rospy.get_caller_id() + " I Remote Node Started")
     v_node = VirtualNode()
-    v_node.register_type('niryo_moveit/SceneData', SceneData)
-    v_node.register_type('niryo_moveit/PoseExecutorService', PoseExecutorService)
     asyncio.run(v_node.main())
 
 if __name__ == "__main__":
