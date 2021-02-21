@@ -12,7 +12,7 @@ public class SceneDataPublisher : MonoBehaviour
     // ROS Connector
     private ROSConnection ros;
 
-    private string topicName = "SceneData_input";
+    private string topicName = "scene_data";
 
     public GameObject niryoOne;
     public GameObject target;

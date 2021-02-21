@@ -18,13 +18,16 @@ from geometry_msgs.msg import Quaternion, Pose
 from std_msgs.msg import String
 from moveit_commander.conversions import pose_to_list
 
-from niryo_moveit.srv import PoseExecutorService, PoseExecutorServiceRequest, PoseExecutorServiceResponse, MoveExecutorService, MoveExecutorServiceRequest, MoveExecutorServiceResponse
-from niryo_moveit.msg import SceneData
+from niryo_moveit.srv import PoseExecutorService, PoseExecutorServiceRequest, PoseExecutorServiceResponse
+from niryo_moveit.msg import MoveActionGoal, MoveActionResult, MoveActionFeedback
+from niryo_moveit.msg import SceneData, MoveCommand
+
+from niryo_moveit.move_command_type import MoveCommandType 
 
 # Node Globals
 joint_names = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
 latest_joint_angles = []
-move_executor_client = None
+move_goal_publisher = None
 
 # Between Melodic and Noetic, the return type of plan() changed. moveit_commander has no __version__ variable, so checking the python version as a proxy
 if sys.version_info >= (3, 0):
@@ -68,10 +71,13 @@ def service_handler(req):
     trajectory = plan_trajectory(move_group, req.pose, angles)
 
     # Send trajectories to robot to execute.
-    move_req = MoveExecutorServiceRequest()
-    move_req.trajectory = trajectory
-    rospy.loginfo(rospy.get_caller_id() + " I Sending trajectory to execute: " + str(move_req))
-    move_executor_client(move_req)
+    goal = MoveActionGoal()
+    goal.cmd = MoveCommand()
+    goal.cmd.cmd_type = MoveCommandType.TRAJECTORY
+    goal.cmd.trajectory = trajectory
+
+    rospy.loginfo(rospy.get_caller_id() + " I Sending trajectory to execute: " + str(goal))
+    move_goal_publisher.publish(goal)
 
     return PoseExecutorServiceResponse(True)
 
@@ -94,10 +100,8 @@ def pose_executor_main():
     rospy.init_node('pose_executor')
     
     # Block on robot's move executor service becoming available.
-    rospy.loginfo(rospy.get_caller_id() + " I Waiting for move executor")
-    rospy.wait_for_service('move_executor')
-    global move_executor_client
-    move_executor_client = rospy.ServiceProxy('move_executor', MoveExecutorService)
+    global move_goal_publisher
+    move_goal_publisher = rospy.Publisher('move_action/goal', MoveActionGoal)
 
     service = rospy.Service('pose_executor', PoseExecutorService, service_handler)
     subscriber = rospy.Subscriber('scene_data', SceneData, scene_data_handler)

@@ -12,12 +12,19 @@ find_package(catkin REQUIRED COMPONENTS
   controller_manager
   roslaunch
   trajectory_msgs
+  genmsg
+  actionlib_msgs
 )
+
 roslaunch_add_file_check(launch)
 
 add_message_files(DIRECTORY msg)
 
 add_service_files(DIRECTORY srv)
+
+add_action_files(DIRECTORY action FILES MoveAction.action)
+
+catkin_python_setup()
 
 generate_messages(
   DEPENDENCIES
@@ -25,6 +32,7 @@ generate_messages(
   std_msgs
   moveit_msgs
   sensor_msgs
+  actionlib_msgs
 )
 
 catkin_package()
