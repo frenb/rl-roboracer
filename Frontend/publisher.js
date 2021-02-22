@@ -14,7 +14,9 @@ class Publisher {
         request.setData(JSON.stringify(data));
         console.log(this.topic + " publishing: " + data);
         this.client.publish(request, function(err, response_unused) {
-            console.log(this.topic + " error publishing " + err);
+            if (err) {
+                console.log(this.topic + " error publishing " + err);
+            }
         });
     }
 }

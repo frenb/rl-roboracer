@@ -5,19 +5,22 @@ var messages = require('../proto/virtual_endpoint/proto/ros_service_pb');
 var express = require('express');
 var router = express.Router();
 
-router.get('/', function(req, res, next) {
-    // Parse desired pose from request,
-    let point_x = parseFloat(req.query.x) || -0.15;
-    let point_y = parseFloat(req.query.y) || -0.21;
-    let point_z = parseFloat(req.query.z) || 0.75;
-    let orientation_x = parseFloat(req.query.o_x) || -0.5;
-    let orientation_y = parseFloat(req.query.o_y) || -0.5;
-    let orientation_z = parseFloat(req.query.o_z) || 0.5;
-    let orientation_w = parseFloat(req.query.o_w) || -0.5;
-  
-    let posePoint = {x: point_x, y: point_y, z: point_z}
-    let poseOrientation = {x: orientation_x, y: orientation_y, z: orientation_z, w: orientation_w};
-    let poseValue = {position: posePoint, orientation: poseOrientation};
+router.post('/', function(req, res, next) {
+    // default value
+    let defaultPose = {
+      position: {
+        x: -0.15,
+        y: -0.21,
+        z: 0.75,
+      },
+      orientation: {
+        x: -0.5,
+        y: -0.5,
+        z: 0.5,
+        w: -0.5
+      }
+    };
+    let poseValue = req.body || defaultPose;
   
     // Build pose request.
     let posePlanRequest = {};

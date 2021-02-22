@@ -38,7 +38,6 @@ generate_messages(
 catkin_package()
 
 catkin_install_python(PROGRAMS
-  scripts/pose_executor.py
   scripts/pose_planner.py
   scripts/remote_node.py
   scripts/unity_node.py
