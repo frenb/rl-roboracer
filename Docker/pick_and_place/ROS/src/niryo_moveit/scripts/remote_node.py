@@ -5,9 +5,6 @@ from __future__ import print_function
 import rospy
 import asyncio
 
-
-from niryo_moveit.msg import SceneData
-from niryo_moveit.srv import PoseExecutorService
 from virtual_endpoint import VirtualNode
 
 def remote_node():

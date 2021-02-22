@@ -1,7 +1,6 @@
 <launch>
     <rosparam file="$(find niryo_moveit)/config/params.yaml" command="load"/>
     <node name="unity_node" pkg="niryo_moveit" type="unity_node.py" args="--wait" output="screen" respawn="true" />
-    <node name="pose_executor" pkg="niryo_moveit" type="pose_executor.py" args="--wait" output="screen"/>
     <node name="pose_planner" pkg="niryo_moveit" type="pose_planner.py" args="--wait" output="screen"/>
     <node name="remote_node" pkg="niryo_moveit" type="remote_node.py" args="--wait" output="screen"/>
     <include file="$(find niryo_moveit)/launch/demo.launch" />

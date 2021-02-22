@@ -75,6 +75,7 @@ public class MoveService : MonoBehaviour
 
     private void onGoal(MoveActionGoal goal)
     {
+        Debug.Log("onGoal: " + goal.ToString());
         // TODO: Currently we ignore new goals if one is received while another
         // is executing. In future: behave more like an actionlib server which
         // will pre-empt currently running goal when a new one is received.
@@ -105,6 +106,7 @@ public class MoveService : MonoBehaviour
         } 
         finally
         {
+            Debug.Log("Goal complete; publishing result");
             sendResult(result);
             activeGoal = null;
         }
@@ -116,6 +118,7 @@ public class MoveService : MonoBehaviour
         // For every robot pose in trajectory plan
         int step = 0;
         var totalPoints = trajectory.joint_trajectory.points.Length;
+        Debug.Log("Executing trajectory with " + totalPoints + " points");
         foreach (var point in trajectory.joint_trajectory.points)
         {
             float[] jointAngles = point.positions.Select(r => (float)r * Mathf.Rad2Deg).ToArray();
@@ -130,10 +133,9 @@ public class MoveService : MonoBehaviour
             await Task.Delay(jointAssingmentWaitMillis);
 
             // Publish progress.
-            double progress = (double)step++ / totalPoints;
+            double progress = (double)++step / totalPoints;
             sendFeedback(new MoveActionFeedback(progress));
         }
-
         return new MoveActionResult((int)Result.SUCCESS);
     }
 

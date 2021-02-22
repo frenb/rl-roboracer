@@ -79,6 +79,9 @@ app.use('/move', function (req, res, next) {
   req.ros = ros_obj
   next();
 }, moveRouter);
+app.get('/pickAndPlace',  function(req, res, next) {
+  res.render('pickAndPlace', { title: 'Pick and Place' });
+});
 app.use('/', indexRouter);
 
 // catch 404 and forward to error handler
