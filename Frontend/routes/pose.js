@@ -5,7 +5,6 @@ var messages = require('../proto/virtual_endpoint/proto/ros_service_pb');
 var express = require('express');
 var router = express.Router();
 
-/* GET home page. */
 router.get('/', function(req, res, next) {
   // Get or assign default pose values.
   var point_x = parseFloat(req.query.x) || -0.15;

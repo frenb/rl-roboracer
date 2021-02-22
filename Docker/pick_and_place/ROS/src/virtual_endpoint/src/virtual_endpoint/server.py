@@ -31,6 +31,8 @@ class RpcServer(ros_service_pb2_grpc.RosNodeServicer):
     def __init__(self):
         self.topics = {}
         self.subscribers = defaultdict(list)
+        # One per topic ever requested.
+        self.publishers = {}
         self.loop = asyncio.get_running_loop()
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
 
@@ -65,6 +67,22 @@ class RpcServer(ros_service_pb2_grpc.RosNodeServicer):
         while True:
             message = await topic_queue.get()
             yield message
+
+    def Publish(self, request, unused_context):
+        topic = request.topic
+
+        if topic not in self.publishers:
+            msg_class = roslib.message.get_service_class(request.msg_type)
+            self.publishers[topic] = rospy.Publisher(topic, msg_class, queue_size=10)
+        publisher = self.publishers[topic]
+        
+        # Convert json to message
+        message = json_message_converter.convert_json_to_ros_message(request.msg_type, request.data)
+        publisher.publish(message)
+
+        return ros_service_pb2.PublishResponse()
+
+
 
     async def CallService(self, request, unused_context):
         await self._wait_for_service_non_blocking(request.service_name)
