@@ -11,7 +11,7 @@ router.get('/', function(req, res, next) {
 });
 
 router.get('/latest', function(req, res, next) {
-    var data = req.ros.sceneData.latest;
+    var data = req.ros.sceneDataQueue.peek();
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify(data, null, 3));
 });

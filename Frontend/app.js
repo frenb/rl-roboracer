@@ -8,40 +8,47 @@ var grpc = require('@grpc/grpc-js');
 var services = require('./proto/virtual_endpoint/proto/ros_service_grpc_pb');
 var messages = require('./proto/virtual_endpoint/proto/ros_service_pb');
 
+const SubscriberQueue = require('./subscriber');
+const Publisher = require('./publisher');
 var indexRouter = require('./routes/index');
 var poseRouter = require('./routes/pose');
 var usersRouter = require('./routes/users');
-var sceneDataRouter = require('./routes/sceneData')
+var sceneDataRouter = require('./routes/sceneData');
+var planRouter = require('./routes/plan');
+var moveRouter = require('./routes/move');
 
+// Initialize ROS Node GRPC Connection
 var client = new services.RosNodeClient('localhost:50051',grpc.credentials.createInsecure());
 console.log("Connected to ROS node");
 
-var sceneData = {latest: {}};
+// Scene Data Subsriber - gets data objects in the scene.
+var sceneDataRequest = new messages.SubscribeRequest();
+sceneDataRequest.setTopic('scene_data');
+sceneDataRequest.setMsgType('niryo_moveit/SceneData');
+var sceneDataQueue = new SubscriberQueue("scene_data", client.subscribe(sceneDataRequest));
 
-// Subscribe to scene data topic and print streaming scene data to console.
-var subscribeRequest = new messages.SubscribeRequest();
-subscribeRequest.setTopic('scene_data');
-subscribeRequest.setMsgType('niryo_moveit/SceneData');
-var call = client.subscribe(subscribeRequest);
-call.on('data', function(topicMessage) {
-  try {
-    sceneData.latest = JSON.parse(topicMessage.getData())
-  } catch (e) {
-    console.log(e);
-  }
-});
-call.on('end', function() {
-  console.log('end');
+// Move Result Subscriber - gets information on the success / error of move action requests
+var moveResultRequest = new messages.SubscribeRequest();
+moveResultRequest.setTopic('move_action/result');
+moveResultRequest.setMsgType('niryo_moveit/MoveActionResult');
+var moveResultQueue = new SubscriberQueue("move_action/result", client.subscribe(moveResultRequest));
 
-});
-call.on('error', function(e) {
-  console.log('error: ' + e);
+// Move Feedback Subscriber - gets information about the current progress of a move action request
+var moveFeedbackRequest = new messages.SubscribeRequest();
+moveFeedbackRequest.setTopic('move_action/result');
+moveFeedbackRequest.setMsgType('niryo_moveit/MoveActionResult');
+var moveFeedbackQueue = new SubscriberQueue("move_action/feedback", client.subscribe(moveFeedbackRequest));
 
-});
-call.on('status', function(status) {
-  console.log('status: ' + status);
-});
+// Publisher for sending move commands.
+var moveGoalPublisher = new Publisher("move_action/goal", 'niryo_moveit/MoveActionGoal', client);
 
+var ros_obj = {
+  client: client,
+  sceneDataQueue: sceneDataQueue,
+  moveResultQueue: moveResultQueue,
+  moveFeedbackQueue: moveFeedbackQueue,
+  moveGoalPublisher: moveGoalPublisher
+}
 
 var app = express();
 
@@ -57,17 +64,21 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 app.use('/users', usersRouter);
 app.use('/pose', function (req, res, next) {
-  req.ros = {
-      client: client
-  }
+  req.ros = ros_obj
   next();
 }, poseRouter);
 app.use('/sceneData', function (req, res, next) {
-  req.ros = {
-      sceneData: sceneData
-  }
+  req.ros = ros_obj
   next();
 }, sceneDataRouter);
+app.use('/plan', function (req, res, next) {
+  req.ros = ros_obj
+  next();
+}, planRouter);
+app.use('/move', function (req, res, next) {
+  req.ros = ros_obj
+  next();
+}, moveRouter);
 app.use('/', indexRouter);
 
 // catch 404 and forward to error handler
