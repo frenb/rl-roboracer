@@ -17,6 +17,12 @@ public class MoveService : MonoBehaviour
 
     // Articulation Bodies
     private ArticulationBody[] jointArticulationBodies;
+    private ArticulationBody leftGripper;
+    private ArticulationBody rightGripper;
+
+    private Transform gripperBase;
+    private Transform leftGripperGameObject;
+    private Transform rightGripperGameObject;
 
     public string goalTopic = "move_action/goal";
     public string resultTopic = "move_action/result";
@@ -27,7 +33,9 @@ public class MoveService : MonoBehaviour
 
     enum CommandType
     {
-        TRAJECTORY = 1
+        TRAJECTORY = 1,
+        OPEN_GRIPPER = 2,
+        CLOSE_GRIPPER = 3
     };
 
     enum Result
@@ -60,6 +68,18 @@ public class MoveService : MonoBehaviour
         string hand_link = wrist_link + "/hand_link";
         jointArticulationBodies[5] = niryoOne.transform.Find(hand_link).GetComponent<ArticulationBody>();
 
+        // Find left and right fingers
+        string right_gripper = hand_link + "/tool_link/gripper_base/servo_head/control_rod_right/right_gripper";
+        string left_gripper = hand_link + "/tool_link/gripper_base/servo_head/control_rod_left/left_gripper";
+        string gripper_base = hand_link + "/tool_link/gripper_base/Collisions/unnamed";
+
+        gripperBase = niryoOne.transform.Find(gripper_base);
+        leftGripperGameObject = niryoOne.transform.Find(left_gripper);
+        rightGripperGameObject = niryoOne.transform.Find(right_gripper);
+
+        rightGripper = rightGripperGameObject.GetComponent<ArticulationBody>();
+        leftGripper = leftGripperGameObject.GetComponent<ArticulationBody>();
+
         ros.Subscribe<MoveActionGoal>(goalTopic, onGoal);
     }
 
@@ -90,10 +110,72 @@ public class MoveService : MonoBehaviour
             case CommandType.TRAJECTORY:
                 processTrajectoryGoal(goal);
                 break;
+            case CommandType.OPEN_GRIPPER:
+            case CommandType.CLOSE_GRIPPER:
+                processGripperGoal(goal);
+                break;
             default:
                 Debug.LogWarning("onGoal: unknown command type " + goal.cmd.cmd_type);
                 break;
         }
+    }
+
+    private async void processGripperGoal(MoveActionGoal goal)
+    {
+        Debug.Log("accepting gripper goal");
+        activeGoal = goal;
+        var result = new MoveActionResult((int)Result.ERROR);
+        try
+        {
+            result = await executeGripperOpen(goal.cmd.cmd_type == (int) CommandType.OPEN_GRIPPER);
+        }
+        finally
+        {
+            Debug.Log("Goal complete; publishing result");
+            sendResult(result);
+            activeGoal = null;
+        }
+    }
+
+    private async Task<MoveActionResult> executeGripperOpen(bool open)
+    {
+        sendFeedback(new MoveActionFeedback(0.0));
+
+
+        float leftCurrent = leftGripper.xDrive.target;
+        float rightCurrent = rightGripper.xDrive.target;
+        float leftTarget;
+        float rightTarget;
+
+        if (open)
+        {
+            leftTarget = 0.01f;
+            rightTarget = -0.01f;
+        } else
+        {
+            leftTarget = -0.01f;
+            rightTarget = 0.01f;
+        }
+
+        int steps = 20;
+        for (int i = 0; i < steps; i++)
+        {
+            var leftDrive = leftGripper.xDrive;
+            var rightDrive = rightGripper.xDrive;
+
+            leftDrive.target += (leftTarget - leftCurrent) / steps;
+            rightDrive.target += (rightTarget - rightCurrent) / steps;
+            leftGripper.xDrive = leftDrive;
+            rightGripper.xDrive = rightDrive;
+
+
+            sendFeedback(new MoveActionFeedback((double) (i + 1) / steps));
+            await Task.Delay(jointAssingmentWaitMillis);
+
+        }
+
+        return new MoveActionResult((int)Result.SUCCESS);
+
     }
 
     private async void processTrajectoryGoal(MoveActionGoal goal)
