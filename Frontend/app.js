@@ -16,6 +16,7 @@ var usersRouter = require('./routes/users');
 var sceneDataRouter = require('./routes/sceneData');
 var planRouter = require('./routes/plan');
 var moveRouter = require('./routes/move');
+var resultRouter = require('./routes/result');
 
 // Initialize ROS Node GRPC Connection
 var client = new services.RosNodeClient('localhost:50051',grpc.credentials.createInsecure());
@@ -79,6 +80,10 @@ app.use('/move', function (req, res, next) {
   req.ros = ros_obj
   next();
 }, moveRouter);
+app.use('/result', function (req, res, next) {
+  req.ros = ros_obj
+  next();
+}, resultRouter);
 app.get('/pickAndPlace',  function(req, res, next) {
   res.render('pickAndPlace', { title: 'Pick and Place' });
 });

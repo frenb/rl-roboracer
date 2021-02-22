@@ -24,7 +24,7 @@ class SubscriberQueue {
 
     onData(topic_message) {
         try {
-            this.queue.push(JSON.parse(topic_message.getData()));
+            this.queue.push({data: JSON.parse(topic_message.getData()), timestamp: Date.now()});
           } catch (e) {
             console.log(e);
         }

@@ -24,7 +24,7 @@ router.post('/', function(req, res, next) {
   
     // Build pose request.
     let posePlanRequest = {};
-    sceneData = req.ros.sceneDataQueue.peek();
+    sceneData = req.ros.sceneDataQueue.peek().data;
     posePlanRequest.joint_00 = sceneData.joint_00;
     posePlanRequest.joint_01 = sceneData.joint_01;
     posePlanRequest.joint_02 = sceneData.joint_02;
@@ -38,6 +38,8 @@ router.post('/', function(req, res, next) {
     serviceRequest.setServiceType('niryo_moveit/PosePlanner');
     serviceRequest.setRequest(JSON.stringify(posePlanRequest));
   
+    console.log("Sending plan request: " + JSON.stringify(posePlanRequest, null, 3));
+
     req.ros.client.callService(serviceRequest, function(err, result) {
       if (err) {
         console.log('error calling pose service: ' + err);
