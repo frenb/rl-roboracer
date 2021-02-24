@@ -35,8 +35,25 @@ $ npm start
 ```
 
 ## Protos & GRPC
-If changing the virtual node RPC service or protos under protos, to update the generated code:
+If changing the virtual node RPC service or protos under protos, you will need to update the generated code.
+
+First you need the python & node protoc tools.
+```console
+$ pip install grpcio-tools
+$ npm config set unsafe-perm true
+$ npm install protoc-gen-grpc -g
+$ npm install grpc-tools -g
+
+```
+
+Then you can run the code generation scripts:
+
 ```console
 $ ./gen_protos.sh
+```
+
+Or on Windows in PowerShell:
+```console
+> .\gen_protos.ps1
 ```
 
