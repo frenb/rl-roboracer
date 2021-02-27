@@ -1,5 +1,3 @@
-var grpc = require('@grpc/grpc-js');
-var services = require('../proto/virtual_endpoint/proto/ros_service_grpc_pb');
 var messages = require('../proto/virtual_endpoint/proto/ros_service_pb');
 
 var express = require('express');
