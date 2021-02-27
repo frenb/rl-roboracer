@@ -87,6 +87,9 @@ app.use('/result', function (req, res, next) {
 app.get('/pickAndPlace',  function(req, res, next) {
   res.render('pickAndPlace', { title: 'Pick and Place' });
 });
+app.get('/editor',  function(req, res, next) {
+  res.render('editor');
+});
 app.use('/', indexRouter);
 
 // catch 404 and forward to error handler
