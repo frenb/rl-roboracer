@@ -15,6 +15,6 @@ html
             console.log(data.data);
             text += data.data;
             var div = document.getElementById('ros_log_text');
-            
             div.innerHTML = '<pre>' + ansi_up.ansi_to_html(text) + '</pre>';
+            window.scrollTo(0,document.body.scrollHeight);
         });
