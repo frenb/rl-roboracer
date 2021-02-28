@@ -24,6 +24,10 @@ exports.createServer = function (config) {
     app.use(express.static(path.join(__dirname, '/../bower_components')));
     app.use(express.static(path.join(__dirname, '/..')));
     app.use('/images', express.static(path.join(__dirname, '/../public/images')));
+    app.get('/videoplayer', function (req, res) {
+        var videPagePath = path.join(__dirname, '/../videoplayer.html');
+        res.sendFile(videPagePath);
+    });
     app.get('/', function (req, res) {
         var indexPagePath = path.join(__dirname, '/../index.html');
         fs.access(indexPagePath, function (err) {
