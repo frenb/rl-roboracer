@@ -1,6 +1,7 @@
+var messages = require('./proto/virtual_endpoint/proto/ros_service_pb');
 
 class SubscriberQueue {
-    constructor(name, subscribe_call, max_size=1) {
+    constructor(name, msg_type, client, max_size=1) {
         this.name = name;
         this.queue = new Array();
         
@@ -12,10 +13,15 @@ class SubscriberQueue {
             return Array.prototype.push.apply(this,arguments);
         }
 
-        subscribe_call.on('data', this.onData.bind(this));
-        subscribe_call.on('end', this.onEnd.bind(this));
-        subscribe_call.on('error', this.onError.bind(this));
-        subscribe_call.on('status', this.onStatus.bind(this));
+        let request = new messages.SubscribeRequest();
+        request.setTopic(name);
+        request.setMsgType(msg_type);
+        this.call = client.subscribe(request);
+
+        this.call.on('data', this.onData.bind(this));
+        this.call.on('end', this.onEnd.bind(this));
+        this.call.on('error', this.onError.bind(this));
+        this.call.on('status', this.onStatus.bind(this));
     }
 
     peek() {
