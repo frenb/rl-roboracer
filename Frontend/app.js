@@ -3,18 +3,18 @@ var express = require('express');
 var path = require('path');
 var cookieParser = require('cookie-parser');
 var logger = require('morgan');
-
 var grpc = require('@grpc/grpc-js');
 var services = require('./proto/virtual_endpoint/proto/ros_service_grpc_pb');
-
 const SubscriberQueue = require('./subscriber');
 const Publisher = require('./publisher');
 
+// Routes
 var indexRouter = require('./routes/index');
 var sceneDataRouter = require('./routes/sceneData');
 var planRouter = require('./routes/plan');
 var moveRouter = require('./routes/move');
 var resultRouter = require('./routes/result');
+var logsRouter = require('./routes/logs');
 
 // Initialize ROS Node GRPC Connection
 var client = new services.RosNodeClient('localhost:50051',grpc.credentials.createInsecure());
@@ -51,6 +51,7 @@ app.use('/sceneData', sceneDataRouter);
 app.use('/plan', planRouter);
 app.use('/move', moveRouter);
 app.use('/result', resultRouter);
+app.use('/logs', logsRouter);
 app.get('/pickAndPlace',  function(req, res, next) {
   res.render('pickAndPlace', { title: 'Pick and Place' });
 });
