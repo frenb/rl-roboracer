@@ -18,6 +18,7 @@ html
             wrap: true,
             autoScrollEditorIntoView: true
         });
+
         jQuery.get('javascripts/pick_and_place.js', function(data) {
             editor.setValue(data, -1);
         });

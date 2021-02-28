@@ -8,8 +8,8 @@ var config = {
                 content: [
                     {
                         type: 'component',
-                        componentName: 'iframeComponent',
-                        componentState: { src: 'http://localhost:3000/editor' }
+                        componentName: 'editorComponent',
+                        componentState: { id: 'start.js' }
                     }
                 ]
             },
@@ -32,7 +32,17 @@ var config = {
         }
     ]
 };
-var myLayout = new GoldenLayout( config );
+
+console.log("G_CHECK " +  $('#golden_layout'));
+
+var myLayout = new window.GoldenLayout(config, $('#golden_layout'));
+
+var editorComponent = function(container, componentState) {
+    console.log("editorComponent: " + componentState.id);
+    container.setTitle(componentState.id);
+    container.getElement().html(`<div id="${componentState.id}"></div>`);
+    container.on('open', () => configureEditor(componentState.id))
+}
 
 var iframeComponent = function(container, componentState) {
     container.on('resize', () => {
@@ -62,7 +72,8 @@ var simpleComponent = function(container, componentState) {
       .appendChild(newChild);
 }
 
-myLayout.registerComponent( 'iframeComponent', iframeComponent);
+myLayout.registerComponent('editorComponent', editorComponent);
+myLayout.registerComponent('iframeComponent', iframeComponent);
 myLayout.registerComponent('simpleComponent', simpleComponent);
 
 myLayout.init();
