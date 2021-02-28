@@ -1,0 +1,20 @@
+doctype html
+html
+  head
+    title='Docker Console Logs'
+  body
+    script(src='/socket.io/socket.io.js')
+    div(id='ros_log_text')
+    script(src="https://cdn.jsdelivr.net/npm/ansi_up@5.0.0/ansi_up.min.js")
+    script.
+        var text = "";
+        var ansi_up = new AnsiUp;
+        var socket = io();
+        socket.emit('ros_log');
+        socket.on('ros_log', function(data) {
+            console.log(data.data);
+            text += data.data;
+            var div = document.getElementById('ros_log_text');
+            div.innerHTML = '<pre>' + ansi_up.ansi_to_html(text) + '</pre>';
+            window.scrollTo(0,document.body.scrollHeight);
+        });

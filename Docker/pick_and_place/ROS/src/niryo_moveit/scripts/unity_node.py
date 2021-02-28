@@ -4,7 +4,7 @@ import rospy
 
 from ros_tcp_endpoint import TcpServer, RosPublisher, RosSubscriber, RosService, UnityService
 from niryo_moveit.msg import SceneData
-from niryo_moveit.srv import MoveExecutorService 
+from niryo_moveit.msg import MoveActionGoal, MoveActionResult, MoveActionFeedback
 
 
 def main():
@@ -14,8 +14,10 @@ def main():
 
     # Start the Server Endpoint with a ROS communication objects dictionary for routing messages
     tcp_server.start({
-        'SceneData_input': RosPublisher('scene_data', SceneData),
-        'move_executor_service': UnityService('move_executor', MoveExecutorService, tcp_server)
+        'scene_data': RosPublisher('scene_data', SceneData),
+        'move_action/goal': RosSubscriber('move_action/goal', MoveActionGoal, tcp_server),
+        'move_action/result': RosPublisher('move_action/result', MoveActionResult),
+        'move_action/feedback': RosPublisher('move_action/feedback', MoveActionFeedback)
     })
     
     rospy.spin()

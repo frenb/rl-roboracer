@@ -5,17 +5,12 @@ from __future__ import print_function
 import rospy
 import asyncio
 
-
-from niryo_moveit.msg import SceneData
-from niryo_moveit.srv import PoseExecutorService
 from virtual_endpoint import VirtualNode
 
 def remote_node():
     rospy.init_node('remote_node', anonymous=True)
     rospy.loginfo(rospy.get_caller_id() + " I Remote Node Started")
     v_node = VirtualNode()
-    v_node.register_type('niryo_moveit/SceneData', SceneData)
-    v_node.register_type('niryo_moveit/PoseExecutorService', PoseExecutorService)
     asyncio.run(v_node.main())
 
 if __name__ == "__main__":

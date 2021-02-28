@@ -27,10 +27,23 @@ message ServiceResponse {
   string response = 1;
 }
 
+message PublishRequest {
+  string topic = 1;
+  string msg_type = 2;
+  string data = 3;
+}
+
+message PublishResponse {
+  // Empty.
+}
+
 service RosNode {
   // Subscribe to a ROS topic.
   rpc Subscribe(SubscribeRequest) returns (stream TopicMessage);
-  
+
+  // Publish a message to a ROS topic.
+  rpc Publish(PublishRequest) returns (PublishResponse);
+
   // Call a ROS service.
   rpc CallService(ServiceRequest) returns (ServiceResponse);
 }
