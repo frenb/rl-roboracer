@@ -23,12 +23,14 @@ Port 10000 is the port that ROS listens to for communication with the simulator.
 3. Press Play
 
 ## Frontend
+Note: If /editor is not working, remember that you have to run git submodule update --init --recursive to retrieve the content of the ace editor repository
 ```console
 $ cd ./Frontend
 $ npm start
 ```
 
 ## Streaming WebApp
+Note: If /index.html is not working, remember to run `npm run-script build` to rebuild from the typescript files under WebApp/src
 ```console
 $ cd ./WebApp
 $ npm start
