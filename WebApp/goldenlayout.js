@@ -18,8 +18,8 @@ var config = {
                 },
                 {
                   type: 'component',
-                  componentName: 'simpleComponent',
-                  componentState: { label: "The iframes aren't required" }
+                  componentName: 'iframeComponent',
+                  componentState: { src: "http://localhost:3000/logs" }
                 }
               ]
             }
@@ -40,6 +40,7 @@ var iframeComponent = function(container, componentState) {
     console.log("componentState.src: " + componentState.src);
     const newChild = document.createElement("iframe")
     newChild.frameBorder=0;
+    newChild.style = "background:white;"
     newChild.src=componentState.src;
     container
       .getElement()
