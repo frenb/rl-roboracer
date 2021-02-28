@@ -24,6 +24,10 @@ export const createServer = (config): express.Application => {
   app.use(express.static(path.join(__dirname, '/../bower_components')));
   app.use(express.static(path.join(__dirname, '/..')));
   app.use('/images', express.static(path.join(__dirname, '/../public/images')));
+  app.get('/videoplayer', (req, res) => {
+    const videPagePath: string = path.join(__dirname, '/../videoplayer.html');
+    res.sendFile(videPagePath);
+  });
   app.get('/', (req, res) => {
     const indexPagePath: string = path.join(__dirname, '/../index.html');
     fs.access(indexPagePath, (err) => {
