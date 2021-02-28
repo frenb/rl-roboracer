@@ -42,3 +42,7 @@ body {
   height: 100%;
   position:absolute;
 }
+
+#golden_layout .lm_content{
+  overflow-y: scroll;
+}
