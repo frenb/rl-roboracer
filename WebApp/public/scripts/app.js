@@ -11,7 +11,8 @@ window.document.oncontextmenu = function () {
 }
 
 window.addEventListener('resize', function() {
-  videoPlayer.resizeVideo();
+  if(videoPlayer)
+    videoPlayer.resizeVideo();
 }, true);
 
 

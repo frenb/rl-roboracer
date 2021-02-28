@@ -7624,7 +7624,7 @@ AudioListener:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 392563228}
-  m_Enabled: 1
+  m_Enabled: 0
 --- !u!20 &392563234
 Camera:
   m_ObjectHideFlags: 0
@@ -9144,6 +9144,22 @@ GameObject:
   m_CorrespondingSourceObject: {fileID: 5601983281253769233, guid: 3901759e6233748538fffdbc519c1a68, type: 3}
   m_PrefabInstance: {fileID: 446270607}
   m_PrefabAsset: {fileID: 0}
+--- !u!114 &446270614
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 446270608}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 132132a7133fd488fa766c260b5433f5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  target: {fileID: 446270608}
+  screenSpace: {x: 0, y: 0, z: 0}
+  offset: {x: 0, y: 0, z: 0}
+  tableTopSurfaceY: 0
 --- !u!43 &447825782
 Mesh:
   m_ObjectHideFlags: 0
@@ -25212,7 +25228,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 181c1f38aca13422b8d486431461b049, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  service_name: move_executor
+  goalTopic: move_action/goal
+  resultTopic: move_action/result
+  feedbackTopic: move_action/feedback
   niryoOne: {fileID: 388558977}
 --- !u!4 &1091775771
 Transform:

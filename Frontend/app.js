@@ -3,45 +3,36 @@ var express = require('express');
 var path = require('path');
 var cookieParser = require('cookie-parser');
 var logger = require('morgan');
-
 var grpc = require('@grpc/grpc-js');
 var services = require('./proto/virtual_endpoint/proto/ros_service_grpc_pb');
-var messages = require('./proto/virtual_endpoint/proto/ros_service_pb');
+const SubscriberQueue = require('./subscriber');
+const Publisher = require('./publisher');
 
+// Routes
 var indexRouter = require('./routes/index');
-var poseRouter = require('./routes/pose');
-var usersRouter = require('./routes/users');
-var sceneDataRouter = require('./routes/sceneData')
+var sceneDataRouter = require('./routes/sceneData');
+var planRouter = require('./routes/plan');
+var moveRouter = require('./routes/move');
+var resultRouter = require('./routes/result');
+var logsRouter = require('./routes/logs');
 
+// Initialize ROS Node GRPC Connection
 var client = new services.RosNodeClient('localhost:50051',grpc.credentials.createInsecure());
 console.log("Connected to ROS node");
 
-var sceneData = {latest: {}};
+// Initialize ROS publishers and subscribers.
+var sceneDataQueue = new SubscriberQueue("scene_data", 'niryo_moveit/SceneData', client);
+var moveResultQueue = new SubscriberQueue("move_action/result", 'niryo_moveit/MoveActionResult', client);
+var moveFeedbackQueue = new SubscriberQueue("move_action/feedback", 'niryo_moveit/MoveActionFeedback', client);
+var moveGoalPublisher = new Publisher("move_action/goal", 'niryo_moveit/MoveActionGoal', client);
 
-// Subscribe to scene data topic and print streaming scene data to console.
-var subscribeRequest = new messages.SubscribeRequest();
-subscribeRequest.setTopic('scene_data');
-subscribeRequest.setMsgType('niryo_moveit/SceneData');
-var call = client.subscribe(subscribeRequest);
-call.on('data', function(topicMessage) {
-  try {
-    sceneData.latest = JSON.parse(topicMessage.getData())
-  } catch (e) {
-    console.log(e);
-  }
-});
-call.on('end', function() {
-  console.log('end');
-
-});
-call.on('error', function(e) {
-  console.log('error: ' + e);
-
-});
-call.on('status', function(status) {
-  console.log('status: ' + status);
-});
-
+var ros_obj = {
+  client: client,
+  sceneDataQueue: sceneDataQueue,
+  moveResultQueue: moveResultQueue,
+  moveFeedbackQueue: moveFeedbackQueue,
+  moveGoalPublisher: moveGoalPublisher
+}
 
 var app = express();
 
@@ -55,19 +46,18 @@ app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.use('/users', usersRouter);
-app.use('/pose', function (req, res, next) {
-  req.ros = {
-      client: client
-  }
-  next();
-}, poseRouter);
-app.use('/sceneData', function (req, res, next) {
-  req.ros = {
-      sceneData: sceneData
-  }
-  next();
-}, sceneDataRouter);
+app.set('ros', ros_obj);
+app.use('/sceneData', sceneDataRouter);
+app.use('/plan', planRouter);
+app.use('/move', moveRouter);
+app.use('/result', resultRouter);
+app.use('/logs', logsRouter);
+app.get('/pickAndPlace',  function(req, res, next) {
+  res.render('pickAndPlace', { title: 'Pick and Place' });
+});
+app.get('/editor',  function(req, res, next) {
+  res.render('editor');
+});
 app.use('/', indexRouter);
 
 // catch 404 and forward to error handler

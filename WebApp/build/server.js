@@ -21,6 +21,8 @@ exports.createServer = function (config) {
     app.use('/signaling', signaling_1.default);
     app.use(express.static(path.join(__dirname, '/../public/stylesheets')));
     app.use(express.static(path.join(__dirname, '/../public/scripts')));
+    app.use(express.static(path.join(__dirname, '/../bower_components')));
+    app.use(express.static(path.join(__dirname, '/..')));
     app.use('/images', express.static(path.join(__dirname, '/../public/images')));
     app.get('/', function (req, res) {
         var indexPagePath = path.join(__dirname, '/../index.html');

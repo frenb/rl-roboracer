@@ -4,12 +4,15 @@ using UnityEngine;
 using ROSGeometry;
 using System.Collections;
 
+using Transform = UnityEngine.Transform;
+using Quaternion = UnityEngine.Quaternion;
+
 public class SceneDataPublisher : MonoBehaviour
 {
     // ROS Connector
     private ROSConnection ros;
 
-    private string topicName = "SceneData_input";
+    private string topicName = "scene_data";
 
     public GameObject niryoOne;
     public GameObject target;
@@ -19,6 +22,8 @@ public class SceneDataPublisher : MonoBehaviour
 
     // Articulation Bodies
     private ArticulationBody[] jointArticulationBodies;
+
+    private Transform gripperBase;
 
     /// <summary>
     /// 
@@ -47,6 +52,9 @@ public class SceneDataPublisher : MonoBehaviour
         string hand_link = wrist_link + "/hand_link";
         jointArticulationBodies[5] = niryoOne.transform.Find(hand_link).GetComponent<ArticulationBody>();
 
+        string gripper_base = hand_link + "/tool_link/gripper_base/Collisions/unnamed";
+        gripperBase = niryoOne.transform.Find(gripper_base);
+
         StartCoroutine(DoPublish());
 
     }
@@ -74,6 +82,16 @@ public class SceneDataPublisher : MonoBehaviour
         // Object & Target
         sceneDataMessage.object_location = target.transform.position.To<FLU>();
         sceneDataMessage.target_location = targetPlacement.transform.position.To<FLU>();
+
+        // Effector Pose.
+        sceneDataMessage.effector_pose.position = gripperBase.transform.position.To<FLU>();
+
+        // TODO: orientation of gripperBase object in unity needs to be rotated to match
+        // axis used by ROS. Don't totally understand the conversion, but this rotation seems
+        // to work.
+        var gribber_rotation = gripperBase.transform.rotation;
+        gribber_rotation *= new Quaternion(0.5f, -0.5f, 0.5f, 0.5f);
+        sceneDataMessage.effector_pose.orientation = gribber_rotation.To<FLU>();
 
         ros.Send(topicName, sceneDataMessage);
     }

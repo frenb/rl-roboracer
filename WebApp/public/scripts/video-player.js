@@ -60,7 +60,9 @@ export class VideoPlayer {
     }
 
     // Decide Signaling Protocol
-    const protocolEndPoint = location.protocol + '//' + location.host + location.pathname + 'protocol';
+    
+    const protocolEndPoint = location.protocol + '//' + location.host + '/' + 'protocol';
+    console.log("**** "+protocolEndPoint);
     const createResponse = await fetch(protocolEndPoint);
     const res = await createResponse.json();
 
@@ -162,6 +164,7 @@ export class VideoPlayer {
   };
 
   resizeVideo() {
+    console.log("inside resize video");
     const clientRect = this.video.getBoundingClientRect();
     const videoRatio = this.videoWidth / this.videoHeight;
     const clientRatio = clientRect.width / clientRect.height;

@@ -18,13 +18,10 @@ from geometry_msgs.msg import Quaternion, Pose
 from std_msgs.msg import String
 from moveit_commander.conversions import pose_to_list
 
-from niryo_moveit.srv import PoseExecutorService, PoseExecutorServiceRequest, PoseExecutorServiceResponse, MoveExecutorService, MoveExecutorServiceRequest, MoveExecutorServiceResponse
-from niryo_moveit.msg import SceneData
+from niryo_moveit.srv import PosePlanner, PosePlannerRequest, PosePlannerResponse
 
 # Node Globals
 joint_names = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
-latest_joint_angles = []
-move_executor_client = None
 
 # Between Melodic and Noetic, the return type of plan() changed. moveit_commander has no __version__ variable, so checking the python version as a proxy
 if sys.version_info >= (3, 0):
@@ -64,46 +61,28 @@ def service_handler(req):
     # Plan trajectory based on current joint angles & desired end-effector pose.
     group_name = "arm"
     move_group = moveit_commander.MoveGroupCommander(group_name)
-    angles = latest_joint_angles
+    angles = [
+        math.radians(req.joint_00),
+        math.radians(req.joint_01),
+        math.radians(req.joint_02),
+        math.radians(req.joint_03),
+        math.radians(req.joint_04),
+        math.radians(req.joint_05),
+    ]
     trajectory = plan_trajectory(move_group, req.pose, angles)
 
-    # Send trajectories to robot to execute.
-    move_req = MoveExecutorServiceRequest()
-    move_req.trajectory = trajectory
-    rospy.loginfo(rospy.get_caller_id() + " I Sending trajectory to execute: " + str(move_req))
-    move_executor_client(move_req)
+    response = PosePlannerResponse()
+    response.trajectory = trajectory
 
-    return PoseExecutorServiceResponse(True)
+    return response    
 
-def scene_data_handler(scene_data):
-    angles = []
-    angles.append(math.radians(scene_data.joint_00))
-    angles.append(math.radians(scene_data.joint_01))
-    angles.append(math.radians(scene_data.joint_02))
-    angles.append(math.radians(scene_data.joint_03))
-    angles.append(math.radians(scene_data.joint_04))
-    angles.append(math.radians(scene_data.joint_05))
-    
-    global latest_joint_angles
-    latest_joint_angles = angles
-    
-
-
-def pose_executor_main():
+def pose_planner_main():
     moveit_commander.roscpp_initialize(sys.argv)
-    rospy.init_node('pose_executor')
-    
-    # Block on robot's move executor service becoming available.
-    rospy.loginfo(rospy.get_caller_id() + " I Waiting for move executor")
-    rospy.wait_for_service('move_executor')
-    global move_executor_client
-    move_executor_client = rospy.ServiceProxy('move_executor', MoveExecutorService)
-
-    service = rospy.Service('pose_executor', PoseExecutorService, service_handler)
-    subscriber = rospy.Subscriber('scene_data', SceneData, scene_data_handler)
-    rospy.loginfo(rospy.get_caller_id() + " I Ready for pose requests")
+    rospy.init_node('pose_planner')
+    service = rospy.Service('pose_planner', PosePlanner, service_handler)
+    rospy.loginfo(rospy.get_caller_id() + " I Ready for pose plannign requests")
     rospy.spin()
 
 
 if __name__ == "__main__":
-    pose_executor_main()
+    pose_planner_main()

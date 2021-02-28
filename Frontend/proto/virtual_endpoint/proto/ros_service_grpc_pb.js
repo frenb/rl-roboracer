@@ -4,6 +4,28 @@
 var grpc = require('@grpc/grpc-js');
 var virtual_endpoint_proto_ros_service_pb = require('../../virtual_endpoint/proto/ros_service_pb.js');
 
+function serialize_virtual_endpoint_PublishRequest(arg) {
+  if (!(arg instanceof virtual_endpoint_proto_ros_service_pb.PublishRequest)) {
+    throw new Error('Expected argument of type virtual_endpoint.PublishRequest');
+  }
+  return Buffer.from(arg.serializeBinary());
+}
+
+function deserialize_virtual_endpoint_PublishRequest(buffer_arg) {
+  return virtual_endpoint_proto_ros_service_pb.PublishRequest.deserializeBinary(new Uint8Array(buffer_arg));
+}
+
+function serialize_virtual_endpoint_PublishResponse(arg) {
+  if (!(arg instanceof virtual_endpoint_proto_ros_service_pb.PublishResponse)) {
+    throw new Error('Expected argument of type virtual_endpoint.PublishResponse');
+  }
+  return Buffer.from(arg.serializeBinary());
+}
+
+function deserialize_virtual_endpoint_PublishResponse(buffer_arg) {
+  return virtual_endpoint_proto_ros_service_pb.PublishResponse.deserializeBinary(new Uint8Array(buffer_arg));
+}
+
 function serialize_virtual_endpoint_ServiceRequest(arg) {
   if (!(arg instanceof virtual_endpoint_proto_ros_service_pb.ServiceRequest)) {
     throw new Error('Expected argument of type virtual_endpoint.ServiceRequest');
@@ -61,6 +83,18 @@ var RosNodeService = exports.RosNodeService = {
     requestDeserialize: deserialize_virtual_endpoint_SubscribeRequest,
     responseSerialize: serialize_virtual_endpoint_TopicMessage,
     responseDeserialize: deserialize_virtual_endpoint_TopicMessage,
+  },
+  // Publish a message to a ROS topic.
+  publish: {
+    path: '/virtual_endpoint.RosNode/Publish',
+    requestStream: false,
+    responseStream: false,
+    requestType: virtual_endpoint_proto_ros_service_pb.PublishRequest,
+    responseType: virtual_endpoint_proto_ros_service_pb.PublishResponse,
+    requestSerialize: serialize_virtual_endpoint_PublishRequest,
+    requestDeserialize: deserialize_virtual_endpoint_PublishRequest,
+    responseSerialize: serialize_virtual_endpoint_PublishResponse,
+    responseDeserialize: deserialize_virtual_endpoint_PublishResponse,
   },
   // Call a ROS service.
   callService: {
