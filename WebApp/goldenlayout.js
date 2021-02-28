@@ -4,9 +4,14 @@ var config = {
           type: 'row',
           content: [
             {
-              type: 'component',
-              componentName: 'iframeComponent',
-              componentState: { src: 'http://localhost:3000/PickAndPlace' }
+                type: 'column',
+                content: [
+                    {
+                        type: 'component',
+                        componentName: 'iframeComponent',
+                        componentState: { src: 'http://localhost:3000/editor' }
+                    }
+                ]
             },
             {
               type: 'column',
