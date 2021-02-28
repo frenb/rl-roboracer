@@ -11,7 +11,6 @@ const SubscriberQueue = require('./subscriber');
 const Publisher = require('./publisher');
 
 var indexRouter = require('./routes/index');
-var usersRouter = require('./routes/users');
 var sceneDataRouter = require('./routes/sceneData');
 var planRouter = require('./routes/plan');
 var moveRouter = require('./routes/move');
@@ -24,7 +23,7 @@ console.log("Connected to ROS node");
 // Initialize ROS publishers and subscribers.
 var sceneDataQueue = new SubscriberQueue("scene_data", 'niryo_moveit/SceneData', client);
 var moveResultQueue = new SubscriberQueue("move_action/result", 'niryo_moveit/MoveActionResult', client);
-var moveFeedbackQueue = new SubscriberQueue("move_action/feedback", 'niryo_moveit/MoveActionResult', client);
+var moveFeedbackQueue = new SubscriberQueue("move_action/feedback", 'niryo_moveit/MoveActionFeedback', client);
 var moveGoalPublisher = new Publisher("move_action/goal", 'niryo_moveit/MoveActionGoal', client);
 
 var ros_obj = {
@@ -47,23 +46,11 @@ app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.use('/users', usersRouter);
-app.use('/sceneData', function (req, res, next) {
-  req.ros = ros_obj
-  next();
-}, sceneDataRouter);
-app.use('/plan', function (req, res, next) {
-  req.ros = ros_obj
-  next();
-}, planRouter);
-app.use('/move', function (req, res, next) {
-  req.ros = ros_obj
-  next();
-}, moveRouter);
-app.use('/result', function (req, res, next) {
-  req.ros = ros_obj
-  next();
-}, resultRouter);
+app.set('ros', ros_obj);
+app.use('/sceneData', sceneDataRouter);
+app.use('/plan', planRouter);
+app.use('/move', moveRouter);
+app.use('/result', resultRouter);
 app.get('/pickAndPlace',  function(req, res, next) {
   res.render('pickAndPlace', { title: 'Pick and Place' });
 });
