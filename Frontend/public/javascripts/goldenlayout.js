@@ -19,7 +19,7 @@ var config = {
                 {
                   type: 'component',
                   componentName: 'iframeComponent',
-                  componentState: { src: 'http://localhost:80/videoplayer' }
+                  componentState: { src: 'http://localhost:80/videoplayer', title: 'simulation' }
                 },
                 {
                   type: 'component',
@@ -54,6 +54,8 @@ var rosLogComponent = function(container, componentState) {
 }
 
 var iframeComponent = function(container, componentState) {
+    container.setTitle(componentState.title);
+
     container.on('resize', () => {
       const iframe = container.getElement().get(0).childNodes[0];
       iframe.width = container.width;
