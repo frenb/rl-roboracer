@@ -1,5 +1,25 @@
-extends layout
-
+doctype html
+head
+  title='Robot Tycoon'
+  link(rel='stylesheet', href='/stylesheets/ide.css')
+  link(rel='stylesheet', href='/stylesheets/editor.css')
+  link(rel='stylesheet', href='//golden-layout.com/assets/css/goldenlayout-base.css')
+  link(rel='stylesheet', href='//golden-layout.com/assets/css/goldenlayout-dark-theme.css')
+  link(rel='stylesheet', href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css")
+  meta(name="viewport" content="width=device-width, initial-scale=1")
 block content
-  h1= title
-  p Welcome to #{title}
+  script(src='https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js')
+  script(src='javascripts/api.js')
+  script(src='/ace-builds/src-noconflict/ace.js')
+  //script(src='//code.jquery.com/jquery-1.11.1.min.js')
+  script(src='//golden-layout.com/files/latest/js/goldenlayout.min.js')
+  script(src='/javascripts/editors.js')
+  body
+    div(id="wrapper")
+      div(class="topnav")
+        li(onclick="runEditorScripts()") &#9658;
+      div(id="golden_layout")
+    script(src='/javascripts/goldenlayout.js')
+
+
+
