@@ -23,8 +23,8 @@ var config = {
                 },
                 {
                   type: 'component',
-                  componentName: 'iframeComponent',
-                  componentState: { src: "http://localhost:3000/logs" }
+                  componentName: 'rosLogComponent',
+                  componentState: { id: "ros_log_output" }
                 }
               ]
             }
@@ -42,6 +42,15 @@ var editorComponent = function(container, componentState) {
     container.setTitle(componentState.id);
     container.getElement().html(`<div id="${componentState.id}"></div>`);
     container.on('open', () => configureEditor(componentState.id))
+}
+
+var rosLogComponent = function(container, componentState) {
+  console.log("rosLogComponent: " + componentState.id);
+  container.setTitle("ROS Logs");
+  container.getElement().html(`<div style="color:white" id="${componentState.id}"></div>`);
+  container.on('open', () => {
+    window.ros_log_div = componentState.id;
+  });
 }
 
 var iframeComponent = function(container, componentState) {
@@ -73,6 +82,7 @@ var simpleComponent = function(container, componentState) {
 }
 
 myLayout.registerComponent('editorComponent', editorComponent);
+myLayout.registerComponent('rosLogComponent', rosLogComponent);
 myLayout.registerComponent('iframeComponent', iframeComponent);
 myLayout.registerComponent('simpleComponent', simpleComponent);
 
