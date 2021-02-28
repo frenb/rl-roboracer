@@ -22,7 +22,6 @@ export const createServer = (config): express.Application => {
   app.use(express.static(path.join(__dirname, '/../public/stylesheets')));
   app.use(express.static(path.join(__dirname, '/../public/scripts')));
   app.use(express.static(path.join(__dirname, '/../bower_components')));
-  app.use(express.static(path.join(__dirname, '/../node_modules/golden-layout')));
   app.use(express.static(path.join(__dirname, '/..')));
   app.use('/images', express.static(path.join(__dirname, '/../public/images')));
   app.get('/', (req, res) => {
