@@ -4,6 +4,8 @@ var express = require('express');
 var router = express.Router();
 
 router.post('/', function(req, res, next) {
+    var ros = req.app.get('ros');
+
     // default value
     let defaultPose = {
       position: {
@@ -22,7 +24,7 @@ router.post('/', function(req, res, next) {
   
     // Build pose request.
     let posePlanRequest = {};
-    sceneData = req.ros.sceneDataQueue.peek().data;
+    sceneData = ros.sceneDataQueue.peek().data;
     posePlanRequest.joint_00 = sceneData.joint_00;
     posePlanRequest.joint_01 = sceneData.joint_01;
     posePlanRequest.joint_02 = sceneData.joint_02;
@@ -38,7 +40,7 @@ router.post('/', function(req, res, next) {
   
     console.log("Sending plan request: " + JSON.stringify(posePlanRequest, null, 3));
 
-    req.ros.client.callService(serviceRequest, function(err, result) {
+    ros.client.callService(serviceRequest, function(err, result) {
       if (err) {
         console.log('error calling pose service: ' + err);
         res.status(500)
