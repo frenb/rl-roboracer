@@ -6,7 +6,8 @@ router.get('/', function(req, res, next) {
 });
 
 router.get('/latest', function(req, res, next) {
-    var data = req.ros.sceneDataQueue.peek().data;
+    var ros = req.app.get('ros');
+    var data = ros.sceneDataQueue.peek().data;
     res.set('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify(data, null, 3));
