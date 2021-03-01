@@ -9160,6 +9160,8 @@ MonoBehaviour:
   screenSpace: {x: 0, y: 0, z: 0}
   offset: {x: 0, y: 0, z: 0}
   tableTopSurfaceY: 0
+  streamCamera: {fileID: 392563228}
+  remoteCameraController: {fileID: 0}
 --- !u!43 &447825782
 Mesh:
   m_ObjectHideFlags: 0
@@ -11177,7 +11179,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 563165329}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: e8a636f62116c0a40bbfefdf876d4608, type: 3}
   m_Name: 

@@ -231,11 +231,35 @@ namespace Unity.RenderStreaming
             return direction;
         }
 
+        public Mouse remoteMouse
+        {
+            get
+            {
+                return m_mouse;
+            }
+        }
+
+        public Keyboard remoteKeyboard
+        {
+            get
+            {
+                return m_keyboard;
+            }
+        }
+
         void FixedUpdate()
         {
             if (m_keyboard.uKey.isPressed)
             {
                 ResetCamera();
+                return;
+            }
+
+            // We will use shift key to ignore mouse movements for the purpose
+            // of camera rotation, and instead allow those to move the target
+            // object.
+            if (m_keyboard.shiftKey.isPressed)
+            {
                 return;
             }
 
