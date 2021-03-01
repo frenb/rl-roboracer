@@ -21,6 +21,8 @@ export class VideoPlayer {
     this.localStream = new MediaStream();
     this.video = elements[0];
     this.video.playsInline = true;
+    this.video.autoplay = true;
+    this.video.muted = true;
     this.video.addEventListener('loadedmetadata', function () {
       _this.video.play();
       _this.resizeVideo();
@@ -30,6 +32,8 @@ export class VideoPlayer {
     this.localStream2 = new MediaStream();
     this.videoThumb = elements[1];
     this.videoThumb.playsInline = true;
+    this.videoThumb.autoplay = true;
+    this.videoThumb.muted = true;
     this.videoThumb.addEventListener('loadedmetadata', function () {
       _this.videoThumb.play();
     }, true);
