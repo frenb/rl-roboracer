@@ -28,6 +28,10 @@ body{
   height: 100%;
 }
 
+video {
+  object-fit: fill;
+}
+
 #VideoThumbnail{
   position: absolute;
   top: 0;

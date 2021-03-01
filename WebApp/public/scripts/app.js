@@ -5,11 +5,13 @@ let playButton;
 let videoPlayer;
 
 showPlayButton();
-
+onClickPlayButton();
 window.document.oncontextmenu = function () {
   return false;     // cancel default menu
 }
 
+/*
+Might have a use for this in the future*/
 window.addEventListener('resize', function() {
   if(videoPlayer)
     videoPlayer.resizeVideo();
@@ -29,7 +31,8 @@ function showPlayButton() {
 
 function onClickPlayButton() {
 
-  playButton.style.display = 'none';
+  if(playButton)
+    playButton.style.display = 'none';
 
   const playerDiv = document.getElementById('player');
 

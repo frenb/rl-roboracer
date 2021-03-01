@@ -263,6 +263,9 @@ namespace Unity.RenderStreaming
                 return;
             }
 
+            // let the the uer controle the camera    
+            return;
+
             var touches = m_screen.GetTouches();
 
             // Rotation 
