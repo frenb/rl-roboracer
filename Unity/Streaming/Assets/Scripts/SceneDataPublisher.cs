@@ -7,16 +7,16 @@ using System.Collections;
 using Transform = UnityEngine.Transform;
 using Quaternion = UnityEngine.Quaternion;
 
-public class SceneDataPublisher : MonoBehaviour
+public class SceneDataPublisher : MonoBehaviour, IRosComponent
 {
     // ROS Connector
     private ROSConnection ros;
 
     private string topicName = "scene_data";
 
-    public GameObject niryoOne;
-    public GameObject target;
-    public GameObject targetPlacement;
+    private GameObject niryoOne;
+    private GameObject target;
+    private GameObject targetPlacement;
 
     private int numRobotJoints = 6;
 
@@ -32,6 +32,18 @@ public class SceneDataPublisher : MonoBehaviour
     {
         // Get ROS connection static instance
         ros = ROSConnection.instance;
+
+        UpdateWorldRefs();
+
+        StartCoroutine(DoPublish());
+    }
+
+    public void UpdateWorldRefs()
+    {
+        target = SimController.instance.target;
+        targetPlacement = SimController.instance.targetPlacement;
+
+        niryoOne = SimController.instance.niryoOne;
 
         jointArticulationBodies = new ArticulationBody[numRobotJoints];
         string shoulder_link = "world/base_link/shoulder_link";
@@ -54,9 +66,6 @@ public class SceneDataPublisher : MonoBehaviour
 
         string gripper_base = hand_link + "/tool_link/gripper_base/Collisions/unnamed";
         gripperBase = niryoOne.transform.Find(gripper_base);
-
-        StartCoroutine(DoPublish());
-
     }
 
     private IEnumerator DoPublish()
