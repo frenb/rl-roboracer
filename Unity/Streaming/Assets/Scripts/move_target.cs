@@ -10,8 +10,8 @@ public class move_target : MonoBehaviour
     public Vector3 screenSpace;
     public Vector3 offset;
     public float tableTopSurfaceY;
-    public GameObject streamCamera;
-    public SimpleCameraController remoteCameraController;
+
+    private SimpleCameraController remoteCameraController;
 
 
     // Use this for initialization
@@ -19,7 +19,7 @@ public class move_target : MonoBehaviour
     {
         tableTopSurfaceY = this.transform.position.y;
         Debug.Log("tableTopSurfaceY " + tableTopSurfaceY);
-        remoteCameraController = streamCamera.GetComponent<SimpleCameraController>();
+        remoteCameraController = SimController.instance.streamCamera.GetComponent<SimpleCameraController>();
     }
 
     private enum ActiveController

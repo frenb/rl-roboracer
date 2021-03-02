@@ -6,7 +6,7 @@ using RosMessageTypes.NiryoMoveit;
 using RosMessageTypes.Moveit;
 using System;
 
-public class MoveService : MonoBehaviour
+public class MoveService : MonoBehaviour, IRosComponent
 {
     // ROS Connector
     private ROSConnection ros;
@@ -27,7 +27,7 @@ public class MoveService : MonoBehaviour
     public string goalTopic = "move_action/goal";
     public string resultTopic = "move_action/result";
     public string feedbackTopic = "move_action/feedback";
-    public GameObject niryoOne;
+    private GameObject niryoOne;
 
     private MoveActionGoal activeGoal = null;
 
@@ -48,6 +48,13 @@ public class MoveService : MonoBehaviour
     void Start()
     {
         ros = ROSConnection.instance;
+        UpdateWorldRefs();
+        ros.Subscribe<MoveActionGoal>(goalTopic, onGoal);
+    }
+
+    public void UpdateWorldRefs()
+    {
+        niryoOne = SimController.instance.niryoOne;
 
         jointArticulationBodies = new ArticulationBody[numRobotJoints];
         string shoulder_link = "world/base_link/shoulder_link";
@@ -79,8 +86,6 @@ public class MoveService : MonoBehaviour
 
         rightGripper = rightGripperGameObject.GetComponent<ArticulationBody>();
         leftGripper = leftGripperGameObject.GetComponent<ArticulationBody>();
-
-        ros.Subscribe<MoveActionGoal>(goalTopic, onGoal);
     }
 
     private void sendResult(MoveActionResult result)
