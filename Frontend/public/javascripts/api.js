@@ -31,6 +31,21 @@ var api = {
         }).promise();
     },
 
+    doSimCommand: async function(command) {
+        return $.ajax({
+            contentType: 'application/json',
+            type: 'POST',
+            url: '/simCommand',
+            data: JSON.stringify(command)
+
+        }).promise();
+    },
+
+    doReset: async function () {
+        let cmd = {cmd: 0 /* reset */};
+        return api.doSimCommand(cmd);
+    },
+
     doTrajectory: async function (trajectory) {
         move_command = {
             cmd_type: 1 /* trajectory */,

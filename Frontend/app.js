@@ -15,6 +15,7 @@ var planRouter = require('./routes/plan');
 var moveRouter = require('./routes/move');
 var resultRouter = require('./routes/result');
 var logsRouter = require('./routes/logs');
+var simCommandRouter = require('./routes/simCommandRouter');
 
 // Initialize ROS Node GRPC Connection
 var client = new services.RosNodeClient('localhost:50051',grpc.credentials.createInsecure());
@@ -25,13 +26,15 @@ var sceneDataQueue = new SubscriberQueue("scene_data", 'niryo_moveit/SceneData',
 var moveResultQueue = new SubscriberQueue("move_action/result", 'niryo_moveit/MoveActionResult', client);
 var moveFeedbackQueue = new SubscriberQueue("move_action/feedback", 'niryo_moveit/MoveActionFeedback', client);
 var moveGoalPublisher = new Publisher("move_action/goal", 'niryo_moveit/MoveActionGoal', client);
+var simCommandPublisher = new Publisher("sim_command", 'niryo_moveit/SimCommand', client);
 
 var ros_obj = {
   client: client,
   sceneDataQueue: sceneDataQueue,
   moveResultQueue: moveResultQueue,
   moveFeedbackQueue: moveFeedbackQueue,
-  moveGoalPublisher: moveGoalPublisher
+  moveGoalPublisher: moveGoalPublisher,
+  simCommandPublisher: simCommandPublisher
 }
 
 var app = express();
@@ -52,6 +55,7 @@ app.use('/plan', planRouter);
 app.use('/move', moveRouter);
 app.use('/result', resultRouter);
 app.use('/logs', logsRouter);
+app.use('/simCommand', simCommandRouter);
 app.get('/pickAndPlace',  function(req, res, next) {
   res.render('pickAndPlace', { title: 'Pick and Place' });
 });
