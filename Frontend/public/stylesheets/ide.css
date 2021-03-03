@@ -7,9 +7,7 @@ body {
 
 #wrapper {
   display: inline-block;
-  vertical-align: top;
   line-height: 1;
-  overflow:hidden
 }
 
 .topnav {
@@ -39,7 +37,7 @@ body {
 
 #golden_layout {
   width: 100%;
-  height: 100%;
+  height: calc(100% - 27px);
   position:absolute;
 }
 
