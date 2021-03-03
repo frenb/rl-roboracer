@@ -50,25 +50,6 @@ function onClickPlayButton() {
 
   setupVideoPlayer([elementVideo, elementVideoThumb]).then(value => videoPlayer = value);
 
-  // add green button
-  const elementBlueButton = document.createElement('button');
-  elementBlueButton.id = "blueButton";
-  elementBlueButton.innerHTML = "Start";
-  playerDiv.appendChild(elementBlueButton);
-  elementBlueButton.addEventListener ("click", function() {
-    sendClickEvent(videoPlayer, 1);
-  });
-
-  // add green button
-  const elementGreenButton = document.createElement('button');
-  elementGreenButton.id = "greenButton";
-  elementGreenButton.innerHTML = "Reset";
-  playerDiv.appendChild(elementGreenButton);
-  elementGreenButton.addEventListener ("click", function() {
-    sendClickEvent(videoPlayer, 2);
-    window.location.reload(false);
-  });
-
   // add fullscreen button
   const elementFullscreenButton = document.createElement('img');
   elementFullscreenButton.id = 'fullscreenButton';
