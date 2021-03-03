@@ -22,9 +22,19 @@ var config = {
                   componentState: { src: 'http://localhost:80/videoplayer', title: 'simulation' }
                 },
                 {
-                  type: 'component',
-                  componentName: 'rosLogComponent',
-                  componentState: { id: "ros_log_output" }
+                  type: 'stack',
+                  content: [
+                    {
+                      type: 'component',
+                      componentName: 'rosLogComponent',
+                      componentState: { id: "ros_log_output" }
+                    },
+                    {
+                      type: 'component',
+                      componentName: 'rosLogComponent',
+                      componentState: { id: "ros_log_output" }
+                    }
+                  ]
                 }
               ]
             }
@@ -50,6 +60,15 @@ var rosLogComponent = function(container, componentState) {
   container.getElement().html(`<div style="color:white" id="${componentState.id}"></div>`);
   container.on('open', () => {
     window.ros_log_div = componentState.id;
+  });
+}
+
+var scriptLogComponent = function(container, componentState) {
+  console.log("scriptLogComponent: " + componentState.id);
+  container.setTitle("Script Logs");
+  container.getElement().html(`<div style="color:white" id="${componentState.id}"></div>`);
+  container.on('open', () => {
+    window.script_log_div = componentState.id;
   });
 }
 
