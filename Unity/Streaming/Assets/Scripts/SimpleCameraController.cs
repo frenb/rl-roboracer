@@ -258,13 +258,12 @@ namespace Unity.RenderStreaming
             // We will use shift key to ignore mouse movements for the purpose
             // of camera rotation, and instead allow those to move the target
             // object.
-            if (m_keyboard.shiftKey.isPressed)
+            if (!m_keyboard.shiftKey.isPressed)
             {
                 return;
             }
 
-            // let the the uer controle the camera    
-            return;
+            // let the the user control the camera    
 
             var touches = m_screen.GetTouches();
 
