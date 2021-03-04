@@ -6,11 +6,11 @@ var config = {
             {
                 type: 'column',
                 content: [
-                    {
-                        type: 'component',
-                        componentName: 'editorComponent',
-                        componentState: { id: 'start.js' }
-                    }
+                  {
+                    type: 'stack',
+                    content: [
+                    ]
+                  }
                 ]
             },
             {
@@ -44,15 +44,15 @@ var config = {
     ]
 };
 
-console.log("G_CHECK " +  $('#golden_layout'));
-
 var myLayout = new window.GoldenLayout(config, $('#golden_layout'));
 
 var editorComponent = function(container, componentState) {
     console.log("editorComponent: " + componentState.id);
     container.setTitle(componentState.id);
     container.getElement().html(`<div id="${componentState.id}"></div>`);
-    container.on('open', () => configureEditor(componentState.id))
+    container.on('show', () => {
+      configureEditor(componentState.id)
+    })
 }
 
 var rosLogComponent = function(container, componentState) {
@@ -110,4 +110,25 @@ myLayout.registerComponent('iframeComponent', iframeComponent);
 myLayout.registerComponent('simpleComponent', simpleComponent);
 
 myLayout.init();
+
+// TODO: allow loading a different workspace. And don't replace contents on refresh.
+// Load default workspace.
+myLayout.on('initialised', async function(event) {
+  // Fetch workspace.
+  await setWorkspace("Pick & Place");
+  // Create editor windows.
+  var editorsContainer = myLayout.root.contentItems[0].contentItems[0].contentItems[0];
+  var editorIds = Object.keys(editors);
+  editorIds.forEach(id => {
+    console.log("adding editor component for " + id);
+    let config =  {
+      type: 'component',
+      componentName: 'editorComponent',
+      componentState: { id: id }
+    };
+    editorsContainer.addChild(config);
+  });
+});
+
+
 

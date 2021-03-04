@@ -12,12 +12,8 @@ async function start() {
     posePoint.y -= 0.01;
     posePoint.x -= 0.01;
     poseOrientation = {x : -0.5, y : -0.5, z : 0.5, w : -0.5}; // perpendicular to table.
-    pose = {position: posePoint, orientation: poseOrientation};
-    plan = await api.getPlan(pose);
-
-    log("Executing pick move with plan...");
-    await api.doTrajectory(plan.trajectory);
-    await api.waitNextResult();
+    var pose = {position: posePoint, orientation: poseOrientation};
+    await executePose(pose);
     log("Done");
 
     log("Opening gripper...");
@@ -27,11 +23,7 @@ async function start() {
 
     log("Planning lowering of arm over object...");
     pose.position.z -= 0.04;
-    plan = await api.getPlan(pose);
-
-    log("Lowering arm over object...");
-    await api.doTrajectory(plan.trajectory);
-    await api.waitNextResult();
+    await executePose(pose);
     log("Done");
 
     log("Closing gripper...");
@@ -39,17 +31,12 @@ async function start() {
     await api.waitNextResult();
     log("Done");
 
-    log("Planning place trajectory...")
+    log("Executing place trajectory...")
     posePoint = scene_data.target_location;
     posePoint.z += 0.15; // stop just above target.
     poseOrientation = {x : -0.5, y : -0.5, z : 0.5, w : -0.5}; // perpendicular to table.
     pose = {position: posePoint, orientation: poseOrientation};
-    plan = await api.getPlan(pose);
-
-
-    log("Executing place move with plan...");
-    await api.doTrajectory(plan.trajectory);
-    await api.waitNextResult();
+    await executePose(pose);
     log("Done");
 
     log("Opening gripper...");

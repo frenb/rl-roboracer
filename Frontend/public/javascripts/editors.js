@@ -1,7 +1,21 @@
-var editors = []
+var editors = {}
+
+async function setWorkspace(workspace_name) {
+    let workspaces = await jQuery.getJSON('workspaces/workspaces.json').promise();
+    let workspace = workspaces[workspace_name];
+    console.log("workspaces = " + JSON.stringify(workspace, null, 3));
+
+    workspace.sources.forEach(file => {
+        let editor = {};
+        editor.get = file.get;
+        editor.post = file.post;
+        editors[file.name] = editor;
+    });
+}
 
 function configureEditor(id) {
-    var editor = ace.edit(id, {
+    var editor = editors[id];
+    editor.ace_editor = ace.edit(id, {
         theme: "ace/theme/tomorrow_night_eighties",
         mode: "ace/mode/javascript",
         maxLines: 1000,
@@ -9,17 +23,17 @@ function configureEditor(id) {
         autoScrollEditorIntoView: true
     });
     
-    // Set default value.
-    jQuery.get('javascripts/pick_and_place.js', function(data) {
-        editor.setValue(data, -1);
+    // Fetch contents.
+    jQuery.get(editor.get, function(data) {
+        editor.ace_editor.setValue(data, -1);
     });
-
-    editors.push(editor);
 }
 
 function constructProgram() {
     let program_string = "";
-    editors.forEach(editor => program_string += editor.getValue() + "\n");
+    Object.keys(editors).forEach(id => {
+        program_string += editors[id].ace_editor.getValue() + "\n"
+    });
     return program_string;
 }
 
