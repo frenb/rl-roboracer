@@ -1,0 +1,16 @@
+{
+    "Pick & Place": {
+        "sources": [
+            {
+                "name": "pick_and_place.js",
+                "get": "workspaces/pick_and_place/pick_and_place.js",
+                "post": "update/workspaces/pick_and_place/pick_and_place.js"
+            },
+            {
+                "name": "helper.js",
+                "get": "workspaces/pick_and_place/helper.js",
+                "post": "update/workspaces/pick_and_place/helper.js"
+            }
+        ]
+    }
+}
