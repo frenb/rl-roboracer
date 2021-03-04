@@ -23,11 +23,12 @@ var config = {
                 },
                 {
                   type: 'stack',
+                  activeItemIndex: 1,
                   content: [
                     {
                       type: 'component',
-                      componentName: 'rosLogComponent',
-                      componentState: { id: "ros_log_output" }
+                      componentName: 'programLogComponent',
+                      componentState: { id: "program_log_output" }
                     },
                     {
                       type: 'component',
@@ -63,12 +64,12 @@ var rosLogComponent = function(container, componentState) {
   });
 }
 
-var scriptLogComponent = function(container, componentState) {
-  console.log("scriptLogComponent: " + componentState.id);
-  container.setTitle("Script Logs");
+var programLogComponent = function(container, componentState) {
+  console.log("programLogComponent: " + componentState.id);
+  container.setTitle("Program");
   container.getElement().html(`<div style="color:white" id="${componentState.id}"></div>`);
   container.on('open', () => {
-    window.script_log_div = componentState.id;
+    window.program_log_div = componentState.id;
   });
 }
 
@@ -103,6 +104,7 @@ var simpleComponent = function(container, componentState) {
 }
 
 myLayout.registerComponent('editorComponent', editorComponent);
+myLayout.registerComponent('programLogComponent', programLogComponent);
 myLayout.registerComponent('rosLogComponent', rosLogComponent);
 myLayout.registerComponent('iframeComponent', iframeComponent);
 myLayout.registerComponent('simpleComponent', simpleComponent);
