@@ -17,8 +17,42 @@ function configureEditor(id) {
     editors.push(editor);
 }
 
+function constructProgram() {
+    let program_string = "";
+    editors.forEach(editor => program_string += editor.getValue() + "\n");
+    return program_string;
+}
+
 async function runEditorScripts() {
-    // TODO: assumes only one editor, no error handling if "start" function not defined.
-    eval(editors[0].getValue());
+    // Functions for script to console pane.
+    // TODO: Override console.log.
+    function log(msg) {
+        let div = document.getElementById(window.program_log_div);
+        let content = div.innerHTML;
+        content += '<pre>' + "[INFO] " + msg + '\n</pre>'
+        div.innerHTML = content;
+        var parent_content = div.parentElement;
+        parent_content.scrollTop = parent_content.scrollHeight;
+    }
+
+    function logError(e) {
+        let div = document.getElementById(window.program_log_div);
+        let content = div.innerHTML;
+        content += '<pre><span style=\"color:red\">' + "[ERROR] " + e + '\n</span></pre>'
+        div.innerHTML = content;
+        var parent_content = div.parentElement;
+        parent_content.scrollTop = parent_content.scrollHeight;
+    }
+
+    // TODO: run this in an invisible iframe.
+    eval(constructProgram());
+
+    if (start == null) {
+        logError('Program does not define an entry point.');
+        return;
+    }
+
+    log('Program started...');
     await start();
+    log('Finished execution.');
 }
