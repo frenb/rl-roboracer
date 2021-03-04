@@ -28,18 +28,20 @@ async function runEditorScripts() {
     // TODO: Override console.log.
     function log(msg) {
         let div = document.getElementById(window.program_log_div);
-        let content = div.innerHTML;
-        content += '<pre>' + "[INFO] " + msg + '\n</pre>'
-        div.innerHTML = content;
+        let text = window.program_log_text || "";
+        text += "[INFO] " + msg + "\n";
+        window.program_log_text = text;
+        div.innerHTML = '<pre>' + text + '</pre>';
         var parent_content = div.parentElement;
         parent_content.scrollTop = parent_content.scrollHeight;
     }
 
     function logError(e) {
         let div = document.getElementById(window.program_log_div);
-        let content = div.innerHTML;
-        content += '<pre><span style=\"color:red\">' + "[ERROR] " + e + '\n</span></pre>'
-        div.innerHTML = content;
+        let text = window.program_log_text || "";
+        text += '<span style=\"color:red\">' + "[ERROR] " + e + '\n</span>';
+        window.program_log_text = text;
+        div.innerHTML = '<pre>' + text + '</pre>';
         var parent_content = div.parentElement;
         parent_content.scrollTop = parent_content.scrollHeight;
     }
@@ -47,12 +49,11 @@ async function runEditorScripts() {
     // TODO: run this in an invisible iframe.
     eval(constructProgram());
 
-    if (start == null) {
-        logError('Program does not define an entry point.');
-        return;
-    }
-
     log('Program started...');
-    await start();
+    try {
+        await start();
+    } catch (e) {
+        logError(e);
+    }
     log('Finished execution.');
 }
