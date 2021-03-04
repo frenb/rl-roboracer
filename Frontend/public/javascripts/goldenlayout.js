@@ -22,9 +22,20 @@ var config = {
                   componentState: { src: 'http://localhost:80/videoplayer', title: 'simulation' }
                 },
                 {
-                  type: 'component',
-                  componentName: 'rosLogComponent',
-                  componentState: { id: "ros_log_output" }
+                  type: 'stack',
+                  activeItemIndex: 1,
+                  content: [
+                    {
+                      type: 'component',
+                      componentName: 'programLogComponent',
+                      componentState: { id: "program_log_output" }
+                    },
+                    {
+                      type: 'component',
+                      componentName: 'rosLogComponent',
+                      componentState: { id: "ros_log_output" }
+                    }
+                  ]
                 }
               ]
             }
@@ -50,6 +61,15 @@ var rosLogComponent = function(container, componentState) {
   container.getElement().html(`<div style="color:white" id="${componentState.id}"></div>`);
   container.on('open', () => {
     window.ros_log_div = componentState.id;
+  });
+}
+
+var programLogComponent = function(container, componentState) {
+  console.log("programLogComponent: " + componentState.id);
+  container.setTitle("Program");
+  container.getElement().html(`<div style="color:white" id="${componentState.id}"></div>`);
+  container.on('open', () => {
+    window.program_log_div = componentState.id;
   });
 }
 
@@ -84,6 +104,7 @@ var simpleComponent = function(container, componentState) {
 }
 
 myLayout.registerComponent('editorComponent', editorComponent);
+myLayout.registerComponent('programLogComponent', programLogComponent);
 myLayout.registerComponent('rosLogComponent', rosLogComponent);
 myLayout.registerComponent('iframeComponent', iframeComponent);
 myLayout.registerComponent('simpleComponent', simpleComponent);
