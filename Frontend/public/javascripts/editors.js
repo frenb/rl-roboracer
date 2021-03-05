@@ -1,29 +1,77 @@
-var editors = []
+var sources = {}
 
-function configureEditor(id) {
-    var editor = ace.edit(id, {
+async function setWorkspace(workspace_name) {
+    let workspaces = await jQuery.getJSON('workspaces/workspaces.json').promise();
+    let workspace = workspaces[workspace_name];
+    console.log("workspaces = " + JSON.stringify(workspace, null, 3));
+
+    for (var remoteSource of workspace.sources) {
+        let source = {};
+        source.get = remoteSource.get;
+        source.post = remoteSource.post;
+        source.txt = await jQuery.get(remoteSource.get).promise();
+        console.log("downloaded source for " + remoteSource.name);
+        sources[remoteSource.name] = source;
+    }
+}
+
+function saveEditors() {
+    Object.keys(sources).forEach(async function(id) {
+        if (sources[id].ace_editor) {
+            sources[id].txt = sources[id].ace_editor.getValue();
+        }
+
+        await $.ajax({
+            type: "POST",
+            url: sources[id].post,
+            data: JSON.stringify({ txt: sources[id].txt }),
+            contentType: 'application/json'
+        }).promise();
+
+        if (sources[id].editorContainer) {
+            sources[id].editorContainer.setSaved(true);
+        }
+    })
+}
+
+function removeEditor(id) {
+    sources[id].ace_editor.destroy();
+    sources[id].ace_editor = null;
+    sources[id].editorContainer = null;
+}
+
+function addEditor(id, editorContainer) {
+    var source = sources[id];
+
+    if (source.ace_editor) {
+        console.log("editor already exists");
+        return;
+    }
+
+    source.ace_editor = ace.edit(id, {
         theme: "ace/theme/tomorrow_night_eighties",
         mode: "ace/mode/javascript",
         maxLines: 1000,
         wrap: true,
         autoScrollEditorIntoView: true
     });
-    
-    // Set default value.
-    jQuery.get('javascripts/pick_and_place.js', function(data) {
-        editor.setValue(data, -1);
-    });
+    source.ace_editor.getSession().setUndoManager(new ace.UndoManager())
+    source.ace_editor.setValue(sources[id].txt, -1);
+    source.editorContainer = editorContainer;
+    console.log("editor created " + id);
 
-    editors.push(editor);
+    source.ace_editor.on('change', (_) => editorContainer.setSaved(false));
 }
 
 function constructProgram() {
     let program_string = "";
-    editors.forEach(editor => program_string += editor.getValue() + "\n");
+    Object.keys(sources).forEach(id => {
+        program_string += sources[id].txt + "\n"
+    });
     return program_string;
 }
 
-async function runEditorScripts() {
+async function runProgram() {
     // Functions for script to console pane.
     // TODO: Override console.log.
     function log(msg) {
