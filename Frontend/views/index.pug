@@ -18,7 +18,8 @@ block content
   body
     div(id="wrapper")
       div(class="topnav")
-        li(onclick="runEditorScripts()") &#9658;
+        li(onclick="saveEditors()") Save
+        li(onclick="runProgram()") &#9658;
         li(onclick="api.doReset()") Reset
       div(id="golden_layout")
     script(src='/javascripts/goldenlayout.js')

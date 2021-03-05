@@ -16,6 +16,7 @@ var moveRouter = require('./routes/move');
 var resultRouter = require('./routes/result');
 var logsRouter = require('./routes/logs');
 var simCommandRouter = require('./routes/simCommandRouter');
+var updateRouter = require('./routes/update');
 
 // Initialize ROS Node GRPC Connection
 var client = new services.RosNodeClient('localhost:50051',grpc.credentials.createInsecure());
@@ -56,6 +57,7 @@ app.use('/move', moveRouter);
 app.use('/result', resultRouter);
 app.use('/logs', logsRouter);
 app.use('/simCommand', simCommandRouter);
+app.use('/update', updateRouter);
 app.get('/pickAndPlace',  function(req, res, next) {
   res.render('pickAndPlace', { title: 'Pick and Place' });
 });
