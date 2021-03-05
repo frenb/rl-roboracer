@@ -49,10 +49,41 @@ var myLayout = new window.GoldenLayout(config, $('#golden_layout'));
 var editorComponent = function(container, componentState) {
     console.log("editorComponent: " + componentState.id);
     container.setTitle(componentState.id);
+
+    // Unsaved changes toggle.
+    container.setSaved = function (saved) {
+      if (saved) {
+        this.setTitle(componentState.id);
+      }
+      else {
+        this.setTitle('*' + componentState.id);
+      }
+    };
+
     container.getElement().html(`<div id="${componentState.id}"></div>`);
+
+    container.on('resize', () => {
+      console.log('resize ' + componentState.id);
+      // TODO: hack? Need to call resize on editor when opened for the first time, but this needs to happen
+      // slightly after on('show') when the element is actually visible.
+      setTimeout(() => sources[componentState.id].ace_editor.resize(), 100);
+    });
+
+    container.on('destroy', () => {
+      console.log('destroy ' + componentState.id);
+      removeEditor(componentState.id);
+    });
+
     container.on('show', () => {
-      configureEditor(componentState.id)
-    })
+      console.log('show ' + componentState.id);
+      // Ensure we are actually in DOM. There are spurious shows when moving tabs.
+      if ($('#' + componentState.id)) {
+        addEditor(componentState.id, container);
+        // TODO: hack? Need to call resize on editor when opened for the first time, but this needs to happen
+        // slightly after on('show') when the element is actually visible.
+        setTimeout(() => sources[componentState.id].ace_editor.resize(), 100);
+      }
+    });
 }
 
 var rosLogComponent = function(container, componentState) {
@@ -118,8 +149,8 @@ myLayout.on('initialised', async function(event) {
   await setWorkspace("Pick & Place");
   // Create editor windows.
   var editorsContainer = myLayout.root.contentItems[0].contentItems[0].contentItems[0];
-  var editorIds = Object.keys(editors);
-  editorIds.forEach(id => {
+  var sourceIds = Object.keys(sources);
+  sourceIds.forEach(id => {
     console.log("adding editor component for " + id);
     let config =  {
       type: 'component',
