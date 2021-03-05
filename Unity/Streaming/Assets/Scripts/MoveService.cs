@@ -35,7 +35,8 @@ public class MoveService : MonoBehaviour, IRosComponent
     {
         TRAJECTORY = 1,
         OPEN_GRIPPER = 2,
-        CLOSE_GRIPPER = 3
+        CLOSE_GRIPPER = 3,
+        POSITIONS = 4
     };
 
     enum Result
@@ -119,11 +120,62 @@ public class MoveService : MonoBehaviour, IRosComponent
             case CommandType.CLOSE_GRIPPER:
                 processGripperGoal(goal);
                 break;
+            case CommandType.POSITIONS:
+                processPositionsGoal(goal);
+                break;
             default:
                 Debug.LogWarning("onGoal: unknown command type " + goal.cmd.cmd_type);
                 break;
         }
     }
+
+    private async void processPositionsGoal(MoveActionGoal goal)
+    {
+        Debug.Log("accepting position goal");
+        activeGoal = goal;
+        var result = new MoveActionResult((int)Result.ERROR);
+        try
+        {
+            result = await executePosition(goal.cmd.positions);
+        }
+        finally
+        {
+            Debug.Log("Goal complete; publishing result");
+            sendResult(result);
+            activeGoal = null;
+        }
+
+    }
+
+    private async Task<MoveActionResult> executePosition(JointPositions positions)
+    {
+        double[] anglesRad = new double[]
+        {
+            positions.joint_00,
+            positions.joint_01,
+            positions.joint_02,
+            positions.joint_03,
+            positions.joint_04,
+            positions.joint_05,
+        };
+
+        sendFeedback(new MoveActionFeedback(0.0f));
+
+        float[] jointAngles = anglesRad.Select(r => (float)r * Mathf.Rad2Deg).ToArray();
+        // Set the joint values for every joint
+        for (int joint = 0; joint < jointArticulationBodies.Length; joint++)
+        {
+            var joint1XDrive = jointArticulationBodies[joint].xDrive;
+            joint1XDrive.target = jointAngles[joint];
+            jointArticulationBodies[joint].xDrive = joint1XDrive;
+        }
+        // Wait for robot to achieve pose for all joint assignments
+        await Task.Delay(jointAssingmentWaitMillis);
+
+        sendFeedback(new MoveActionFeedback(1.0f));
+        return new MoveActionResult((int)Result.SUCCESS);
+    }
+
 
     private async void processGripperGoal(MoveActionGoal goal)
     {
