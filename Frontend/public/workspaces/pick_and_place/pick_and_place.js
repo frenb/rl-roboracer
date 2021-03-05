@@ -1,4 +1,23 @@
 async function start() {
+    
+    var scene_data = await api.getSceneData();
+    
+    positions = {
+        joint_00: scene_data.joint_00 + (Math.random() * 2 -1) / 100,
+        joint_01: scene_data.joint_01 + (Math.random() * 2 -1) / 100,
+        joint_02: scene_data.joint_02 + (Math.random() * 2 -1) / 100,
+        joint_03: scene_data.joint_03 + (Math.random() * 2 -1) / 100,
+        joint_04: scene_data.joint_04 + (Math.random() * 2 -1) / 100,
+        joint_05: scene_data.joint_05 + (Math.random() * 2 -1) / 100
+    }
+    
+    var position_cmd = {
+            cmd_type: 4 /* positions */,
+            positions: positions
+        };
+    
+    await api.doMove({ cmd: position_cmd });
+    /*
     api.clearResult();
     log("Starting...");
     
@@ -42,5 +61,5 @@ async function start() {
     log("Opening gripper...");
     await api.doOpenGripper();
     await api.waitNextResult();
-    log("Done");
+    log("Done");*/
 }
