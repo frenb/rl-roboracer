@@ -21,6 +21,13 @@ function saveEditors() {
             sources[id].txt = sources[id].ace_editor.getValue();
         }
 
+        await $.ajax({
+            type: "POST",
+            url: sources[id].post,
+            data: JSON.stringify({ txt: sources[id].txt }),
+            contentType: 'application/json'
+        }).promise();
+
         if (sources[id].editorContainer) {
             sources[id].editorContainer.setSaved(true);
         }
