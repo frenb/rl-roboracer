@@ -11,6 +11,8 @@ public class MoveService : MonoBehaviour, IRosComponent
 
     // Hardcoded variables 
     private int numRobotJoints = 6;
+    // Via experimentation, joints seem to reach their value within 1-2 FixedUpdate
+    // cycles, which defaults to 20ms.
     private readonly int jointAssingmentWaitMillis = 40;
 
     // Articulation Bodies
@@ -87,9 +89,19 @@ public class MoveService : MonoBehaviour, IRosComponent
         leftGripper = leftGripperGameObject.GetComponent<ArticulationBody>();
     }
 
+    private void sendResult(Result result)
+    {
+        sendResult(new MoveActionResult((int)result, activeGoal.cmd_id));
+    }
+
     private void sendResult(MoveActionResult result)
     {
         ros.Send(resultTopic, result);
+    }
+
+    private void sendFeedback(double progress)
+    {
+        sendFeedback(new MoveActionFeedback(progress, activeGoal.cmd_id));
     }
 
     private void sendFeedback(MoveActionFeedback feedback)
@@ -131,7 +143,7 @@ public class MoveService : MonoBehaviour, IRosComponent
     {
         Debug.Log("accepting position goal");
         activeGoal = goal;
-        var result = new MoveActionResult((int)Result.ERROR);
+        var result = Result.ERROR;
         try
         {
             result = await executePosition(goal.cmd.positions);
@@ -145,7 +157,7 @@ public class MoveService : MonoBehaviour, IRosComponent
 
     }
 
-    private async Task<MoveActionResult> executePosition(JointPositions positions)
+    private async Task<Result> executePosition(JointPositions positions)
     {
         double[] anglesRad = new double[]
         {
@@ -157,7 +169,7 @@ public class MoveService : MonoBehaviour, IRosComponent
             positions.joint_05,
         };
 
-        sendFeedback(new MoveActionFeedback(0.0f));
+        sendFeedback(0.0f);
 
         float[] jointAngles = anglesRad.Select(r => (float)r * Mathf.Rad2Deg).ToArray();
         // Set the joint values for every joint
@@ -170,8 +182,8 @@ public class MoveService : MonoBehaviour, IRosComponent
         // Wait for robot to achieve pose for all joint assignments
         await Task.Delay(jointAssingmentWaitMillis);
 
-        sendFeedback(new MoveActionFeedback(1.0f));
-        return new MoveActionResult((int)Result.SUCCESS);
+        sendFeedback(1.0f);
+        return Result.SUCCESS;
     }
 
 
@@ -179,7 +191,7 @@ public class MoveService : MonoBehaviour, IRosComponent
     {
         Debug.Log("accepting gripper goal");
         activeGoal = goal;
-        var result = new MoveActionResult((int)Result.ERROR);
+        var result = Result.ERROR;
         try
         {
             result = await executeGripperOpen(goal.cmd.cmd_type == (int) CommandType.OPEN_GRIPPER);
@@ -192,9 +204,9 @@ public class MoveService : MonoBehaviour, IRosComponent
         }
     }
 
-    private async Task<MoveActionResult> executeGripperOpen(bool open)
+    private async Task<Result> executeGripperOpen(bool open)
     {
-        sendFeedback(new MoveActionFeedback(0.0));
+        sendFeedback(0.0f);
 
 
         float leftCurrent = leftGripper.xDrive.target;
@@ -224,12 +236,12 @@ public class MoveService : MonoBehaviour, IRosComponent
             rightGripper.xDrive = rightDrive;
 
 
-            sendFeedback(new MoveActionFeedback((double) (i + 1) / steps));
+            sendFeedback((double) (i + 1) / steps);
             await Task.Delay(jointAssingmentWaitMillis);
 
         }
 
-        return new MoveActionResult((int)Result.SUCCESS);
+        return Result.SUCCESS;
 
     }
 
@@ -237,7 +249,7 @@ public class MoveService : MonoBehaviour, IRosComponent
     {
         Debug.Log("accepting trajectory goal");
         activeGoal = goal;
-        var result = new MoveActionResult((int)Result.ERROR);
+        var result = Result.ERROR;
         try {
             result = await executeTrajectories(goal.cmd.trajectory);
         } 
@@ -250,7 +262,7 @@ public class MoveService : MonoBehaviour, IRosComponent
     }
 
 
-    private async Task<MoveActionResult> executeTrajectories(RobotTrajectory trajectory)
+    private async Task<Result> executeTrajectories(RobotTrajectory trajectory)
     {
         // For every robot pose in trajectory plan
         int step = 0;
@@ -271,9 +283,9 @@ public class MoveService : MonoBehaviour, IRosComponent
 
             // Publish progress.
             double progress = (double)++step / totalPoints;
-            sendFeedback(new MoveActionFeedback(progress));
+            sendFeedback(progress);
         }
-        return new MoveActionResult((int)Result.SUCCESS);
+        return Result.SUCCESS;
     }
 
         // Update is called once per frame
