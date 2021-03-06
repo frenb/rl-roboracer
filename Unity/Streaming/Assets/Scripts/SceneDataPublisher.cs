@@ -1,4 +1,3 @@
-using RosMessageTypes.Geometry;
 using RosMessageTypes.NiryoMoveit;
 using UnityEngine;
 using ROSGeometry;
@@ -81,12 +80,12 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
     {
         SceneData sceneDataMessage = new SceneData();
 
-        sceneDataMessage.joint_00 = jointArticulationBodies[0].xDrive.target;
-        sceneDataMessage.joint_01 = jointArticulationBodies[1].xDrive.target;
-        sceneDataMessage.joint_02 = jointArticulationBodies[2].xDrive.target;
-        sceneDataMessage.joint_03 = jointArticulationBodies[3].xDrive.target;
-        sceneDataMessage.joint_04 = jointArticulationBodies[4].xDrive.target;
-        sceneDataMessage.joint_05 = jointArticulationBodies[5].xDrive.target;
+        sceneDataMessage.joint_00 = Mathf.Deg2Rad * jointArticulationBodies[0].xDrive.target;
+        sceneDataMessage.joint_01 = Mathf.Deg2Rad * jointArticulationBodies[1].xDrive.target;
+        sceneDataMessage.joint_02 = Mathf.Deg2Rad * jointArticulationBodies[2].xDrive.target;
+        sceneDataMessage.joint_03 = Mathf.Deg2Rad * jointArticulationBodies[3].xDrive.target;
+        sceneDataMessage.joint_04 = Mathf.Deg2Rad * jointArticulationBodies[4].xDrive.target;
+        sceneDataMessage.joint_05 = Mathf.Deg2Rad * jointArticulationBodies[5].xDrive.target;
 
         // Object & Target
         sceneDataMessage.object_location = target.transform.position.To<FLU>();
