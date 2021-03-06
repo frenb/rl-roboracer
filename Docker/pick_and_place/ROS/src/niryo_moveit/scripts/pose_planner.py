@@ -62,12 +62,12 @@ def service_handler(req):
     group_name = "arm"
     move_group = moveit_commander.MoveGroupCommander(group_name)
     angles = [
-        math.radians(req.joint_00),
-        math.radians(req.joint_01),
-        math.radians(req.joint_02),
-        math.radians(req.joint_03),
-        math.radians(req.joint_04),
-        math.radians(req.joint_05),
+        req.joint_00,
+        req.joint_01,
+        req.joint_02,
+        req.joint_03,
+        req.joint_04,
+        req.joint_05,
     ]
     trajectory = plan_trajectory(move_group, req.pose, angles)
 
