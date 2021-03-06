@@ -1,8 +1,11 @@
 # goal
 niryo_moveit/MoveCommand cmd
+int32 cmd_id
 ---
 # result
 int32 result
+int32 cmd_id
 ---
 # feedback
 float64 progress
+int32 cmd_id
