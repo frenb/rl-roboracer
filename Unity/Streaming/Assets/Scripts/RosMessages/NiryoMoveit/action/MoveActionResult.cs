@@ -13,20 +13,24 @@ namespace RosMessageTypes.NiryoMoveit
 
         //  result
         public int result;
+        public int cmd_id;
 
         public MoveActionResult()
         {
             this.result = 0;
+            this.cmd_id = 0;
         }
 
-        public MoveActionResult(int result)
+        public MoveActionResult(int result, int cmd_id)
         {
             this.result = result;
+            this.cmd_id = cmd_id;
         }
         public override List<byte[]> SerializationStatements()
         {
             var listOfSerializations = new List<byte[]>();
             listOfSerializations.Add(BitConverter.GetBytes(this.result));
+            listOfSerializations.Add(BitConverter.GetBytes(this.cmd_id));
 
             return listOfSerializations;
         }
@@ -35,6 +39,8 @@ namespace RosMessageTypes.NiryoMoveit
         {
             this.result = BitConverter.ToInt32(data, offset);
             offset += 4;
+            this.cmd_id = BitConverter.ToInt32(data, offset);
+            offset += 4;
 
             return offset;
         }
@@ -42,7 +48,8 @@ namespace RosMessageTypes.NiryoMoveit
         public override string ToString()
         {
             return "MoveActionResult: " +
-            "\nresult: " + result.ToString();
+            "\nresult: " + result.ToString() +
+            "\ncmd_id: " + cmd_id.ToString();
         }
     }
 }
