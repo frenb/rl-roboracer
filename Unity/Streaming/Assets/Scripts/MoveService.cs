@@ -1,10 +1,8 @@
 ﻿using UnityEngine;
-using System.Collections;
 using System.Linq;
 using System.Threading.Tasks;
 using RosMessageTypes.NiryoMoveit;
 using RosMessageTypes.Moveit;
-using System;
 
 public class MoveService : MonoBehaviour, IRosComponent
 {
@@ -13,7 +11,7 @@ public class MoveService : MonoBehaviour, IRosComponent
 
     // Hardcoded variables 
     private int numRobotJoints = 6;
-    private readonly int jointAssingmentWaitMillis = 100;
+    private readonly int jointAssingmentWaitMillis = 40;
 
     // Articulation Bodies
     private ArticulationBody[] jointArticulationBodies;
