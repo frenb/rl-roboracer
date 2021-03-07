@@ -5,7 +5,7 @@ var cookieParser = require('cookie-parser');
 var logger = require('morgan');
 var grpc = require('@grpc/grpc-js');
 var services = require('./proto/virtual_endpoint/proto/ros_service_grpc_pb');
-const SubscriberQueue = require('./subscriber');
+const {SubscriberQueue, _} = require('./subscriber');
 const Publisher = require('./publisher');
 
 // Routes
