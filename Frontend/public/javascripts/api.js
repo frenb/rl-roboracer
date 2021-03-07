@@ -1,16 +1,37 @@
-var api = {
-    sleep: function (ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
-    },
+class API {
+    constructor() {
+        this.waiting = {};
+        this.next_cmd_id = 0;
+        // Listen to move action results.
+        socket.emit('subscribe', 'move_action/result');
+        socket.on('move_action/result', result => this.onMoveActionResult(result));
+    }
 
-    getSceneData: async function () {
+
+    onMoveActionResult(result) {
+        // Wake up waiters for cmd id.
+        if (this.waiting[result.data.cmd_id]) {
+            this.waiting[result.data.cmd_id](result)
+            delete this.waiting[result.data.cmd_id];
+        }
+    }
+
+    waitOnCmd(id) {
+        return new Promise(resolve => this.waiting[id] = resolve);
+    }
+
+    sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async getSceneData() {
         return $.ajax({
             dataType: "json",
             url: '/sceneData/latest',
         }).promise();
-    },
+    }
 
-    getPlan: async function (pose) {
+    async getPlan(pose) {
         return $.ajax({
             dataType: "json",
             contentType: 'application/json',
@@ -19,19 +40,23 @@ var api = {
             data: JSON.stringify(pose)
 
         }).promise();
-    },
+    }
 
-    doMove: async function (action) {
-        return $.ajax({
+    async doMove(action) {
+        let id = this.next_cmd_id++;
+        let waitPromise = this.waitOnCmd(id);
+        action.cmd_id = id;
+        await $.ajax({
             contentType: 'application/json',
             type: 'POST',
             url: '/move',
             data: JSON.stringify(action)
 
-        }).promise();
-    },
+        });
+        return waitPromise;
+    }
 
-    doSimCommand: async function(command) {
+    async doSimCommand(command) {
         return $.ajax({
             contentType: 'application/json',
             type: 'POST',
@@ -39,61 +64,35 @@ var api = {
             data: JSON.stringify(command)
 
         }).promise();
-    },
+    }
 
-    doReset: async function () {
+    async doReset() {
         let cmd = {cmd: 0 /* reset */};
-        return api.doSimCommand(cmd);
-    },
+        return this.doSimCommand(cmd);
+    }
 
-    doTrajectory: async function (trajectory) {
-        move_command = {
+    async doTrajectory(trajectory) {
+        let move_command = {
             cmd_type: 1 /* trajectory */,
             trajectory: trajectory
         };
-        return api.doMove({cmd: move_command});
-    },
+        return this.doMove({cmd: move_command});
+    }
 
-    doOpenGripper: async function () {
-        move_command = {
+    async doOpenGripper() {
+        let move_command = {
             cmd_type: 2 /* open */
         };
-        return api.doMove({cmd: move_command});
-    },
+        return this.doMove({cmd: move_command});
+    }
 
-    doCloseGripper: async function () {
-        move_command = {
+    async doCloseGripper() {
+        let move_command = {
             cmd_type: 3 /* close */
         };
-        return api.doMove({cmd: move_command});
-    },
-
-    getLatestResult: async function () {
-        return $.ajax({
-            dataType: "json",
-            contentType: 'application/json',
-            type: 'GET',
-            url: '/result/latest'
-
-        }).promise();
-    },
-
-    lastResult: {},
-
-    clearResult: function () {
-        api.lastResult = {};
-    },
-
-    waitNextResult: async function () {
-        while(true) {
-            last_ts = api.lastResult.timestamp || 0;
-            current_result = await api.getLatestResult();
-            current_ts = current_result.timestamp || 0;
-            if (current_ts > last_ts) {
-                api.lastResult = current_result;
-                return current_result;
-            }
-            await api.sleep(1000);
-        }
-    },
+        return this.doMove({cmd: move_command});  
+    }
 }
+
+
+var api = new API();
