@@ -146,7 +146,8 @@ myLayout.init();
 // Load default workspace.
 myLayout.on('initialised', async function(event) {
   // Fetch workspace.
-  await setWorkspace("Pick & Place");
+  //await setWorkspace("Pick & Place");
+  await setWorkspace("Pole & Cart TF");
   // Create editor windows.
   var editorsContainer = myLayout.root.contentItems[0].contentItems[0].contentItems[0];
   var sourceIds = Object.keys(sources);
