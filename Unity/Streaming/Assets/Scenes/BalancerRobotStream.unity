@@ -1347,10 +1347,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   simCommandTopic: sim_command
   simStatusTopic: sim_status
-  niryoOnePrefab: {fileID: 4552326254093087083, guid: 8b8e06f20df6a418a9ea18fdc1f5f337, type: 3}
+  niryoOnePrefab: {fileID: 4552326254093087083, guid: 2084e70ceb987384091b1d2044620b04, type: 3}
   targetPrefab: {fileID: 6306637745650358488, guid: 6d2d5245f7add4f2c8c75048ce6e5140, type: 3}
   targetPlacementPrefab: {fileID: 2378414880219785809, guid: 548394a4eba944fdeabb809219e40030, type: 3}
-  poleCartPrefab: {fileID: 0}
+  poleCartPrefab: {fileID: 3400222665675494350, guid: 6f7f7ee8a8376174ca3586567c179f1b, type: 3}
   streamCamera: {fileID: 392563228}
 --- !u!4 &1091775771
 Transform:

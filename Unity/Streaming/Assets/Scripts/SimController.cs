@@ -15,7 +15,6 @@ public class SimController : MonoBehaviour
     public GameObject niryoOnePrefab;
     public GameObject targetPrefab;
     public GameObject targetPlacementPrefab;
-
     public GameObject poleCartPrefab;
 
     public GameObject streamCamera;
@@ -64,7 +63,10 @@ public class SimController : MonoBehaviour
         Destroy(niryoOne);
         Destroy(target);
         Destroy(targetPlacement);
-        Destroy(poleCart);
+        if (poleCart != null)
+        {
+            Destroy(poleCart);
+        }
     }
 
     private void InstantiateObjects()
@@ -72,7 +74,10 @@ public class SimController : MonoBehaviour
         niryoOne = Instantiate(niryoOnePrefab);
         target = Instantiate(targetPrefab);
         targetPlacement = Instantiate(targetPlacementPrefab);
-        poleCart = Instantiate(poleCartPrefab);
+        if (poleCartPrefab != null)
+        {
+            poleCart = Instantiate(poleCartPrefab);
+        }
     }
 
     private void onCommand(SimCommand cmd)
