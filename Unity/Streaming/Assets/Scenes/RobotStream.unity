@@ -463,13 +463,13 @@ Transform:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 392563228}
-  m_LocalRotation: {x: 0.38268343, y: 0, z: 0, w: 0.92387956}
-  m_LocalPosition: {x: 0, y: 1.4, z: -0.7}
+  m_LocalRotation: {x: 0.2509706, y: -0, z: -0, w: 0.9679947}
+  m_LocalPosition: {x: 0, y: 1.29, z: -0.96}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_Children: []
   m_Father: {fileID: 0}
   m_RootOrder: 2
-  m_LocalEulerAnglesHint: {x: 45, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: 29.07, y: 0, z: 0}
 --- !u!1 &563165329
 GameObject:
   m_ObjectHideFlags: 0
@@ -680,7 +680,7 @@ AudioListener:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 563165329}
-  m_Enabled: 1
+  m_Enabled: 0
 --- !u!20 &563165335
 Camera:
   m_ObjectHideFlags: 0
@@ -1347,9 +1347,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   simCommandTopic: sim_command
   simStatusTopic: sim_status
-  niryoOnePrefab: {fileID: 4552326254093087083, guid: 8b8e06f20df6a418a9ea18fdc1f5f337, type: 3}
+  niryoOnePrefab: {fileID: 4552326254093087083, guid: 2084e70ceb987384091b1d2044620b04, type: 3}
   targetPrefab: {fileID: 6306637745650358488, guid: 6d2d5245f7add4f2c8c75048ce6e5140, type: 3}
   targetPlacementPrefab: {fileID: 2378414880219785809, guid: 548394a4eba944fdeabb809219e40030, type: 3}
+  poleCartPrefab: {fileID: 3400222665675494350, guid: 6f7f7ee8a8376174ca3586567c179f1b, type: 3}
   streamCamera: {fileID: 392563228}
 --- !u!4 &1091775771
 Transform:
