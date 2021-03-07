@@ -7,3 +7,5 @@ float64 joint_02
 float64 joint_03
 float64 joint_04
 float64 joint_05
+geometry_msgs/Pose pole_pose
+bool pole_upright

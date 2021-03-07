@@ -20,6 +20,8 @@ namespace RosMessageTypes.NiryoMoveit
         public double joint_03;
         public double joint_04;
         public double joint_05;
+        public Geometry.Pose pole_pose;
+        public bool pole_upright;
 
         public SceneData()
         {
@@ -32,9 +34,11 @@ namespace RosMessageTypes.NiryoMoveit
             this.joint_03 = 0.0;
             this.joint_04 = 0.0;
             this.joint_05 = 0.0;
+            this.pole_pose = new Geometry.Pose();
+            this.pole_upright = false;
         }
 
-        public SceneData(Geometry.Point object_location, Geometry.Point target_location, Geometry.Pose effector_pose, double joint_00, double joint_01, double joint_02, double joint_03, double joint_04, double joint_05)
+        public SceneData(Geometry.Point object_location, Geometry.Point target_location, Geometry.Pose effector_pose, double joint_00, double joint_01, double joint_02, double joint_03, double joint_04, double joint_05, Geometry.Pose pole_pose, bool pole_upright)
         {
             this.object_location = object_location;
             this.target_location = target_location;
@@ -45,6 +49,8 @@ namespace RosMessageTypes.NiryoMoveit
             this.joint_03 = joint_03;
             this.joint_04 = joint_04;
             this.joint_05 = joint_05;
+            this.pole_pose = pole_pose;
+            this.pole_upright = pole_upright;
         }
         public override List<byte[]> SerializationStatements()
         {
@@ -58,6 +64,8 @@ namespace RosMessageTypes.NiryoMoveit
             listOfSerializations.Add(BitConverter.GetBytes(this.joint_03));
             listOfSerializations.Add(BitConverter.GetBytes(this.joint_04));
             listOfSerializations.Add(BitConverter.GetBytes(this.joint_05));
+            listOfSerializations.AddRange(pole_pose.SerializationStatements());
+            listOfSerializations.Add(BitConverter.GetBytes(this.pole_upright));
 
             return listOfSerializations;
         }
@@ -79,6 +87,9 @@ namespace RosMessageTypes.NiryoMoveit
             offset += 8;
             this.joint_05 = BitConverter.ToDouble(data, offset);
             offset += 8;
+            offset = this.pole_pose.Deserialize(data, offset);
+            this.pole_upright = BitConverter.ToBoolean(data, offset);
+            offset += 1;
 
             return offset;
         }
@@ -94,7 +105,9 @@ namespace RosMessageTypes.NiryoMoveit
             "\njoint_02: " + joint_02.ToString() +
             "\njoint_03: " + joint_03.ToString() +
             "\njoint_04: " + joint_04.ToString() +
-            "\njoint_05: " + joint_05.ToString();
+            "\njoint_05: " + joint_05.ToString() +
+            "\npole_pose: " + pole_pose.ToString() +
+            "\npole_upright: " + pole_upright.ToString();
         }
     }
 }

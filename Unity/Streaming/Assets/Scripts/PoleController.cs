@@ -6,10 +6,13 @@ public class PoleController : MonoBehaviour
 {
     // Start is called before the first frame update
     int fixedUpdateCount=0;
-    bool isUpright = true;
+
+
+    public bool isUpright  {get; private set;}
+
     void Start()
     {
-        
+        isUpright = true;   
     }
 
     // Update is called once per frame

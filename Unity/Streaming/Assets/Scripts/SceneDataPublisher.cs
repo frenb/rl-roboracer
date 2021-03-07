@@ -16,6 +16,7 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
     private GameObject niryoOne;
     private GameObject target;
     private GameObject targetPlacement;
+    private GameObject pole;
 
     private int numRobotJoints = 6;
 
@@ -39,9 +40,11 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
 
     public void UpdateWorldRefs()
     {
+        // Targets
         target = SimController.instance.target;
         targetPlacement = SimController.instance.targetPlacement;
 
+        // Robot
         niryoOne = SimController.instance.niryoOne;
 
         jointArticulationBodies = new ArticulationBody[numRobotJoints];
@@ -65,6 +68,12 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
 
         string gripper_base = hand_link + "/tool_link/gripper_base/Collisions/unnamed";
         gripperBase = niryoOne.transform.Find(gripper_base);
+
+        // Pole
+        if (SimController.instance.poleCart != null)
+        {
+            pole = SimController.instance.poleCart.transform.Find("Pole").gameObject;
+        }
     }
 
     private IEnumerator DoPublish()
@@ -100,6 +109,14 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
         var gribber_rotation = gripperBase.transform.rotation;
         gribber_rotation *= new Quaternion(0.5f, -0.5f, 0.5f, 0.5f);
         sceneDataMessage.effector_pose.orientation = gribber_rotation.To<FLU>();
+
+        // Pole position & orientation.
+        if (pole != null) {
+            sceneDataMessage.pole_pose.position = pole.transform.position.To<FLU>();
+            sceneDataMessage.pole_pose.orientation = pole.transform.rotation.To<FLU>();
+            sceneDataMessage.pole_upright = pole.GetComponent<PoleController>().isUpright;
+        }
+
 
         ros.Send(topicName, sceneDataMessage);
     }
