@@ -12,5 +12,14 @@
                 "post": "/update/workspaces/pick_and_place/pick_and_place.js"
             }
         ]
+    },
+    "Pole & Cart TF": {
+        "sources": [
+            {
+                "name": "pole_cart_tf.js",
+                "get": "/workspaces/pole_cart_tf/pole_cart_tf.js",
+                "post": "/update/workspaces/pole_cart_tf/pole_cart_tf.js"
+            }
+        ]
     }
 }
