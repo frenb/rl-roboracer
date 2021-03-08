@@ -1,12 +1,36 @@
 class API {
     constructor() {
         this.waiting = {};
+        this.waiting_scene_data = null;
+        this.waiting_sim_restarted = null;
+        this.latest_scene_data = null;
         this.next_cmd_id = 0;
         // Listen to move action results.
         socket.emit('subscribe', 'move_action/result');
         socket.on('move_action/result', result => this.onMoveActionResult(result));
+        // Listen to scene data.
+        socket.emit('subscribe', 'scene_data');
+        socket.on('scene_data', scene_data => this.onSceneData(scene_data));
+        // Listen to simulation status updates (e.g. restarted )
+        socket.emit('subscribe', 'sim_status');
+        socket.on('scene_data', sim_status => this.onSimStatus(sim_status));
+
     }
 
+    onSimStatus(sim_status) {
+        if (sim_status.data.status == 1 /* restarted */) {
+            if (this.waiting_sim_restarted) {
+                this.waiting_sim_restarted.resolve();
+            }
+        }
+    }
+
+    onSceneData(scene_data) {
+        if (this.waiting_scene_data) {
+            this.waiting_scene_data.resolve(scene_data)
+        }
+        this.latest_scene_data = scene_data;
+    }
 
     onMoveActionResult(result) {
         // Wake up waiters for cmd id.
@@ -25,10 +49,11 @@ class API {
     }
 
     async getSceneData() {
-        return $.ajax({
-            dataType: "json",
-            url: '/sceneData/latest',
-        }).promise();
+        if (this.latest_scene_data) {
+            return this.latest_scene_data;
+        }
+        // Not populated yet.
+        return new Promise(resolve => this.waiting_scene_data = resolve);
     }
 
     async getPlan(pose) {
@@ -67,8 +92,10 @@ class API {
     }
 
     async doReset() {
+        let waitPromise = new Promise(resolve => this.waiting_sim_restarted = resolve);
         let cmd = {cmd: 0 /* reset */};
-        return this.doSimCommand(cmd);
+        await this.doSimCommand(cmd);
+        return waitPromise;
     }
 
     async doTrajectory(trajectory) {

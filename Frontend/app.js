@@ -28,6 +28,7 @@ var moveResultQueue = new SubscriberQueue("move_action/result", 'niryo_moveit/Mo
 var moveFeedbackQueue = new SubscriberQueue("move_action/feedback", 'niryo_moveit/MoveActionFeedback', client);
 var moveGoalPublisher = new Publisher("move_action/goal", 'niryo_moveit/MoveActionGoal', client);
 var simCommandPublisher = new Publisher("sim_command", 'niryo_moveit/SimCommand', client);
+var simStatusQueue = new SubscriberQueue("sim_status", "niryo_moveit/SimStatus", client);
 
 var ros_obj = {
   client: client,
@@ -35,7 +36,8 @@ var ros_obj = {
   moveResultQueue: moveResultQueue,
   moveFeedbackQueue: moveFeedbackQueue,
   moveGoalPublisher: moveGoalPublisher,
-  simCommandPublisher: simCommandPublisher
+  simCommandPublisher: simCommandPublisher,
+  simStatusQueue: simStatusQueue
 }
 
 var app = express();
