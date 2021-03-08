@@ -11,12 +11,14 @@ block content
   script(src='https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js')
   script(src='/socket.io/socket.io.js')
   script.
-    // global socket.io instnace.
+    // global instance for IDE.
     socket = io();
   script(src='javascripts/api.js')
   script(src='/ace-builds/src-noconflict/ace.js')
   script(src='//golden-layout.com/files/latest/js/goldenlayout.min.js')
   script(src="https://cdn.jsdelivr.net/npm/ansi_up@5.0.0/ansi_up.min.js")
+  script(src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@2.0.0/dist/tf.min.js")
+  script(src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js")
   script(src='/javascripts/editors.js')
   body
     div(id="wrapper")

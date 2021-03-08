@@ -36,7 +36,8 @@ public class SimController : MonoBehaviour
 
     private enum Status
     {
-        STARTED = 0
+        STARTED = 0,
+        RESTARTED = 1,
     };
 
     public SimController()
@@ -100,6 +101,7 @@ public class SimController : MonoBehaviour
         InstantiateObjects();
         moveService.UpdateWorldRefs();
         sceneDataPublisher.UpdateWorldRefs();
+        ros.Send(simStatusTopic, new SimStatus((int)Status.RESTARTED));
     }
 
     // Update is called once per frame
