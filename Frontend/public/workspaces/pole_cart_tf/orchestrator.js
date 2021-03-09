@@ -4,11 +4,11 @@ const LAMBDA = 0.01;
 
 class Orchestrator {
     
-    constructor(maxStepsPerGame, model, memory, discountRate) {
+    constructor(maxStepsPerGame, model, memory, discountRate, eps) {
         this.maxStepsPerGame = maxStepsPerGame;
         this.model = model;
         this.memory = memory;
-        this.eps = MAX_EPSILON;
+        this.eps = eps;
         this.steps = 0;
         this.discountRate = discountRate;
         
@@ -36,7 +36,7 @@ class Orchestrator {
             const action = this.model.chooseAction(state, this.eps)
             console.log("step " + step + ": action = " + action);
             const done = await env.update(action);
-            const reward = done? -1 : 1;
+            const reward = done? -10 : 1;
             console.log("Executed action done = " + done);
 
             
@@ -96,16 +96,16 @@ class Orchestrator {
         console.log("updating rewards");
         batch.forEach(
             ([state, action, reward, nextState], index) => {
-                console.log(`qsa[${index}] = `);
+                //console.log(`qsa[${index}] = `);
                 qsa[index].print();
-                console.log(`qsad[${index}] = `);
+                //console.log(`qsad[${index}] = `);
                 qsad[index].print();
                 
                 const currentQ = qsa[index].dataSync();
                 let action_index = action + 1;
                 
                 console.log(`action = ${action}, action_i = ${action_index}, reward = ${reward}`);
-                console.log(`currentQ = ${currentQ.toString()}`);
+                console.log(`currentQ = ${currentQ.toString()} ->`);
                 
                 currentQ[action_index] = nextState ? reward + this.discountRate * qsad[index].max().dataSync() : reward;
                 
