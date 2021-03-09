@@ -13,21 +13,21 @@ class API {
         socket.on('scene_data', scene_data => this.onSceneData(scene_data));
         // Listen to simulation status updates (e.g. restarted )
         socket.emit('subscribe', 'sim_status');
-        socket.on('scene_data', sim_status => this.onSimStatus(sim_status));
+        socket.on('sim_status', sim_status => this.onSimStatus(sim_status));
 
     }
 
     onSimStatus(sim_status) {
         if (sim_status.data.status == 1 /* restarted */) {
             if (this.waiting_sim_restarted) {
-                this.waiting_sim_restarted.resolve();
+                this.waiting_sim_restarted();
             }
         }
     }
 
     onSceneData(scene_data) {
         if (this.waiting_scene_data) {
-            this.waiting_scene_data.resolve(scene_data)
+            this.waiting_scene_data(scene_data)
         }
         this.latest_scene_data = scene_data;
     }

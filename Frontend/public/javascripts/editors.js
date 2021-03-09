@@ -79,8 +79,10 @@ async function runProgram() {
         let text = window.program_log_text || "";
         text += "[INFO] " + msg + "\n";
         window.program_log_text = text;
-        div.innerHTML = '<pre>' + text + '</pre>';
-        var parent_content = div.parentElement;
+        if (div) {
+            div.innerHTML = '<pre>' + text + '</pre>';
+            var parent_content = div.parentElement;
+        }
         parent_content.scrollTop = parent_content.scrollHeight;
     }
 
@@ -89,8 +91,10 @@ async function runProgram() {
         let text = window.program_log_text || "";
         text += '<span style=\"color:red\">' + "[ERROR] " + e + '\n</span>';
         window.program_log_text = text;
-        div.innerHTML = '<pre>' + text + '</pre>';
-        var parent_content = div.parentElement;
+        if (div) {
+            div.innerHTML = '<pre>' + text + '</pre>';
+            var parent_content = div.parentElement;
+        }
         parent_content.scrollTop = parent_content.scrollHeight;
     }
 
@@ -102,6 +106,8 @@ async function runProgram() {
         await start();
     } catch (e) {
         logError(e);
+        // G_CHECK remove
+        throw(e);
     }
     log('Finished execution.');
 }
