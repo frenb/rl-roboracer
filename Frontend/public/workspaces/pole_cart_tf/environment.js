@@ -1,40 +1,35 @@
-class Action {
-    constructor(joint_delta) {
-        this.joint_delta = joint_delta;
-    }
-}
+
+const MAX_JOINT_ANGLE = 30;
 
 class Environment {
     constructor(scene_data) {
-        this._time_start = Date.now();
-        updateFromSceneData(scene_data);
+        this.updateFromSceneData(scene_data);
     }
     
     updateFromSceneData(scene_data) {
-        this.joint_00 = scene_data.joint_00;
-        this.pole_x = scene_data.pole_pose.position.x;
-        this.pole_y = scene_data.pole_pose.position.y;
-        this.pole_z = scene_data.pole_pose.position.z;
-        this.pole_o_x = scene_data.pole_pose.orientation.x;
-        this.pole_o_y = scene_data.pole_pose.orientation.y;
-        this.pole_o_z = scene_data.pole_pose.orientation.z;
-        this.pole_o_w = scene_data.pole_pose.orientation.w;
-        this.pole_upright = scene_data.pole_upright;
-        if (this.pole_upright) {
-            this.upright_millis = Date.now() - this._time_start;
-        }
+        scene_data = scene_data.data
+        // Save entire scene data for sending move commands with correct angles
+        this.scene_data = scene_data;       
+        // State variables.
+        this.joint_00 =             scene_data.joint_00;
+        this.hand_tangent_speed =   scene_data.pole_cart.hand_tangent_speed;
+        this.pole_hand_angle =      scene_data.pole_cart.pole_hand_angle;
+        this.pole_angular_speed =   scene_data.pole_cart.pole_angular_speed;
+        this.upright =              scene_data.pole_cart.upright;
     }
     
+    // Actions:
+    //.   -1 = add -2 degree to joint_00
+    //.    0 = nothing
+    //.    1 = add 2 degree to joint_00
     async update(action) {
-        var scene_data = await api.getSceneData();
-        
-        positions = {
-            joint_00: scene_data.joint_00 + action.joint_delta,
-            joint_01: scene_data.joint_01,
-            joint_02: scene_data.joint_02,
-            joint_03: scene_data.joint_03,
-            joint_04: scene_data.joint_04,
-            joint_05: scene_data.joint_05
+        let positions = {
+            joint_00: this.scene_data.joint_00 + action * 2 * 3.14 / 180.0,
+            joint_01: this.scene_data.joint_01,
+            joint_02: this.scene_data.joint_02,
+            joint_03: this.scene_data.joint_03,
+            joint_04: this.scene_data.joint_04,
+            joint_05: this.scene_data.joint_05
         }
         
         var position_cmd = {
@@ -43,22 +38,44 @@ class Environment {
             };
         
         await api.doMove({ cmd: position_cmd });
-        
+        api.latest_scene_data = null
         var new_scene_data = await api.getSceneData();
-        updateFromSceneData(new_scene_data);
+        this.updateFromSceneData(new_scene_data);
         
-        return !this.pole_upright
+        return !this.upright || Math.abs(this.joint_00) * 180.0 / 3.14 > MAX_JOINT_ANGLE;
     }
     
     getStateTensor() {
-        return tf.tensor([
-            this.joint_00,
-            this.pole_x,
-            this.pole_y,
-            this.pole_z,
-            this.pole_o_x,
-            this.pole_o_y,
-            this.pole_o_z,
-            this.pole_o_w]);
+        return tf.tensor2d([[
+            this.discretizeJointAngle(this.joint_00),
+            this.discretizeHandTangentSpeed(this.hand_tangent_speed),
+            this.discretizePoleHandAngle(this.pole_hand_angle),
+            this.discretizePoleAngularSpeed(this.pole_angular_speed)]]);
     }
+    
+    discretizeJointAngle(angle) {
+        let angle_deg = angle * 180.0 / 3.14;
+        return this.discretize(angle_deg, -MAX_JOINT_ANGLE, MAX_JOINT_ANGLE, 6);
+    }
+    
+    discretizeHandTangentSpeed(speed) {
+        return this.discretize(speed, -0.5, 0.5, 3);
+    }
+    
+    discretizePoleHandAngle(angle) {
+        return this.discretize(angle, -30, 30, 6);
+    }
+    
+    discretizePoleAngularSpeed(speed) {
+        return this.discretize(speed, -1.5, 1.5, 6);    
+    }
+    
+    // TODO: map to actual variable domain instead of a bucket number.
+    discretize(x, min, max, buckets) {
+        x = Math.max(x, min);
+        x = Math.min(x, max);
+        let bucket = Math.round(((x - min) / (max - min) * buckets));
+        return bucket;
+    }
+    
 }

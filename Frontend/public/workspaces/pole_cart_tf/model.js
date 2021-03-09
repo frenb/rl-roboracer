@@ -32,20 +32,29 @@ class Model {
     }
     
     predict(states) {
-        return tf.tidy(() => this.network.predict(states));
+        console.log("model.predict: ");
+        states.print();
+        let ret =  tf.tidy(() => this.network.predict(states));
+        console.log("returning: ");
+        ret.print();
+        return ret;
     }
     
     async train(xBatch, yBatch) {
         await this.network.fit(xBatch, yBatch);
     }
     
+    // Returns action -1, 0, 1
     chooseAction(state, eps) {
-        // TODO: implement this
-        //if (Math.random() < eps) {
-        //}
-        return tf.tidy(() => {
-            // TODO: make async
-            return this.network.predict(state).arraySync()[0] - 1;
-        });
+        if (Math.random() < eps) {
+            return Math.floor(Math.random() * this.numActions) - 1;
+        } else {
+            return tf.tidy(() => {
+                const logits = this.network.predict(state);
+                const sigmoid = tf.sigmoid(logits);
+                const probs = tf.div(sigmoid, tf.sum(sigmoid));
+                return tf.multinomial(probs, 1).dataSync()[0] - 1;
+            });
+        }
     }
 }

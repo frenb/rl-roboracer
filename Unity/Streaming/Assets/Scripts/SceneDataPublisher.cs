@@ -38,6 +38,7 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
         StartCoroutine(DoPublish());
     }
 
+
     public void UpdateWorldRefs()
     {
         // Targets
@@ -74,6 +75,9 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
         {
             pole = SimController.instance.poleCart.transform.Find("Pole").gameObject;
         }
+
+        // So one fresh scene_data before reset done signal sent.
+        Publish();
     }
 
     private IEnumerator DoPublish()
@@ -112,9 +116,26 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
 
         // Pole position & orientation.
         if (pole != null) {
-            sceneDataMessage.pole_pose.position = pole.transform.position.To<FLU>();
-            sceneDataMessage.pole_pose.orientation = pole.transform.rotation.To<FLU>();
-            sceneDataMessage.pole_upright = pole.GetComponent<PoleController>().isUpright;
+
+            // Calculate the effector speed.
+            var tangent = jointArticulationBodies[5].transform.forward;
+            var handSpeed = Vector3.Dot(jointArticulationBodies[5].velocity, tangent);
+
+            // Calculate angle between effector normal & pole.
+            var handRedAxis = jointArticulationBodies[5].transform.right;
+            var poleGreenAxis = pole.transform.up;
+            var poleToHandAngle = Vector3.Angle(-handRedAxis, poleGreenAxis);
+
+            // Calculate angular speed of pole normal to the circle.
+            var poleAngularSpeed = Vector3.Dot(pole.GetComponent<Rigidbody>().angularVelocity, pole.transform.forward);
+
+            sceneDataMessage.pole_cart.pole_hand_angle = poleToHandAngle;
+            sceneDataMessage.pole_cart.hand_tangent_speed = handSpeed;
+            sceneDataMessage.pole_cart.pole_angular_speed = poleAngularSpeed;
+            sceneDataMessage.pole_cart.upright = pole.transform.position.y > jointArticulationBodies[5].transform.position.y;
+            //sceneDataMessage.pole_cart.upright = pole.GetComponent<PoleController>().isUpright;
+
+            Debug.Log(string.Format("G_CHECK angle: {0:f3}, handSpeed = {1:f3}, anngularSpeed = {2:f3}, upright: {3}", poleToHandAngle, handSpeed, poleAngularSpeed, sceneDataMessage.pole_cart.upright));
         }
 
 

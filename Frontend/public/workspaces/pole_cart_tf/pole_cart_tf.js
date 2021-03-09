@@ -1,5 +1,27 @@
 async function start() {
-    tf_hello_world();
+    const memory = new Memory(500);
+    const model = new Model(
+        [128],
+        4 /* state size */,
+        3 /* action size */,
+        100 /* replay batch size */
+        )
+    
+    const orchestrator = new Orchestrator(
+        30 /* max steps per game */,
+        model,
+        memory,
+        0.95 /* discount rate */
+        )
+    
+    
+    let game = 0;
+    while (game < 200) {
+        let totalReward = await orchestrator.run()
+        log(`generation ${game}: ${totalReward}`);
+        game++;
+    }
+        
 }
 
 
@@ -10,7 +32,7 @@ async function start() {
 
 
 
-
+/*
 async function tf_hello_world() {
     // Define a model for linear regression.
     const model = tf.sequential();
@@ -28,4 +50,4 @@ async function tf_hello_world() {
       model.predict(tf.tensor2d([100], [1, 1])).print();
       // Open the browser devtools to see the output
     });
-}
+}*/
