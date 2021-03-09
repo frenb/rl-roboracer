@@ -24,7 +24,7 @@ class Environment {
     //.    1 = add 2 degree to joint_00
     async update(action) {
         let positions = {
-            joint_00: this.scene_data.joint_00 + action * 2 * 3.14 / 180.0,
+            joint_00: this.scene_data.joint_00 + action * 3.14 / 180.0,
             joint_01: this.scene_data.joint_01,
             joint_02: this.scene_data.joint_02,
             joint_03: this.scene_data.joint_03,
@@ -47,7 +47,7 @@ class Environment {
     
     getStateTensor() {
         return tf.tensor2d([[
-            this.discretizeJointAngle(this.joint_00),
+            //this.discretizeJointAngle(this.joint_00),
             this.discretizeHandTangentSpeed(this.hand_tangent_speed),
             this.discretizePoleHandAngle(this.pole_hand_angle),
             this.discretizePoleAngularSpeed(this.pole_angular_speed)]]);
@@ -59,15 +59,15 @@ class Environment {
     }
     
     discretizeHandTangentSpeed(speed) {
-        return this.discretize(speed, -0.5, 0.5, 3);
+        return this.discretize(speed, -0.5, 0.5, 5);
     }
     
     discretizePoleHandAngle(angle) {
-        return this.discretize(angle, -30, 30, 6);
+        return this.discretize(angle, -30, 30, 30);
     }
     
     discretizePoleAngularSpeed(speed) {
-        return this.discretize(speed, -1.5, 1.5, 6);    
+        return this.discretize(speed, -1.5, 1.5, 30);    
     }
     
     // TODO: map to actual variable domain instead of a bucket number.
