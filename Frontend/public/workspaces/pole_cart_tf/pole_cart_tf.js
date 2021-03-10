@@ -1,8 +1,8 @@
 async function start() {
     const memory = new Memory(500);
     const model = new Model(
-        [256],
-        3 /* state size */,
+        [128],
+        2 /* state size */,
         3 /* action size */,
         100 /* replay batch size */
         );
@@ -12,7 +12,7 @@ async function start() {
         model,
         memory,
         0.95 /* discount rate */,
-        0.2, /* initial eps */
+        0.0, /* initial eps */
         );
     
     

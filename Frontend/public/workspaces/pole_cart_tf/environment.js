@@ -48,7 +48,7 @@ class Environment {
     getStateTensor() {
         return tf.tensor2d([[
             //this.discretizeJointAngle(this.joint_00),
-            this.discretizeHandTangentSpeed(this.hand_tangent_speed),
+            //this.discretizeHandTangentSpeed(this.hand_tangent_speed),
             this.discretizePoleHandAngle(this.pole_hand_angle),
             this.discretizePoleAngularSpeed(this.pole_angular_speed)]]);
     }
@@ -63,11 +63,11 @@ class Environment {
     }
     
     discretizePoleHandAngle(angle) {
-        return this.discretize(angle, -30, 30, 30);
+        return this.discretize(angle, -30, 30, 60);
     }
     
     discretizePoleAngularSpeed(speed) {
-        return this.discretize(speed, -1.5, 1.5, 30);    
+        return this.discretize(speed, -1.5, 1.5, 10);    
     }
     
     // TODO: map to actual variable domain instead of a bucket number.
