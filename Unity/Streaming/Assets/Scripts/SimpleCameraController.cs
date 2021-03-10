@@ -249,6 +249,11 @@ namespace Unity.RenderStreaming
 
         void FixedUpdate()
         {
+            if (m_keyboard == null)
+            {
+                return;
+            }
+
             if (m_keyboard.uKey.isPressed)
             {
                 ResetCamera();

@@ -1,4 +1,4 @@
-const MIN_EPSILON = 0.01;
+const MIN_EPSILON = 0.0;
 const MAX_EPSILON = 0.2;
 const LAMBDA = 0.01;
 

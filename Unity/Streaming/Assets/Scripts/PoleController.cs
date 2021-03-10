@@ -21,7 +21,7 @@ public class PoleController : MonoBehaviour
         if(isUpright){
             fixedUpdateCount++;
         }
-        Debug.Log("Seconds upright: " + GetSecondsUpright());
+        //Debug.Log("Seconds upright: " + GetSecondsUpright());
     }
 
     public float GetSecondsUpright(){
@@ -30,16 +30,16 @@ public class PoleController : MonoBehaviour
 
      void OnCollisionStay(Collision collisionInfo)
     {
-        Debug.Log("collisionInfo.gameObject.name:" + collisionInfo.gameObject.name);
+        //Debug.Log("collisionInfo.gameObject.name:" + collisionInfo.gameObject.name);
         if (collisionInfo.gameObject.name.Contains("gripper")
             || collisionInfo.gameObject.name.Contains("Cart"))
         {
             isUpright = true;
-            Debug.Log("Gripper or Cart");
+            //Debug.Log("Gripper or Cart");
             
         } else {
             isUpright = false;
-            Debug.Log("Pole Fell");
+            //Debug.Log("Pole Fell");
         }
     }
 }

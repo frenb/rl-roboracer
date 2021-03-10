@@ -23,12 +23,12 @@ public class RemoteController : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
-        if(remoteCameraController.remoteKeyboard.rightArrowKey.isPressed)
+        if(remoteCameraController.remoteKeyboard != null && remoteCameraController.remoteKeyboard.rightArrowKey.isPressed)
         {
             localController.UpdateDirection(false);
         }
 
-        if(remoteCameraController.remoteKeyboard.leftArrowKey.isPressed)
+        if(remoteCameraController.remoteKeyboard != null && remoteCameraController.remoteKeyboard.leftArrowKey.isPressed)
         {
             localController.UpdateDirection(true);
         }

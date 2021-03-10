@@ -135,7 +135,7 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
             sceneDataMessage.pole_cart.upright = pole.transform.position.y > jointArticulationBodies[5].transform.position.y;
             //sceneDataMessage.pole_cart.upright = pole.GetComponent<PoleController>().isUpright;
 
-            Debug.Log(string.Format("G_CHECK angle: {0:f3}, handSpeed = {1:f3}, anngularSpeed = {2:f3}, upright: {3}", poleToHandAngle, handSpeed, poleAngularSpeed, sceneDataMessage.pole_cart.upright));
+            //Debug.Log(string.Format("G_CHECK angle: {0:f3}, handSpeed = {1:f3}, anngularSpeed = {2:f3}, upright: {3}", poleToHandAngle, handSpeed, poleAngularSpeed, sceneDataMessage.pole_cart.upright));
         }
 
 
