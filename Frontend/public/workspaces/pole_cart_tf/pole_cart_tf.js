@@ -1,18 +1,18 @@
 async function start() {
     const memory = new Memory(500);
     const model = new Model(
-        [128],
+        [256],
         2 /* state size */,
-        3 /* action size */,
+        NUM_ACTIONS /* action size */,
         100 /* replay batch size */
         );
     
     const orchestrator = new Orchestrator(
-        30 /* max steps per game */,
+        40 /* max steps per game */,
         model,
         memory,
         0.95 /* discount rate */,
-        0.0, /* initial eps */
+        0.2, /* initial eps */
         );
     
     
@@ -24,7 +24,7 @@ async function start() {
     }
     
     const orchestrator2 = new Orchestrator(
-        30 /* max steps per game */,
+        40 /* max steps per game */,
         model,
         memory,
         0.95 /* discount rate */,

@@ -1,5 +1,7 @@
 
-const MAX_JOINT_ANGLE = 30;
+const MAX_JOINT_ANGLE = 90;
+
+
 
 class Environment {
     constructor(scene_data) {
@@ -18,10 +20,7 @@ class Environment {
         this.upright =              scene_data.pole_cart.upright;
     }
     
-    // Actions:
-    //.   -1 = add -2 degree to joint_00
-    //.    0 = nothing
-    //.    1 = add 2 degree to joint_00
+    
     async update(action) {
         let positions = {
             joint_00: this.scene_data.joint_00 + action * 3.14 / 180.0,
@@ -38,7 +37,6 @@ class Environment {
             };
         
         await api.doMove({ cmd: position_cmd });
-        api.latest_scene_data = null
         var new_scene_data = await api.getSceneData();
         this.updateFromSceneData(new_scene_data);
         
@@ -59,7 +57,7 @@ class Environment {
     }
     
     discretizeHandTangentSpeed(speed) {
-        return this.discretize(speed, -0.5, 0.5, 5);
+        return this.discretize(speed, -0.5, 0.5, 3);
     }
     
     discretizePoleHandAngle(angle) {
@@ -67,7 +65,7 @@ class Environment {
     }
     
     discretizePoleAngularSpeed(speed) {
-        return this.discretize(speed, -1.5, 1.5, 10);    
+        return this.discretize(speed, -1.5, 1.5, 5);    
     }
     
     // TODO: map to actual variable domain instead of a bucket number.

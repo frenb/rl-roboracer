@@ -30,15 +30,29 @@ class Orchestrator {
         let totalReward = 0;
         let step = 0;
         
+        let actions = new Array();
+        
         console.log("Beginning game, max steps =  " + this.maxStepsPerGame);
         while (step < this.maxStepsPerGame) {
-            console.log("Beginning step " + step);
+            //console.log("Beginning step " + step);
             const action = this.model.chooseAction(state, this.eps)
-            console.log("step " + step + ": action = " + action);
+            //console.log("step " + step + ": action = " + action);
             const done = await env.update(action);
-            const reward = done? -10 : 1;
-            console.log("Executed action done = " + done);
-
+            
+            actions.push(action);
+            
+            // TODO: move out reward logic.
+            let reward = 0;
+            if (done) {
+                reward = -100
+            } else if (Math.abs(env.joint_00) < 0.10) {
+                // reward extra for staying close to start.
+                reward = 10
+            } else {
+                reward = 1
+            }
+            
+            //console.log("Executed action done = " + done);
             
             let nextState = env.getStateTensor();
             
@@ -58,29 +72,21 @@ class Orchestrator {
                 break;
             }
         }
+        
+        console.log("done with actions: " + actions.toString());
+        
         await this.replay();
         
         return totalReward;
     }
     
     async replay() {
-        console.log('replaying');
+        //console.log('replaying');
         const batch = this.memory.sample(this.model.batchSize);
         const states = batch.map(([state, , , ]) => state);
         const nextStates = batch.map(
             ([, , , nextState]) => nextState ? nextState : tf.zeros([1, this.model.numStates])
         );
-        
-        // print States
-        console.log(states.length)
-        console.log(nextStates.length)
-
-        console.log("...with states = ");
-        states.forEach(s => s.print());
-        // print Next States
-        console.log("...with next states = ");
-        nextStates.forEach(s => s.print());
-        
         
         // Predict the values of each action at each state
         const qsa = states.map((state) => this.model.predict(state));
@@ -96,20 +102,15 @@ class Orchestrator {
         console.log("updating rewards");
         batch.forEach(
             ([state, action, reward, nextState], index) => {
-                //console.log(`qsa[${index}] = `);
-                qsa[index].print();
-                //console.log(`qsad[${index}] = `);
-                qsad[index].print();
-                
                 const currentQ = qsa[index].dataSync();
-                let action_index = action + 1;
+                let action_index = actionToIndex(action);
                 
-                console.log(`action = ${action}, action_i = ${action_index}, reward = ${reward}`);
-                console.log(`currentQ = ${currentQ.toString()} ->`);
+                //console.log(`action = ${action}, action_i = ${action_index}, reward = ${reward}`);
+                //console.log(`currentQ = ${currentQ.toString()} ->`);
                 
                 currentQ[action_index] = nextState ? reward + this.discountRate * qsad[index].max().dataSync() : reward;
                 
-                console.log(`new currentQ = ${currentQ.toString()}`);
+                //console.log(`new currentQ = ${currentQ.toString()}`);
 
                 
                 x.push(state.dataSync());
