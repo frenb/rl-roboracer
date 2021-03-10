@@ -1,3 +1,35 @@
+
+const NUM_ACTIONS = 7;
+
+const INDEX_TO_ACTION = {
+    0: -2,
+    1: -1,
+    2: -0.5,
+    3: 0,
+    4: 0.5,
+    5: 1,
+    6: 2
+};
+
+const ACTION_TO_INDEX = {
+    "-2": 0,
+    "-1": 1,
+    "-0.5": 2,
+    0: 3,
+    0.5: 4,
+    1: 5,
+    2: 6
+};
+
+function indexToAction(index) {
+    return INDEX_TO_ACTION[index];
+}
+
+function actionToIndex(action) {
+    return ACTION_TO_INDEX[action];
+}
+
+
 class Model {
     constructor(hiddenLayerSizesOrModel, numStates, numActions, batchSize) {
         this.numStates = numStates;
@@ -32,12 +64,7 @@ class Model {
     }
     
     predict(states) {
-        console.log("model.predict: ");
-        states.print();
-        let ret =  tf.tidy(() => this.network.predict(states));
-        console.log("returning: ");
-        ret.print();
-        return ret;
+        return tf.tidy(() => this.network.predict(states));
     }
     
     async train(xBatch, yBatch) {
@@ -47,14 +74,10 @@ class Model {
     // Returns action -1, 0, 1
     chooseAction(state, eps) {
         if (Math.random() < eps) {
-            return Math.floor(Math.random() * this.numActions) - 1;
+            return indexToAction(Math.floor(Math.random() * this.numActions));
         } else {
             return tf.tidy(() => {
-                return this.network.predict(state).argMax(1).dataSync()[0] - 1
-                //const logits = this.network.predict(state);
-                //const sigmoid = tf.sigmoid(logits);
-                //const probs = tf.div(sigmoid, tf.sum(sigmoid));
-                //return tf.multinomial(probs, 1).dataSync()[0] - 1;
+                return indexToAction(this.network.predict(state).argMax(1).dataSync()[0]);
             });
         }
     }

@@ -85,7 +85,7 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
         while (true)
         {
             Publish();
-            yield return new WaitForSeconds(0.1f); // 10Hz
+            yield return new WaitForSeconds(0.01f); // 50Hz
         }
     }
 
@@ -114,6 +114,9 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
         gribber_rotation *= new Quaternion(0.5f, -0.5f, 0.5f, 0.5f);
         sceneDataMessage.effector_pose.orientation = gribber_rotation.To<FLU>();
 
+        // Last command executed in this scene.
+        sceneDataMessage.last_executed_cmd_id = MoveService.instance.lastExecutedCommand;
+
         // Pole position & orientation.
         if (pole != null) {
 
@@ -123,19 +126,25 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
 
             // Calculate angle between effector normal & pole.
             var handRedAxis = jointArticulationBodies[5].transform.right;
+            var handBlueAxis = jointArticulationBodies[5].transform.forward;
             var poleGreenAxis = pole.transform.up;
-            var poleToHandAngle = Vector3.Angle(-handRedAxis, poleGreenAxis);
+            var poleToHandAngle = Vector3.Angle(-handRedAxis, Vector3.Dot(poleGreenAxis, handBlueAxis) * handBlueAxis - handRedAxis);
+            var poleToHandAngleB = Vector3.Angle(-handRedAxis, Vector3.Dot(poleGreenAxis, poleGreenAxis) * poleGreenAxis - handRedAxis);
 
             // Calculate angular speed of pole normal to the circle.
             var poleAngularSpeed = Vector3.Dot(pole.GetComponent<Rigidbody>().angularVelocity, pole.transform.forward);
+            var poleAngularSpeedB = Vector3.Dot(pole.GetComponent<Rigidbody>().angularVelocity, pole.transform.right);
 
             sceneDataMessage.pole_cart.pole_hand_angle = poleToHandAngle;
+            sceneDataMessage.pole_cart.pole_hand_angle_b = poleToHandAngleB;
             sceneDataMessage.pole_cart.hand_tangent_speed = handSpeed;
             sceneDataMessage.pole_cart.pole_angular_speed = poleAngularSpeed;
+            sceneDataMessage.pole_cart.pole_angular_speed_b = poleAngularSpeedB;
             sceneDataMessage.pole_cart.upright = pole.transform.position.y > jointArticulationBodies[5].transform.position.y;
             //sceneDataMessage.pole_cart.upright = pole.GetComponent<PoleController>().isUpright;
 
-            //Debug.Log(string.Format("G_CHECK angle: {0:f3}, handSpeed = {1:f3}, anngularSpeed = {2:f3}, upright: {3}", poleToHandAngle, handSpeed, poleAngularSpeed, sceneDataMessage.pole_cart.upright));
+            //Debug.Log(string.Format("G_CHECK poleToHandAngle = {0:f3}, poleToHandAngleB = {1:f3}, poleAngularSpeed: {2:f3}, poleAngularSpeedB: {3:f3}",
+            //    poleToHandAngle, poleToHandAngleB, poleAngularSpeed, poleAngularSpeedB));
         }
 
 

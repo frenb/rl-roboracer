@@ -21,6 +21,7 @@ namespace RosMessageTypes.NiryoMoveit
         public double joint_04;
         public double joint_05;
         public PoleCart pole_cart;
+        public int last_executed_cmd_id;
 
         public SceneData()
         {
@@ -34,9 +35,10 @@ namespace RosMessageTypes.NiryoMoveit
             this.joint_04 = 0.0;
             this.joint_05 = 0.0;
             this.pole_cart = new PoleCart();
+            this.last_executed_cmd_id = 0;
         }
 
-        public SceneData(Geometry.Point object_location, Geometry.Point target_location, Geometry.Pose effector_pose, double joint_00, double joint_01, double joint_02, double joint_03, double joint_04, double joint_05, PoleCart pole_cart)
+        public SceneData(Geometry.Point object_location, Geometry.Point target_location, Geometry.Pose effector_pose, double joint_00, double joint_01, double joint_02, double joint_03, double joint_04, double joint_05, PoleCart pole_cart, int last_executed_cmd_id)
         {
             this.object_location = object_location;
             this.target_location = target_location;
@@ -48,6 +50,7 @@ namespace RosMessageTypes.NiryoMoveit
             this.joint_04 = joint_04;
             this.joint_05 = joint_05;
             this.pole_cart = pole_cart;
+            this.last_executed_cmd_id = last_executed_cmd_id;
         }
         public override List<byte[]> SerializationStatements()
         {
@@ -62,6 +65,7 @@ namespace RosMessageTypes.NiryoMoveit
             listOfSerializations.Add(BitConverter.GetBytes(this.joint_04));
             listOfSerializations.Add(BitConverter.GetBytes(this.joint_05));
             listOfSerializations.AddRange(pole_cart.SerializationStatements());
+            listOfSerializations.Add(BitConverter.GetBytes(this.last_executed_cmd_id));
 
             return listOfSerializations;
         }
@@ -84,6 +88,8 @@ namespace RosMessageTypes.NiryoMoveit
             this.joint_05 = BitConverter.ToDouble(data, offset);
             offset += 8;
             offset = this.pole_cart.Deserialize(data, offset);
+            this.last_executed_cmd_id = BitConverter.ToInt32(data, offset);
+            offset += 4;
 
             return offset;
         }
@@ -100,7 +106,8 @@ namespace RosMessageTypes.NiryoMoveit
             "\njoint_03: " + joint_03.ToString() +
             "\njoint_04: " + joint_04.ToString() +
             "\njoint_05: " + joint_05.ToString() +
-            "\npole_cart: " + pole_cart.ToString();
+            "\npole_cart: " + pole_cart.ToString() +
+            "\nlast_executed_cmd_id: " + last_executed_cmd_id.ToString();
         }
     }
 }

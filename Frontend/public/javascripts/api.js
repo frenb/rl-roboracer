@@ -1,10 +1,12 @@
+const WAIT_COMMAND_DEADLINE_MS = 200;
+
 class API {
     constructor() {
         this.waiting = {};
         this.waiting_scene_data = null;
         this.waiting_sim_restarted = null;
         this.latest_scene_data = null;
-        this.next_cmd_id = 0;
+        this.next_cmd_id = 1;
         // Listen to move action results.
         socket.emit('subscribe', 'move_action/result');
         socket.on('move_action/result', result => this.onMoveActionResult(result));
@@ -15,7 +17,21 @@ class API {
         socket.emit('subscribe', 'sim_status');
         socket.on('sim_status', sim_status => this.onSimStatus(sim_status));
 
+       // this.rtt_history = new Array();
+
     }
+
+    //updateRttHistory(rtt) {
+    //    this.rtt_history.push(rtt);
+    //    if (this.rtt_history.length > 20) {
+    //        this.rtt_history.shift();
+    //    }
+
+    //    let sum = 0;
+    //    this.rtt_history.forEach(val => sum += val);
+
+    //    console.log("running rtt: " + sum / this.rtt_history.length);
+    //}
 
     onSimStatus(sim_status) {
         if (sim_status.data.status == 1 /* restarted */) {
@@ -29,19 +45,34 @@ class API {
         if (this.waiting_scene_data) {
             this.waiting_scene_data(scene_data)
         }
+        if (this.waiting[scene_data.data.last_executed_cmd_id]) {
+            this.waiting[scene_data.data.last_executed_cmd_id][1] = true;
+            this.maybeReleaseCmdWaiter(scene_data.data.last_executed_cmd_id);
+        }
         this.latest_scene_data = scene_data;
     }
 
     onMoveActionResult(result) {
         // Wake up waiters for cmd id.
         if (this.waiting[result.data.cmd_id]) {
-            this.waiting[result.data.cmd_id](result)
-            delete this.waiting[result.data.cmd_id];
+            this.waiting[result.data.cmd_id][0] = true;
+            this.maybeReleaseCmdWaiter(result.data.cmd_id);
+        }
+    }
+    
+    maybeReleaseCmdWaiter(cmd_id) {
+        if (this.waiting[cmd_id][0] && this.waiting[cmd_id][1]) {
+            this.waiting[cmd_id][2]()
+            delete this.waiting[cmd_id];
         }
     }
 
     waitOnCmd(id) {
-        return new Promise(resolve => this.waiting[id] = resolve);
+        // Will wait until a result for the command is returned and we have seen a scene_data with command's results.
+        return new Promise(resolve => {
+            this.waiting[id] = [true /* returned result */, true /* reflected in scene data */ , resolve];
+            setTimeout(() => {delete this.waiting[id]; resolve()}, WAIT_COMMAND_DEADLINE_MS);
+        });
     }
 
     sleep(ms) {
@@ -68,6 +99,7 @@ class API {
     }
 
     async doMove(action) {
+        //let start = Date.now();
         let id = this.next_cmd_id++;
         let waitPromise = this.waitOnCmd(id);
         action.cmd_id = id;
@@ -78,7 +110,8 @@ class API {
             data: JSON.stringify(action)
 
         });
-        return waitPromise;
+        await waitPromise;
+        //this.updateRttHistory(Date.now() - start);
     }
 
     async doSimCommand(command) {

@@ -45,6 +45,11 @@ public class SimController : MonoBehaviour
         _instance = this;
     }
 
+    // Frames to wait after reseting declaring ready.
+    private const int WAIT_FRAMES = 5;
+
+    private int currentWait = 0;
+
     // Start is called before the first frame update
     void Start()
     {
@@ -78,6 +83,9 @@ public class SimController : MonoBehaviour
         if (poleCartPrefab != null)
         {
             poleCart = Instantiate(poleCartPrefab);
+
+            // G_CHECK random rotation
+            poleCart.transform.Find("Pole").transform.Rotate(0, 0, Random.Range(-10, 10));
         }
     }
 
@@ -101,7 +109,7 @@ public class SimController : MonoBehaviour
         InstantiateObjects();
         moveService.UpdateWorldRefs();
         sceneDataPublisher.UpdateWorldRefs();
-        ros.Send(simStatusTopic, new SimStatus((int)Status.RESTARTED));
+        currentWait = WAIT_FRAMES;
     }
 
     // Update is called once per frame
@@ -111,6 +119,15 @@ public class SimController : MonoBehaviour
         {
             ros.Send(simStatusTopic, new SimStatus((int)Status.STARTED));
             sentStarted = true;
+        }
+
+        if (currentWait > 0)
+        {
+            currentWait--;
+            if (currentWait == 0)
+            {
+                ros.Send(simStatusTopic, new SimStatus((int)Status.RESTARTED));
+            }
         }
     }
 

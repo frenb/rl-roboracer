@@ -29,7 +29,16 @@ public class MoveService : MonoBehaviour, IRosComponent
     public string feedbackTopic = "move_action/feedback";
     private GameObject niryoOne;
 
+    public int lastExecutedCommand { get; private set; }
+
     private MoveActionGoal activeGoal = null;
+
+    public static MoveService instance { get; private set; }
+
+    public MoveService()
+    {
+        instance = this;
+    }
 
     enum CommandType
     {
@@ -152,6 +161,7 @@ public class MoveService : MonoBehaviour, IRosComponent
         {
             Debug.Log("Goal complete; publishing result");
             sendResult(result);
+            lastExecutedCommand = activeGoal.cmd_id;
             activeGoal = null;
         }
 
@@ -200,6 +210,7 @@ public class MoveService : MonoBehaviour, IRosComponent
         {
             Debug.Log("Goal complete; publishing result");
             sendResult(result);
+            lastExecutedCommand = activeGoal.cmd_id;
             activeGoal = null;
         }
     }
@@ -257,6 +268,7 @@ public class MoveService : MonoBehaviour, IRosComponent
         {
             Debug.Log("Goal complete; publishing result");
             sendResult(result);
+            lastExecutedCommand = activeGoal.cmd_id;
             activeGoal = null;
         }
     }

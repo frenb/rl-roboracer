@@ -13,22 +13,28 @@ namespace RosMessageTypes.NiryoMoveit
 
         public double hand_tangent_speed;
         public double pole_hand_angle;
+        public double pole_hand_angle_b;
         public double pole_angular_speed;
+        public double pole_angular_speed_b;
         public bool upright;
 
         public PoleCart()
         {
             this.hand_tangent_speed = 0.0;
             this.pole_hand_angle = 0.0;
+            this.pole_hand_angle_b = 0.0;
             this.pole_angular_speed = 0.0;
+            this.pole_angular_speed_b = 0.0;
             this.upright = false;
         }
 
-        public PoleCart(double hand_tangent_speed, double pole_hand_angle, double pole_angular_speed, bool upright)
+        public PoleCart(double hand_tangent_speed, double pole_hand_angle, double pole_hand_angle_b, double pole_angular_speed, double pole_angular_speed_b, bool upright)
         {
             this.hand_tangent_speed = hand_tangent_speed;
             this.pole_hand_angle = pole_hand_angle;
+            this.pole_hand_angle_b = pole_hand_angle_b;
             this.pole_angular_speed = pole_angular_speed;
+            this.pole_angular_speed_b = pole_angular_speed_b;
             this.upright = upright;
         }
         public override List<byte[]> SerializationStatements()
@@ -36,7 +42,9 @@ namespace RosMessageTypes.NiryoMoveit
             var listOfSerializations = new List<byte[]>();
             listOfSerializations.Add(BitConverter.GetBytes(this.hand_tangent_speed));
             listOfSerializations.Add(BitConverter.GetBytes(this.pole_hand_angle));
+            listOfSerializations.Add(BitConverter.GetBytes(this.pole_hand_angle_b));
             listOfSerializations.Add(BitConverter.GetBytes(this.pole_angular_speed));
+            listOfSerializations.Add(BitConverter.GetBytes(this.pole_angular_speed_b));
             listOfSerializations.Add(BitConverter.GetBytes(this.upright));
 
             return listOfSerializations;
@@ -48,7 +56,11 @@ namespace RosMessageTypes.NiryoMoveit
             offset += 8;
             this.pole_hand_angle = BitConverter.ToDouble(data, offset);
             offset += 8;
+            this.pole_hand_angle_b = BitConverter.ToDouble(data, offset);
+            offset += 8;
             this.pole_angular_speed = BitConverter.ToDouble(data, offset);
+            offset += 8;
+            this.pole_angular_speed_b = BitConverter.ToDouble(data, offset);
             offset += 8;
             this.upright = BitConverter.ToBoolean(data, offset);
             offset += 1;
@@ -61,7 +73,9 @@ namespace RosMessageTypes.NiryoMoveit
             return "PoleCart: " +
             "\nhand_tangent_speed: " + hand_tangent_speed.ToString() +
             "\npole_hand_angle: " + pole_hand_angle.ToString() +
+            "\npole_hand_angle_b: " + pole_hand_angle_b.ToString() +
             "\npole_angular_speed: " + pole_angular_speed.ToString() +
+            "\npole_angular_speed_b: " + pole_angular_speed_b.ToString() +
             "\nupright: " + upright.ToString();
         }
     }
