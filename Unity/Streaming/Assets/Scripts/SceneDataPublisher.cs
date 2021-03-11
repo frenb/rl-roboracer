@@ -127,9 +127,18 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
             // Calculate angle between effector normal & pole.
             var handRedAxis = jointArticulationBodies[5].transform.right;
             var handBlueAxis = jointArticulationBodies[5].transform.forward;
+            var handGreenAxis = jointArticulationBodies[5].transform.up;
             var poleGreenAxis = pole.transform.up;
-            var poleToHandAngle = Vector3.Angle(-handRedAxis, Vector3.Dot(poleGreenAxis, handBlueAxis) * handBlueAxis - handRedAxis);
-            var poleToHandAngleB = Vector3.Angle(-handRedAxis, Vector3.Dot(poleGreenAxis, poleGreenAxis) * poleGreenAxis - handRedAxis);
+
+
+            var deltaOnHandBlueAxis = poleGreenAxis - Vector3.Dot(poleGreenAxis, handGreenAxis) * handGreenAxis;
+            var poleToHandAngle = Vector3.Angle(-handRedAxis, deltaOnHandBlueAxis);
+            Debug.DrawRay(pole.transform.position, deltaOnHandBlueAxis, Color.red);
+
+            var deltaOnHandGreenAxis = poleGreenAxis - Vector3.Dot(poleGreenAxis, handBlueAxis) * handBlueAxis;
+            var poleToHandAngleB = Vector3.Angle(-handRedAxis, deltaOnHandGreenAxis);
+            Debug.DrawRay(pole.transform.position, deltaOnHandGreenAxis, Color.blue);
+
 
             // Calculate angular speed of pole normal to the circle.
             var poleAngularSpeed = Vector3.Dot(pole.GetComponent<Rigidbody>().angularVelocity, pole.transform.forward);
