@@ -8,7 +8,6 @@ class Orchestrator {
         this.maxStepsPerGame = maxStepsPerGame;
         this.model = model;
         this.memory = memory;
-        this.eps = MAX_EPSILON;
         this.steps = 0;
         this.discountRate = discountRate;
         
@@ -18,6 +17,8 @@ class Orchestrator {
     
     
     async run() {
+        this.eps = MAX_EPSILON;
+        
         // reset the simulation. And get a new scene_data to create env.
         console.log("resetting sim");
         await api.doReset();
@@ -36,13 +37,23 @@ class Orchestrator {
         while (step < this.maxStepsPerGame) {
             //console.log("Beginning step " + step);
             const action = this.model.chooseAction(state, this.eps)
+            
             //console.log("step " + step + ": action = " + action);
             const done = await env.update(action);
             
             actions.push(action);
             
             // TODO: move out reward logic.
-            let reward = done ? -100 : 1;
+            
+            let reward = 0;
+            if (done) {
+                reward = -20;
+            } else if (step == this.maxStepsPerGame) {
+                reward = 20;
+            } else {
+                reward = 1;
+            }
+            
             
             let nextState = env.getStateTensor();
             
