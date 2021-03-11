@@ -2,7 +2,7 @@ async function start() {
     const memory = new Memory(500);
     const model = new Model(
         [256],
-        2 /* state size */,
+        4 /* state size */,
         NUM_ACTIONS /* action size */,
         100 /* replay batch size */
         );
@@ -12,37 +12,17 @@ async function start() {
         model,
         memory,
         0.95 /* discount rate */,
-        0.2, /* initial eps */
+        0.4, /* initial eps */
         );
     
     
     let game = 0;
-    while (game < 500) {
+    while (game < 1000) {
         let totalReward = await orchestrator.run()
         log(`generation ${game}: ${totalReward}`);
         game++;
     }
-    
-    const orchestrator2 = new Orchestrator(
-        40 /* max steps per game */,
-        model,
-        memory,
-        0.95 /* discount rate */,
-        0.0, /* initial eps */
-        );
-      
-    let totalReward = await orchestrator2.run()
-    log(`Final generation: ${totalReward}`);
-
-        
 }
-
-
-
-
-
-
-
 
 
 /*

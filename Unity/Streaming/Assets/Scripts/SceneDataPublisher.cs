@@ -140,11 +140,12 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
             sceneDataMessage.pole_cart.hand_tangent_speed = handSpeed;
             sceneDataMessage.pole_cart.pole_angular_speed = poleAngularSpeed;
             sceneDataMessage.pole_cart.pole_angular_speed_b = poleAngularSpeedB;
-            sceneDataMessage.pole_cart.upright = pole.transform.position.y > jointArticulationBodies[5].transform.position.y;
+            sceneDataMessage.pole_cart.upright = (pole.transform.position.y > (jointArticulationBodies[5].transform.position.y) * 0.7)
+                && poleToHandAngle < 40 && poleToHandAngleB < 40;
             //sceneDataMessage.pole_cart.upright = pole.GetComponent<PoleController>().isUpright;
 
-            //Debug.Log(string.Format("G_CHECK poleToHandAngle = {0:f3}, poleToHandAngleB = {1:f3}, poleAngularSpeed: {2:f3}, poleAngularSpeedB: {3:f3}",
-            //    poleToHandAngle, poleToHandAngleB, poleAngularSpeed, poleAngularSpeedB));
+            Debug.Log(string.Format("G_CHECK poleToHandAngle = {0:f3}, poleToHandAngleB = {1:f3}, poleAngularSpeed: {2:f3}, poleAngularSpeedB: {3:f3}",
+                poleToHandAngle, poleToHandAngleB, poleAngularSpeed, poleAngularSpeedB));
         }
 
 

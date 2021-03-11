@@ -1,32 +1,58 @@
 
-const NUM_ACTIONS = 7;
+const ACTIONS = new Array();
+const OPTIONS = [-1, -0.5, 0, 0.5, 1];
 
-const INDEX_TO_ACTION = {
-    0: -2,
-    1: -1,
-    2: -0.5,
-    3: 0,
-    4: 0.5,
-    5: 1,
-    6: 2
-};
+var index = 0;
+var i;
+for(i = 0; i < OPTIONS.length; i++) {
+	let joint_0 = OPTIONS[i];
+	
+  var j;
+  for (j = 0; j < OPTIONS.length; j++) {
+  	let joint_1 = OPTIONS[j];
+    
+    var k;
+    for (k = 0; k < OPTIONS.length; k++) {
+   		let joint_2 = OPTIONS[k];
+      let action = {
+      	joint_0: joint_0,
+        joint_1: joint_1,
+        joint_2: joint_2,
+        index: index++
+      }
+      console.log(JSON.stringify(action, null, 3));
+      ACTIONS.push(action);
+    }
+  }
+}
 
-const ACTION_TO_INDEX = {
-    "-2": 0,
-    "-1": 1,
-    "-0.5": 2,
-    0: 3,
-    0.5: 4,
-    1: 5,
-    2: 6
-};
+const NUM_ACTIONS = index;
+console.log(`num_actions = ${NUM_ACTIONS}`);
 
 function indexToAction(index) {
-    return INDEX_TO_ACTION[index];
+    var i;
+    for (i = 0; i < ACTIONS.length; i++) {
+        if (ACTIONS[i].index == index) {
+            return [
+                ACTIONS[i].joint_0,
+                ACTIONS[i].joint_1,
+                ACTIONS[i].joint_2
+            ]
+        }
+    }
+    return undefined;
 }
 
 function actionToIndex(action) {
-    return ACTION_TO_INDEX[action];
+    var i;
+    for (i = 0; i < ACTIONS.length; i++) {
+        if (ACTIONS[i].joint_0 == action.joint_0
+         && ACTIONS[i].joint_1 == action.joint_1
+         && ACTIONS[i].joint_2 == action.joint_2) {
+             return ACTIONS[i].index;
+        }
+    }
+    return undefined;
 }
 
 
@@ -77,7 +103,10 @@ class Model {
             return indexToAction(Math.floor(Math.random() * this.numActions));
         } else {
             return tf.tidy(() => {
-                return indexToAction(this.network.predict(state).argMax(1).dataSync()[0]);
+                const logits = this.network.predict(state);
+                const sigmoid = tf.sigmoid(logits);
+                const probs = tf.div(sigmoid, tf.sum(sigmoid));
+                return indexToAction(tf.multinomial(probs, 1).dataSync()[0]);
             });
         }
     }

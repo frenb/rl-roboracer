@@ -4,11 +4,11 @@ const LAMBDA = 0.01;
 
 class Orchestrator {
     
-    constructor(maxStepsPerGame, model, memory, discountRate, eps) {
+    constructor(maxStepsPerGame, model, memory, discountRate) {
         this.maxStepsPerGame = maxStepsPerGame;
         this.model = model;
         this.memory = memory;
-        this.eps = eps;
+        this.eps = MAX_EPSILON;
         this.steps = 0;
         this.discountRate = discountRate;
         
@@ -42,17 +42,7 @@ class Orchestrator {
             actions.push(action);
             
             // TODO: move out reward logic.
-            let reward = 0;
-            if (done) {
-                reward = -100
-            } else if (Math.abs(env.joint_00) < 0.10) {
-                // reward extra for staying close to start.
-                reward = 10
-            } else {
-                reward = 1
-            }
-            
-            //console.log("Executed action done = " + done);
+            let reward = done ? -50 : 1;
             
             let nextState = env.getStateTensor();
             
