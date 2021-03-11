@@ -42,7 +42,7 @@ class Orchestrator {
             actions.push(action);
             
             // TODO: move out reward logic.
-            let reward = done ? -50 : 1;
+            let reward = done ? -100 : 1;
             
             let nextState = env.getStateTensor();
             

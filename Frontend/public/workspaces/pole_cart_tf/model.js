@@ -103,10 +103,11 @@ class Model {
             return indexToAction(Math.floor(Math.random() * this.numActions));
         } else {
             return tf.tidy(() => {
-                const logits = this.network.predict(state);
-                const sigmoid = tf.sigmoid(logits);
-                const probs = tf.div(sigmoid, tf.sum(sigmoid));
-                return indexToAction(tf.multinomial(probs, 1).dataSync()[0]);
+                return indexToAction(this.network.predict(state).argMax(1).dataSync()[0]);
+                //const logits = this.network.predict(state);
+                //const sigmoid = tf.sigmoid(logits);
+                //const probs = tf.div(sigmoid, tf.sum(sigmoid));
+                //return indexToAction(tf.multinomial(probs, 1).dataSync()[0]);
             });
         }
     }

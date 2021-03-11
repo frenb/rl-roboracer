@@ -1,7 +1,7 @@
 async function start() {
     const memory = new Memory(500);
     const model = new Model(
-        [256],
+        [128],
         4 /* state size */,
         NUM_ACTIONS /* action size */,
         100 /* replay batch size */
