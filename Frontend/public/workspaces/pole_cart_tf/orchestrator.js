@@ -1,14 +1,14 @@
 const MIN_EPSILON = 0.0;
-const MAX_EPSILON = 0.2;
 const LAMBDA = 0.01;
 
 class Orchestrator {
     
-    constructor(maxStepsPerGame, model, memory, discountRate) {
+    constructor(maxStepsPerGame, model, memory, discountRate, max_eps) {
         this.maxStepsPerGame = maxStepsPerGame;
         this.model = model;
         this.memory = memory;
         this.steps = 0;
+        this.max_eps = max_eps;
         this.discountRate = discountRate;
         
         this.rewardStore = new Array();
@@ -17,7 +17,7 @@ class Orchestrator {
     
     
     async run() {
-        this.eps = MAX_EPSILON;
+        this.eps = this.max_eps;
         
         // reset the simulation. And get a new scene_data to create env.
         console.log("resetting sim");
@@ -37,22 +37,13 @@ class Orchestrator {
         while (step < this.maxStepsPerGame) {
             //console.log("Beginning step " + step);
             const action = this.model.chooseAction(state, this.eps)
-            
             //console.log("step " + step + ": action = " + action);
             const done = await env.update(action);
             
             actions.push(action);
             
             // TODO: move out reward logic.
-            
-            let reward = 0;
-            if (done) {
-                reward = -20;
-            } else if (step == this.maxStepsPerGame) {
-                reward = 20;
-            } else {
-                reward = 1;
-            }
+            const reward = done ? -100 : step;
             
             
             let nextState = env.getStateTensor();
@@ -62,7 +53,7 @@ class Orchestrator {
             this.memory.addSample([state, action, reward, nextState]);
             
             this.steps += 1;
-            this.eps = MIN_EPSILON + (MAX_EPSILON - MIN_EPSILON) * Math.exp(-LAMBDA * this.steps);
+            this.eps = MIN_EPSILON + (this.max_eps - MIN_EPSILON) * Math.exp(-LAMBDA * this.steps);
             
             state = nextState;
             totalReward += reward;

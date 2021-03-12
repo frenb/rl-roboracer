@@ -85,7 +85,7 @@ public class SimController : MonoBehaviour
             poleCart = Instantiate(poleCartPrefab);
 
             // G_CHECK random rotation
-            poleCart.transform.Find("Pole").transform.Rotate(0, 0, Random.Range(-10, 10));
+            poleCart.transform.Find("Pole").transform.Rotate(0, 0, Random.Range(-5, 5));
         }
     }
 
