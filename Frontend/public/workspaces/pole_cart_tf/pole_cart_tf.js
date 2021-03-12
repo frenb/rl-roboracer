@@ -1,27 +1,81 @@
 async function start() {
     const memory = new Memory(500);
+    
+    //const network = await tf.loadLayersModel('localstorage://pole_cart_model_0');
+    
     const model = new Model(
-        [128],
+        [256],
         4 /* state size */,
         NUM_ACTIONS /* action size */,
         100 /* replay batch size */
         );
     
-    const orchestrator = new Orchestrator(
-        40 /* max steps per game */,
-        model,
-        memory,
-        0.95 /* discount rate */,
-        0.4, /* initial eps */
-        );
-    
-    
+
+
     let game = 0;
-    while (game < 1000) {
+    
+    // Epsilon Greedy Phase
+    while (game < 100) {
+        let orchestrator = new Orchestrator(
+            40 /* max steps per game */,
+            model,
+            memory,
+            0.95 /* discount rate */,
+            0.2, /* initial eps */
+            );
+            
+        //if (game % 50 == 0) {
+        //    const saveResults = await model.network.save('localstorage://pole_cart_model_0');
+        //    console.log("model saved: " + JSON.stringify(saveResults,null,3));
+        //}
+        
         let totalReward = await orchestrator.run()
         log(`generation ${game}: ${totalReward}`);
         game++;
     }
+    
+    
+    // Medium Epsilon phase
+    while (game < 1000) {
+        let orchestrator = new Orchestrator(
+            40,
+            model,
+            memory,
+            0.95,
+            0.5, 
+            );
+            
+        if (game % 50 == 0) {
+            const saveResults = await model.network.save('localstorage://pole_cart_model_0');
+            console.log("model saved: " + JSON.stringify(saveResults,null,3));
+        }
+        
+        let totalReward = await orchestrator.run()
+        log(`generation ${game}: ${totalReward}`);
+        game++;
+    }
+    
+    while (game < 1500) {
+        let orchestrator = new Orchestrator(
+            40 ,
+            model,
+            memory,
+            0.95, 
+            0.2,
+            );
+        
+        if (game % 50 == 0) {
+            const saveResults = await model.network.save('localstorage://pole_cart_model_0');
+            console.log("model saved: " + JSON.stringify(saveResults,null,3));
+        }
+        
+        let totalReward = await orchestrator.run()
+        log(`generation ${game}: ${totalReward}`);
+        game++;
+    }
+    
+    const saveResults = await model.network.save('localstorage://pole_cart_model_0');
+    log("model saved: " + JSON.stringify(saveResults,null,3));
 }
 
 

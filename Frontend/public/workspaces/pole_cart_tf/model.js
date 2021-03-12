@@ -1,6 +1,6 @@
 
 const ACTIONS = new Array();
-const OPTIONS = [-1, -0.5, 0, 0.5, 1];
+const OPTIONS = [-0.5, 0, 0.5];
 
 var index = 0;
 var i;

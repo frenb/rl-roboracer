@@ -52,7 +52,7 @@ class Environment {
     }
     
     discretizePoleHandAngle(angle) {
-        return this.discretize(angle, -30, 30, 30);
+        return this.discretize(angle, -30, 30, 60);
     }
     
     discretizePoleAngularSpeed(speed) {
