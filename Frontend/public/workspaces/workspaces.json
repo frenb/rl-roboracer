@@ -41,5 +41,19 @@
                 "post": "/update/workspaces/pole_cart_tf/orchestrator.js"
             }
         ]
+    },
+    "Pole & Cart Python": {
+        "sources": [
+            {
+                "name": "pole_cart.py",
+                "get": "/workspaces/pole_cart_python/pole_cart.py",
+                "post": "/update/workspaces/pole_cart_python/pole_cart.py"
+            },
+            {
+                "name": "api.py",
+                "get": "/workspaces/pole_cart_python/api.py",
+                "post": "/update/workspaces/pole_cart_python/api.py"
+            }
+        ]
     }
 }

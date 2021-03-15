@@ -1,0 +1,3 @@
+tf-agents[reverb]
+grpcio
+google-api-python-client
