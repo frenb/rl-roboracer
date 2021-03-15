@@ -2,7 +2,7 @@
 python -m grpc_tools.protoc -Iprotos --python_out=Docker/pick_and_place/ROS/src/virtual_endpoint/src/ --grpc_python_out=Docker/pick_and_place/ROS/src/virtual_endpoint/src/ virtual_endpoint/proto/ros_service.proto
 
 # Python Client
-python -m grpc_tools.protoc -Iprotos --python_out=Python/ --grpc_python_out=Python/ virtual_endpoint/proto/ros_service.proto
+python -m grpc_tools.protoc -Iprotos --python_out=Frontend/public/workspaces/pole_cart_python/ --grpc_python_out=Frontend/public/workspaces/pole_cart_python/ virtual_endpoint/proto/ros_service.proto
 
 
 # Web Frontend

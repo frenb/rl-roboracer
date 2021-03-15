@@ -11,10 +11,16 @@ $ docker build -t robottycoon.azurecr.io/unity-robotics-pick-and-place -f docker
 
 3. Start the image.
 ```console
-$ docker run -it --rm -p 10000:10000 -p 50051:50051 -p 60061:60061 robottycoon.azurecr.io/unity-robotics-pick-and-place:alpha ./src/start.sh
+$ docker run -it --rm -p 10000:10000 -p 50051:50051 -p 60061:60061 robottycoon.azurecr.io/unity-robotics-pick-and-place ./src/start.sh
 ```
 
 Port 10000 is the port that ROS listens to for communication with the simulator. Port 50051 is the port that the GRPC virtual node listens to. Port 60061 is a server that serves a tail of the console output.
+
+To use unity sources, bind the /python_ws/src volume to the host python workspace. e.g., cd to the root of the project and run:
+
+```console
+$ docker run -it --rm -v $(pwd)/Frontend/public/workspaces/pole_cart_python:/python_ws/src -p 10000:10000 -p 50051:50051 -p 60061:60061 robottycoon.azurecr.io/unity-robotics-pick-and-place ./src/start.sh 
+```
 
 
 ## Start Unity Simulator

@@ -26,6 +26,7 @@ class RpcClient:
 class RobotApi:
 
     def __init__(self, addr='localhost:50051'):
+        self.loop = asyncio.get_event_loop()
         self.rpc_client = RpcClient(addr)
         self.pp = pprint.PrettyPrinter(indent=4)
         self.reset_event = asyncio.Event()
@@ -43,10 +44,9 @@ class RobotApi:
 
     async def Initialize(self):
         # Set up subscribers
-        loop = asyncio.get_event_loop()
-        loop.create_task(self.rpc_client.Subscribe('scene_data', 'niryo_moveit/SceneData', self._on_scene_data))
-        loop.create_task(self.rpc_client.Subscribe('sim_status', 'niryo_moveit/SimStatus', self._on_sim_status))
-        loop.create_task(self.rpc_client.Subscribe('move_action/result', 'niryo_moveit/MoveActionResult', self._on_move_action_result))
+        self.loop.create_task(self.rpc_client.Subscribe('scene_data', 'niryo_moveit/SceneData', self._on_scene_data))
+        self.loop.create_task(self.rpc_client.Subscribe('sim_status', 'niryo_moveit/SimStatus', self._on_sim_status))
+        self.loop.create_task(self.rpc_client.Subscribe('move_action/result', 'niryo_moveit/MoveActionResult', self._on_move_action_result))
 
     def _on_sim_status(self, sim_status):
         if (sim_status['status'] == 1):
@@ -67,11 +67,22 @@ class RobotApi:
     async def _do_sim_command(self, command):
         await self.rpc_client.Publish('sim_command', 'niryo_moveit/SimCommand', command)
 
+    def DoResetBlocking(self):
+        asyncio.run_coroutine_threadsafe(self.DoReset(), self.loop).result()
+
+    def DoMoveBlocking(self, action):
+        asyncio.run_coroutine_threadsafe(self.DoMove(action), self.loop).result()
+
+    def GetSceneDataBlocking(self):
+        return asyncio.run_coroutine_threadsafe(self.GetSceneData(), self.loop).result()
 
     async def DoReset(self):
         self.reset_event.clear()
         await self._do_sim_command( { 'cmd' : 0 } )
-        await self.reset_event.wait()
+        try:
+            await asyncio.wait_for(self.reset_event.wait(), 2)
+        except asyncio.TimeoutError:
+            print('timed out waiting for reset. Ignoring')
 
     async def DoMove(self, action):
         cmd_id = self._next_id()
@@ -82,8 +93,12 @@ class RobotApi:
         await self.rpc_client.Publish('move_action/goal', 'niryo_moveit/MoveActionGoal', action)
         
         # Wait for command completion & newest scene data including command.
-        await asyncio.wait_for(self.move_events[cmd_id].wait(), 0.2)
-        await asyncio.wait_for(self.scene_data_events[cmd_id].wait(), 0.2)
+        try:
+            await asyncio.wait_for(self.move_events[cmd_id].wait(), 0.2)
+            await asyncio.wait_for(self.scene_data_events[cmd_id].wait(), 0.2)
+        except asyncio.TimeoutError:
+            print('timed out waiting for move. Ignoring')
+
 
         # Cleanup.
         del self.move_events[cmd_id]
