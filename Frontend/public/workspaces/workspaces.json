@@ -11,7 +11,8 @@
                 "get": "/workspaces/pick_and_place/pick_and_place.js",
                 "post": "/update/workspaces/pick_and_place/pick_and_place.js"
             }
-        ]
+        ],
+        "type": "javascript"
     },
     "Pole & Cart TF": {
         "sources": [
@@ -40,7 +41,8 @@
                 "get": "/workspaces/pole_cart_tf/orchestrator.js",
                 "post": "/update/workspaces/pole_cart_tf/orchestrator.js"
             }
-        ]
+        ],
+        "type": "javascript"
     },
     "Pole & Cart Python": {
         "sources": [
@@ -54,6 +56,8 @@
                 "get": "/workspaces/pole_cart_python/api.py",
                 "post": "/update/workspaces/pole_cart_python/api.py"
             }
-        ]
+        ],
+        "type": "python",
+        "main": "pole_cart.py"
     }
 }

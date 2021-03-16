@@ -25,6 +25,7 @@ block content
       div(class="topnav")
         li(onclick="saveEditors()") Save
         li(onclick="runProgram()") &#9658;
+        li(onclick="stopProgram()") Stop
         li(onclick="api.doReset()") Reset
       div(id="golden_layout")
     script(src='/javascripts/goldenlayout.js')
@@ -34,7 +35,6 @@ block content
         var ansi_up = new AnsiUp;
         socket.emit('ros_log');
         socket.on('ros_log', function(data) {
-            console.log(data.data);
             ros_log_text += data.data;
             if (window.ros_log_div) {
               var div = document.getElementById(window.ros_log_div);
@@ -43,6 +43,5 @@ block content
               parent_content.scrollTop = parent_content.scrollHeight;
             }
         });
-
 
 

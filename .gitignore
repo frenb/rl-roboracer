@@ -15,3 +15,6 @@
 # Backup files for sed rename
 *.js-e
 *.js.bu
+
+# Python runtime files anywhere
+*__pycache__*
