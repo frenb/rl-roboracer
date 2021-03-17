@@ -10,11 +10,11 @@ public class CameraPublisher : MonoBehaviour
     public string topic;
     private RenderTexture renderTexture;
 
-    private int renderTextureHeight = 200;
-    private int renderTextureWidth = 200;
+    private int renderTextureHeight = 400;
+    private int renderTextureWidth = 400;
     private int renderTextureDepth = 0;
     private RenderTextureFormat renderTextureFormat = RenderTextureFormat.ARGB32;
-    private byte[] rawBytes = new byte[160000];
+    private byte[] rawBytes = new byte[640000];
 
     // Start is called before the first frame update
     void Start()
@@ -32,7 +32,7 @@ public class CameraPublisher : MonoBehaviour
         {
             yield return StartCoroutine(ReadPixels());
             Publish();
-            yield return new WaitForSeconds(1.0f); // 1Hz
+            yield return new WaitForSeconds(0.5f); // 2Hz
         }
     }
 

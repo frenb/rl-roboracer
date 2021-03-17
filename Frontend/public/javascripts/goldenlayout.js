@@ -17,9 +17,19 @@ var config = {
               type: 'column',
               content: [
                 {
-                  type: 'component',
-                  componentName: 'iframeComponent',
-                  componentState: { src: 'http://localhost:80/videoplayer', title: 'simulation' }
+                  type: 'stack',
+                  content: [
+                    {
+                      type: 'component',
+                      componentName: 'iframeComponent',
+                      componentState: { src: 'http://localhost:80/videoplayer', title: 'simulation' }
+                    },
+                    {
+                      type: 'component',
+                      componentName: 'cameraComponent',
+                      componentState: { id: "camera/overhead" }
+                    }
+                  ]
                 },
                 {
                   type: 'stack',
@@ -95,6 +105,11 @@ var rosLogComponent = function(container, componentState) {
   });
 }
 
+var cameraComponent = function(container, componentState) {
+  container.setTitle(componentState.id)
+  container.getElement().html(`<div style="text-align: center"><canvas id="${componentState.id}"></canvas></div>`)
+}
+
 var programLogComponent = function(container, componentState) {
   console.log("programLogComponent: " + componentState.id);
   container.setTitle("Program");
@@ -139,6 +154,7 @@ myLayout.registerComponent('programLogComponent', programLogComponent);
 myLayout.registerComponent('rosLogComponent', rosLogComponent);
 myLayout.registerComponent('iframeComponent', iframeComponent);
 myLayout.registerComponent('simpleComponent', simpleComponent);
+myLayout.registerComponent('cameraComponent', cameraComponent);
 
 myLayout.init();
 
