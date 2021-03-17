@@ -43,5 +43,38 @@ block content
               parent_content.scrollTop = parent_content.scrollHeight;
             }
         });
+    // Configure camera feed.
+    script.
+      
+        const byteStringToArray = byteString  => {
+
+          // write the bytes of the string to a typed array
+          var ia = new Uint8ClampedArray(byteString.length);
+          for (var i = 0; i < byteString.length; i++) {
+            ia[i] = byteString.charCodeAt(i);
+          }
+
+          return ia;
+        };
+
+        socket.emit('subscribe', 'camera/overhead');
+        socket.on('camera/overhead', data => {
+          let camera_canvas = document.getElementById("camera/overhead");
+          if (!camera_canvas) {
+            return;
+          }
+
+          let height = data.data.frame.height;
+          let width = data.data.frame.width;
+
+          var byte_array = byteStringToArray(window.atob(data.data.frame.data));
+
+          console.log(`bytes=${byte_array.length}`);
+          camera_canvas.height = height;
+          camera_canvas.width = width;
+          ctx = camera_canvas.getContext("2d");
+          debugger;
+          ctx.putImageData(new ImageData(byte_array, width, height), 0, 0);
+        });
 
 
