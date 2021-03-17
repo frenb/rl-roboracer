@@ -10,11 +10,11 @@ public class CameraPublisher : MonoBehaviour
     public string topic;
     private RenderTexture renderTexture;
 
-    private int renderTextureHeight = 400;
-    private int renderTextureWidth = 400;
+    private int renderTextureHeight = 800;
+    private int renderTextureWidth = 800;
     private int renderTextureDepth = 0;
     private RenderTextureFormat renderTextureFormat = RenderTextureFormat.ARGB32;
-    private byte[] rawBytes = new byte[640000];
+    private byte[] rawBytes = new byte[2560000];
 
     // Start is called before the first frame update
     void Start()
@@ -32,7 +32,7 @@ public class CameraPublisher : MonoBehaviour
         {
             yield return StartCoroutine(ReadPixels());
             Publish();
-            yield return new WaitForSeconds(0.5f); // 2Hz
+            yield return new WaitForSeconds(2); // 0.5Hz
         }
     }
 
@@ -46,7 +46,10 @@ public class CameraPublisher : MonoBehaviour
             yield return new WaitForEndOfFrame();
         }
 
-        request.GetData<byte>().CopyTo(rawBytes);
+        if (!request.hasError)
+        {
+            request.GetData<byte>().CopyTo(rawBytes);
+        }
     }
 
     private void Publish()

@@ -59,5 +59,15 @@
         ],
         "type": "python",
         "main": "pole_cart.py"
+    },
+    "Find & Pick": {
+        "sources": [
+            {
+                "name": "find_and_pick.js",
+                "get": "/workspaces/find_and_pick/find_and_pick.js",
+                "post": "/update//workspaces/find_and_pick/find_and_pick.js"
+            }
+        ],
+        "type": "javascript"
     }
 }

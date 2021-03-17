@@ -107,6 +107,7 @@ var rosLogComponent = function(container, componentState) {
 
 var cameraComponent = function(container, componentState) {
   container.setTitle(componentState.id)
+  //container.getElement().html(`<img id="${componentState.id}" src="/images/banana.jpeg"></img>`);
   container.getElement().html(`<div style="text-align: center"><canvas id="${componentState.id}"></canvas></div>`)
 }
 
@@ -164,7 +165,9 @@ myLayout.on('initialised', async function(event) {
   // Fetch workspace.
   //await setWorkspace("Pick & Place");
   //await setWorkspace("Pole & Cart TF");
-  await setWorkspace("Pole & Cart Python")
+  //await setWorkspace("Pole & Cart Python");
+  await setWorkspace("Find & Pick");
+  
   // Create editor windows.
   var editorsContainer = myLayout.root.contentItems[0].contentItems[0].contentItems[0];
   var sourceIds = Object.keys(sources);
