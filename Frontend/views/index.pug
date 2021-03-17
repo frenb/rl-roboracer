@@ -18,6 +18,8 @@ block content
   script(src='//golden-layout.com/files/latest/js/goldenlayout.min.js')
   script(src="https://cdn.jsdelivr.net/npm/ansi_up@5.0.0/ansi_up.min.js")
   script(src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@2.0.0/dist/tf.min.js")
+  script(src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@1.0.0")
+  script(src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd")
   script(src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js")
   script(src='/javascripts/editors.js')
   body
@@ -46,6 +48,8 @@ block content
     // Configure camera feed.
     script.
       
+        var cameraAnnotations = [];
+
         const byteStringToArray = byteString  => {
 
           // write the bytes of the string to a typed array
@@ -69,12 +73,18 @@ block content
 
           var byte_array = byteStringToArray(window.atob(data.data.frame.data));
 
-          console.log(`bytes=${byte_array.length}`);
           camera_canvas.height = height;
           camera_canvas.width = width;
-          ctx = camera_canvas.getContext("2d");
-          debugger;
+          let ctx = camera_canvas.getContext("2d");
           ctx.putImageData(new ImageData(byte_array, width, height), 0, 0);
+
+          cameraAnnotations.forEach(annot => {
+            ctx.beginPath();
+            ctx.strokeStyle = "red";
+            ctx.rect(annot[0], annot[1], annot[2], annot[3]);
+            ctx.stroke();
+          })
+
         });
 
 
