@@ -23,13 +23,13 @@ block content
   script(src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js")
   script(src='/javascripts/editors.js')
   body
-    div(id="wrapper")
-      div(class="topnav")
-        li(onclick="saveEditors()") Save
-        li(onclick="runProgram()") &#9658;
-        li(onclick="stopProgram()") Stop
-        li(onclick="api.doReset()") Reset
-      div(id="golden_layout")
+    //div(id="wrapper")
+    ul(class="topnav")
+      li(onclick="saveEditors()") Save
+      li(onclick="runProgram()") &#9658;
+      li(onclick="stopProgram()") Stop
+      li(onclick="api.doReset()") Reset
+    div(id="golden_layout")
     script(src='/javascripts/goldenlayout.js')
     // Configure socket to receive ROS Log.
     script.

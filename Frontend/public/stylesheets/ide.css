@@ -2,7 +2,7 @@ body {
   margin: 0;
   font-family: Arial, Helvetica, sans-serif;
   min-width:100%;
-  background-color: #333;
+  background-color: rgb(57, 57, 57);
 }
 
 #wrapper {
@@ -11,8 +11,12 @@ body {
 }
 
 .topnav {
-  background-color: #333;
+  background-color: rgb(101, 101, 101);
   overflow: hidden;
+  padding-left: 0;
+  margin-top: 0;
+  margin-bottom: 7px;
+  box-shadow: 2px 2px 2px rgb(38, 38, 38);
 }
 
 .topnav li {
@@ -22,7 +26,7 @@ body {
   text-align: center;
   padding: 5px 16px;
   text-decoration: none;
-  font-size: 17px;
+  font-size: 15px;
 }
 
 .topnav li:hover {
@@ -43,4 +47,8 @@ body {
 
 #golden_layout .lm_content{
   overflow-y: scroll;
+}
+
+#golden_layout * {
+  box-shadow: none;
 }
