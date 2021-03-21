@@ -1,4 +1,3 @@
-using RosMessageTypes.Geometry;
 using RosMessageTypes.NiryoMoveit;
 using UnityEngine;
 using ROSGeometry;
@@ -17,6 +16,7 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
     private GameObject niryoOne;
     private GameObject target;
     private GameObject targetPlacement;
+    private GameObject pole;
 
     private int numRobotJoints = 6;
 
@@ -38,11 +38,14 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
         StartCoroutine(DoPublish());
     }
 
+
     public void UpdateWorldRefs()
     {
+        // Targets
         target = SimController.instance.target;
         targetPlacement = SimController.instance.targetPlacement;
 
+        // Robot
         niryoOne = SimController.instance.niryoOne;
 
         jointArticulationBodies = new ArticulationBody[numRobotJoints];
@@ -66,6 +69,15 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
 
         string gripper_base = hand_link + "/tool_link/gripper_base/Collisions/unnamed";
         gripperBase = niryoOne.transform.Find(gripper_base);
+
+        // Pole
+        if (SimController.instance.poleCart != null)
+        {
+            pole = SimController.instance.poleCart.transform.Find("Pole").gameObject;
+        }
+
+        // So one fresh scene_data before reset done signal sent.
+        Publish();
     }
 
     private IEnumerator DoPublish()
@@ -73,7 +85,7 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
         while (true)
         {
             Publish();
-            yield return new WaitForSeconds(0.1f); // 10Hz
+            yield return new WaitForSeconds(0.01f); // 50Hz
         }
     }
 
@@ -81,16 +93,22 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
     {
         SceneData sceneDataMessage = new SceneData();
 
-        sceneDataMessage.joint_00 = jointArticulationBodies[0].xDrive.target;
-        sceneDataMessage.joint_01 = jointArticulationBodies[1].xDrive.target;
-        sceneDataMessage.joint_02 = jointArticulationBodies[2].xDrive.target;
-        sceneDataMessage.joint_03 = jointArticulationBodies[3].xDrive.target;
-        sceneDataMessage.joint_04 = jointArticulationBodies[4].xDrive.target;
-        sceneDataMessage.joint_05 = jointArticulationBodies[5].xDrive.target;
+        sceneDataMessage.joint_00 = Mathf.Deg2Rad * jointArticulationBodies[0].xDrive.target;
+        sceneDataMessage.joint_01 = Mathf.Deg2Rad * jointArticulationBodies[1].xDrive.target;
+        sceneDataMessage.joint_02 = Mathf.Deg2Rad * jointArticulationBodies[2].xDrive.target;
+        sceneDataMessage.joint_03 = Mathf.Deg2Rad * jointArticulationBodies[3].xDrive.target;
+        sceneDataMessage.joint_04 = Mathf.Deg2Rad * jointArticulationBodies[4].xDrive.target;
+        sceneDataMessage.joint_05 = Mathf.Deg2Rad * jointArticulationBodies[5].xDrive.target;
 
         // Object & Target
-        sceneDataMessage.object_location = target.transform.position.To<FLU>();
-        sceneDataMessage.target_location = targetPlacement.transform.position.To<FLU>();
+        if (target != null)
+        {
+            sceneDataMessage.object_location = target.transform.position.To<FLU>();
+        }
+        if (targetPlacement != null)
+        {
+            sceneDataMessage.target_location = targetPlacement.transform.position.To<FLU>();
+        }
 
         // Effector Pose.
         sceneDataMessage.effector_pose.position = gripperBase.transform.position.To<FLU>();
@@ -101,6 +119,50 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
         var gribber_rotation = gripperBase.transform.rotation;
         gribber_rotation *= new Quaternion(0.5f, -0.5f, 0.5f, 0.5f);
         sceneDataMessage.effector_pose.orientation = gribber_rotation.To<FLU>();
+
+        // Last command executed in this scene.
+        sceneDataMessage.last_executed_cmd_id = MoveService.instance.lastExecutedCommand;
+
+        // Pole position & orientation.
+        if (pole != null) {
+
+            // Calculate the effector speed.
+            var tangent = jointArticulationBodies[5].transform.forward;
+            var handSpeed = Vector3.Dot(jointArticulationBodies[5].velocity, tangent);
+
+            // Calculate angle between effector normal & pole.
+            var handRedAxis = jointArticulationBodies[5].transform.right;
+            var handBlueAxis = jointArticulationBodies[5].transform.forward;
+            var handGreenAxis = jointArticulationBodies[5].transform.up;
+            var poleGreenAxis = pole.transform.up;
+
+
+            var deltaOnHandBlueAxis = poleGreenAxis - Vector3.Dot(poleGreenAxis, handGreenAxis) * handGreenAxis;
+            var poleToHandAngle = Vector3.Angle(-handRedAxis, deltaOnHandBlueAxis);
+            Debug.DrawRay(pole.transform.position, deltaOnHandBlueAxis, Color.red);
+
+            var deltaOnHandGreenAxis = poleGreenAxis - Vector3.Dot(poleGreenAxis, handBlueAxis) * handBlueAxis;
+            var poleToHandAngleB = Vector3.Angle(-handRedAxis, deltaOnHandGreenAxis);
+            Debug.DrawRay(pole.transform.position, deltaOnHandGreenAxis, Color.blue);
+
+
+            // Calculate angular speed of pole normal to the circle.
+            var poleAngularSpeed = Vector3.Dot(pole.GetComponent<Rigidbody>().angularVelocity, pole.transform.forward);
+            var poleAngularSpeedB = Vector3.Dot(pole.GetComponent<Rigidbody>().angularVelocity, pole.transform.right);
+
+            sceneDataMessage.pole_cart.pole_hand_angle = poleToHandAngle;
+            sceneDataMessage.pole_cart.pole_hand_angle_b = poleToHandAngleB;
+            sceneDataMessage.pole_cart.hand_tangent_speed = handSpeed;
+            sceneDataMessage.pole_cart.pole_angular_speed = poleAngularSpeed;
+            sceneDataMessage.pole_cart.pole_angular_speed_b = poleAngularSpeedB;
+            sceneDataMessage.pole_cart.upright = (pole.transform.position.y > (jointArticulationBodies[5].transform.position.y) * 0.7)
+                && poleToHandAngle < 40 && poleToHandAngleB < 40;
+            //sceneDataMessage.pole_cart.upright = pole.GetComponent<PoleController>().isUpright;
+
+            Debug.Log(string.Format("G_CHECK poleToHandAngle = {0:f3}, poleToHandAngleB = {1:f3}, poleAngularSpeed: {2:f3}, poleAngularSpeedB: {3:f3}",
+                poleToHandAngle, poleToHandAngleB, poleAngularSpeed, poleAngularSpeedB));
+        }
+
 
         ros.Send(topicName, sceneDataMessage);
     }

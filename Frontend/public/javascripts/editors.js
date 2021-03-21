@@ -1,9 +1,15 @@
-var sources = {}
+var sources = {};
+var active_workspace = null;
 
 async function setWorkspace(workspace_name) {
     let workspaces = await jQuery.getJSON('workspaces/workspaces.json').promise();
     let workspace = workspaces[workspace_name];
+    active_workspace = workspace;
     console.log("workspaces = " + JSON.stringify(workspace, null, 3));
+
+    if (workspace.type == "python") {
+        await connectPythonWorkspace()
+    }
 
     for (var remoteSource of workspace.sources) {
         let source = {};
@@ -13,6 +19,22 @@ async function setWorkspace(workspace_name) {
         console.log("downloaded source for " + remoteSource.name);
         sources[remoteSource.name] = source;
     }
+}
+
+// TODO: dont connect if already connected
+async function connectPythonWorkspace() {
+    socket.emit('python_workspace');
+    socket.on('python_output', function(data) {
+        if (window.program_log_div) {
+            let div = document.getElementById(window.program_log_div);
+            let text = window.program_log_text || "";
+            text += data.data;
+            window.program_log_text = text;
+            div.innerHTML = '<pre>' + ansi_up.ansi_to_html(text) + '</pre>';
+            var parent_content = div.parentElement;
+            parent_content.scrollTop = parent_content.scrollHeight;
+        }
+    });
 }
 
 function saveEditors() {
@@ -50,7 +72,7 @@ function addEditor(id, editorContainer) {
 
     source.ace_editor = ace.edit(id, {
         theme: "ace/theme/tomorrow_night_eighties",
-        mode: "ace/mode/javascript",
+        mode: `ace/mode/${active_workspace.type}`,
         maxLines: 1000,
         wrap: true,
         autoScrollEditorIntoView: true
@@ -72,6 +94,28 @@ function constructProgram() {
 }
 
 async function runProgram() {
+    if (active_workspace.type == "javascript") {
+        await runJsProgram();
+    } else if (active_workspace.type == "python") {
+        await runPyProgram();
+    }
+}
+
+async function runPyProgram() {
+    socket.emit("python_run", active_workspace.main)
+}
+
+async function stopProgram() {
+    if (active_workspace.type == "python") {
+        await stopPyProgram();
+    }
+}
+
+async function stopPyProgram() {
+    socket.emit("python_stop");
+}
+
+async function runJsProgram() {
     // Functions for script to console pane.
     // TODO: Override console.log.
     function log(msg) {
@@ -79,8 +123,10 @@ async function runProgram() {
         let text = window.program_log_text || "";
         text += "[INFO] " + msg + "\n";
         window.program_log_text = text;
-        div.innerHTML = '<pre>' + text + '</pre>';
-        var parent_content = div.parentElement;
+        if (div) {
+            div.innerHTML = '<pre>' + text + '</pre>';
+            var parent_content = div.parentElement;
+        }
         parent_content.scrollTop = parent_content.scrollHeight;
     }
 
@@ -89,8 +135,10 @@ async function runProgram() {
         let text = window.program_log_text || "";
         text += '<span style=\"color:red\">' + "[ERROR] " + e + '\n</span>';
         window.program_log_text = text;
-        div.innerHTML = '<pre>' + text + '</pre>';
-        var parent_content = div.parentElement;
+        if (div) {
+            div.innerHTML = '<pre>' + text + '</pre>';
+            var parent_content = div.parentElement;
+        }
         parent_content.scrollTop = parent_content.scrollHeight;
     }
 
@@ -102,6 +150,8 @@ async function runProgram() {
         await start();
     } catch (e) {
         logError(e);
+        // G_CHECK remove
+        throw(e);
     }
     log('Finished execution.');
 }

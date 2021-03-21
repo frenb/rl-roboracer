@@ -43,7 +43,7 @@ public class move_target : MonoBehaviour
             screenX = Input.mousePosition.x;
             screenY = Input.mousePosition.y;
         }
-        else if (remoteCameraController.remoteMouse.leftButton.isPressed)
+        else if (remoteCameraController.remoteMouse != null && remoteCameraController.remoteMouse.leftButton.isPressed)
         {
             controller = ActiveController.REMOTE;
             screenX = remoteCameraController.remoteMouse.position.x.ReadValue();

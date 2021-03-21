@@ -7,3 +7,6 @@ float64 joint_02
 float64 joint_03
 float64 joint_04
 float64 joint_05
+niryo_moveit/PoleCart pole_cart
+int32 last_executed_cmd_id
+

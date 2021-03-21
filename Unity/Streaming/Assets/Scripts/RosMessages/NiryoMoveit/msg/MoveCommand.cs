@@ -13,23 +13,27 @@ namespace RosMessageTypes.NiryoMoveit
 
         public int cmd_type;
         public Moveit.RobotTrajectory trajectory;
+        public JointPositions positions;
 
         public MoveCommand()
         {
             this.cmd_type = 0;
             this.trajectory = new Moveit.RobotTrajectory();
+            this.positions = new JointPositions();
         }
 
-        public MoveCommand(int cmd_type, Moveit.RobotTrajectory trajectory)
+        public MoveCommand(int cmd_type, Moveit.RobotTrajectory trajectory, JointPositions positions)
         {
             this.cmd_type = cmd_type;
             this.trajectory = trajectory;
+            this.positions = positions;
         }
         public override List<byte[]> SerializationStatements()
         {
             var listOfSerializations = new List<byte[]>();
             listOfSerializations.Add(BitConverter.GetBytes(this.cmd_type));
             listOfSerializations.AddRange(trajectory.SerializationStatements());
+            listOfSerializations.AddRange(positions.SerializationStatements());
 
             return listOfSerializations;
         }
@@ -39,6 +43,7 @@ namespace RosMessageTypes.NiryoMoveit
             this.cmd_type = BitConverter.ToInt32(data, offset);
             offset += 4;
             offset = this.trajectory.Deserialize(data, offset);
+            offset = this.positions.Deserialize(data, offset);
 
             return offset;
         }
@@ -47,7 +52,8 @@ namespace RosMessageTypes.NiryoMoveit
         {
             return "MoveCommand: " +
             "\ncmd_type: " + cmd_type.ToString() +
-            "\ntrajectory: " + trajectory.ToString();
+            "\ntrajectory: " + trajectory.ToString() +
+            "\npositions: " + positions.ToString();
         }
     }
 }

@@ -15,17 +15,21 @@ public class SimController : MonoBehaviour
     public GameObject niryoOnePrefab;
     public GameObject targetPrefab;
     public GameObject targetPlacementPrefab;
+    public GameObject poleCartPrefab;
 
     public GameObject streamCamera;
     public GameObject niryoOne { get; private set; }
     public GameObject target { get; private set; }
     public GameObject targetPlacement { get; private set; }
+    public GameObject poleCart { get; private set; }
+    public GameObject overheadCamera = null;
 
     private ROSConnection ros;
     private bool sentStarted = false;
     private static SimController _instance = null;
     private MoveService moveService;
     private SceneDataPublisher sceneDataPublisher;
+    private CameraPublisher overheadCameraPublisher;
 
     private enum Command
     {
@@ -34,13 +38,19 @@ public class SimController : MonoBehaviour
 
     private enum Status
     {
-        STARTED = 0
+        STARTED = 0,
+        RESTARTED = 1,
     };
 
     public SimController()
     {
         _instance = this;
     }
+
+    // Frames to wait after reseting declaring ready.
+    private const int WAIT_FRAMES = 5;
+
+    private int currentWait = 0;
 
     // Start is called before the first frame update
     void Start()
@@ -53,21 +63,51 @@ public class SimController : MonoBehaviour
         moveService = gameObject.AddComponent(typeof(MoveService)) as MoveService;
         sceneDataPublisher = gameObject.AddComponent(typeof(SceneDataPublisher)) as SceneDataPublisher;
 
+        if (overheadCamera != null) {
+            overheadCameraPublisher = gameObject.AddComponent(typeof(CameraPublisher)) as CameraPublisher;
+            overheadCameraPublisher.camera = overheadCamera.GetComponent<UnityEngine.Camera>();
+            overheadCameraPublisher.topic = "camera/overhead";
+        }
+
         ros.Subscribe<SimCommand>(simCommandTopic, onCommand);
     }
 
     private void DestroyObjects()
     {
         Destroy(niryoOne);
-        Destroy(target);
-        Destroy(targetPlacement);
+        if (target != null)
+        {
+            Destroy(target);
+        }
+        if (targetPlacement != null)
+        {
+            Destroy(targetPlacement);
+        }
+        if (poleCart != null)
+        {
+            Destroy(poleCart);
+        }
     }
 
     private void InstantiateObjects()
     {
         niryoOne = Instantiate(niryoOnePrefab);
-        target = Instantiate(targetPrefab);
-        targetPlacement = Instantiate(targetPlacementPrefab);
+
+        if (targetPrefab != null)
+        {
+            target = Instantiate(targetPrefab);
+        }
+        if (targetPlacementPrefab != null)
+        {
+            targetPlacement = Instantiate(targetPlacementPrefab);
+        }
+        if (poleCartPrefab != null)
+        {
+            poleCart = Instantiate(poleCartPrefab);
+
+            // G_CHECK random rotation
+            poleCart.transform.Find("Pole").transform.Rotate(0, 0, Random.Range(-5, 5));
+        }
     }
 
     private void onCommand(SimCommand cmd)
@@ -90,6 +130,7 @@ public class SimController : MonoBehaviour
         InstantiateObjects();
         moveService.UpdateWorldRefs();
         sceneDataPublisher.UpdateWorldRefs();
+        currentWait = WAIT_FRAMES;
     }
 
     // Update is called once per frame
@@ -99,6 +140,15 @@ public class SimController : MonoBehaviour
         {
             ros.Send(simStatusTopic, new SimStatus((int)Status.STARTED));
             sentStarted = true;
+        }
+
+        if (currentWait > 0)
+        {
+            currentWait--;
+            if (currentWait == 0)
+            {
+                ros.Send(simStatusTopic, new SimStatus((int)Status.RESTARTED));
+            }
         }
     }
 

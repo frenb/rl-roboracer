@@ -1,9 +1,13 @@
 var messages = require('./proto/virtual_endpoint/proto/ros_service_pb');
 
+var subscribers = {};
+
 class SubscriberQueue {
     constructor(name, msg_type, client, max_size=1) {
+        subscribers[name] = this;
         this.name = name;
         this.queue = new Array();
+        this.callbacks = new Set();
         
         // Bound size of message queue.
         this.queue.push = function (){
@@ -24,13 +28,23 @@ class SubscriberQueue {
         this.call.on('status', this.onStatus.bind(this));
     }
 
+    addDataCallback(callback) {
+        this.callbacks.add(callback);
+    }
+
+    removeDataCallback(callback) {
+        this.callbacks.delete(callback);
+    }
+
     peek() {
         return this.queue[this.queue.length-1];
     }
 
     onData(topic_message) {
         try {
-            this.queue.push({data: JSON.parse(topic_message.getData()), timestamp: Date.now()});
+            let entry = {data: JSON.parse(topic_message.getData()), timestamp: Date.now()};
+            this.queue.push(entry);
+            this.callbacks.forEach(cb => cb(entry));
           } catch (e) {
             console.log(e);
         }
@@ -51,4 +65,5 @@ class SubscriberQueue {
     }
 }
 
-module.exports = SubscriberQueue
+module.exports.SubscriberQueue = SubscriberQueue;
+module.exports.subscribers = subscribers;

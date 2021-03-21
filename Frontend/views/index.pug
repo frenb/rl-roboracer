@@ -9,28 +9,40 @@ head
   meta(name="viewport" content="width=device-width, initial-scale=1")
 block content
   script(src='https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js')
+  script(src='/socket.io/socket.io.js')
+  script.
+    // global instance for IDE.
+    socket = io();
   script(src='javascripts/api.js')
   script(src='/ace-builds/src-noconflict/ace.js')
-  script(src='/socket.io/socket.io.js')
   script(src='//golden-layout.com/files/latest/js/goldenlayout.min.js')
   script(src="https://cdn.jsdelivr.net/npm/ansi_up@5.0.0/ansi_up.min.js")
+  script(src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@2.0.0/dist/tf.min.js")
+  script(src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@1.0.0")
+  script(src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd")
+  script(src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js")
+  script(src="https://cdn.jsdelivr.net/npm/tracking@1.1.3/build/tracking.min.js")
   script(src='/javascripts/editors.js')
   body
-    div(id="wrapper")
-      div(class="topnav")
-        li(onclick="saveEditors()") Save
-        li(onclick="runProgram()") &#9658;
-        li(onclick="api.doReset()") Reset
-      div(id="golden_layout")
+    //div(id="wrapper")
+    ul(class="topnav")
+      li(onclick="saveEditors()") Save
+      li(onclick="runProgram()") &#9658;
+      li(onclick="stopProgram()") Stop
+      li(onclick="reset()") Reset
+    div(id="golden_layout")
     script(src='/javascripts/goldenlayout.js')
-    // ROS Log socket.
+    script.
+        function reset() {
+          window.overhead_sequence = 0;
+          api.doReset();
+        }
+    // Configure socket to receive ROS Log.
     script.
         var ros_log_text = "";
         var ansi_up = new AnsiUp;
-        var socket = io();
         socket.emit('ros_log');
         socket.on('ros_log', function(data) {
-            console.log(data.data);
             ros_log_text += data.data;
             if (window.ros_log_div) {
               var div = document.getElementById(window.ros_log_div);
@@ -39,6 +51,49 @@ block content
               parent_content.scrollTop = parent_content.scrollHeight;
             }
         });
+    // Configure camera feed.
+    script.
+        const byteStringToArray = byteString  => {
 
+          // write the bytes of the string to a typed array
+          var ia = new Uint8ClampedArray(byteString.length);
+          for (var i = 0; i < byteString.length; i++) {
+            ia[i] = byteString.charCodeAt(i);
+          }
+
+          return ia;
+        };
+
+        // TODO: overflow
+        window.overhead_sequence = 0;
+        socket.emit('subscribe', 'camera/overhead');
+        socket.on('camera/overhead', data => {
+
+          if (window.overhead_sequence > data.data.frame.header.seq) {
+            // old frame
+            return;
+          }
+          window.overhead_sequence = data.data.frame.header.seq;
+
+          let camera_canvas = document.getElementById("camera/overhead");
+          let annotations = document.getElementById('camera/overhead_annotations');
+          if (!camera_canvas) {
+            return;
+          }
+
+          let height = data.data.frame.height;
+          let width = data.data.frame.width;
+
+          var byte_array = byteStringToArray(window.atob(data.data.frame.data));
+
+          camera_canvas.height = height;
+          camera_canvas.width = width;
+          if (camera_canvas.height != annotations.height) {
+            annotations.height = height;
+            annotations.width = width;
+          }
+          let ctx = camera_canvas.getContext("2d");
+          ctx.putImageData(new ImageData(byte_array, width, height), 0, 0);
+        });
 
 

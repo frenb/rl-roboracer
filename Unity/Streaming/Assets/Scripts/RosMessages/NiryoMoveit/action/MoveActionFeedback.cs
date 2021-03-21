@@ -13,20 +13,24 @@ namespace RosMessageTypes.NiryoMoveit
 
         //  feedback
         public double progress;
+        public int cmd_id;
 
         public MoveActionFeedback()
         {
             this.progress = 0.0;
+            this.cmd_id = 0;
         }
 
-        public MoveActionFeedback(double progress)
+        public MoveActionFeedback(double progress, int cmd_id)
         {
             this.progress = progress;
+            this.cmd_id = cmd_id;
         }
         public override List<byte[]> SerializationStatements()
         {
             var listOfSerializations = new List<byte[]>();
             listOfSerializations.Add(BitConverter.GetBytes(this.progress));
+            listOfSerializations.Add(BitConverter.GetBytes(this.cmd_id));
 
             return listOfSerializations;
         }
@@ -35,6 +39,8 @@ namespace RosMessageTypes.NiryoMoveit
         {
             this.progress = BitConverter.ToDouble(data, offset);
             offset += 8;
+            this.cmd_id = BitConverter.ToInt32(data, offset);
+            offset += 4;
 
             return offset;
         }
@@ -42,7 +48,8 @@ namespace RosMessageTypes.NiryoMoveit
         public override string ToString()
         {
             return "MoveActionFeedback: " +
-            "\nprogress: " + progress.ToString();
+            "\nprogress: " + progress.ToString() +
+            "\ncmd_id: " + cmd_id.ToString();
         }
     }
 }
