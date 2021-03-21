@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using ROSGeometry;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -9,6 +10,7 @@ public class CameraPublisher : MonoBehaviour
     public Camera camera;
     public string topic;
     private RenderTexture renderTexture;
+    private uint frame_sequence = 0;
 
     private int renderTextureHeight = 800;
     private int renderTextureWidth = 800;
@@ -32,7 +34,7 @@ public class CameraPublisher : MonoBehaviour
         {
             yield return StartCoroutine(ReadPixels());
             Publish();
-            yield return new WaitForSeconds(2); // 0.5Hz
+            yield return new WaitForSeconds(1.0f); // 1Hz
         }
     }
 
@@ -58,6 +60,7 @@ public class CameraPublisher : MonoBehaviour
         frame.frame.height = (uint) renderTextureHeight;
         frame.frame.width = (uint) renderTextureWidth;
         frame.frame.data = rawBytes;
+        frame.frame.header.seq = frame_sequence++;
         ros.Send(topic, frame);
     }
 }

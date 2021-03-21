@@ -108,7 +108,11 @@ var rosLogComponent = function(container, componentState) {
 var cameraComponent = function(container, componentState) {
   container.setTitle(componentState.id)
   //container.getElement().html(`<img id="${componentState.id}" src="/images/banana.jpeg"></img>`);
-  container.getElement().html(`<div style="text-align: center"><canvas id="${componentState.id}"></canvas></div>`)
+  container.getElement().html(`
+  <div style="text-align: center; position: relative;">
+    <canvas id="${componentState.id}" style="position: absolute; left: 0; top: 0; z-index: 0;"></canvas>
+    <canvas id="${componentState.id}_annotations" style="position: absolute; left: 0; top: 0; z-index: 1;"></canvas>
+  </div>`)
 }
 
 var programLogComponent = function(container, componentState) {

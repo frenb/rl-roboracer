@@ -101,8 +101,14 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
         sceneDataMessage.joint_05 = Mathf.Deg2Rad * jointArticulationBodies[5].xDrive.target;
 
         // Object & Target
-        sceneDataMessage.object_location = target.transform.position.To<FLU>();
-        sceneDataMessage.target_location = targetPlacement.transform.position.To<FLU>();
+        if (target != null)
+        {
+            sceneDataMessage.object_location = target.transform.position.To<FLU>();
+        }
+        if (targetPlacement != null)
+        {
+            sceneDataMessage.target_location = targetPlacement.transform.position.To<FLU>();
+        }
 
         // Effector Pose.
         sceneDataMessage.effector_pose.position = gripperBase.transform.position.To<FLU>();
