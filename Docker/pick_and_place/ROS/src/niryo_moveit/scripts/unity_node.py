@@ -4,7 +4,7 @@ import rospy
 
 from ros_tcp_endpoint import TcpServer, RosPublisher, RosSubscriber, RosService, UnityService
 from niryo_moveit.msg import SceneData
-from niryo_moveit.msg import MoveActionGoal, MoveActionResult, MoveActionFeedback, SimCommand, SimStatus
+from niryo_moveit.msg import MoveActionGoal, MoveActionResult, MoveActionFeedback, SimCommand, SimStatus, Camera
 
 
 def main():
@@ -19,7 +19,8 @@ def main():
         'move_action/result': RosPublisher('move_action/result', MoveActionResult),
         'move_action/feedback': RosPublisher('move_action/feedback', MoveActionFeedback),
         'sim_command': RosSubscriber('sim_command', SimCommand, tcp_server),
-        'sim_status': RosPublisher('sim_status', SimStatus)
+        'sim_status': RosPublisher('sim_status', SimStatus),
+        'camera/overhead': RosPublisher('camera/overhead', Camera),
     })
     
     rospy.spin()

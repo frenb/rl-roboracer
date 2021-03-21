@@ -11,6 +11,63 @@
                 "get": "/workspaces/pick_and_place/pick_and_place.js",
                 "post": "/update/workspaces/pick_and_place/pick_and_place.js"
             }
-        ]
+        ],
+        "type": "javascript"
+    },
+    "Pole & Cart TF": {
+        "sources": [
+            {
+                "name": "pole_cart_tf.js",
+                "get": "/workspaces/pole_cart_tf/pole_cart_tf.js",
+                "post": "/update/workspaces/pole_cart_tf/pole_cart_tf.js"
+            },
+            {
+                "name": "environment.js",
+                "get": "/workspaces/pole_cart_tf/environment.js",
+                "post": "/update/workspaces/pole_cart_tf/environment.js"
+            },
+            {
+                "name": "model.js",
+                "get": "/workspaces/pole_cart_tf/model.js",
+                "post": "/update/workspaces/pole_cart_tf/model.js"
+            },
+            {
+                "name": "memory.js",
+                "get": "/workspaces/pole_cart_tf/memory.js",
+                "post": "/update/workspaces/pole_cart_tf/memory.js"
+            },
+            {
+                "name": "orchestrator.js",
+                "get": "/workspaces/pole_cart_tf/orchestrator.js",
+                "post": "/update/workspaces/pole_cart_tf/orchestrator.js"
+            }
+        ],
+        "type": "javascript"
+    },
+    "Pole & Cart Python": {
+        "sources": [
+            {
+                "name": "pole_cart.py",
+                "get": "/workspaces/pole_cart_python/pole_cart.py",
+                "post": "/update/workspaces/pole_cart_python/pole_cart.py"
+            },
+            {
+                "name": "api.py",
+                "get": "/workspaces/pole_cart_python/api.py",
+                "post": "/update/workspaces/pole_cart_python/api.py"
+            }
+        ],
+        "type": "python",
+        "main": "pole_cart.py"
+    },
+    "Find & Pick": {
+        "sources": [
+            {
+                "name": "find_and_pick.js",
+                "get": "/workspaces/find_and_pick/find_and_pick.js",
+                "post": "/update//workspaces/find_and_pick/find_and_pick.js"
+            }
+        ],
+        "type": "javascript"
     }
 }

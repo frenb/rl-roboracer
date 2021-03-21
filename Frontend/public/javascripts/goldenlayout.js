@@ -17,9 +17,19 @@ var config = {
               type: 'column',
               content: [
                 {
-                  type: 'component',
-                  componentName: 'iframeComponent',
-                  componentState: { src: 'http://localhost:80/videoplayer', title: 'simulation' }
+                  type: 'stack',
+                  content: [
+                    {
+                      type: 'component',
+                      componentName: 'iframeComponent',
+                      componentState: { src: 'http://localhost:80/videoplayer', title: 'simulation' }
+                    },
+                    {
+                      type: 'component',
+                      componentName: 'cameraComponent',
+                      componentState: { id: "camera/overhead" }
+                    }
+                  ]
                 },
                 {
                   type: 'stack',
@@ -95,6 +105,16 @@ var rosLogComponent = function(container, componentState) {
   });
 }
 
+var cameraComponent = function(container, componentState) {
+  container.setTitle(componentState.id)
+  //container.getElement().html(`<img id="${componentState.id}" src="/images/banana.jpeg"></img>`);
+  container.getElement().html(`
+  <div style="text-align: center; position: relative;">
+    <canvas id="${componentState.id}" style="position: absolute; left: 0; top: 0; z-index: 0;"></canvas>
+    <canvas id="${componentState.id}_annotations" style="position: absolute; left: 0; top: 0; z-index: 1;"></canvas>
+  </div>`)
+}
+
 var programLogComponent = function(container, componentState) {
   console.log("programLogComponent: " + componentState.id);
   container.setTitle("Program");
@@ -139,6 +159,7 @@ myLayout.registerComponent('programLogComponent', programLogComponent);
 myLayout.registerComponent('rosLogComponent', rosLogComponent);
 myLayout.registerComponent('iframeComponent', iframeComponent);
 myLayout.registerComponent('simpleComponent', simpleComponent);
+myLayout.registerComponent('cameraComponent', cameraComponent);
 
 myLayout.init();
 
@@ -146,7 +167,11 @@ myLayout.init();
 // Load default workspace.
 myLayout.on('initialised', async function(event) {
   // Fetch workspace.
-  await setWorkspace("Pick & Place");
+  //await setWorkspace("Pick & Place");
+  //await setWorkspace("Pole & Cart TF");
+  //await setWorkspace("Pole & Cart Python");
+  await setWorkspace("Find & Pick");
+  
   // Create editor windows.
   var editorsContainer = myLayout.root.contentItems[0].contentItems[0].contentItems[0];
   var sourceIds = Object.keys(sources);
