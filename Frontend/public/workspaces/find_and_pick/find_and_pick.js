@@ -14,7 +14,7 @@ async function start() {
         clearAnnotations();
         await api.sleep(2000);
         
-        let predictions = await model.detect(img, 20, 0.1);
+        let predictions = await model.detect(img, 20, 0.05);
         let bananas = predictions.filter(p => p.class == 'banana');
         
         if (bananas.length == 0) {
