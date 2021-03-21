@@ -67,11 +67,11 @@ class API {
         }
     }
 
-    waitOnCmd(id) {
+    waitOnCmd(id, timeout = WAIT_COMMAND_DEADLINE_MS) {
         // Will wait until a result for the command is returned and we have seen a scene_data with command's results.
         return new Promise(resolve => {
             this.waiting[id] = [true /* returned result */, true /* reflected in scene data */ , resolve];
-            setTimeout(() => {delete this.waiting[id]; resolve()}, WAIT_COMMAND_DEADLINE_MS);
+            setTimeout(() => {delete this.waiting[id]; resolve()}, timeout);
         });
     }
 
@@ -98,10 +98,10 @@ class API {
         }).promise();
     }
 
-    async doMove(action) {
+    async doMove(action, timeout = WAIT_COMMAND_DEADLINE_MS) {
         //let start = Date.now();
         let id = this.next_cmd_id++;
-        let waitPromise = this.waitOnCmd(id);
+        let waitPromise = this.waitOnCmd(id, timeout);
         action.cmd_id = id;
         await $.ajax({
             contentType: 'application/json',
@@ -136,7 +136,7 @@ class API {
             cmd_type: 1 /* trajectory */,
             trajectory: trajectory
         };
-        return this.doMove({cmd: move_command});
+        return this.doMove({cmd: move_command}, 10000);
     }
 
     async doOpenGripper() {
