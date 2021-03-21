@@ -3,6 +3,7 @@ async function start() {
     
     log("Getting Latest Scene Data...");
     scene_data = await api.getSceneData();
+    scene_data = scene_data.data;
     log("Received Scene Data " + JSON.stringify(scene_data));
 
     log("Planning pick trajectory...")
