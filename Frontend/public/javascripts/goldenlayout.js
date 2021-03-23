@@ -28,6 +28,11 @@ var config = {
                       type: 'component',
                       componentName: 'cameraComponent',
                       componentState: { id: "camera/overhead" }
+                    },
+                    {
+                      type: 'component',
+                      componentName: 'streamPlayerComponent',
+                      componentState: { id: "ScenePlayer ", title: "scene"}
                     }
                   ]
                 },
@@ -96,6 +101,15 @@ var editorComponent = function(container, componentState) {
     });
 }
 
+var streamPlayerComponent = function(container, componentState) {
+  console.log("streamPlayerComponent: " + componentState.id);
+  container.setTitle(componentState.title);
+  container.getElement().html(`<div id="${componentState.id}"></div>`);
+  container.on('open', () => {
+    window.setupVideoStream(componentState.id);
+  });
+}
+
 var rosLogComponent = function(container, componentState) {
   console.log("rosLogComponent: " + componentState.id);
   container.setTitle("ROS Logs");
@@ -156,6 +170,7 @@ var simpleComponent = function(container, componentState) {
 
 myLayout.registerComponent('editorComponent', editorComponent);
 myLayout.registerComponent('programLogComponent', programLogComponent);
+myLayout.registerComponent('streamPlayerComponent', streamPlayerComponent);
 myLayout.registerComponent('rosLogComponent', rosLogComponent);
 myLayout.registerComponent('iframeComponent', iframeComponent);
 myLayout.registerComponent('simpleComponent', simpleComponent);
