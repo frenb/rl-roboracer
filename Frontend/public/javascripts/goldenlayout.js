@@ -99,7 +99,7 @@ var editorComponent = function(container, componentState) {
 var streamPlayerComponent = function(container, componentState) {
   console.log("streamPlayerComponent: " + componentState.id);
   container.setTitle(componentState.title);
-  container.getElement().html(`<div id="${componentState.id}"></div>`);
+  container.getElement().html(`<div id="${componentState.id}" class="StreamPlayer"></div>`);
   container.on('open', () => {
     window.setupVideoStream(componentState.id);
   });
@@ -133,27 +133,6 @@ var programLogComponent = function(container, componentState) {
   });
 }
 
-var iframeComponent = function(container, componentState) {
-    container.setTitle(componentState.title);
-
-    container.on('resize', () => {
-      const iframe = container.getElement().get(0).childNodes[0];
-      iframe.width = container.width;
-      iframe.height = container.height;
-    });
-    // This code seems to run only once; attach .on event handlers to react to changes,
-    // don't expect this code to be rerun.
-    console.log("componentState.src: " + componentState.src);
-    const newChild = document.createElement("iframe")
-    newChild.frameBorder=0;
-    newChild.style = "background:white;"
-    newChild.src=componentState.src;
-    container
-      .getElement()
-      .get(0)
-      .appendChild(newChild);
-}
-
 var simpleComponent = function(container, componentState) {
     const newChild = document.createElement("h2");
     newChild.innerText = componentState.label;
@@ -167,7 +146,6 @@ myLayout.registerComponent('editorComponent', editorComponent);
 myLayout.registerComponent('programLogComponent', programLogComponent);
 myLayout.registerComponent('streamPlayerComponent', streamPlayerComponent);
 myLayout.registerComponent('rosLogComponent', rosLogComponent);
-myLayout.registerComponent('iframeComponent', iframeComponent);
 myLayout.registerComponent('simpleComponent', simpleComponent);
 myLayout.registerComponent('cameraComponent', cameraComponent);
 
