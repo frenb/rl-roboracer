@@ -46,6 +46,7 @@ function showPlayButton(playerElementId) {
     elementPlayButton.id = playButtonId(playerElementId);
     elementPlayButton.src = 'images/Play.png';
     elementPlayButton.alt = 'Start Streaming';
+    elementPlayButton.className = "StreamPlayButton";
     let playButton = document.getElementById(playerElementId).appendChild(elementPlayButton);
     playButton.addEventListener('click', () => onClickPlayButton(playerElementId));
   }
@@ -63,12 +64,14 @@ function onClickPlayButton(playerElementId) {
   // add video player
   const elementVideo = document.createElement('video');
   elementVideo.id = videoElementId(playerElementId);
+  elementVideo.className = "StreamVideo";
   elementVideo.style.touchAction = 'none';
   playerDiv.appendChild(elementVideo);
 
   // add video thumbnail
   const elementVideoThumb = document.createElement('video');
   elementVideoThumb.id = videoThumbnailId(playerElementId);
+  elementVideoThumb.className = "StreamVideoThumbnail";
   elementVideoThumb.style.touchAction = 'none';
   playerDiv.appendChild(elementVideoThumb);
 
