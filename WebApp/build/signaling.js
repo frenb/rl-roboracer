@@ -159,7 +159,6 @@ router.delete('/connection', function (req, res) {
     res.sendStatus(200);
 });
 router.post('/offer', function (req, res) {
-    console.log(`/offer POST ${JSON.stringify(req.body, null, 3)}`);
     var sessionId = req.header('session-id');
     var connectionId = req.body.connectionId;
     offers.set(connectionId, new offer_1.default(req.body.sdp, Date.now()));
@@ -179,7 +178,6 @@ router.post('/offer', function (req, res) {
     res.sendStatus(200);
 });
 router.post('/answer', function (req, res) {
-    console.log(`/answer POST ${JSON.stringify(req.body, null, 3)}`);
     var sessionId = req.header('session-id');
     var connectionId = req.body.connectionId;
     var connectionIds = getOrCreateConnectionIds(sessionId);
@@ -203,7 +201,6 @@ router.post('/answer', function (req, res) {
     res.sendStatus(200);
 });
 router.post('/candidate', function (req, res) {
-    console.log(`/candidate POST ${JSON.stringify(req.body, null, 3)}`);
     var sessionId = req.header('session-id');
     var connectionId = req.body.connectionId;
     if (!candidates.has(sessionId)) {

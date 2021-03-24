@@ -5,6 +5,7 @@ var bodyParser = require("body-parser");
 var path = require("path");
 var fs = require("fs");
 var signaling_1 = require("./signaling");
+var cors = require('cors');
 var log_1 = require("./log");
 var morgan = require("morgan");
 exports.createServer = function (config) {
@@ -14,11 +15,18 @@ exports.createServer = function (config) {
     if (config.logging != "none") {
         app.use(morgan(config.logging));
     }
+    // TODO: REMOVE!
+    app.use(cors());
+    app.options('*', cors());
+    var corsOptions = {
+        origin: '*',
+        exposedHeaders: 'Date'
+    };
     // const signal = require('./signaling');
     app.use(bodyParser.urlencoded({ extended: true }));
     app.use(bodyParser.json());
-    app.get('/protocol', function (req, res) { return res.json({ useWebSocket: config.websocket }); });
-    app.use('/signaling', signaling_1.default);
+    app.get('/protocol', cors(corsOptions), function (req, res) { return res.json({ useWebSocket: config.websocket }); });
+    app.use('/signaling', cors(corsOptions), signaling_1.default);
     app.use(express.static(path.join(__dirname, '/../public/stylesheets')));
     app.use(express.static(path.join(__dirname, '/../public/scripts')));
     app.use(express.static(path.join(__dirname, '/../bower_components')));

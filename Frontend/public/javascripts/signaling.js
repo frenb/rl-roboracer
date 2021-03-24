@@ -18,7 +18,7 @@ export default class Signaling extends EventTarget {
   };
 
   url(method) {
-    return location.protocol + '//' + location.host + '/' + 'signaling/' + method;
+    return location.protocol + '//' + "localhost:80" + '/' + 'signaling/' + method;
   };
 
   async start() {
@@ -58,10 +58,13 @@ export default class Signaling extends EventTarget {
   async loopGetAnswer() {
     // receive answer message from 30secs ago
     let lastTimeRequest = Date.now() - 30000;
+    console.log(`G_CHECK let lastTimeRequest = ${lastTimeRequest}`);
 
     while (true) {
       const res = await this.getAnswer(lastTimeRequest);
+      console.log(`G_CHECK let getAnswer.headers = ${JSON.stringify(res.headers)}`);
       lastTimeRequest = Date.parse(res.headers.get('Date'));
+
 
       const data = await res.json();
       const answers = data.answers;
@@ -154,9 +157,9 @@ export class WebSocketSignaling extends EventTarget {
     super();
 
     if (location.protocol === "https:") {
-      var websocketUrl = "wss://" + location.host;
+      var websocketUrl = "wss://" + "localhost:80";
     } else {
-      var websocketUrl = "ws://" + location.host;
+      var websocketUrl = "ws://" + "localhost:80";
     }
 
     this.websocket = new WebSocket(websocketUrl);

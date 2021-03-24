@@ -21,19 +21,14 @@ var config = {
                   content: [
                     {
                       type: 'component',
-                      componentName: 'iframeComponent',
-                      componentState: { src: 'http://localhost:80/videoplayer', title: 'simulation' }
+                      componentName: 'streamPlayerComponent',
+                      componentState: { id: "ScenePlayer ", title: "scene"}
                     },
                     {
                       type: 'component',
                       componentName: 'cameraComponent',
                       componentState: { id: "camera/overhead" }
                     },
-                    {
-                      type: 'component',
-                      componentName: 'streamPlayerComponent',
-                      componentState: { id: "ScenePlayer ", title: "scene"}
-                    }
                   ]
                 },
                 {
