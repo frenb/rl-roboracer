@@ -22,12 +22,12 @@ var config = {
                     {
                       type: 'component',
                       componentName: 'streamPlayerComponent',
-                      componentState: { id: "ScenePlayer", title: "scene"}
+                      componentState: { id: "ScenePlayer", title: "scene", isMain: true, track: 0}
                     },
                     {
                       type: 'component',
-                      componentName: 'cameraComponent',
-                      componentState: { id: "camera/overhead" }
+                      componentName: 'streamPlayerComponent',
+                      componentState: { id: "OverheadCameraPlayer", title: "camera/overhead", isMain: false, track: 1}
                     },
                   ]
                 },
@@ -100,9 +100,15 @@ var streamPlayerComponent = function(container, componentState) {
   console.log("streamPlayerComponent: " + componentState.id);
   container.setTitle(componentState.title);
   container.getElement().html(`<div id="${componentState.id}" class="StreamPlayer"></div>`);
-  container.on('open', () => {
-    window.setMainVideoPlayer(componentState.id, 0, 1);
-  });
+  if (componentState.isMain) {
+    container.on('open', () => {
+      window.setMainVideoPlayer(componentState.id, componentState.track);
+    });
+  } else {
+    container.on('open', () => {
+      window.setExtraVideoPlayer(componentState.id, componentState.track);
+    });
+  }
 }
 
 var rosLogComponent = function(container, componentState) {

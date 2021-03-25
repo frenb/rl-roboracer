@@ -33,6 +33,7 @@ export class VideoPlayer {
     element.playsInline = true;
     element.autoplay = true;
     element.muted = true;
+    var _this = this;
     // Treat first as camera for scene. For main scene video only: we need a resize callback to properly translate
     // interaction positions.
     if (this.streams.length == 1) {
@@ -101,6 +102,7 @@ export class VideoPlayer {
     this.pc.ontrack = function (e) {
       if(e.track.kind == 'video') {
         _this.videoTrackList.push(e.track);
+        console.log(`G_CHECK video tracks: ${_this.videoTrackList.length}`);
         _this.maybeConnectVideoTrack(_this.videoTrackList.length - 1 /* new track's index */);
       }
       if(e.track.kind == 'audio') {
