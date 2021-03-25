@@ -5,7 +5,7 @@ var videoStreamer;
 var mainPlayerElement;
 var mainVideoElement;
 var mainThumbnailElement;
-var extraPlayerElements = [];
+var extraVideoElements = [];
 
 
 window.document.oncontextmenu = function () {
@@ -34,18 +34,34 @@ function setMainVideoPlayer(playerElementId, mainTrackIndex, thumbnailTrackIndex
 
 
   // add video thumbnail
-  mainThumbnailElement = document.createElement('video');
-  mainThumbnailElement.id = videoThumbnailId(playerElementId);
-  mainThumbnailElement.className = "StreamVideoThumbnail";
-  mainThumbnailElement.style.touchAction = 'none';
-  mainThumbnailElement.setAttribute('data-track', thumbnailTrackIndex);
-  mainPlayerElement.appendChild(mainThumbnailElement);
+  if (thumbnailTrackIndex !== undefined) {
+    mainThumbnailElement = document.createElement('video');
+    mainThumbnailElement.id = videoThumbnailId(playerElementId);
+    mainThumbnailElement.className = "StreamVideoThumbnail";
+    mainThumbnailElement.style.touchAction = 'none';
+    mainThumbnailElement.setAttribute('data-track', thumbnailTrackIndex);
+    mainPlayerElement.appendChild(mainThumbnailElement);
+  }
 
   maybeConnectMainPlayer();
 }
 
+function setExtraVideoPlayer(playerElementId, trackIndex) {
+  var playerElement = document.getElementById(playerElementId);
+  var videoElement = document.createElement('video');
+  videoElement.id = videoElementId(playerElementId);
+  videoElement.className = "StreamVideo";
+  videoElement.style.touchAction = 'none';
+  videoElement.setAttribute('data-track', trackIndex);
+  playerElement.appendChild(videoElement);
+  extraVideoElements.push({element: videoElement, connected: false});
+  
+  maybeConnectExtraPlayers();
+}
+
 // TODO: module-ify everything?
 window.setMainVideoPlayer = setMainVideoPlayer;
+window.setExtraVideoPlayer = setExtraVideoPlayer;
 
 
 function videoElementId(playerElementId) {
@@ -62,7 +78,22 @@ function maybeConnectMainPlayer() {
   }
   registerMouseEvents(videoStreamer, mainVideoElement);
   videoStreamer.addVideoElement(mainVideoElement);
-  videoStreamer.addVideoElement(mainThumbnailElement);
+
+  if (mainThumbnailElement) {
+    videoStreamer.addVideoElement(mainThumbnailElement);
+  }
+}
+
+function maybeConnectExtraPlayers() {
+  if (!videoStreamer) {
+    return;
+  }
+
+  extraVideoElements.forEach(extraVideo => {
+    if (!extraVideo.connected) {
+      videoStreamer.addVideoElement(extraVideo.element);
+    }
+  });
 }
 
 async function setupVideoStreamer() {
@@ -78,13 +109,14 @@ async function setupVideoStreamer() {
 function onDisconnect() {
   console.log("video streamer disconnected");
   videoStreamer = null;
-  // TODO: schedule reconnect;
+  // TODO: clear state; schedule reconnect;
 }
 
 function initStreamer() {
   setupVideoStreamer().then(streamer => {
     videoStreamer = streamer;
     maybeConnectMainPlayer();
+    maybeConnectExtraPlayers();
   })
 }
 

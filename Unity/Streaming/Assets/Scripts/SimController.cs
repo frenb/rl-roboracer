@@ -22,14 +22,12 @@ public class SimController : MonoBehaviour
     public GameObject target { get; private set; }
     public GameObject targetPlacement { get; private set; }
     public GameObject poleCart { get; private set; }
-    public GameObject overheadCamera = null;
 
     private ROSConnection ros;
     private bool sentStarted = false;
     private static SimController _instance = null;
     private MoveService moveService;
     private SceneDataPublisher sceneDataPublisher;
-    private CameraPublisher overheadCameraPublisher;
 
     private enum Command
     {
@@ -62,12 +60,6 @@ public class SimController : MonoBehaviour
         // Ros nodes instatiates here after world created.
         moveService = gameObject.AddComponent(typeof(MoveService)) as MoveService;
         sceneDataPublisher = gameObject.AddComponent(typeof(SceneDataPublisher)) as SceneDataPublisher;
-
-        if (overheadCamera != null) {
-            overheadCameraPublisher = gameObject.AddComponent(typeof(CameraPublisher)) as CameraPublisher;
-            overheadCameraPublisher.camera = overheadCamera.GetComponent<UnityEngine.Camera>();
-            overheadCameraPublisher.topic = "camera/overhead";
-        }
 
         ros.Subscribe<SimCommand>(simCommandTopic, onCommand);
     }
