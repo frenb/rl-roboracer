@@ -1,35 +1,52 @@
 import { VideoPlayer } from "./video-player.js";
 import { registerGamepadEvents, registerKeyboardEvents, registerMouseEvents, sendClickEvent } from "./register-events.js";
 
-var videoPlayers = {};
-
-// TODO: module-ify everything?
-function setupVideoStream (playerElementId) {
-  showPlayButton(playerElementId);
-  onClickPlayButton(playerElementId);
-}
-
-window.setupVideoStream = setupVideoStream;
+var videoStreamer;
+var mainPlayerElement;
+var mainVideoElement;
+var mainThumbnailElement;
+var extraPlayerElements = [];
 
 
 window.document.oncontextmenu = function () {
   return false;     // cancel default menu
 }
 
-/*
-Might have a use for this in the future*/
+/* Might have a use for this in the future*/
 window.addEventListener('resize', function() {
-  for (let player in videoPlayers) {
-    if (videoPlayers[player]) {
-      videoPlayers[player].resizeVideo();
-    }
+  if (videoStreamer) {
+    videoStreamer.resizeVideo();
   }
 }, true);
 
 
-function playButtonId(playerElementId) {
-  return `${playerElementId}_playButton`;
+
+function setMainVideoPlayer(playerElementId, mainTrackIndex, thumbnailTrackIndex) {
+  mainPlayerElement = document.getElementById(playerElementId);
+
+  // add video player
+  mainVideoElement = document.createElement('video');
+  mainVideoElement.id = videoElementId(playerElementId);
+  mainVideoElement.className = "StreamVideo";
+  mainVideoElement.style.touchAction = 'none';
+  mainVideoElement.setAttribute('data-track', mainTrackIndex);
+  mainPlayerElement.appendChild(mainVideoElement);
+
+
+  // add video thumbnail
+  mainThumbnailElement = document.createElement('video');
+  mainThumbnailElement.id = videoThumbnailId(playerElementId);
+  mainThumbnailElement.className = "StreamVideoThumbnail";
+  mainThumbnailElement.style.touchAction = 'none';
+  mainThumbnailElement.setAttribute('data-track', thumbnailTrackIndex);
+  mainPlayerElement.appendChild(mainThumbnailElement);
+
+  maybeConnectMainPlayer();
 }
+
+// TODO: module-ify everything?
+window.setMainVideoPlayer = setMainVideoPlayer;
+
 
 function videoElementId(playerElementId) {
   return `${playerElementId}_video`
@@ -39,97 +56,36 @@ function videoThumbnailId(playerElementId) {
   return `${playerElementId}_videoThumbnail`
 }
 
-
-function showPlayButton(playerElementId) {
-  if (!document.getElementById(playButtonId(playerElementId))) {
-    let elementPlayButton = document.createElement('img');
-    elementPlayButton.id = playButtonId(playerElementId);
-    elementPlayButton.src = 'images/Play.png';
-    elementPlayButton.alt = 'Start Streaming';
-    elementPlayButton.className = "StreamPlayButton";
-    let playButton = document.getElementById(playerElementId).appendChild(elementPlayButton);
-    playButton.addEventListener('click', () => onClickPlayButton(playerElementId));
+function maybeConnectMainPlayer() {
+  if (!mainPlayerElement || !videoStreamer) {
+    return;
   }
+  registerMouseEvents(videoStreamer, mainVideoElement);
+  videoStreamer.addVideoElement(mainVideoElement);
+  videoStreamer.addVideoElement(mainThumbnailElement);
 }
 
-function onClickPlayButton(playerElementId) {
-
-  var playButton = document.getElementById(playButtonId(playerElementId));
-
-  if(playButton)
-    playButton.style.display = 'none';
-
-  const playerDiv = document.getElementById(playerElementId);
-
-  // add video player
-  const elementVideo = document.createElement('video');
-  elementVideo.id = videoElementId(playerElementId);
-  elementVideo.className = "StreamVideo";
-  elementVideo.style.touchAction = 'none';
-  playerDiv.appendChild(elementVideo);
-
-  // add video thumbnail
-  const elementVideoThumb = document.createElement('video');
-  elementVideoThumb.id = videoThumbnailId(playerElementId);
-  elementVideoThumb.className = "StreamVideoThumbnail";
-  elementVideoThumb.style.touchAction = 'none';
-  playerDiv.appendChild(elementVideoThumb);
-
-  setupVideoPlayer([elementVideo, elementVideoThumb], undefined /* config */, playerElementId)
-    .then(value => videoPlayers[playerElementId] = value);
-
-  // TODO: full screen support?
-  // add fullscreen button
-  /*
-  const elementFullscreenButton = document.createElement('img');
-  elementFullscreenButton.id = 'fullscreenButton';
-  elementFullscreenButton.src = 'images/FullScreen.png';
-  playerDiv.appendChild(elementFullscreenButton);
-  elementFullscreenButton.addEventListener ("click", function() {
-    if (!document.fullscreenElement) {
-      if(document.documentElement.requestFullscreen) {
-        document.documentElement.requestFullscreen();
-      }
-      else if(document.documentElement.webkitRequestFullscreen){
-        document.documentElement.webkitRequestFullscreen(Element.ALLOW_KEYBOARD_INPUT);
-      }
-    }
-  });
-  document.addEventListener('webkitfullscreenchange', onFullscreenChange);
-  document.addEventListener('fullscreenchange', onFullscreenChange);
-
-  function onFullscreenChange(e) {
-    if(document.webkitFullscreenElement || document.fullscreenElement) {
-      elementFullscreenButton.style.display = 'none';
-    }
-    else {
-      elementFullscreenButton.style.display = 'block';
-    }
-  }
-  */
-}
-
-async function setupVideoPlayer(elements, config, playerElementId) {
-  const videoPlayer = new VideoPlayer(elements, config);
-  await videoPlayer.setupConnection();
-
-  videoPlayer.ondisconnect = () => onDisconnect(playerElementId);
-  registerGamepadEvents(videoPlayer);
-  registerKeyboardEvents(videoPlayer);
-  registerMouseEvents(videoPlayer, elements[0]);
+async function setupVideoStreamer() {
+  const videoStreamer = new VideoPlayer();
+  await videoStreamer.setupConnection();
+  videoStreamer.ondisconnect = () => onDisconnect();
+  registerGamepadEvents(videoStreamer);
+  registerKeyboardEvents(videoStreamer);
   
-  return videoPlayer;
+  return videoStreamer;
 }
 
-function onDisconnect(playerElementId) {
-  const playerDiv = document.getElementById(playerElementId)
-  clearChildren(playerDiv);
-  delete videoPlayers[playerElementId];
-  showPlayButton();
+function onDisconnect() {
+  console.log("video streamer disconnected");
+  videoStreamer = null;
+  // TODO: schedule reconnect;
 }
 
-function clearChildren(element) {
-  while (element.firstChild) {
-    element.removeChild(element.firstChild);
-  }
+function initStreamer() {
+  setupVideoStreamer().then(streamer => {
+    videoStreamer = streamer;
+    maybeConnectMainPlayer();
+  })
 }
+
+initStreamer();

@@ -6,7 +6,7 @@ var UnityEventType = {
 };
 
 export class VideoPlayer {
-  constructor(elements, config) {
+  constructor(config) {
     const _this = this;
     this.cfg = VideoPlayer.getConfiguration(config);
     this.pc = null;
@@ -17,32 +17,38 @@ export class VideoPlayer {
     };
     this.connectionId = null;
 
-    // main video
-    this.localStream = new MediaStream();
-    this.video = elements[0];
-    this.video.playsInline = true;
-    this.video.autoplay = true;
-    this.video.muted = true;
-    this.video.addEventListener('loadedmetadata', function () {
-      _this.video.play();
-      _this.resizeVideo();
-    }, true);
-
-    // secondly video
-    this.localStream2 = new MediaStream();
-    this.videoThumb = elements[1];
-    this.videoThumb.playsInline = true;
-    this.videoThumb.autoplay = true;
-    this.videoThumb.muted = true;
-    this.videoThumb.addEventListener('loadedmetadata', function () {
-      _this.videoThumb.play();
-    }, true);
+    this.streams = [];
+    this.videoElements = [];
+    this.audio_track = null;
 
     this.videoTrackList = [];
     this.videoTrackIndex = 0;
-    this.maxVideoTrackLength = 2;
-
+    
     this.ondisconnect = function () { };
+  }
+
+  addVideoElement(element) {
+    this.streams.push(new MediaStream());
+    this.videoElements.push(element);
+    element.playsInline = true;
+    element.autoplay = true;
+    element.muted = true;
+    // Treat first as camera for scene. For main scene video only: we need a resize callback to properly translate
+    // interaction positions.
+    if (this.streams.length == 1) {
+      if (this.audio_track) {
+        this.streams[0].addTrack(this.audio_track);
+      }
+      this.maybeConnectVideoTrack(element.dataset.track);
+      element.addEventListener('loadedmetadata', function () {
+        element.play();
+        _this.resizeVideo();
+      });
+    } else {
+      element.addEventListener('loadedmetadata', function () {
+        element.play();
+      });
+    }
   }
 
   static getConfiguration(config) {
@@ -85,6 +91,7 @@ export class VideoPlayer {
       console.log('iceConnectionState changed:', e);
       console.log('pc.iceConnectionState:' + _this.pc.iceConnectionState);
       if (_this.pc.iceConnectionState === 'disconnected') {
+        // TODO: Clear tracks from MediaStreamers
         _this.ondisconnect();
       }
     };
@@ -94,12 +101,11 @@ export class VideoPlayer {
     this.pc.ontrack = function (e) {
       if(e.track.kind == 'video') {
         _this.videoTrackList.push(e.track);
+        _this.maybeConnectVideoTrack(_this.videoTrackList.length - 1 /* new track's index */);
       }
       if(e.track.kind == 'audio') {
-        _this.localStream.addTrack(e.track);
-      }
-      if(_this.videoTrackList.length == _this.maxVideoTrackLength) {
-        _this.switchVideo(_this.videoTrackIndex);
+        _this.audio_track = e.track;
+        _this.maybeConnectAudioTrack();
       }
     };
     this.pc.onicecandidate = function (e) {
@@ -131,7 +137,9 @@ export class VideoPlayer {
       _this.videoTrackIndex = bytes[1];
       switch(bytes[0]) {
         case UnityEventType.SWITCH_VIDEO:
-          _this.switchVideo(_this.videoTrackIndex);
+          // TODO: suport?
+          console.error("UnityEventType.SWITCH_VIDEO not supported");
+          // _this.switchVideo(_this.videoTrackIndex);
           break;
       }
     };
@@ -169,7 +177,7 @@ export class VideoPlayer {
 
   resizeVideo() {
     console.log("inside resize video");
-    const clientRect = this.video.getBoundingClientRect();
+    const clientRect = this.videoElements[0].getBoundingClientRect();
     const videoRatio = this.videoWidth / this.videoHeight;
     const clientRatio = clientRect.width / clientRect.height;
 
@@ -181,21 +189,15 @@ export class VideoPlayer {
   }
 
   // switch streaming destination main video and secondly video
+  /*
   switchVideo(indexVideoTrack) {
-    this.video.srcObject = this.localStream;
-    this.videoThumb.srcObject = this.localStream2;
 
-    if(indexVideoTrack == 0) {
-      this.replaceTrack(this.localStream, this.videoTrackList[0]);
-      this.replaceTrack(this.localStream2, this.videoTrackList[1]);
-    }
-    else {
-      this.replaceTrack(this.localStream, this.videoTrackList[1]);
-      this.replaceTrack(this.localStream2, this.videoTrackList[0]);
-    }
+    this.videoElements.forEach((element, i) => {
+      element.srcObject = this.streams[i];
+      this.replaceTrack(this.streams[i], this.videoTrackList[0].element.dataset.track);
+    });
   }
-
-  // replace video track related the MediaStream
+   // replace video track related the MediaStream
   replaceTrack(stream, newTrack) {
     const tracks = stream.getVideoTracks();
     for(const track of tracks) {
@@ -205,13 +207,37 @@ export class VideoPlayer {
     }
     stream.addTrack(newTrack);
   }
+  
+  */
+
+  maybeConnectAudioTrack() {
+    if (this.audio_track != null && this.streams.length > 1) {
+      this.streams[0].addTrack(this.audio_track);
+    }
+  }
+
+  maybeConnectVideoTrack(trackIndex) {
+    if (this.videoTrackList.length <= trackIndex) {
+      // Track not presented yet by server.
+      return;
+    }
+
+    // Find matching video element.
+    for (var i = 0; i < this.videoElements.length; i++) {
+      let element = this.videoElements[i];
+      if (element.dataset.track == trackIndex && this.streams[i].getVideoTracks().length == 0) {
+        element.srcObject = this.streams[i];
+        this.streams[i].addTrack(this.videoTrackList[trackIndex]);
+      }
+    }
+  }
 
   get videoWidth() {
-    return this.video.videoWidth;
+    return this.videoElements[0].videoWidth;
   }
 
   get videoHeight() {
-    return this.video.videoHeight;
+    return this.videoElements[0].videoHeight;
   }
 
   get videoOriginX() {
