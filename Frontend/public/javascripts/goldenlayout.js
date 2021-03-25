@@ -22,7 +22,7 @@ var config = {
                     {
                       type: 'component',
                       componentName: 'streamPlayerComponent',
-                      componentState: { id: "ScenePlayer ", title: "scene"}
+                      componentState: { id: "ScenePlayer", title: "scene"}
                     },
                     {
                       type: 'component',
@@ -101,7 +101,7 @@ var streamPlayerComponent = function(container, componentState) {
   container.setTitle(componentState.title);
   container.getElement().html(`<div id="${componentState.id}" class="StreamPlayer"></div>`);
   container.on('open', () => {
-    window.setupVideoStream(componentState.id);
+    window.setMainVideoPlayer(componentState.id, 0, 1);
   });
 }
 
