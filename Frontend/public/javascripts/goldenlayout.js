@@ -99,14 +99,15 @@ var editorComponent = function(container, componentState) {
 var streamPlayerComponent = function(container, componentState) {
   console.log("streamPlayerComponent: " + componentState.id);
   container.setTitle(componentState.title);
-  container.getElement().html(`
-    <div id="${componentState.id}" class="StreamPlayer" style="z-index: 0;"></div>
-    <canvas id="${componentState.id}_annotations" style="height: 100%; width: 100%; z-index: 1; position: absolute;"></canvas>`);
   if (componentState.isMain) {
+    container.getElement().html(`<div id="${componentState.id}" class="StreamPlayer" style="z-index: 0;"></div>`);
     container.on('open', () => {
       window.setMainVideoPlayer(componentState.id, componentState.track);
     });
   } else {
+    container.getElement().html(`
+    <div id="${componentState.id}" class="StreamPlayer" style="z-index: 0;"></div>
+    <canvas id="${componentState.id}_annotations" style="height: 100%; width: 100%; z-index: 1; position: absolute;"></canvas>`);
     container.on('open', () => {
       window.setExtraVideoPlayer(componentState.id, componentState.track);
     });
