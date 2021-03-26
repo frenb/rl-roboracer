@@ -99,7 +99,9 @@ var editorComponent = function(container, componentState) {
 var streamPlayerComponent = function(container, componentState) {
   console.log("streamPlayerComponent: " + componentState.id);
   container.setTitle(componentState.title);
-  container.getElement().html(`<div id="${componentState.id}" class="StreamPlayer"></div>`);
+  container.getElement().html(`
+    <div id="${componentState.id}" class="StreamPlayer" style="z-index: 0;"></div>
+    <canvas id="${componentState.id}_annotations" style="height: 100%; width: 100%; z-index: 1; position: absolute;"></canvas>`);
   if (componentState.isMain) {
     container.on('open', () => {
       window.setMainVideoPlayer(componentState.id, componentState.track);
@@ -118,16 +120,6 @@ var rosLogComponent = function(container, componentState) {
   container.on('open', () => {
     window.ros_log_div = componentState.id;
   });
-}
-
-var cameraComponent = function(container, componentState) {
-  container.setTitle(componentState.id)
-  //container.getElement().html(`<img id="${componentState.id}" src="/images/banana.jpeg"></img>`);
-  container.getElement().html(`
-  <div style="text-align: center; position: relative;">
-    <canvas id="${componentState.id}" style="position: absolute; left: 0; top: 0; z-index: 0;"></canvas>
-    <canvas id="${componentState.id}_annotations" style="position: absolute; left: 0; top: 0; z-index: 1;"></canvas>
-  </div>`)
 }
 
 var programLogComponent = function(container, componentState) {
@@ -153,7 +145,6 @@ myLayout.registerComponent('programLogComponent', programLogComponent);
 myLayout.registerComponent('streamPlayerComponent', streamPlayerComponent);
 myLayout.registerComponent('rosLogComponent', rosLogComponent);
 myLayout.registerComponent('simpleComponent', simpleComponent);
-myLayout.registerComponent('cameraComponent', cameraComponent);
 
 myLayout.init();
 

@@ -6,6 +6,7 @@ var mainPlayerElement;
 var mainVideoElement;
 var mainThumbnailElement;
 var extraVideoElements = [];
+var elementObservers = [];
 
 
 window.document.oncontextmenu = function () {
@@ -30,7 +31,11 @@ function setMainVideoPlayer(playerElementId, mainTrackIndex, thumbnailTrackIndex
   mainVideoElement.className = "StreamVideo";
   mainVideoElement.style.touchAction = 'none';
   mainVideoElement.setAttribute('data-track', mainTrackIndex);
+  mainVideoElement.onplay = () => adjustAnnotationsSize(playerElementId);
   mainPlayerElement.appendChild(mainVideoElement);
+
+  // Needed so that we can match annotations canvas size to video client size.
+  observeElementChanges(playerElementId);
 
 
   // add video thumbnail
@@ -53,10 +58,31 @@ function setExtraVideoPlayer(playerElementId, trackIndex) {
   videoElement.className = "StreamVideo";
   videoElement.style.touchAction = 'none';
   videoElement.setAttribute('data-track', trackIndex);
+  videoElement.onplay = () => adjustAnnotationsSize(playerElementId);
   playerElement.appendChild(videoElement);
   extraVideoElements.push({element: videoElement, connected: false});
+
+  // Needed so that we can match annotations canvas size to video client size.
+  observeElementChanges(playerElementId);
   
   maybeConnectExtraPlayers();
+}
+
+function observeElementChanges(playerElementId) {
+  var playerElement = document.getElementById(playerElementId);
+  var containerElement = playerElement.parentElement.parentElement;
+  var observer = new MutationObserver(unused_mutations => adjustAnnotationsSize(playerElementId));
+  observer.observe(containerElement, {
+    attributes: true
+  });
+  elementObservers.push(observer);
+}
+
+function adjustAnnotationsSize(playerElementId) {
+  var annotations = document.getElementById(videoAnnotationsId(playerElementId));
+  var video = document.getElementById(videoElementId(playerElementId));
+  annotations.width = video.clientWidth;
+  annotations.height = video.clientHeight;
 }
 
 // TODO: module-ify everything?
@@ -65,11 +91,15 @@ window.setExtraVideoPlayer = setExtraVideoPlayer;
 
 
 function videoElementId(playerElementId) {
-  return `${playerElementId}_video`
+  return `${playerElementId}_video`;
 }
 
 function videoThumbnailId(playerElementId) {
-  return `${playerElementId}_videoThumbnail`
+  return `${playerElementId}_videoThumbnail`;
+}
+
+function videoAnnotationsId(playerElementId) {
+  return `${playerElementId}_annotations`;
 }
 
 function maybeConnectMainPlayer() {

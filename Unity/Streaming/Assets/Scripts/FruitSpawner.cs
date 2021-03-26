@@ -55,7 +55,8 @@ public class FruitSpawner : MonoBehaviour
             RaycastHit hit;
             if (Physics.Raycast(ray, out hit))
             {
-                Instantiate(bananaPrefab, hit.point + Vector3.up * 0.1f, Quaternion.identity);
+                var obj = Instantiate(bananaPrefab, hit.point + Vector3.up * 0.1f, Quaternion.identity);
+                obj.transform.Rotate(new Vector3(0, 180, 0));
             }
         }
 
