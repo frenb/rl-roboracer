@@ -12,11 +12,11 @@ async function start() {
     
     while (true) {
         await api.sleep(2000);
-        //clearAnnotations();
+        clearAnnotations();
         
         let predictions = await model.detect(img, 20, 0.05);
         log(`predictions = ${JSON.stringify(predictions, null, 3)}`);
-        //predictions.forEach(p => drawBox(p.bbox));
+        predictions.forEach(p => drawBox(p.bbox));
         
         let bananas = predictions.filter(p => p.class == 'banana');
         
