@@ -55,20 +55,94 @@ function actionToIndex(action) {
     return undefined;
 }
 
-
+function publishReports(context) {
+        /* layer summary*/
+        let layerSummary =
+            {
+                name: 'Layer Summary',
+                tab: 'Model',
+                styles: {
+                    height: '500px'
+                }
+            }
+            
+        tfvis.show.layer(
+            layerSummary, 
+            context.network.getLayer(undefined, 1));
+        
+        /* Model summary*/
+        let modelSummary = 
+            {
+                name: 'Summary',
+                tab: 'Model',
+                styles: {
+                  height: '500px'
+                }
+            }
+        tfvis.show.modelSummary(
+            modelSummary,
+            context.network);
+        
+        /*Line chart*/
+        const data = 
+            { 
+                values: [context.rewardHistoryGraph.series1], 
+                series: context.rewardHistoryGraph.legend 
+            };
+        
+        tfvis.render.linechart(
+            context.rewardHistoryGraph.container, 
+            data, 
+            context.rewardHistoryGraph.config);
+    
+        console.log("***history**** " + JSON.stringify(context.history));
+}
+    
 class Model {
     constructor(hiddenLayerSizesOrModel, numStates, numActions, batchSize) {
         this.numStates = numStates;
         this.numActions = numActions;
         this.batchSize = batchSize;
+        this.history = [];
+        /* reward history graph*/
+        this.rewardHistoryGraph =
+            {
+                series1: [],
+                legend: ['Reward'],
+                config: { zoomToFit: true, height: 200 },
+                container: {
+                    name: 'Training Iterations',
+                    tab: 'Rewards',
+                    styles: {
+                      height: '1000px'
+                    }
+                }
+            };
+        
         
         if (hiddenLayerSizesOrModel instanceof tf.LayersModel) {
             this.network = hiddenLayerSizesOrModel;
             this.network.summary();
-            this.network.compile({optimizer: 'adam', loss: 'meanSquaredError'});
+            this.network.compile(
+                {
+                    optimizer: 'adam',
+                    loss: 'meanSquaredError',
+                    metrics: ['accuracy']
+                });
         } else {
             this.defineModel(hiddenLayerSizesOrModel);
         }
+        
+        this.container = {
+            name: 'show.fitCallbacks',
+            tab: 'Training',
+            styles: {
+              height: '1000px'
+            }
+        };
+        
+        tfvis.visor();
+        tfvis.visor().surface(this.container);
     }
     
     defineModel(hiddenLayerSizes) {
@@ -86,7 +160,12 @@ class Model {
         this.network.add(tf.layers.dense({units: this.numActions}));
         
         this.network.summary();
-        this.network.compile({optimizer: 'adam', loss: 'meanSquaredError'});
+        this.network.compile
+            ({ 
+                optimizer: 'adam',
+                loss: 'meanSquaredError',
+                metrics: ['accuracy']
+            });
     }
     
     predict(states) {
@@ -94,7 +173,20 @@ class Model {
     }
     
     async train(xBatch, yBatch) {
-        await this.network.fit(xBatch, yBatch);
+        //await this.network.fit(xBatch, yBatch);
+        const BATCH_SIZE = 100;
+        const testDataSize = 100;
+        const history = await this.network.fit(xBatch, yBatch, {
+            callbacks: {
+                onEpochEnd: (epoch, log) => {
+                this.history.push(log);
+                tfvis.show.history(
+                    this.container, 
+                    this.history, 
+                    ['acc','loss']);
+            }}});
+        
+        publishReports(this);
     }
     
     // Returns action -1, 0, 1
