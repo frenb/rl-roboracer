@@ -1,4 +1,4 @@
-Start-Process Streaming.exe
+Start-Process ../../../../UnityBinary/Streaming.exe
 write "streaming.exe started"
 $pN = "Streaming" ## soffice: soffice.bin  soffice.exe,  swriter.exe
  while (1) {
