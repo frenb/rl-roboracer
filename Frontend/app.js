@@ -1,5 +1,6 @@
 var createError = require('http-errors');
 var express = require('express');
+const cors = require('cors');
 var path = require('path');
 var cookieParser = require('cookie-parser');
 var logger = require('morgan');
@@ -29,7 +30,6 @@ var moveFeedbackQueue = new SubscriberQueue("move_action/feedback", 'niryo_movei
 var moveGoalPublisher = new Publisher("move_action/goal", 'niryo_moveit/MoveActionGoal', client);
 var simCommandPublisher = new Publisher("sim_command", 'niryo_moveit/SimCommand', client);
 var simStatusQueue = new SubscriberQueue("sim_status", "niryo_moveit/SimStatus", client);
-var cameraQueue = new SubscriberQueue("camera/overhead", "niryo_moveit/Camera", client);
 
 var ros_obj = {
   client: client,
@@ -39,10 +39,13 @@ var ros_obj = {
   moveGoalPublisher: moveGoalPublisher,
   simCommandPublisher: simCommandPublisher,
   simStatusQueue: simStatusQueue,
-  cameraQueue: cameraQueue
 }
 
 var app = express();
+
+// TODO: REMOVE!
+app.use(cors());
+app.options('*', cors());
 
 // view engine setup
 app.set('views', path.join(__dirname, 'views'));

@@ -1,3 +1,5 @@
 tf-agents[reverb]
 grpcio
 google-api-python-client
+tensorflow
+tensorflow_hub
