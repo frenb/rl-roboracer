@@ -10,8 +10,12 @@ import signal
 import traceback
 
 def kill(proc):
-    if proc:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    try:
+        if proc:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except:
+        print("Unexpected error: ", sys.exc_info()[0])
+        traceback.print_exc()
 
 def check_task_exception(task):
     try:

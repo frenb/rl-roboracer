@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using Unity.RenderStreaming;
 using UnityEngine;
+using ROSGeometry;
 
 public class FruitSpawner : MonoBehaviour
 {
@@ -55,7 +56,8 @@ public class FruitSpawner : MonoBehaviour
             RaycastHit hit;
             if (Physics.Raycast(ray, out hit))
             {
-                Instantiate(bananaPrefab, hit.point + Vector3.up * 0.1f, Quaternion.identity);
+                var obj = Instantiate(bananaPrefab, hit.point + Vector3.up * 0.1f, Quaternion.identity);
+                obj.transform.Rotate(new Vector3(0, 180, 0));
             }
         }
 

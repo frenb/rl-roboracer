@@ -21,14 +21,14 @@ var config = {
                   content: [
                     {
                       type: 'component',
-                      componentName: 'iframeComponent',
-                      componentState: { src: 'http://localhost:80/videoplayer', title: 'simulation' }
+                      componentName: 'streamPlayerComponent',
+                      componentState: { id: "ScenePlayer", title: "scene", isMain: true, track: 0}
                     },
                     {
                       type: 'component',
-                      componentName: 'cameraComponent',
-                      componentState: { id: "camera/overhead" }
-                    }
+                      componentName: 'streamPlayerComponent',
+                      componentState: { id: "OverheadCameraPlayer", title: "camera/overhead", isMain: false, track: 1}
+                    },
                   ]
                 },
                 {
@@ -96,6 +96,24 @@ var editorComponent = function(container, componentState) {
     });
 }
 
+var streamPlayerComponent = function(container, componentState) {
+  console.log("streamPlayerComponent: " + componentState.id);
+  container.setTitle(componentState.title);
+  if (componentState.isMain) {
+    container.getElement().html(`<div id="${componentState.id}" class="StreamPlayer" style="z-index: 0;"></div>`);
+    container.on('open', () => {
+      window.setMainVideoPlayer(componentState.id, componentState.track);
+    });
+  } else {
+    container.getElement().html(`
+    <div id="${componentState.id}" class="StreamPlayer" style="z-index: 0;"></div>
+    <canvas id="${componentState.id}_annotations" style="height: 100%; width: 100%; z-index: 1; position: absolute;"></canvas>`);
+    container.on('open', () => {
+      window.setExtraVideoPlayer(componentState.id, componentState.track);
+    });
+  }
+}
+
 var rosLogComponent = function(container, componentState) {
   console.log("rosLogComponent: " + componentState.id);
   container.setTitle("ROS Logs");
@@ -105,16 +123,6 @@ var rosLogComponent = function(container, componentState) {
   });
 }
 
-var cameraComponent = function(container, componentState) {
-  container.setTitle(componentState.id)
-  //container.getElement().html(`<img id="${componentState.id}" src="/images/banana.jpeg"></img>`);
-  container.getElement().html(`
-  <div style="text-align: center; position: relative;">
-    <canvas id="${componentState.id}" style="position: absolute; left: 0; top: 0; z-index: 0;"></canvas>
-    <canvas id="${componentState.id}_annotations" style="position: absolute; left: 0; top: 0; z-index: 1;"></canvas>
-  </div>`)
-}
-
 var programLogComponent = function(container, componentState) {
   console.log("programLogComponent: " + componentState.id);
   container.setTitle("Program");
@@ -122,27 +130,6 @@ var programLogComponent = function(container, componentState) {
   container.on('open', () => {
     window.program_log_div = componentState.id;
   });
-}
-
-var iframeComponent = function(container, componentState) {
-    container.setTitle(componentState.title);
-
-    container.on('resize', () => {
-      const iframe = container.getElement().get(0).childNodes[0];
-      iframe.width = container.width;
-      iframe.height = container.height;
-    });
-    // This code seems to run only once; attach .on event handlers to react to changes,
-    // don't expect this code to be rerun.
-    console.log("componentState.src: " + componentState.src);
-    const newChild = document.createElement("iframe")
-    newChild.frameBorder=0;
-    newChild.style = "background:white;"
-    newChild.src=componentState.src;
-    container
-      .getElement()
-      .get(0)
-      .appendChild(newChild);
 }
 
 var simpleComponent = function(container, componentState) {
@@ -156,10 +143,9 @@ var simpleComponent = function(container, componentState) {
 
 myLayout.registerComponent('editorComponent', editorComponent);
 myLayout.registerComponent('programLogComponent', programLogComponent);
+myLayout.registerComponent('streamPlayerComponent', streamPlayerComponent);
 myLayout.registerComponent('rosLogComponent', rosLogComponent);
-myLayout.registerComponent('iframeComponent', iframeComponent);
 myLayout.registerComponent('simpleComponent', simpleComponent);
-myLayout.registerComponent('cameraComponent', cameraComponent);
 
 myLayout.init();
 
@@ -170,8 +156,9 @@ myLayout.on('initialised', async function(event) {
   //await setWorkspace("Pick & Place");
   //await setWorkspace("Pole & Cart TF");
   //await setWorkspace("Pole & Cart Python");
-  await setWorkspace("Find & Pick");
-  
+  //await setWorkspace("Find & Pick");
+  await setWorkspace("Find & Pick Python");
+
   // Create editor windows.
   var editorsContainer = myLayout.root.contentItems[0].contentItems[0].contentItems[0];
   var sourceIds = Object.keys(sources);

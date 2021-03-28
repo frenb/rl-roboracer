@@ -18,18 +18,19 @@ public class SimController : MonoBehaviour
     public GameObject poleCartPrefab;
 
     public GameObject streamCamera;
+    public GameObject publishedCamera;
+    public string publishedCameraTopic = "camera/overhead";
     public GameObject niryoOne { get; private set; }
     public GameObject target { get; private set; }
     public GameObject targetPlacement { get; private set; }
     public GameObject poleCart { get; private set; }
-    public GameObject overheadCamera = null;
 
     private ROSConnection ros;
     private bool sentStarted = false;
     private static SimController _instance = null;
     private MoveService moveService;
     private SceneDataPublisher sceneDataPublisher;
-    private CameraPublisher overheadCameraPublisher;
+    private CameraPublisher cameraPublisher;
 
     private enum Command
     {
@@ -63,10 +64,12 @@ public class SimController : MonoBehaviour
         moveService = gameObject.AddComponent(typeof(MoveService)) as MoveService;
         sceneDataPublisher = gameObject.AddComponent(typeof(SceneDataPublisher)) as SceneDataPublisher;
 
-        if (overheadCamera != null) {
-            overheadCameraPublisher = gameObject.AddComponent(typeof(CameraPublisher)) as CameraPublisher;
-            overheadCameraPublisher.camera = overheadCamera.GetComponent<UnityEngine.Camera>();
-            overheadCameraPublisher.topic = "camera/overhead";
+        // Publish camera frames for computer vision.
+        if (publishedCamera != null)
+        {
+            cameraPublisher = gameObject.AddComponent(typeof(CameraPublisher)) as CameraPublisher;
+            cameraPublisher.camera = publishedCamera.GetComponent<UnityEngine.Camera>();
+            cameraPublisher.topic = publishedCameraTopic;
         }
 
         ros.Subscribe<SimCommand>(simCommandTopic, onCommand);

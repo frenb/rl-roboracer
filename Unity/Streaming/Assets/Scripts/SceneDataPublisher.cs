@@ -159,8 +159,8 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
                 && poleToHandAngle < 40 && poleToHandAngleB < 40;
             //sceneDataMessage.pole_cart.upright = pole.GetComponent<PoleController>().isUpright;
 
-            Debug.Log(string.Format("G_CHECK poleToHandAngle = {0:f3}, poleToHandAngleB = {1:f3}, poleAngularSpeed: {2:f3}, poleAngularSpeedB: {3:f3}",
-                poleToHandAngle, poleToHandAngleB, poleAngularSpeed, poleAngularSpeedB));
+            //Debug.Log(string.Format("G_CHECK poleToHandAngle = {0:f3}, poleToHandAngleB = {1:f3}, poleAngularSpeed: {2:f3}, poleAngularSpeedB: {3:f3}",
+            //    poleToHandAngle, poleToHandAngleB, poleAngularSpeed, poleAngularSpeedB));
         }
 
 

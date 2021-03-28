@@ -35,6 +35,14 @@ async function connectPythonWorkspace() {
             parent_content.scrollTop = parent_content.scrollHeight;
         }
     });
+    socket.on('python_annotation', function(data) {
+        console.log(`received camera annotation ${data.data}`);
+        let annotation = JSON.parse(data.data);
+        let cameraDivId = annotation.annotateCamera;
+        window.camera_annotations = window.camera_annotations || {};
+        window.camera_annotations[cameraDivId] = annotation;
+        window.drawAnnotations();
+    });
 }
 
 function saveEditors() {

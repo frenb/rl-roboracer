@@ -231,7 +231,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 392563228}
-  m_Enabled: 0
+  m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: e3379f8b7ab35724b965e26351c2004e, type: 3}
   m_Name: 
@@ -499,7 +499,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 563165329}
-  m_Enabled: 0
+  m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: e3379f8b7ab35724b965e26351c2004e, type: 3}
   m_Name: 
@@ -1230,7 +1230,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!114 &991569800
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1352,6 +1352,8 @@ MonoBehaviour:
   targetPlacementPrefab: {fileID: 2378414880219785809, guid: 548394a4eba944fdeabb809219e40030, type: 3}
   poleCartPrefab: {fileID: 3400222665675494350, guid: 6f7f7ee8a8376174ca3586567c179f1b, type: 3}
   streamCamera: {fileID: 392563228}
+  publishedCamera: {fileID: 0}
+  publishedCameraTopic: camera/overhead
 --- !u!4 &1091775771
 Transform:
   m_ObjectHideFlags: 0

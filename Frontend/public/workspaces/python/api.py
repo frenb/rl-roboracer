@@ -22,6 +22,15 @@ class RpcClient:
         req = ros_service_pb2.PublishRequest(topic=topic, msg_type=msg_type, data=json.dumps(data))
         await self.stub.Publish(req)
 
+    async def Plan(self, plan_request):
+        req = ros_service_pb2.ServiceRequest(
+            service_name='pose_planner',
+            service_type='niryo_moveit/PosePlanner',
+            request=json.dumps(plan_request))
+        res = await self.stub.CallService(req)
+        return json.loads(res.response)
+
+
 
 class RobotApi:
 
@@ -35,6 +44,8 @@ class RobotApi:
         self.have_scene_data = asyncio.Event()
         self.next_id = 0
         self.latest_scene_data = None
+        self.latest_overhead_camera_frame = None
+        self.have_overhead_camera_frame = asyncio.Event()
 
     def _next_id(self):
         ret = self.next_id
@@ -47,6 +58,7 @@ class RobotApi:
         self.loop.create_task(self.rpc_client.Subscribe('scene_data', 'niryo_moveit/SceneData', self._on_scene_data))
         self.loop.create_task(self.rpc_client.Subscribe('sim_status', 'niryo_moveit/SimStatus', self._on_sim_status))
         self.loop.create_task(self.rpc_client.Subscribe('move_action/result', 'niryo_moveit/MoveActionResult', self._on_move_action_result))
+        self.loop.create_task(self.rpc_client.Subscribe('camera/overhead', 'niryo_moveit/Camera', self._on_overhead_camera_frame))
 
     def _on_sim_status(self, sim_status):
         if (sim_status['status'] == 1):
@@ -58,6 +70,10 @@ class RobotApi:
         # Check if there are command waiting on this scene data
         if scene_data['last_executed_cmd_id'] in self.scene_data_events:
             self.scene_data_events[scene_data['last_executed_cmd_id']].set()
+
+    def _on_overhead_camera_frame(self, frame):
+        self.latest_overhead_camera_frame = frame
+        self.have_overhead_camera_frame.set()
 
 
     def _on_move_action_result(self, result):
@@ -84,7 +100,7 @@ class RobotApi:
         except asyncio.TimeoutError:
             print('timed out waiting for reset. Ignoring')
 
-    async def DoMove(self, action):
+    async def DoMove(self, action, timeout=0.2):
         cmd_id = self._next_id()
         action['cmd_id'] = cmd_id
         
@@ -94,8 +110,8 @@ class RobotApi:
         
         # Wait for command completion & newest scene data including command.
         try:
-            await asyncio.wait_for(self.move_events[cmd_id].wait(), 0.2)
-            await asyncio.wait_for(self.scene_data_events[cmd_id].wait(), 0.2)
+            await asyncio.wait_for(self.move_events[cmd_id].wait(), timeout)
+            await asyncio.wait_for(self.scene_data_events[cmd_id].wait(), timeout)
         except asyncio.TimeoutError:
             print('timed out waiting for move. Ignoring')
 
@@ -104,9 +120,37 @@ class RobotApi:
         del self.move_events[cmd_id]
         del self.scene_data_events[cmd_id]
 
+    async def DoTrajectory(self, trajectory):
+        action = {'cmd': {
+            'cmd_type': 1,
+            'trajectory': trajectory
+        }}
+        await self.DoMove(action, 10)
+
+    async def GetPlan(self, pose):
+        scene_data = await self.GetSceneData()
+        plan_request = {
+            'joint_00': scene_data['joint_00'],
+            'joint_01': scene_data['joint_01'],
+            'joint_02': scene_data['joint_02'],
+            'joint_03': scene_data['joint_03'],
+            'joint_04': scene_data['joint_04'],
+            'joint_05': scene_data['joint_05'],
+            'pose': pose 
+        }
+        plan = await self.rpc_client.Plan(plan_request)
+        return plan
+
     async def GetSceneData(self):
         if not self.latest_scene_data:
             await self.have_scene_data.wait()
         return self.latest_scene_data
+
+    async def GetOverheadCameraFrame(self):
+        if not self.latest_overhead_camera_frame:
+            await self.have_overhead_camera_frame.wait()
+            self.have_overhead_camera_frame.clear()
+        res = self.latest_overhead_camera_frame
+        return res
 
 

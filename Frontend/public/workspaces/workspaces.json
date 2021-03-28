@@ -48,17 +48,38 @@
         "sources": [
             {
                 "name": "pole_cart.py",
-                "get": "/workspaces/pole_cart_python/pole_cart.py",
-                "post": "/update/workspaces/pole_cart_python/pole_cart.py"
+                "get": "/workspaces/python/pole_cart.py",
+                "post": "/update/workspaces/python/pole_cart.py"
             },
             {
                 "name": "api.py",
-                "get": "/workspaces/pole_cart_python/api.py",
-                "post": "/update/workspaces/pole_cart_python/api.py"
+                "get": "/workspaces/python/api.py",
+                "post": "/update/workspaces/python/api.py"
             }
         ],
         "type": "python",
         "main": "pole_cart.py"
+    },
+    "Find & Pick Python": {
+        "sources": [
+            {
+                "name": "api.py",
+                "get": "/workspaces/python/api.py",
+                "post": "/update/workspaces/python/api.py"
+            },
+            {
+                "name": "utility.py",
+                "get": "/workspaces/python/utility.py",
+                "post": "/update/workspaces/python/utility.py"
+            },
+            {
+                "name": "find_and_pick.py",
+                "get": "/workspaces/python/find_and_pick.py",
+                "post": "/update/workspaces/python/find_and_pick.py"
+            }
+        ],
+        "type": "python",
+        "main": "find_and_pick.py"
     },
     "Find & Pick": {
         "sources": [
