@@ -45,7 +45,18 @@ function createPythonWorkspaceHandler(socket) {
         });
 
         socket.workspace_socket.on('data', function(data) {
-            socket.emit('python_output', {data: data.toString()});
+            let escape = '!escape!';
+            if (data.toString().includes(escape)) {
+                // Camera Annotation Line
+                let seq = data.toString();
+                let start = seq.indexOf(escape) + escape.length;
+                let end = seq.lastIndexOf(escape); 
+                let annot = seq.substring(start, end);       
+                socket.emit('python_annotation', {data: annot});
+            } else {
+                // Normal output line
+                socket.emit('python_output', {data: data.toString()});
+            }
         });
     }
 }

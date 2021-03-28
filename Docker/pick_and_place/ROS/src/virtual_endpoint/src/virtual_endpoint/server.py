@@ -55,7 +55,7 @@ class RpcServer(ros_service_pb2_grpc.RosNodeServicer):
             self.topics[topic] = {}
         if id not in self.topics[topic]:
             # TODO: this will never get cleaned up even if client disconnects.
-            self.topics[topic][id] = asyncio.Queue()
+            self.topics[topic][id] = asyncio.Queue(maxsize=1)
         return self.topics[topic][id]
 
     def _new_subscriber(self, topic, msg_type, id):
