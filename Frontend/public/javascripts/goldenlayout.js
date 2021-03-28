@@ -155,9 +155,9 @@ myLayout.on('initialised', async function(event) {
   // Fetch workspace.
   //await setWorkspace("Pick & Place");
   //await setWorkspace("Pole & Cart TF");
-  await setWorkspace("Pole & Cart Python");
+  //await setWorkspace("Pole & Cart Python");
   //await setWorkspace("Find & Pick");
-  //await setWorkspace("Find & Pick Python");
+  await setWorkspace("Find & Pick Python");
 
   // Create editor windows.
   var editorsContainer = myLayout.root.contentItems[0].contentItems[0].contentItems[0];
