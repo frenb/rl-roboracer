@@ -18,6 +18,8 @@ public class SimController : MonoBehaviour
     public GameObject poleCartPrefab;
 
     public GameObject streamCamera;
+    public GameObject publishedCamera;
+    public string publishedCameraTopic = "camera/overhead";
     public GameObject niryoOne { get; private set; }
     public GameObject target { get; private set; }
     public GameObject targetPlacement { get; private set; }
@@ -28,6 +30,7 @@ public class SimController : MonoBehaviour
     private static SimController _instance = null;
     private MoveService moveService;
     private SceneDataPublisher sceneDataPublisher;
+    private CameraPublisher cameraPublisher;
 
     private enum Command
     {
@@ -60,6 +63,14 @@ public class SimController : MonoBehaviour
         // Ros nodes instatiates here after world created.
         moveService = gameObject.AddComponent(typeof(MoveService)) as MoveService;
         sceneDataPublisher = gameObject.AddComponent(typeof(SceneDataPublisher)) as SceneDataPublisher;
+
+        // Publish camera frames for computer vision.
+        if (publishedCamera != null)
+        {
+            cameraPublisher = gameObject.AddComponent(typeof(CameraPublisher)) as CameraPublisher;
+            cameraPublisher.camera = publishedCamera.GetComponent<UnityEngine.Camera>();
+            cameraPublisher.topic = publishedCameraTopic;
+        }
 
         ros.Subscribe<SimCommand>(simCommandTopic, onCommand);
     }

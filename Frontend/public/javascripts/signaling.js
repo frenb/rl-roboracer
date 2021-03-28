@@ -58,11 +58,9 @@ export default class Signaling extends EventTarget {
   async loopGetAnswer() {
     // receive answer message from 30secs ago
     let lastTimeRequest = Date.now() - 30000;
-    console.log(`G_CHECK let lastTimeRequest = ${lastTimeRequest}`);
 
     while (true) {
       const res = await this.getAnswer(lastTimeRequest);
-      console.log(`G_CHECK let getAnswer.headers = ${JSON.stringify(res.headers)}`);
       lastTimeRequest = Date.parse(res.headers.get('Date'));
 
 

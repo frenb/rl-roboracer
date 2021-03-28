@@ -34,7 +34,6 @@ namespace Unity.RenderStreaming
         {
             // todo(kazuki): remove bitrate parameter because it is not supported
             m_track = m_camera.CaptureStreamTrack(streamingSize.x, streamingSize.y, 1000000);
-            Debug.Log("G_CHECK OnEnable " + gameObject.name);
             RenderStreaming.Instance?.AddVideoStreamTrack(m_track);
         }
 

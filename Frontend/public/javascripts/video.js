@@ -81,13 +81,40 @@ function observeElementChanges(playerElementId) {
 function adjustAnnotationsSize(playerElementId) {
   var annotations = document.getElementById(videoAnnotationsId(playerElementId));
   var video = document.getElementById(videoElementId(playerElementId));
-  annotations.width = video.clientWidth;
-  annotations.height = video.clientHeight;
+  if (video) {
+    annotations.width = video.clientWidth;
+    annotations.height = video.clientHeight;
+  }
+  drawAnnotations();
+}
+
+function drawAnnotations() {
+  if (!window.camera_annotations) {
+    return;
+  }
+
+  for (let id in window.camera_annotations) {
+    let annotation = window.camera_annotations[id]
+    let canvas = document.getElementById(id);
+    let ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.beginPath();
+    ctx.strokeStyle = "red";
+    annotation.boxes.forEach(box => {
+      ctx.rect(
+        box[1] * canvas.width,
+        canvas.height - box[2] * canvas.height, // flip y.
+        (box[3] - box[1]) * canvas.width,
+        (box[2] - box[0]) * canvas.height);
+    });
+    ctx.stroke();
+  }
 }
 
 // TODO: module-ify everything?
 window.setMainVideoPlayer = setMainVideoPlayer;
 window.setExtraVideoPlayer = setExtraVideoPlayer;
+window.drawAnnotations = drawAnnotations;
 
 
 function videoElementId(playerElementId) {
@@ -131,7 +158,8 @@ async function setupVideoStreamer() {
   await videoStreamer.setupConnection();
   videoStreamer.ondisconnect = () => onDisconnect();
   registerGamepadEvents(videoStreamer);
-  registerKeyboardEvents(videoStreamer);
+  // TODO: add these back, but make it so they only register when scene pane is selected
+  //registerKeyboardEvents(videoStreamer);
   
   return videoStreamer;
 }

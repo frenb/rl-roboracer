@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using Unity.RenderStreaming;
 using UnityEngine;
+using ROSGeometry;
 
 public class FruitSpawner : MonoBehaviour
 {

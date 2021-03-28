@@ -102,7 +102,7 @@ export class VideoPlayer {
     this.pc.ontrack = function (e) {
       if(e.track.kind == 'video') {
         _this.videoTrackList.push(e.track);
-        console.log(`G_CHECK video tracks: ${_this.videoTrackList.length}`);
+        console.log(`video tracks: ${_this.videoTrackList.length}`);
         _this.maybeConnectVideoTrack(_this.videoTrackList.length - 1 /* new track's index */);
       }
       if(e.track.kind == 'audio') {
