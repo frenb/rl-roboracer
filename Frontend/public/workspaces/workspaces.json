@@ -60,7 +60,7 @@
         "type": "python",
         "main": "pole_cart.py"
     },
-    "Find & Pick Python": {
+    "Find & Push": {
         "sources": [
             {
                 "name": "api.py",
@@ -73,22 +73,12 @@
                 "post": "/update/workspaces/python/utility.py"
             },
             {
-                "name": "find_and_pick.py",
-                "get": "/workspaces/python/find_and_pick.py",
-                "post": "/update/workspaces/python/find_and_pick.py"
+                "name": "find_and_push.py",
+                "get": "/workspaces/python/find_and_push.py",
+                "post": "/update/workspaces/python/find_and_push.py"
             }
         ],
         "type": "python",
-        "main": "find_and_pick.py"
-    },
-    "Find & Pick": {
-        "sources": [
-            {
-                "name": "find_and_pick.js",
-                "get": "/workspaces/find_and_pick/find_and_pick.js",
-                "post": "/update//workspaces/find_and_pick/find_and_pick.js"
-            }
-        ],
-        "type": "javascript"
+        "main": "find_and_push.py"
     }
 }
