@@ -11,7 +11,10 @@ version: '3.4'
 
 services:
   ros-server:
-    image: robottycoon.azurecr.io/unity-robotics-pick-and-place
+    #image: robottycoon.azurecr.io/unity-robotics-pick-and-place
+    build:
+      context:  C:\Users\benja\Documents\robots\LATEST\robot-tycoon\Docker\pick_and_place
+      dockerfile: docker/Dockerfile
     platform: linux
     volumes:  
       - type: bind
@@ -24,10 +27,14 @@ services:
       - "60062:60062"
     command: sh -c "./src/start.sh"
   front-end:
-    image: node:15.8
+    #image: node:15.8
     platform: linux
+    build:
+      context: C:\Users\benja\Documents\robots\LATEST\robot-tycoon\Docker\pick_and_place
+      dockerfile: docker/Dockerfile-Frontend
     ports:
       - "3000:3000"
+      - "6006:6006"
     volumes:
       - type: bind
         source: C:\Users\benja\Documents\robots\LATEST\robot-tycoon\Frontend
