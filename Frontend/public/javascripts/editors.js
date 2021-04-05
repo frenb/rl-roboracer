@@ -93,6 +93,18 @@ function addEditor(id, editorContainer) {
     source.ace_editor.on('change', (_) => editorContainer.setSaved(false));
 }
 
+async function switchWorkspace(workspace_name)
+/*
+ //await setWorkspace("Pick & Place");
+  //await setWorkspace("Pole & Cart TF");
+  await setWorkspace("Pole & Cart Python");
+  //await setWorkspace("Find & Pick");
+*/
+{
+   await setWorkspace(workspace_name);
+   console.log("switch completed");
+}
+
 function constructProgram() {
     let program_string = "";
     Object.keys(sources).forEach(id => {
