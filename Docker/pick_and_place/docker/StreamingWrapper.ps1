@@ -1,4 +1,5 @@
-Start-Process ../../../../UnityBinary/Streaming.exe
+$path = "../../../../UnityBinary/Balancer"
+Start-Process $path/Streaming.exe
 write "streaming.exe started"
 $pN = "Streaming" ## soffice: soffice.bin  soffice.exe,  swriter.exe
  while (1) {
@@ -9,7 +10,7 @@ $pN = "Streaming" ## soffice: soffice.bin  soffice.exe,  swriter.exe
              } else {  ## 
                  write "Status = Not Responding: Kill & Restart.."  
                  $oneProcess.kill()
-                 Start-Process Streaming.exe
+                 Start-Process $path/Streaming.exe
              } 
          }
      }

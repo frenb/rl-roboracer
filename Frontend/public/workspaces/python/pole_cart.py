@@ -29,21 +29,21 @@ from tf_agents.environments import py_environment
 from tf_agents.specs import array_spec
 from tf_agents.trajectories import time_step as ts
 
-
 from api import RobotApi
 
 # Global reference to RobotApi
 api = None
 
-
 class PoleCartEnv(py_environment.PyEnvironment):
     def __init__(self, api):
         self._api = api
         self._action_spec = array_spec.BoundedArraySpec(
-            shape=(3, ), dtype=np.float32, minimum=-0.025, maximum=0.025, name='action')
+            shape=(3, ), dtype=np.float32, minimum=-0.01, maximum=0.01, name='action')
         self._observation_spec = array_spec.BoundedArraySpec(
             shape=(10,), dtype=np.float32,
-            minimum=[-3.06, -1.90, -1.4, -3.06, -1.75, -2.62, -30, -30, -1.5, -1.5], maximum=[3.06, 0.63, 1.57, 3.06, 1.92, 2.62, 30, 30, 1.5, 1.5], name='observation')
+            minimum=[-3.06, -1.90, -1.4, -3.06, -1.75, -2.62, -30, -30, -1.5, -1.5],
+            maximum=[3.06, 0.63, 1.57, 3.06, 1.92, 2.62, 30, 30, 1.5, 1.5],
+            name='observation')
         self._episode_ended = False
 
     def action_spec(self):
@@ -75,6 +75,9 @@ class PoleCartEnv(py_environment.PyEnvironment):
             return ts.transition(self._scene_data_array(data), reward=1.0, discount=0.95)
     
     def _do_action(self, action):
+        # print('Action:')
+        # print(action)
+        # print(self._current_time_step.observation[0])
         positions = {
             'joint_00': (self._current_time_step.observation[0] + action[0]).item(),
             'joint_01': (self._current_time_step.observation[1] + action[1]).item(),
@@ -111,7 +114,7 @@ def main():
 
     env_name = "NiryoPoleCart-v0" # @param {type:"string"}
 
-    num_iterations = 10000 # @param {type:"integer"}
+    num_iterations = 100000 # @param {type:"integer"}
     initial_collect_steps = 1000 # @param {type:"integer"}
     collect_steps_per_iteration = 1 # @param {type:"integer"}
     replay_buffer_capacity = 1000 # @param {type:"integer"}
@@ -230,7 +233,7 @@ def main():
         steps_per_run=initial_collect_steps,
         observers=[rb_observer])
     
-    print("initial_collect_actor.run()")
+    print("initial_collect_actor.run() :)")
     initial_collect_actor.run()
     print("Initial collection done")
 
@@ -287,6 +290,7 @@ def main():
     def log_eval_metrics(step, metrics):
         eval_results = (', ').join(
             '{} = {:.6f}'.format(name, result) for name, result in metrics.items())
+        
         print('step = {0}: {1}'.format(step, eval_results))
 
     log_eval_metrics(0, metrics)
@@ -301,6 +305,7 @@ def main():
 
     for _ in range(num_iterations):
         # Training.
+        
         collect_actor.run()
         loss_info = agent_learner.run(iterations=1)
 
@@ -319,40 +324,42 @@ def main():
     reverb_server.stop()
 
 
-def random_walk_blocking(api):
-    api.DoResetBlocking()
-    while True:
-        scene_data = api.GetSceneDataBlocking()
-        positions = {
-            'joint_00': scene_data['joint_00'] + random.uniform(-1, 1) * 3.14 / 180.0,
-            'joint_01': scene_data['joint_01'] + random.uniform(-1, 1) * 3.14 / 180.0,
-            'joint_02': scene_data['joint_02'] + random.uniform(-1, 1) * 3.14 / 180.0,
-            'joint_03': scene_data['joint_03'] + random.uniform(-1, 1) * 3.14 / 180.0,
-            'joint_04': scene_data['joint_04'] + random.uniform(-1, 1) * 3.14 / 180.0,
-            'joint_05': scene_data['joint_05'] + random.uniform(-1, 1) * 3.14 / 180.0,
-        }
-        action = {
-            'cmd_type': 4,
-            'positions': positions
-        }
-        api.DoMoveBlocking({'cmd': action})
+# def random_walk_blocking(api):
+#     print("******" + " inside random walk blocking " + "******")
+#     api.DoResetBlocking()
+#     while True:
+#         scene_data = api.GetSceneDataBlocking()
+#         positions = {
+#             'joint_00': scene_data['joint_00'] + random.uniform(-1, 1) * 3.14 / 360.0,
+#             'joint_01': scene_data['joint_01'] + random.uniform(-1, 1) * 3.14 / 360.0,
+#             'joint_02': scene_data['joint_02'] + random.uniform(-1, 1) * 3.14 / 360.0,
+#             'joint_03': scene_data['joint_03'] + random.uniform(-1, 1) * 3.14 / 360.0,
+#             'joint_04': scene_data['joint_04'] + random.uniform(-1, 1) * 3.14 / 360.0,
+#             'joint_05': scene_data['joint_05'] + random.uniform(-1, 1) * 3.14 / 360.0,
+#         }
+#         action = {
+#             'cmd_type': 4,
+#             'positions': positions
+#         }
+#         api.DoMoveBlocking({'cmd': action})
 
-async def random_walk(api):
-    while True:
-        scene_data = await api.GetSceneData()
-        positions = {
-            'joint_00': scene_data['joint_00'] + random.uniform(-1, 1) * 3.14 / 180.0,
-            'joint_01': scene_data['joint_01'] + random.uniform(-1, 1) * 3.14 / 180.0,
-            'joint_02': scene_data['joint_02'] + random.uniform(-1, 1) * 3.14 / 180.0,
-            'joint_03': scene_data['joint_03'] + random.uniform(-1, 1) * 3.14 / 180.0,
-            'joint_04': scene_data['joint_04'] + random.uniform(-1, 1) * 3.14 / 180.0,
-            'joint_05': scene_data['joint_05'] + random.uniform(-1, 1) * 3.14 / 180.0,
-        }
-        action = {
-            'cmd_type': 4,
-            'positions': positions
-        }
-        await api.DoMove({'cmd': action})
+# async def random_walk(api):
+#     print("******" + " inside random walk " + "******")
+#     while True:
+#         scene_data = await api.GetSceneData()
+#         positions = {
+#             'joint_00': scene_data['joint_00'] + random.uniform(-1, 1) * 3.14 / 360.0,
+#             'joint_01': scene_data['joint_01'] + random.uniform(-1, 1) * 3.14 / 360.0,
+#             'joint_02': scene_data['joint_02'] + random.uniform(-1, 1) * 3.14 / 360.0,
+#             'joint_03': scene_data['joint_03'] + random.uniform(-1, 1) * 3.14 / 360.0,
+#             'joint_04': scene_data['joint_04'] + random.uniform(-1, 1) * 3.14 / 360.0,
+#             'joint_05': scene_data['joint_05'] + random.uniform(-1, 1) * 3.14 / 360.0,
+#         }
+#         action = {
+#             'cmd_type': 4,
+#             'positions': positions
+#         }
+#         await api.DoMove({'cmd': action})
 
 async def robot_com():
     global api
