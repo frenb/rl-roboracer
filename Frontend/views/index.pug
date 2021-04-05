@@ -31,11 +31,33 @@ block content
   script(src='/javascripts/editors.js')
   body
     //div(id="wrapper")
-    ul(class="topnav")
-      li(onclick="saveEditors()") Save
-      li(onclick="runProgram()") &#9658;
-      li(onclick="stopProgram()") Stop
-      li(onclick="reset()") Reset
+    nav.nav
+      ul.nav__menu
+        li.nav__menu-item
+          a(onclick="saveEditors()") Save
+        li.nav__menu-item
+          a(onclick="runProgram()") &#9658;
+        li.nav__menu-item
+          a(onclick="stopProgram()") Stop
+        li.nav__menu-item
+          a(onclick="reset()") Reset
+        li.nav__menu-item
+          a Workspace
+          ul.nav__submenu
+            //wsList = ["Pick & Place", "Pole & Cart TF", "Pole & Cart Python", "Find & Pick"];
+            li.nav__submenu-item 
+              a Pick &amp; Place
+            li.nav__submenu-item 
+              a Pole &amp; Cart TF
+            li.nav__submenu-item 
+              a Pole &amp; Cart Python
+            li.nav__submenu-item 
+              a Find &amp; Pick 
+      //- ul(class="nav")
+      //-   li(onclick="saveEditors()") Save
+      //-   li(onclick="runProgram()") &#9658;
+      //-   li(onclick="stopProgram()") Stop
+      //-   li(onclick="reset()") Reset
     div(id="golden_layout")
     script(src='/javascripts/goldenlayout.js')
     script.
@@ -57,5 +79,34 @@ block content
               parent_content.scrollTop = parent_content.scrollHeight;
             }
         });
+    
+    // Support for ctrl-s save
+    script.
+        document.addEventListener("keydown", function(e) {
+          if ((window.navigator.platform.match("Mac") ? e.metaKey : e.ctrlKey)
+            && e.keyCode == 83) {
+              e.preventDefault();
+              saveEditors()
+              // Process the event here (such as click on submit button)
+            }
+        }, false);
+    // switch workspace with ctl-x
+    script.
+        document.addEventListener("keydown", function(e) {
+          if ((window.navigator.platform.match("Mac") ? e.metaKey : e.ctrlKey)
+            && e.keyCode == 88) {
+              e.preventDefault();
+              /*
+                await setWorkspace("Pick & Place");
+                await setWorkspace("Pole & Cart TF");
+                await setWorkspace("Pole & Cart Python");
+                await setWorkspace("Find & Pick");
+              */
+              // Process the event here (such as click on submit button)
+              wsList = ["Pick & Place", "Pole & Cart TF", "Pole & Cart Python", "Find & Pick"];
+              randomIndex = Math.floor(Math.random() * (wsList.length-1));
+              switchWorkspace(wsList[randomIndex]);
+            }
+        }, false);
 
 
