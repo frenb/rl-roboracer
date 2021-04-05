@@ -44,6 +44,11 @@ var config = {
                       type: 'component',
                       componentName: 'rosLogComponent',
                       componentState: { id: "ros_log_output" }
+                    },
+                    {
+                      type: 'component',
+                      componentName: 'iframeComponent',
+                      componentState: {  src: 'http://localhost:6006', title: 'Tensorboard' }
                     }
                   ]
                 }
