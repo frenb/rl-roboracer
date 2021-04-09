@@ -146,11 +146,33 @@ var simpleComponent = function(container, componentState) {
       .appendChild(newChild);
 }
 
+var iframeComponent = function(container, componentState) {
+  container.setTitle(componentState.title);
+
+  container.on('resize', () => {
+    const iframe = container.getElement().get(0).childNodes[0];
+    iframe.width = container.width;
+    iframe.height = container.height;
+  });
+  // This code seems to run only once; attach .on event handlers to react to changes,
+  // don't expect this code to be rerun.
+  console.log("componentState.src: " + componentState.src);
+  const newChild = document.createElement("iframe")
+  newChild.frameBorder=0;
+  newChild.style = "background:white;"
+  newChild.src=componentState.src;
+  container
+    .getElement()
+    .get(0)
+    .appendChild(newChild);
+}
+
 myLayout.registerComponent('editorComponent', editorComponent);
 myLayout.registerComponent('programLogComponent', programLogComponent);
 myLayout.registerComponent('streamPlayerComponent', streamPlayerComponent);
 myLayout.registerComponent('rosLogComponent', rosLogComponent);
 myLayout.registerComponent('simpleComponent', simpleComponent);
+myLayout.registerComponent('iframeComponent', iframeComponent);
 
 myLayout.init();
 
@@ -161,7 +183,7 @@ myLayout.on('initialised', async function(event) {
   //await setWorkspace("Pick & Place");
   //await setWorkspace("Pole & Cart TF");
   await setWorkspace("Pole & Cart Python");
-  //await setWorkspace("Find & Pick");
+  //await setWorkspace("Find & Push");
   
   // Create editor windows.
   var editorsContainer = myLayout.root.contentItems[0].contentItems[0].contentItems[0];
