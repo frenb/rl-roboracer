@@ -28,7 +28,7 @@ services:
       - "60061:60061" 
       - "60062:60062"
       - "6006:6006"
-    command: sh -c "tensorboard --bind_all --logdir /tmp --reload_multifile true & ./src/start.sh"
+    command: sh -c "./src/start.sh"
   front-end:
     image: node:15.8
     platform: linux
