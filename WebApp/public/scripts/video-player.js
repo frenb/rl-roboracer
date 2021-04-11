@@ -137,15 +137,23 @@ export class VideoPlayer {
     };
 
     this.signaling.addEventListener('answer', async (e) => {
-      const answer = e.detail;
-      const desc = new RTCSessionDescription({ sdp: answer.sdp, type: "answer" });
-      await _this.pc.setRemoteDescription(desc);
+      try {
+        const answer = e.detail;
+        const desc = new RTCSessionDescription({ sdp: answer.sdp, type: "answer" });
+        await _this.pc.setRemoteDescription(desc);
+      } catch (error) {
+        console.error("caught: " + error);
+      }
     });
 
     this.signaling.addEventListener('candidate', async (e) => {
-      const candidate = e.detail;
-      const iceCandidate = new RTCIceCandidate({ candidate: candidate.candidate, sdpMid: candidate.sdpMid, sdpMLineIndex: candidate.sdpMLineIndex });
-      await _this.pc.addIceCandidate(iceCandidate);
+      try {
+        const candidate = e.detail;
+        const iceCandidate = new RTCIceCandidate({ candidate: candidate.candidate, sdpMid: candidate.sdpMid, sdpMLineIndex: candidate.sdpMLineIndex });
+        await _this.pc.addIceCandidate(iceCandidate);
+      } catch (error) {
+        console.error("caught: " + error);
+      }
     });
 
     // setup signaling

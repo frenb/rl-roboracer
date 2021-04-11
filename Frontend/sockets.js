@@ -7,7 +7,7 @@ function createRosLogHandler(socket) {
     return function(data_unused) {
         socket.ros_log_client = new net.Socket();
         
-        socket.ros_log_client.connect(60061, 'localhost', function() {
+        socket.ros_log_client.connect(60061, 'ros-server', function() {
             console.log('connected to ros_log on behalf of ' + socket.id);
         });
 
@@ -24,7 +24,7 @@ function createRosLogHandler(socket) {
 function createPythonWorkspaceHandler(socket) {
     return function(data_unused) {
         socket.workspace_socket = new net.Socket();
-        socket.workspace_socket.connect(60062, 'localhost', function() {
+        socket.workspace_socket.connect(60062, 'ros-server', function() {
             console.log('connected to python_workspace on behalf of ' + socket.id);
         });
 
