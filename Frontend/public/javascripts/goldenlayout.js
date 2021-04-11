@@ -179,11 +179,10 @@ myLayout.init();
 // TODO: allow loading a different workspace. And don't replace contents on refresh.
 // Load default workspace.
 myLayout.on('initialised', async function(event) {
-  // Fetch workspace.
-  //await setWorkspace("Pick & Place");
-  //await setWorkspace("Pole & Cart TF");
-  await setWorkspace("Pole & Cart Python");
-  //await setWorkspace("Find & Push");
+  var workspace = getWorkspace();
+  await setWorkspace(workspace);
+  // Remember the last workspace.
+  localStorage.setItem('lastWorkspace', workspace);
   
   // Create editor windows.
   var editorsContainer = myLayout.root.contentItems[0].contentItems[0].contentItems[0];
@@ -198,6 +197,18 @@ myLayout.on('initialised', async function(event) {
     editorsContainer.addChild(config);
   });
 });
+
+function getWorkspace() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const workspace = urlParams.get('workspace');
+  if (workspace) {
+    return workspace;
+  } else if (localStorage.getItem("lastWorkspace")) {
+    return localStorage.getItem("lastWorkspace");
+  }
+  // default
+  return "Pick & Place";
+}
 
 
 

@@ -94,15 +94,9 @@ function addEditor(id, editorContainer) {
 }
 
 async function switchWorkspace(workspace_name)
-/*
- //await setWorkspace("Pick & Place");
-  //await setWorkspace("Pole & Cart TF");
-  await setWorkspace("Pole & Cart Python");
-  //await setWorkspace("Find & Pick");
-*/
 {
-   await setWorkspace(workspace_name);
-   console.log("switch completed");
+    var url = window.location.href;    
+    window.location.href = url.split('?')[0] + '?workspace=' + encodeURIComponent(workspace_name);
 }
 
 function constructProgram() {
