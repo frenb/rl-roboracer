@@ -122,9 +122,7 @@ function constructProgram() {
 }
 
 async function runProgram() {
-    if (active_workspace.type == "javascript") {
-        await runJsProgram();
-    } else if (active_workspace.type == "python") {
+    if (active_workspace.type == "python") {
         await runPyProgram();
     }
 }
@@ -141,45 +139,4 @@ async function stopProgram() {
 
 async function stopPyProgram() {
     socket.emit("python_stop");
-}
-
-async function runJsProgram() {
-    // Functions for script to console pane.
-    // TODO: Override console.log.
-    function log(msg) {
-        let div = document.getElementById(window.program_log_div);
-        let text = window.program_log_text || "";
-        text += "[INFO] " + msg + "\n";
-        window.program_log_text = text;
-        if (div) {
-            div.innerHTML = '<pre>' + text + '</pre>';
-            var parent_content = div.parentElement;
-        }
-        parent_content.scrollTop = parent_content.scrollHeight;
-    }
-
-    function logError(e) {
-        let div = document.getElementById(window.program_log_div);
-        let text = window.program_log_text || "";
-        text += '<span style=\"color:red\">' + "[ERROR] " + e + '\n</span>';
-        window.program_log_text = text;
-        if (div) {
-            div.innerHTML = '<pre>' + text + '</pre>';
-            var parent_content = div.parentElement;
-        }
-        parent_content.scrollTop = parent_content.scrollHeight;
-    }
-
-    // TODO: run this in an invisible iframe.
-    eval(constructProgram());
-
-    log('Program started...');
-    try {
-        await start();
-    } catch (e) {
-        logError(e);
-        // G_CHECK remove
-        throw(e);
-    }
-    log('Finished execution.');
 }
