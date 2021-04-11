@@ -20,7 +20,7 @@ var simCommandRouter = require('./routes/simCommandRouter');
 var updateRouter = require('./routes/update');
 
 // Initialize ROS Node GRPC Connection
-var client = new services.RosNodeClient('localhost:50051',grpc.credentials.createInsecure());
+var client = new services.RosNodeClient('ros-server:50051',grpc.credentials.createInsecure());
 console.log("Connected to ROS node");
 
 // Initialize ROS publishers and subscribers.

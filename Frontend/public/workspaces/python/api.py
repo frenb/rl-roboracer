@@ -7,7 +7,6 @@ from grpc import aio
 from virtual_endpoint.proto import ros_service_pb2_grpc
 from virtual_endpoint.proto import ros_service_pb2
 
-
 class RpcClient:
     def __init__(self, addr):
         self.channel = aio.insecure_channel(addr)
@@ -34,7 +33,7 @@ class RpcClient:
 
 class RobotApi:
 
-    def __init__(self, addr='localhost:50051'):
+    def __init__(self, addr='ros-server:50051'):
         self.loop = asyncio.get_event_loop()
         self.rpc_client = RpcClient(addr)
         self.pp = pprint.PrettyPrinter(indent=4)

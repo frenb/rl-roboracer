@@ -1,0 +1,78 @@
+version: '3.4'
+#  docker 
+#   run -it --rm -v 
+#   $(pwd)/Frontend/public/workspaces/pole_cart_python:/python_ws/src 
+#   -p 10000:10000 
+#   -p 50051:50051 
+#   -p 60061:60061 
+#   -p 60062:60062 
+#   robottycoon.azurecr.io/unity-robotics-pick-and-place 
+#   ./src/start.sh
+
+services:
+  ros-server:
+    #image: docker_ros-server
+    #image: robottycoon.azurecr.io/unity-robotics-pick-and-place
+    build:
+      #from: robottycoon.azurecr.io/unity-robotics-pick-and-place 
+      context:  C:\Users\benja\Documents\robots\LATEST\robot-tycoon\Docker\pick_and_place
+      dockerfile: docker\Dockerfile
+    platform: linux
+    volumes:  
+      - type: bind
+        source: C:\Users\benja\Documents\robots\LATEST\robot-tycoon\Frontend\public\workspaces\pole_cart_python  
+        target: /python_ws/src
+    ports:
+      - "10000:10000" 
+      - "50051:50051" 
+      - "60061:60061" 
+      - "60062:60062"
+      - "6006:6006"
+    command: sh -c "./src/start.sh"
+  front-end:
+    image: node:15.8
+    platform: linux
+    ports:
+      - "3000:3000"
+    volumes:
+      - type: bind
+        source: C:\Users\benja\Documents\robots\LATEST\robot-tycoon\Frontend
+        target: /Frontend
+    links:
+      - "ros-server"
+      - "webapp"
+    command: sh -c "cd /Frontend && npm start"
+  webapp:
+    image: node:15.8
+    platform: linux
+    ports:
+      - "80:80"
+    volumes:
+      - type: bind
+        source: C:\Users\benja\Documents\robots\LATEST\robot-tycoon\WebApp
+        target: /WebApp
+    links:
+      - "ros-server"
+    command: sh -c "cd /WebApp && npm start"
+  # simulation:
+  #   image: mcr.microsoft.com/windows:10.0.19041.867
+  #   environment:
+  #     DB_UPSTREAM: http://${DOCKER_GATEWAY_HOST:-host.docker.internal}:3000
+  #   image: mcr.microsoft.com/windows/servercore:1903
+  #   platform: windows  
+  #   ports:
+  #     - "1-79:1-79"
+  #     - "81-2999:81-2999"
+  #     - "3001-65535:3001-65535"
+  #     - "49000-49500:49000-50000"
+  #     - "135:135"
+  #     - "53432:53432"
+  #    - "3389:3389"
+  #       - "80:80"
+  #   volumes:
+  #     - type: bind
+  #       source: C:\Users\benja\Documents\robots\LATEST
+  #       target: C:\Sim
+  #   command: powershell -executionpolicy bypass "ls C:\Sim;cd C:\Sim; ls;./StreamingWrapper.ps1"
+  #   extra_hosts:
+  #     - "dockerhost: 192.168.96.1"
