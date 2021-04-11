@@ -126,6 +126,18 @@ class RobotApi:
         }}
         await self.DoMove(action, 10)
 
+    async def DoOpenGripper(self):
+        action = {'cmd': {
+            'cmd_type': 2
+        }}
+        await self.DoMove(action, 10)
+
+    async def DoCloseGripper(self):
+        action = {'cmd': {
+            'cmd_type': 3
+        }}
+        await self.DoMove(action, 10)
+
     async def GetPlan(self, pose):
         scene_data = await self.GetSceneData()
         plan_request = {
