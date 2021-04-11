@@ -14,36 +14,6 @@
         ],
         "type": "javascript"
     },
-    "Pole & Cart TF": {
-        "sources": [
-            {
-                "name": "pole_cart_tf.js",
-                "get": "/workspaces/pole_cart_tf/pole_cart_tf.js",
-                "post": "/update/workspaces/pole_cart_tf/pole_cart_tf.js"
-            },
-            {
-                "name": "environment.js",
-                "get": "/workspaces/pole_cart_tf/environment.js",
-                "post": "/update/workspaces/pole_cart_tf/environment.js"
-            },
-            {
-                "name": "model.js",
-                "get": "/workspaces/pole_cart_tf/model.js",
-                "post": "/update/workspaces/pole_cart_tf/model.js"
-            },
-            {
-                "name": "memory.js",
-                "get": "/workspaces/pole_cart_tf/memory.js",
-                "post": "/update/workspaces/pole_cart_tf/memory.js"
-            },
-            {
-                "name": "orchestrator.js",
-                "get": "/workspaces/pole_cart_tf/orchestrator.js",
-                "post": "/update/workspaces/pole_cart_tf/orchestrator.js"
-            }
-        ],
-        "type": "javascript"
-    },
     "Pole & Cart Python": {
         "sources": [
             {
