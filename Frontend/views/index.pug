@@ -43,16 +43,15 @@ block content
           a(onclick="reset()") Reset
         li.nav__menu-item
           a Workspace
-          ul.nav__submenu
-            //wsList = ["Pick & Place", "Pole & Cart TF", "Pole & Cart Python", "Find & Pick"];
-            li.nav__submenu-item 
-              a Pick &amp; Place
-            li.nav__submenu-item 
-              a Pole &amp; Cart TF
-            li.nav__submenu-item 
-              a Pole &amp; Cart Python
-            li.nav__submenu-item 
-              a Find &amp; Pick 
+          ul(class='nav__submenu' id='workspaces_submenu')
+            //li.nav__submenu-item 
+            //  a Pick &amp; Place
+            //li.nav__submenu-item 
+            //  a Pole &amp; Cart TF
+            //li.nav__submenu-item 
+            //  a Pole &amp; Cart Python
+            //li.nav__submenu-item 
+            //  a Find &amp; Pick 
       //- ul(class="nav")
       //-   li(onclick="saveEditors()") Save
       //-   li(onclick="runProgram()") &#9658;
@@ -79,7 +78,9 @@ block content
               parent_content.scrollTop = parent_content.scrollHeight;
             }
         });
-    
+    // Load list of workspaces.
+    script.
+        populateWorkspaces();
     // Support for ctrl-s save
     script.
         document.addEventListener("keydown", function(e) {
@@ -96,12 +97,6 @@ block content
           if ((window.navigator.platform.match("Mac") ? e.metaKey : e.ctrlKey)
             && e.keyCode == 88) {
               e.preventDefault();
-              /*
-                await setWorkspace("Pick & Place");
-                await setWorkspace("Pole & Cart TF");
-                await setWorkspace("Pole & Cart Python");
-                await setWorkspace("Find & Pick");
-              */
               // Process the event here (such as click on submit button)
               wsList = ["Pick & Place", "Pole & Cart TF", "Pole & Cart Python", "Find & Pick"];
               randomIndex = Math.floor(Math.random() * (wsList.length-1));
