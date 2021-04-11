@@ -1,6 +1,20 @@
 var sources = {};
 var active_workspace = null;
 
+
+async function populateWorkspaces() {
+    let workspaces = await jQuery.getJSON('workspaces/workspaces.json').promise();
+    for (let workspace in workspaces) {
+        var listItem = document.createElement('li');
+        listItem.class = "nav__submenu-item";
+        var anchor = document.createElement('a');
+        anchor.innerHTML = workspace;
+        anchor.onclick = () => { switchWorkspace(workspace) };
+        listItem.appendChild(anchor);
+        document.getElementById("workspaces_submenu").appendChild(listItem);
+    }
+}
+
 async function setWorkspace(workspace_name) {
     let workspaces = await jQuery.getJSON('workspaces/workspaces.json').promise();
     let workspace = workspaces[workspace_name];
