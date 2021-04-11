@@ -2,19 +2,15 @@
     "Pick & Place": {
         "sources": [
             {
-                "name": "helper.js",
-                "get": "/workspaces/pick_and_place/helper.js",
-                "post": "/update/workspaces/pick_and_place/helper.js"
-            },
-            {
-                "name": "pick_and_place.js",
-                "get": "/workspaces/pick_and_place/pick_and_place.js",
-                "post": "/update/workspaces/pick_and_place/pick_and_place.js"
+                "name": "pick_and_place.py",
+                "get": "/workspaces/python/pick_and_place.py",
+                "post": "/update/workspaces/python/pick_and_place.py"
             }
         ],
-        "type": "javascript"
+        "type": "python",
+        "main": "pick_and_place.py"
     },
-    "Pole & Cart Python": {
+    "Pole & Cart": {
         "sources": [
             {
                 "name": "pole_cart.py",
