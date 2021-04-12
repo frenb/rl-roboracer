@@ -20,7 +20,7 @@ services:
     platform: linux
     volumes:  
       - type: bind
-        source: C:\Users\benja\Documents\robots\LATEST\robot-tycoon\Frontend\public\workspaces\pole_cart_python  
+        source: C:\Users\benja\Documents\robots\LATEST\robot-tycoon\Frontend\public\workspaces\python 
         target: /python_ws/src
     ports:
       - "10000:10000" 
