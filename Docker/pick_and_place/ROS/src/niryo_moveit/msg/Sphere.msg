@@ -1,0 +1,5 @@
+float64 speed
+float64 location_x
+float64 location_y
+float64 location_z
+bool has_not_crashed

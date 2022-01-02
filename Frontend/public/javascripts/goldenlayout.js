@@ -49,6 +49,21 @@ var config = {
                       type: 'component',
                       componentName: 'iframeComponent',
                       componentState: {  src: 'http://localhost:6006', title: 'Tensorboard' }
+                    },
+                    {
+                      type: 'component',
+                      componentName: 'iframeComponent',
+                      componentState: {  src: 'http://localhost/leaderboard', title: 'Leaderboards' }
+                    },
+                    {
+                      type: 'component',
+                      componentName: 'iframeComponent',
+                      componentState: {  src: 'http://localhost/models', title: 'Models' }
+                    },
+                    {
+                      type: 'component',
+                      componentName: 'iframeComponent',
+                      componentState: {  src: 'http://localhost/jobs', title: 'Jobs' }
                     }
                   ]
                 }

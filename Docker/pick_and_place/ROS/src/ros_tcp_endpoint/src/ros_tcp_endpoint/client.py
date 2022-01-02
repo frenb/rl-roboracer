@@ -90,7 +90,8 @@ class ClientThread(Thread):
 
         destination = ClientThread.read_string(conn)
         full_message_size = ClientThread.read_int32(conn)
-
+        print("destination: " + str(destination))
+        print("full_message_size: " + str(full_message_size))
         while len(data) < full_message_size:
             # Only grabs max of 1024 bytes TODO: change to TCPServer's buffer_size
             grab = 1024 if full_message_size - len(data) > 1024 else full_message_size - len(data)

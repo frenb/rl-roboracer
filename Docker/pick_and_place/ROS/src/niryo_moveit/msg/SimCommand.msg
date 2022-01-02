@@ -1,1 +1,2 @@
 int32 cmd
+niryo_moveit/ApplyForce ApplyForce

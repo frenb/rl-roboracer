@@ -4,7 +4,9 @@ RUN sudo apt-get update && sudo apt-get install -y vim iputils-ping net-tools py
 RUN sudo -H pip3 install rospkg jsonpickle
 RUN sudo ln -s /usr/bin/python3 /usr/bin/python
 RUN sudo python -m pip install grpcio google-api-python-client
-RUN pip3 install tensorboard 
+RUN pip3 install tensorboard
+RUN pip3 install pymongo
+RUN pip3 install numpy --upgrade
 RUN pip3 install -U tensorboard-plugin-profile
 ENV ROS_WORKSPACE=/catkin_ws
 ENV PYTHON_WORKSPACE=/python_ws

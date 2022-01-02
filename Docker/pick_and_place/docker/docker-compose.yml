@@ -11,8 +11,11 @@ version: '3.4'
 
 services:
   ros-server:
-    #image: docker_ros-server
+    image: docker_ros-server:latest
     #image: robottycoon.azurecr.io/unity-robotics-pick-and-place
+    environment:
+      - SAVED_MODELS_DIR=/saved_models
+      - ROBOT_TYPE=niryo
     build:
       #from: robottycoon.azurecr.io/unity-robotics-pick-and-place 
       context:  C:\Users\benja\Documents\robots\LATEST\robot-tycoon\Docker\pick_and_place
@@ -22,6 +25,9 @@ services:
       - type: bind
         source: C:\Users\benja\Documents\robots\LATEST\robot-tycoon\Frontend\public\workspaces\python 
         target: /python_ws/src
+      - type: bind
+        source: C:\Users\benja\Documents\robots\LATEST\saved_models 
+        target: /saved_models
     ports:
       - "10000:10000" 
       - "50051:50051" 
@@ -29,6 +35,21 @@ services:
       - "60062:60062"
       - "6006:6006"
     command: sh -c "./src/start.sh"
+  mongo:
+    image: mongo
+    restart: always
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+  mongo-express:
+    image: mongo-express
+    restart: always
+    ports:
+      - 8081:8081
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: example
+      ME_CONFIG_MONGODB_URL: mongodb://root:example@mongo:27017/
   front-end:
     image: node:15.8
     platform: linux
