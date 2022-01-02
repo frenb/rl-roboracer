@@ -71,7 +71,7 @@ class PoleCartEnv(py_environment.PyEnvironment):
         self._api.DoApplyForceBlocking()
 
     def _step(self, action):
-        print("in _step")
+        #print("in _step")
         if self._episode_ended:
             # The last action ended the episode. Ignore the current action and start
             # a new episode.
@@ -80,8 +80,8 @@ class PoleCartEnv(py_environment.PyEnvironment):
         self._do_action(action)
 
         data = self._api.GetSceneDataBlocking()
-        print("_Step")
-        print(data)
+        #print("_Step")
+        #print(data)
         if not data['pole_cart']['upright']:
             self._episode_ended = True
             return ts.termination(self._scene_data_array(data), reward=0)
@@ -124,7 +124,7 @@ class PoleCartEnv(py_environment.PyEnvironment):
 
     
     def _scene_data_array(self, scene_data):
-        print("in_scene_data_array")
+        #print("in_scene_data_array")
         arr = [
             scene_data['joint_00'],
             scene_data['joint_01'],
