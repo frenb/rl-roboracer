@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.5.0/angular.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/angular-ui-grid/4.6.3/ui-grid.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/angular-ui-grid/4.6.3/ui-grid.min.css" type="text/css">
+    
+    <style>
+        .uiGrd {
+            width: 100%;
+            height: 100vh;
+        }
+    </style>
+</head>
+
+<body>
+    
+    <div ng-app="myApp" 
+        ng-controller="myController">
+        <p>{{title}}</p>
+        <button type="button" class="btn btn-success" ng-click="clearAll()">Clear All</button>
+        <button type="button" class="btn btn-success" ng-click="update_job_status_all()"> Update Status</button>
+        <button type="button" class="btn btn-success" ng-click="delete_jobs()"> Delete Jobs</button>
+        <div class="uiGrd" id="grd" 
+            ui-grid="gridOptions" 
+                ui-grid-resize-columns
+                ui-grid-selection
+                ui-grid-pagination>
+        </div>
+    </div>
+</body>
+
+<!--The Controller -->
+<script>
+    var app = angular.module('myApp', ['ui.grid', 'ui.grid.pagination','ui.grid.resizeColumns','ui.grid.selection']);
+    function update_job_status($http, job_id,status){
+        var update_params = {
+            status: status,
+            _id: job_id,
+        }
+        
+        var postModel = {
+            method: 'post',
+            url: '/update_job_status',
+            dataType: 'json',
+            data: update_params,
+            contentType: "application/json"
+        };
+        
+        $http(postModel)
+            .success(function (jsonData) {
+                console.log(jsonData)
+            })
+            .error(function () { });
+    }
+    function delete_job($http, job_id){
+        var delete_params = {
+            _id: job_id,
+        }
+        
+        var postModel = {
+            method: 'post',
+            url: '/delete_job',
+            dataType: 'json',
+            data: delete_params,
+            contentType: "application/json"
+        };
+        
+        $http(postModel)
+            .success(function (jsonData) {
+                console.log(jsonData)
+            })
+            .error(function () { });
+    }
+    app.controller('myController', function ($scope, $http) {
+
+        $scope.title = "Jobs"
+        $scope.selected_jobs = [];
+        // SPECIFY FILTERING OPTIONS.
+        $scope.clearAll = function() {
+            $scope.gridApi.selection.clearSelectedRows();
+            $scope.selected_jobs=[];
+        };
+        $scope.selectAll = function() {
+            $scope.gridApi.selection.selectAllRows();
+        };
+        
+        $scope.update_job_status_all = function() {
+            console.log("in update jobs");
+            console.log($scope.selected_jobs);
+            if (!$scope.selected_jobs)
+                return;
+            for(var i=0;i<$scope.selected_jobs.length;i++){
+                update_job_status($http, $scope.selected_jobs[i].entity._id,"DONE");
+            }
+        };
+
+        $scope.delete_jobs = function() {
+            console.log("in update jobs");
+            console.log($scope.selected_jobs);
+            if (!$scope.selected_jobs)
+                return;
+            for(var i=0;i<$scope.selected_jobs.length;i++){
+                delete_job($http, $scope.selected_jobs[i].entity._id);
+            }
+        };
+
+        $scope.gridOptions = {
+            paginationPageSizes: [5, 10, 20],
+            paginationPageSize: 20,
+            enableFiltering: true
+        };
+        
+        $scope.gridOptions.onRegisterApi = function(gridApi){
+            //set gridApi on scope
+            $scope.gridApi = gridApi;
+            gridApi.selection.on.rowSelectionChanged($scope,function(row){
+                var msg = 'row selected ' + row.isSelected;
+                console.log(msg);
+                console.log(row.entity)
+                if(row.isSelected)
+                    $scope.selected_jobs.push(row);
+                else
+                    for(var i=0;i<$scope.selected_jobs.length;i++)
+                    {
+                        if($scope.selected_jobs[i].entity.location
+                            == row.entity.location)
+                        {
+                            $scope.selected_jobs.splice(i,1)    
+                        }
+                    }
+                // add_model($http, row.entity.location);
+            });
+        
+            gridApi.selection.on.rowSelectionChangedBatch($scope,function(rows){
+                var msg = 'rows changed ' + rows.length;
+                if(rows[0].isSelected==true)
+                    $scope.selected_jobs = rows;
+                else
+                    $scope.selected_jobs = [];
+
+                console.log(msg);
+                console.log( $scope.selected_jobs);
+            });
+        };
+        var request = {
+            method: 'get',
+            url: '/get_jobs',
+            dataType: 'json',
+            contentType: "application/json"
+        };
+
+        $http(request)
+            .success(function (jsonData) {
+                var results = [];
+                for(var i=0;i<jsonData.length; i++){
+                    var model = jsonData[i];
+                    console.log(model);
+                    var new_model = {};
+                    new_model._id = model["_id"];
+                    new_model.model_type = model["model_type"];
+                    new_model.location = model["location"];
+                    new_model.robot_type = model["job_type"]; 
+                    new_model.iterations = model["status"];  
+                    results.push(new_model) 
+                }
+                console.log(results)
+                $scope.gridOptions.data = results;     // BIND JSON TO THE GRID.
+            })
+            .error(function () { });
+       
+
+
+    });
+</script>
+</html>

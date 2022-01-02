@@ -4,5 +4,8 @@
 EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
-  m_Scenes: []
+  m_Scenes:
+  - enabled: 1
+    path: Assets/Scenes/BalancerRobotStream.unity
+    guid: 9ecbb2b3d77f64400b069e9af8002838
   m_configObjects: {}

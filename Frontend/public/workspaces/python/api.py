@@ -29,8 +29,6 @@ class RpcClient:
         res = await self.stub.CallService(req)
         return json.loads(res.response)
 
-
-
 class RobotApi:
 
     def __init__(self, addr='ros-server:50051'):
@@ -38,11 +36,14 @@ class RobotApi:
         self.rpc_client = RpcClient(addr)
         self.pp = pprint.PrettyPrinter(indent=4)
         self.reset_event = asyncio.Event()
+        self.apply_force_event = asyncio.Event()
         self.move_events = {}
         self.scene_data_events = {}
         self.have_scene_data = asyncio.Event()
+        self.have_car_scene_data = asyncio.Event()
         self.next_id = 0
         self.latest_scene_data = None
+        self.latest_car_scene_data = None
         self.latest_overhead_camera_frame = None
         self.have_overhead_camera_frame = asyncio.Event()
 
@@ -55,6 +56,7 @@ class RobotApi:
     async def Initialize(self):
         # Set up subscribers
         self.loop.create_task(self.rpc_client.Subscribe('scene_data', 'niryo_moveit/SceneData', self._on_scene_data))
+        self.loop.create_task(self.rpc_client.Subscribe('car_scene_data', 'niryo_moveit/CarSceneData', self._on_car_scene_data))
         self.loop.create_task(self.rpc_client.Subscribe('sim_status', 'niryo_moveit/SimStatus', self._on_sim_status))
         self.loop.create_task(self.rpc_client.Subscribe('move_action/result', 'niryo_moveit/MoveActionResult', self._on_move_action_result))
         self.loop.create_task(self.rpc_client.Subscribe('camera/overhead', 'niryo_moveit/Camera', self._on_overhead_camera_frame))
@@ -62,13 +64,24 @@ class RobotApi:
     def _on_sim_status(self, sim_status):
         if (sim_status['status'] == 1):
             self.reset_event.set()
+        if (sim_status['status'] == 2):
+             self.apply_force_event.set()
 
     def _on_scene_data(self, scene_data):
+        #print("in on_scene_data")
         self.latest_scene_data = scene_data
         self.have_scene_data.set()
         # Check if there are command waiting on this scene data
         if scene_data['last_executed_cmd_id'] in self.scene_data_events:
             self.scene_data_events[scene_data['last_executed_cmd_id']].set()
+    
+    def _on_car_scene_data(self, car_scene_data):
+        #print("in on_car_scene_data")
+        self.latest_car_scene_data = car_scene_data
+        self.have_car_scene_data.set()
+        # Check if there are command waiting on this scene data
+        if car_scene_data['last_executed_cmd_id'] in self.scene_data_events:
+            self.car_scene_data_events[car_scene_data['last_executed_cmd_id']].set()
 
     def _on_overhead_camera_frame(self, frame):
         self.latest_overhead_camera_frame = frame
@@ -80,24 +93,49 @@ class RobotApi:
             self.move_events[result['cmd_id']].set()
 
     async def _do_sim_command(self, command):
+        print(command)
         await self.rpc_client.Publish('sim_command', 'niryo_moveit/SimCommand', command)
 
     def DoResetBlocking(self):
         asyncio.run_coroutine_threadsafe(self.DoReset(), self.loop).result()
+    
+    def DoApplyForceBlocking(self):
+        asyncio.run_coroutine_threadsafe(self.DoApplyForce(), self.loop).result()
 
     def DoMoveBlocking(self, action):
         asyncio.run_coroutine_threadsafe(self.DoMove(action), self.loop).result()
 
     def GetSceneDataBlocking(self):
         return asyncio.run_coroutine_threadsafe(self.GetSceneData(), self.loop).result()
+    
+    def GetCarSceneDataBlocking(self):
+        return asyncio.run_coroutine_threadsafe(self.GetCarSceneData(), self.loop).result()
 
     async def DoReset(self):
         self.reset_event.clear()
-        await self._do_sim_command( { 'cmd' : 0 } )
+        force_angle = {
+            'acceleration': 0.0,
+            'steering_angle': 0.0
+        }
+        await self._do_sim_command( { 'cmd' : 0 , 'ApplyForce': force_angle} )
         try:
             await asyncio.wait_for(self.reset_event.wait(), 2)
         except asyncio.TimeoutError:
             print('timed out waiting for reset. Ignoring')
+    
+    async def DoApplyForce(self):
+        print("DoApplyForce")
+        force_angle = {
+            'acceleration': 100.0,
+            'steering_angle': 30.0
+        }
+        await self._do_sim_command( { 'cmd' : 1, 'ApplyForce': force_angle } )
+        try:
+            await asyncio.wait_for(self.apply_force_event.wait(), 2)
+            print("we did it")
+            print(self.latest_car_scene_data)
+        except asyncio.TimeoutError:
+            print('timed out waiting for applyforce. Ignoring')
 
     async def DoMove(self, action, timeout=0.2):
         cmd_id = self._next_id()
@@ -118,6 +156,19 @@ class RobotApi:
         # Cleanup.
         del self.move_events[cmd_id]
         del self.scene_data_events[cmd_id]
+    
+    # async def DoMove(self, action, timeout=0.2):
+    #     cmd_id = self._next_id()
+    #     action['cmd_id'] = cmd_id
+    #     print("in DoMove")
+    #     print(action)
+    #     await self._do_sim_command( { 'cmd' : 1 , 'ApplyForce': action.apply_force} )
+    #     try:
+    #         await asyncio.wait_for(self.apply_force_event.wait(), 2)
+    #         print("we did it")
+    #         print(self.latest_car_scene_data)
+    #     except asyncio.TimeoutError:
+    #         print('timed out waiting for applyforce. Ignoring')
 
     async def DoTrajectory(self, trajectory):
         action = {'cmd': {
@@ -156,6 +207,11 @@ class RobotApi:
         if not self.latest_scene_data:
             await self.have_scene_data.wait()
         return self.latest_scene_data
+    
+    async def GetCarSceneData(self):
+        if not self.latest_car_scene_data:
+            await self.have_car_scene_data.wait()
+        return self.latest_car_scene_data
 
     async def GetOverheadCameraFrame(self):
         if not self.latest_overhead_camera_frame:

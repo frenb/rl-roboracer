@@ -92,8 +92,8 @@ PlayerSettings:
   xboxEnableKinectAutoTracking: 0
   xboxEnableFitness: 0
   visibleInBackground: 1
-  allowFullscreenSwitch: 1
-  fullscreenMode: 1
+  allowFullscreenSwitch: 0
+  fullscreenMode: 3
   xboxSpeechDB: 0
   xboxEnableHeadOrientation: 0
   xboxEnableGuest: 0
@@ -131,6 +131,7 @@ PlayerSettings:
   preloadedAssets:
   - {fileID: 0}
   - {fileID: 0}
+  - {fileID: 0}
   metroInputSource: 0
   wsaTransparentSwapchain: 0
   m_HolographicPauseOnTrackingLoss: 1
@@ -140,8 +141,8 @@ PlayerSettings:
     enable360StereoCapture: 0
   isWsaHolographicRemotingEnabled: 0
   enableFrameTimingStats: 0
-  useHDRDisplay: 0
-  D3DHDRBitDepth: 0
+  useHDRDisplay: 1
+  D3DHDRBitDepth: 1
   m_ColorGamuts: 00000000
   targetPixelDensity: 30
   resolutionScalingMode: 0

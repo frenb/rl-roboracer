@@ -14,7 +14,7 @@ public class SimController : MonoBehaviour
     }
     public GameObject niryoOnePrefab;
     public GameObject targetPrefab;
-    public GameObject targetPlacementPrefab;
+    public GameObject targetPlacementPrefab;  
     public GameObject poleCartPrefab;
 
     public GameObject streamCamera;
@@ -34,7 +34,8 @@ public class SimController : MonoBehaviour
 
     private enum Command
     {
-        RESTART = 0
+        RESTART = 0,
+        APPLY_FORCE = 1
     };
 
     private enum Status
@@ -107,9 +108,8 @@ public class SimController : MonoBehaviour
         if (poleCartPrefab != null)
         {
             poleCart = Instantiate(poleCartPrefab);
-
             // G_CHECK random rotation
-            poleCart.transform.Find("Pole").transform.Rotate(0, 0, Random.Range(-5, 5));
+            poleCart.transform.Find("Pole").transform.Rotate(0, 0, Random.Range(-0.5f, 0.5f));
         }
     }
 
@@ -118,7 +118,11 @@ public class SimController : MonoBehaviour
         switch ((Command) cmd.cmd )
         {
             case Command.RESTART:
+                Debug.Log("RESTARTING");
                 Restart();
+                break;
+            case Command.APPLY_FORCE:
+                Debug.Log("APPLY FORCE MESSAGE");
                 break;
             default:
                 Debug.LogError("Unrecognized Sim Command: " + cmd.cmd);
