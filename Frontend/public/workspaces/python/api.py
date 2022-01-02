@@ -137,38 +137,38 @@ class RobotApi:
         except asyncio.TimeoutError:
             print('timed out waiting for applyforce. Ignoring')
 
-    async def DoMove(self, action, timeout=0.2):
-        cmd_id = self._next_id()
-        action['cmd_id'] = cmd_id
-        
-        self.move_events[cmd_id] = asyncio.Event()
-        self.scene_data_events[cmd_id] = asyncio.Event()
-        await self.rpc_client.Publish('move_action/goal', 'niryo_moveit/MoveActionGoal', action)
-        
-        # Wait for command completion & newest scene data including command.
-        try:
-            await asyncio.wait_for(self.move_events[cmd_id].wait(), timeout)
-            await asyncio.wait_for(self.scene_data_events[cmd_id].wait(), timeout)
-        except asyncio.TimeoutError:
-            print('timed out waiting for move. Ignoring')
-
-
-        # Cleanup.
-        del self.move_events[cmd_id]
-        del self.scene_data_events[cmd_id]
-    
     # async def DoMove(self, action, timeout=0.2):
     #     cmd_id = self._next_id()
     #     action['cmd_id'] = cmd_id
-    #     print("in DoMove")
-    #     print(action)
-    #     await self._do_sim_command( { 'cmd' : 1 , 'ApplyForce': action.apply_force} )
+        
+    #     self.move_events[cmd_id] = asyncio.Event()
+    #     self.scene_data_events[cmd_id] = asyncio.Event()
+    #     await self.rpc_client.Publish('move_action/goal', 'niryo_moveit/MoveActionGoal', action)
+        
+    #     # Wait for command completion & newest scene data including command.
     #     try:
-    #         await asyncio.wait_for(self.apply_force_event.wait(), 2)
-    #         print("we did it")
-    #         print(self.latest_car_scene_data)
+    #         await asyncio.wait_for(self.move_events[cmd_id].wait(), timeout)
+    #         await asyncio.wait_for(self.scene_data_events[cmd_id].wait(), timeout)
     #     except asyncio.TimeoutError:
-    #         print('timed out waiting for applyforce. Ignoring')
+    #         print('timed out waiting for move. Ignoring')
+
+
+    #     # Cleanup.
+    #     del self.move_events[cmd_id]
+    #     del self.scene_data_events[cmd_id]
+    
+    async def DoMove(self, action, timeout=0.2):
+        cmd_id = self._next_id()
+        action['cmd_id'] = cmd_id
+        print("in DoMove")
+        print(action)
+        await self._do_sim_command( { 'cmd' : 1 , 'ApplyForce': action.apply_force} )
+        try:
+            await asyncio.wait_for(self.apply_force_event.wait(), 2)
+            print("we did it")
+            print(self.latest_car_scene_data)
+        except asyncio.TimeoutError:
+            print('timed out waiting for applyforce. Ignoring')
 
     async def DoTrajectory(self, trajectory):
         action = {'cmd': {

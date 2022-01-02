@@ -81,46 +81,46 @@ class PoleCartEnv(py_environment.PyEnvironment):
 
         data = self._api.GetSceneDataBlocking()
         #print("_Step")
-        #print(data)
+        print(data)
         if not data['pole_cart']['upright']:
             self._episode_ended = True
             return ts.termination(self._scene_data_array(data), reward=0)
         else:
             return ts.transition(self._scene_data_array(data), reward=1.0, discount=0.90)
     
-    def _do_action(self, action):
-        # print('Action:')
-        # print(action)
-        # print(self._current_time_step.observation[0])
-        positions = {
-            'joint_00': (self._current_time_step.observation[0] + action[0]).item(),
-            'joint_01': (self._current_time_step.observation[1] + action[1]).item(),
-            'joint_02': (self._current_time_step.observation[2] + action[2]).item(),
-            'joint_03': (self._current_time_step.observation[3]).item(),
-            'joint_04': (self._current_time_step.observation[4]).item(),
-            'joint_05': (self._current_time_step.observation[5]).item(),
-        }
-        cmd = {
-            'cmd_type': 4,
-            'positions': positions
-        }
-        self._api.DoMoveBlocking({'cmd': cmd})
-    
     # def _do_action(self, action):
     #     # print('Action:')
-    #     print(action)
+    #     # print(action)
     #     # print(self._current_time_step.observation[0])
-    #     force_angle = {
-    #         'acceleration': action[0],
-    #         'steering_angle': action[1]
+    #     positions = {
+    #         'joint_00': (self._current_time_step.observation[0] + action[0]).item(),
+    #         'joint_01': (self._current_time_step.observation[1] + action[1]).item(),
+    #         'joint_02': (self._current_time_step.observation[2] + action[2]).item(),
+    #         'joint_03': (self._current_time_step.observation[3]).item(),
+    #         'joint_04': (self._current_time_step.observation[4]).item(),
+    #         'joint_05': (self._current_time_step.observation[5]).item(),
     #     }
     #     cmd = {
-    #         'cmd_type': 2,
-    #         'apply_force': force_angle
+    #         'cmd_type': 4,
+    #         'positions': positions
     #     }
-    #     print("do action:")
-    #     print(force_angle)
     #     self._api.DoMoveBlocking({'cmd': cmd})
+    
+    def _do_action(self, action):
+        # print('Action:')
+        print(action)
+        # print(self._current_time_step.observation[0])
+        force_angle = {
+            'acceleration': action[0],
+            'steering_angle': action[1]
+        }
+        cmd = {
+            'cmd_type': 2,
+            'apply_force': force_angle
+        }
+        print("do action:")
+        print(force_angle)
+        self._api.DoMoveBlocking({'cmd': cmd})
 
     
     def _scene_data_array(self, scene_data):
@@ -611,22 +611,22 @@ if __name__ == "__main__":
     print("Robot API initialized")
     #main(iterations=70000)
     env = PoleCartEnv(api)
-    # run_randompolicy_collect()
+    #run_randompolicy()
     # results = db.models.find_one({"model_type": "SacAgent"})
-    # env._apply_force()
-    # while True:
-    #     print("before getSceneData")
-    #     data = env._api.GetCarSceneDataBlocking()
-    #     print(data)
-    #     time.sleep(5)
-    #env._reset()
+    env._apply_force()
     while True:
-        jobs = get_jobs()
-        for j in jobs:
-            print("doing job")
-            do_job(j)
-        print("sleep")
+        print("before getSceneData")
+        data = env._api.GetCarSceneDataBlocking()
+        print(data)
         time.sleep(5)
+    #env._reset()
+    # while True:
+    #     jobs = get_jobs()
+    #     for j in jobs:
+    #         print("doing job")
+    #         do_job(j)
+    #     print("sleep")
+    #     time.sleep(5)
 
 
 
