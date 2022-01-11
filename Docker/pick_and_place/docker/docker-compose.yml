@@ -15,7 +15,7 @@ services:
     #image: robottycoon.azurecr.io/unity-robotics-pick-and-place
     environment:
       - SAVED_MODELS_DIR=/saved_models
-      - ROBOT_TYPE=niryo
+      - ROBOT_TYPE=robotaxi
     build:
       #from: robottycoon.azurecr.io/unity-robotics-pick-and-place 
       context:  C:\Users\benja\Documents\robots\LATEST\robot-tycoon\Docker\pick_and_place
@@ -41,6 +41,10 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: example
+    volumes:  
+      - type: bind
+        source: C:\Users\benja\Documents\robots\LATEST\mongodb\
+        target: /data/db
   mongo-express:
     image: mongo-express
     restart: always
