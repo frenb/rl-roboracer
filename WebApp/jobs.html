@@ -160,8 +160,8 @@
                     new_model._id = model["_id"];
                     new_model.model_type = model["model_type"];
                     new_model.location = model["location"];
-                    new_model.robot_type = model["job_type"]; 
-                    new_model.iterations = model["status"];  
+                    new_model.job_type = model["job_type"]; 
+                    new_model.status = model["status"];  
                     results.push(new_model) 
                 }
                 console.log(results)

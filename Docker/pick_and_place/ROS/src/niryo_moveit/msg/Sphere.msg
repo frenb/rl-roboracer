@@ -2,4 +2,8 @@ float64 speed
 float64 location_x
 float64 location_y
 float64 location_z
+float64 cost
+float64 dist_from_traj
+float64 dist_from_goal
+float64 rotation_z
 bool has_not_crashed

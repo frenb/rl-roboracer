@@ -1,2 +1,3 @@
 float64 acceleration
 float64 steering_angle
+int32 cmd_id
