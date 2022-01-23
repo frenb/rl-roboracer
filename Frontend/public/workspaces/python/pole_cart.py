@@ -1,6 +1,7 @@
 import asyncio
 import random
 import os
+import math
 import reverb
 import tempfile
 import threading
@@ -34,6 +35,7 @@ from tf_agents.environments import tf_py_environment
 from tf_agents.environments import utils
 from tf_agents.specs import array_spec
 from tf_agents.trajectories import time_step as ts
+from tf_agents.utils import common
 from pymongo import MongoClient
 
 from api import RobotApi
@@ -83,6 +85,7 @@ class PoleCartEnv(py_environment.PyEnvironment):
         #self._state = self._get_empty_state()
         data_arr=self._scene_data_array(data)
         self._step_costs=[]
+        self._position_history=[]
         #return ts.restart(np.array([data_arr], dtype=np.float32))
         return ts.restart(np.array(data_arr, dtype=np.float32))
         #return ts.restart(np.array(self._state, dtype=np.int32))
@@ -91,10 +94,11 @@ class PoleCartEnv(py_environment.PyEnvironment):
         #print("has_failed: " + str(data_arr))
         has_fallen = data_arr[3] < -0.5
         int_rotation_z = round(data_arr[8])
+        is_stuck = not self.check_if_moving(self._position_history)
         has_flipped = int_rotation_z == 90 or int_rotation_z == 180 or int_rotation_z == 270
         #print("has_fallen: " + str(has_fallen))
         #print("has_flipped: " + str(has_flipped) + " " + str(int_rotation_z))
-        return has_fallen or has_flipped
+        return has_fallen or has_flipped or is_stuck
     
     def __has_succeeded(self, data_arr):
         #print("has_succeeded: " + str(data_arr))
@@ -104,27 +108,45 @@ class PoleCartEnv(py_environment.PyEnvironment):
     
     def _apply_force(self):
         self._api.DoApplyForceBlocking()
+    
+    def check_if_moving(self, arr):
+        last_position = len(arr)-1
+        debug_print(last_position)
+        if len(arr) < 6:
+            return True
+        for  i in reversed(range(last_position-5, last_position)):
+            dist = math.dist(arr[last_position], arr[i])
+            debug_print(i)
+            debug_print("dist: " + str(dist))
+            if dist >= 0.0001:
+                return True
+        return False
 
     def _step(self, action):
         #print("in _step")
-        time.sleep(2)
+        #time.sleep(1)
         if self._episode_ended:
             # The last action ended the episode. Ignore the current action and start
-            # a new episode.
+            # a new episode
             return self.reset()
         #print("before do action: " + str(self._state))
-        result = self._do_action(action)
-        debug_print("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" + str(result))
-        data = self._api.GetCarSceneDataBlocking()
+        data = self._do_action(action)
+        #print("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx " + str(data))
+        #data = self._api.GetCarSceneDataBlocking()
         debug_print("data: " + str(data))
         data_arr = self._scene_data_array(data)
-        self._step_costs.append(data_arr[6] + data_arr[7])
+        self._step_costs.append(abs(data_arr[6]))
+        self._position_history.append(
+            [data_arr[2], #x position
+            data_arr[3], #y position
+            data_arr[4]]) #z position
         #print("self._state")
         #print("in_step: " + str(self._state))
         if self.__has_failed(data_arr):
             debug_print("has failed")
             self._episode_ended = True
             #print('before termination')
+            
             if False:
                 term_time_step = ts.termination(np.array([data_arr], dtype=np.float32), -1)
             else:
@@ -137,7 +159,12 @@ class PoleCartEnv(py_environment.PyEnvironment):
             debug_print("has succeeded")
             self._episode_ended = True
             #print('before termination')
-            reward = (1 / (1+np.sum(self._step_costs)))*100
+            mean_step_costs = np.mean(self._step_costs)
+            max_step_costs = np.max(self._step_costs)
+            debug_print("mean_step_costs " +  str(mean_step_costs))
+            debug_print("max_step_costs " + str(max_step_costs))
+            reward = 1 - (np.mean(self._step_costs) / (np.max(self._step_costs)+0.001)) if len(self._step_costs) > 0  else 1
+            debug_print("has succeeded reward: " +  str(reward))
             if False:
                 term_time_step = ts.termination(np.array([data_arr], dtype=np.float32), reward)
             else:
@@ -149,11 +176,18 @@ class PoleCartEnv(py_environment.PyEnvironment):
             debug_print("did not fail")
             self._episode_ended = False
             #ts.transition(np.array([self._state], dtype=np.int32), reward=0.05, discount=1.0)
-            
+            mean_step_costs = np.mean(self._step_costs)
+            max_step_costs = np.max(self._step_costs)
+            last_step_costs = self._step_costs[len(self._step_costs)-1]
+            debug_print("mean_step_costs " +  str(mean_step_costs))
+            debug_print("max_step_costs " + str(max_step_costs))
+            debug_print("last_step_costs " + str(last_step_costs))
+            reward = 1 - (self._step_costs[len(self._step_costs)-1] /(np.max(self._step_costs) + 0.0001)) if len(self._step_costs) > 0  else 1
+            debug_print("did not end reward: " +  str(reward))
             if False:
                 return ts.transition(np.array([data_arr], dtype=np.float32), reward=1.0, discount=0.90)
             else:
-                return ts.transition(np.array(data_arr, dtype=np.float32), reward=1.0, discount=0.90)
+                return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
             #return ts.transition(np.array(self._state, dtype=np.int32), reward=1.0, discount=0.90)
     
     # def _do_action(self, action):
@@ -185,7 +219,7 @@ class PoleCartEnv(py_environment.PyEnvironment):
         debug_print('Action: ' + str(action_arr))
         acceleration=action_arr[0]
         steering_angle=action_arr[1]
-        self._api.DoApplyForceBlocking(
+        return self._api.DoApplyForceBlocking(
             acceleration,
             steering_angle)
 
@@ -277,7 +311,7 @@ def main(
     num_iterations_val=50000,
     initial_collect_steps_val=500,
     collect_steps_per_iteration_val=1,
-    replay_buffer_capacity_val=1000,
+    replay_buffer_capacity_val=200,
     batch_size_val=256,
     critic_learning_rate_val=3e-5,
     actor_learning_rate_val=3e-5,
@@ -424,15 +458,15 @@ def main(
         train_checkpointer = common.Checkpointer(
             ckpt_dir=checkpoint_dir,
             max_to_keep=1,
-            agent=agent,
+            agent=tf_agent,
             policy=tf_agent.policy,
             replay_buffer=reverb_replay,
-            global_step=global_step
+            global_step= tf.compat.v1.train.get_global_step()
         )
     else:
         debug_print("initial_collect_actor.run() :)")
         initial_collect_actor.run()
-        debug_print("Initial collection done")
+        print("Initial collection done")
 
     # restore from checkpoint
     debug_print("+++++")
@@ -463,7 +497,7 @@ def main(
             tf_agent,
             train_step,
             interval=policy_save_interval),
-        triggers.StepPerSecondLogTrigger(train_step, interval=1000),
+        triggers.StepPerSecondLogTrigger(train_step, interval=50),
     ]
 
     agent_learner = learner.Learner(
@@ -498,6 +532,7 @@ def main(
     avg_return = get_eval_metrics()["AverageReturn"]
     returns = [avg_return]
     curr_iteration=0
+    print("Training started")
     for _ in range(num_iterations):
         # Training.
         
@@ -515,6 +550,7 @@ def main(
         if log_interval and step % log_interval == 0:
             print('step = {0}: loss = {1}'.format(step, loss_info.loss.numpy()))
         curr_iteration=curr_iteration+1
+    print("Training completed")
     rb_observer.close()
     reverb_server.stop()
     tf_policy_saver = policy_saver.PolicySaver(tf_agent.policy)
