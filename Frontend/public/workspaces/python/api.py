@@ -81,6 +81,7 @@ class RobotApi:
         self.latest_car_scene_data = car_scene_data
         self.have_car_scene_data.set()
         # Check if there are command waiting on this scene data
+        #print(car_scene_data)
         #print("car_scene_data['last_executed_cmd_id']: " + str(car_scene_data['last_executed_cmd_id']))
         #print("self.scene_data_events: " + str(self.scene_data_events))
         if car_scene_data['last_executed_cmd_id'] in self.scene_data_events:
@@ -105,14 +106,18 @@ class RobotApi:
         asyncio.run_coroutine_threadsafe(self.DoReset(), self.loop).result()
     
     def DoApplyForceBlocking(self, acceleration=100.0, steering_angle=30.0):
-        asyncio.run_coroutine_threadsafe(
+        result = asyncio.run_coroutine_threadsafe(
             self.DoApplyForce(acceleration, steering_angle),
             self.loop
         ).result()
+        #print("++++++++++++++++++++++")
+        #print(result)
+        #print("++++++++++++++++++++++")
+        return result
 
     def DoMoveBlocking(self, action):
-        asyncio.run_coroutine_threadsafe(self.DoMove(action), self.loop).result()
-
+        return asyncio.run_coroutine_threadsafe(self.DoMove(action), self.loop).result()
+        
     def GetSceneDataBlocking(self):
         return asyncio.run_coroutine_threadsafe(self.GetSceneData(), self.loop).result()
     
@@ -145,15 +150,17 @@ class RobotApi:
         await self._do_sim_command( { 'cmd' : 1, 'ApplyForce': force_angle } )
         try:
             await asyncio.wait_for(self.apply_force_event.wait(), 3)
-            #print("after apply force for cmd_id " + str(cmd_id))
-            await asyncio.wait_for(self.scene_data_events[cmd_id].wait(), 3)
-            #print("after wait for scene_data_events cmd_id " + str(cmd_id))
-            #print("we did it")
-            #print(self.latest_car_scene_data)
         except asyncio.TimeoutError:
-            print('timed out waiting for applyforce. Ignoring')
-        #clean up
+            print('Apply force timed out waiting. Ignoring')
+        
+        try:
+            await asyncio.wait_for(self.scene_data_events[cmd_id].wait(), 5)
+            #print("after wait")
+        except asyncio.TimeoutError:
+            print('Scene data events timed out waiting. Ignoring')
+
         del self.scene_data_events[cmd_id]
+        return self.latest_car_scene_data
 
     async def DoMove(self, action, timeout=0.2):
         cmd_id = self._next_id()

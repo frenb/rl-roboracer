@@ -130,10 +130,12 @@
                     var model = jsonData[i];
                     console.log(model);
                     var new_model = {};
-                    new_model.model_type = model["model_type"];
+                    new_model.id = model["_id"];
+                    new_model.avg_return = model["avg_return"];
+;                   new_model.model_type = model["model_type"];
                     new_model.location = model["location"];
                     new_model.robot_type = model["robot_type"]; 
-                    new_model.iterations = model["training_iterations"];  
+                    new_model.iterations = model["training_iterations"];
                     results.push(new_model) 
                 }
                 console.log(results)

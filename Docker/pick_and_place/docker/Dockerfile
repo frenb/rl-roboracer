@@ -7,6 +7,7 @@ RUN sudo python -m pip install grpcio google-api-python-client
 RUN pip3 install tensorboard
 RUN pip3 install pymongo
 RUN pip3 install numpy --upgrade
+RUN pip3 install scipy
 RUN pip3 install -U tensorboard-plugin-profile
 ENV ROS_WORKSPACE=/catkin_ws
 ENV PYTHON_WORKSPACE=/python_ws

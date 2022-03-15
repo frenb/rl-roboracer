@@ -19,4 +19,9 @@ tensorboard --bind_all --logdir /tmp --reload_multifile true &
 
 # Launch ROS
 export PYTHONUNBUFFERED=1
-roslaunch niryo_moveit part_3.launch 2>&1 | tee $tmpfile
+while true
+do    
+    roslaunch niryo_moveit part_3.launch 2>&1 | tee $tmpfile
+    echo "roslaunch exited..."
+sleep 1
+done
