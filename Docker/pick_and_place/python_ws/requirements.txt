@@ -1,5 +1,5 @@
-tf-agents[reverb]
+tf-agents[reverb]==0.11.0rc0
 grpcio
 google-api-python-client
-tensorflow
+tensorflow==2.7
 tensorflow_hub

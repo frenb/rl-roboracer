@@ -1,20 +1,29 @@
-$path = "../../../../UnityBinary/CarGym.2022.02.12"
+$path = "../../../../UnityBinary/WCourseServerBuildWindows2022.03.06v2/robotaxi gym level 1.exe"
+$param1=$args[0]
+if ($param1)
+{
+    $path=$param1
+}
 #"Balancer"
-Start-Process $path/Streaming.exe
-write "streaming.exe started"
-$pN = "Streaming" ## soffice: soffice.bin  soffice.exe,  swriter.exe
+Start-Process $path
+write "robotaxi gym level 1 started"
+$pN = "robotaxi gym level 1" ## soffice: soffice.bin  soffice.exe,  swriter.exe
  while (1) {
-     if ( $allProcesses = get-process -name $pN -errorAction SilentlyContinue ) {
+    if ( $allProcesses = get-process -name $pN -errorAction SilentlyContinue ) {
          foreach ($oneProcess in $allProcesses) {
              if ( $oneProcess.Responding ) { 
                  write "working fine" 
              } else {  ## 
-                 write "Status = Not Responding: Kill & Restart.."  
+                 write "Status = Not Responding: Kill & Restart..."  
                  $oneProcess.kill()
-                 Start-Process $path/Streaming.exe
+                 Start-Process $path
              } 
-         }
-     }
+         }  
+    } else{
+        write "Status = Restart..."  
+        Start-Process $path
+    }
+
      start-sleep 5
  }
 ## source: 

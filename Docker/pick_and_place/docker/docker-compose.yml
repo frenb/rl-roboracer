@@ -13,6 +13,7 @@ services:
   ros-server:
     image: docker_ros-server:latest
     #image: robottycoon.azurecr.io/unity-robotics-pick-and-place
+    restart: always
     environment:
       - SAVED_MODELS_DIR=/saved_models
       - ROBOT_TYPE=robotaxi
@@ -35,6 +36,12 @@ services:
       - "60062:60062"
       - "6006:6006"
     command: sh -c "./src/start.sh"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
   mongo:
     image: mongo
     restart: always
@@ -56,6 +63,7 @@ services:
       ME_CONFIG_MONGODB_URL: mongodb://root:example@mongo:27017/
   front-end:
     image: node:15.8
+    restart: always
     platform: linux
     ports:
       - "3000:3000"
@@ -69,6 +77,7 @@ services:
     command: sh -c "cd /Frontend && npm start"
   webapp:
     image: node:15.8
+    restart: always
     platform: linux
     ports:
       - "80:80"

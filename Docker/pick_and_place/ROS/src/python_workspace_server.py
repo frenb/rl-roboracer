@@ -43,6 +43,7 @@ async def handle_client(client, python_ws):
                 kill(proc)
                 src = command['src']
                 shell_str = '/bin/bash -c "export PYTHONUNBUFFERED=1 && cd %s && source ./venv/bin/activate && cd src && python %s 2>&1"' % (python_ws, src)
+                print("shell_str: " + shell_str)
                 proc = await asyncio.create_subprocess_shell(
                     shell_str,
                     stdin=asyncio.subprocess.PIPE,

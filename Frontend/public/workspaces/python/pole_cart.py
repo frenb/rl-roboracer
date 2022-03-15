@@ -10,6 +10,8 @@ import json
 import datetime
 
 import numpy as np
+from scipy.interpolate import interp1d
+from numpy import interp
 import tensorflow as tf
 
 from tf_agents.agents.ddpg import critic_network
@@ -46,68 +48,37 @@ client = MongoClient('mongo',
     username='root',
     password='example')
 db = client.local
-class PoleCartEnv(py_environment.PyEnvironment):
-    def __init__(self, api):
+
+class DonutCourse ():
+    def __init__(self, api, env):
+        self.env = env
         self._api = api
-        # action_apply_force = tf.random.uniform((1,),0,10,tf.dtypes.float32).numpy().tolist()[0]
-        # action_steering_angle = tf.random.uniform((1,),-45,45,tf.dtypes.float32).numpy().tolist()[0]
-        self._action_spec = array_spec.BoundedArraySpec(
+        self.action_spec = array_spec.BoundedArraySpec(
             shape=(2, ), dtype=np.float32, 
-                minimum=[0,-45], 
-                maximum=[10,45], name='action')
-        # self._observation_spec = array_spec.BoundedArraySpec(
-        #     shape=(10,), dtype=np.float32,
-        #     minimum=[-3.06, -1.90, -1.4, -3.06, -1.75, -2.62, -30, -30, -1.5, -1.5],
-        #     maximum=[3.06, 0.63, 1.57, 3.06, 1.92, 2.62, 30, 30, 1.5, 1.5],
-        #     name='observation')
-        self._observation_spec = array_spec.BoundedArraySpec(
-            shape=(9,), dtype=np.float32,
-            minimum=[0, -25, -10000, -10000, -10000,-100,0,0,0],
-            maximum=[1, 100, 10000, 10000, 10000,100,1000,1000,360],
+                minimum=[0,-1], 
+                maximum=[10,1], name='action')
+        self.observation_spec = array_spec.BoundedArraySpec(
+            shape=(15,), dtype=np.float32,
+            minimum=[0, -25, -10000, -10000, -10000,-100,0,0,0,0,-1000, -1000, -1000, -1000,-1000],
+            maximum=[1, 100, 10000, 10000, 10000,100,1000,1000,360,1,1000, 1000, 1000, 1000, 1000],
             name='observation')
-        self._time_step_spec = ts.time_step_spec(self._observation_spec)
-        self._state = self._get_empty_state()
-        self._episode_ended = False
-
-    def action_spec(self):
-        return self._action_spec
-
-    def observation_spec(self):
-        return self._observation_spec
-
-    def _reset(self):
-        #print(9999)
-        self._episode_ended = False
-        #print(222222)
-        #print(7777777)
-        self._api.DoResetBlocking()
-        data = self._api.GetCarSceneDataBlocking()
-        #self._state = self._get_empty_state()
-        data_arr=self._scene_data_array(data)
-        self._step_costs=[]
-        self._position_history=[]
-        #return ts.restart(np.array([data_arr], dtype=np.float32))
-        return ts.restart(np.array(data_arr, dtype=np.float32))
-        #return ts.restart(np.array(self._state, dtype=np.int32))
-   
-    def __has_failed(self, data_arr):
-        #print("has_failed: " + str(data_arr))
+    
+    def get_empty_state(self):
+        emptyState = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+        return emptyState
+        
+    def has_failed(self, data_arr, step_costs, position_history):
         has_fallen = data_arr[3] < -0.5
         int_rotation_z = round(data_arr[8])
-        is_stuck = not self.check_if_moving(self._position_history)
+        has_crashed = data_arr[9]
+        has_too_many_steps = len(step_costs) > 1000
+        is_stuck = not self.check_if_moving(position_history)
         has_flipped = int_rotation_z == 90 or int_rotation_z == 180 or int_rotation_z == 270
-        #print("has_fallen: " + str(has_fallen))
-        #print("has_flipped: " + str(has_flipped) + " " + str(int_rotation_z))
-        return has_fallen or has_flipped or is_stuck
+        return has_fallen or has_flipped or is_stuck or has_too_many_steps or has_crashed
     
-    def __has_succeeded(self, data_arr):
-        #print("has_succeeded: " + str(data_arr))
+    def has_succeeded(self, data_arr):
         has_succeeded = data_arr[0] == 1
-        #print("has_succeeded: " + str(has_succeeded))
         return has_succeeded
-    
-    def _apply_force(self):
-        self._api.DoApplyForceBlocking()
     
     def check_if_moving(self, arr):
         last_position = len(arr)-1
@@ -116,119 +87,128 @@ class PoleCartEnv(py_environment.PyEnvironment):
             return True
         for  i in reversed(range(last_position-5, last_position)):
             dist = math.dist(arr[last_position], arr[i])
-            debug_print(i)
-            debug_print("dist: " + str(dist))
             if dist >= 0.0001:
                 return True
         return False
-
-    def _step(self, action):
-        #print("in _step")
-        #time.sleep(1)
-        if self._episode_ended:
-            # The last action ended the episode. Ignore the current action and start
-            # a new episode
-            return self.reset()
-        #print("before do action: " + str(self._state))
-        data = self._do_action(action)
-        #print("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx " + str(data))
-        #data = self._api.GetCarSceneDataBlocking()
-        debug_print("data: " + str(data))
-        data_arr = self._scene_data_array(data)
-        self._step_costs.append(abs(data_arr[6]))
-        self._position_history.append(
-            [data_arr[2], #x position
-            data_arr[3], #y position
-            data_arr[4]]) #z position
-        #print("self._state")
-        #print("in_step: " + str(self._state))
-        if self.__has_failed(data_arr):
-            debug_print("has failed")
-            self._episode_ended = True
-            #print('before termination')
-            
-            if False:
-                term_time_step = ts.termination(np.array([data_arr], dtype=np.float32), -1)
-            else:
-                term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), -1)
-            #term_time_step = ts.termination(np.array(self._state, dtype=np.int32), -1)
-            #print("is_last(): " + str(term_time_step.is_last()))
-            return term_time_step
-            #return ts.termination(np.array([self._state]), reward=-1)
-        if self.__has_succeeded(data_arr):
-            debug_print("has succeeded")
-            self._episode_ended = True
-            #print('before termination')
-            mean_step_costs = np.mean(self._step_costs)
-            max_step_costs = np.max(self._step_costs)
-            debug_print("mean_step_costs " +  str(mean_step_costs))
-            debug_print("max_step_costs " + str(max_step_costs))
-            reward = 1 - (np.mean(self._step_costs) / (np.max(self._step_costs)+0.001)) if len(self._step_costs) > 0  else 1
-            debug_print("has succeeded reward: " +  str(reward))
-            if False:
-                term_time_step = ts.termination(np.array([data_arr], dtype=np.float32), reward)
-            else:
-                term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward)
-            #term_time_step = ts.termination(np.array(self._state, dtype=np.int32), reward)
-            #print("is_last(): " + str(term_time_step.is_last()))
-            return term_time_step
-        else:
-            debug_print("did not fail")
-            self._episode_ended = False
-            #ts.transition(np.array([self._state], dtype=np.int32), reward=0.05, discount=1.0)
-            mean_step_costs = np.mean(self._step_costs)
-            max_step_costs = np.max(self._step_costs)
-            last_step_costs = self._step_costs[len(self._step_costs)-1]
-            debug_print("mean_step_costs " +  str(mean_step_costs))
-            debug_print("max_step_costs " + str(max_step_costs))
-            debug_print("last_step_costs " + str(last_step_costs))
-            reward = 1 - (self._step_costs[len(self._step_costs)-1] /(np.max(self._step_costs) + 0.0001)) if len(self._step_costs) > 0  else 1
-            debug_print("did not end reward: " +  str(reward))
-            if False:
-                return ts.transition(np.array([data_arr], dtype=np.float32), reward=1.0, discount=0.90)
-            else:
-                return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
-            #return ts.transition(np.array(self._state, dtype=np.int32), reward=1.0, discount=0.90)
     
-    # def _do_action(self, action):
-    #     # print('Action:')
-    #     # print(action)
-    #     # print(self._current_time_step.observation[0])
-    #     positions = {
-    #         'joint_00': (self._current_time_step.observation[0] + action[0]).item(),
-    #         'joint_01': (self._current_time_step.observation[1] + action[1]).item(),
-    #         'joint_02': (self._current_time_step.observation[2] + action[2]).item(),
-    #         'joint_03': (self._current_time_step.observation[3]).item(),
-    #         'joint_04': (self._current_time_step.observation[4]).item(),
-    #         'joint_05': (self._current_time_step.observation[5]).item(),
-    #     }
-    #     cmd = {
-    #         'cmd_type': 4,
-    #         'positions': positions
-    #     }
-    #     self._api.DoMoveBlocking({'cmd': cmd})
+    def scene_data_array(self, scene_data):
+        #float64 speed
+        # float64 location_x
+        # float64 location_y
+        # float64 location_z
+        # float64 cost
+        # float64 dist_from_traj
+        # float64 dist_from_goal
+        # float64 rotation_z
+        # float64 angular_velocity
+        # float64 acceleration
+        # float64 left
+        # float64 forward_left
+        # float64 forward
+        # float64 forward_right
+        # float64 right
+        # float64 goal_1
+        # float64 goal_2
+        # float64 goal_3
+        # float64 goal_4
+        # bool has_reached_goal
+        # bool has_crashed
+        arr = [
+            1 if scene_data["car"]['has_reached_goal'] else 0,
+            scene_data["car"]['speed'],
+            scene_data["car"]['location_x'],
+            scene_data["car"]['location_y'],
+            scene_data["car"]['location_z'],
+            scene_data["car"]["cost"],
+            scene_data["car"]["dist_from_traj"],
+            scene_data["car"]["dist_from_goal"],
+            scene_data["car"]["rotation_z"],
+            1 if scene_data["car"]["has_crashed"] else 0,
+            scene_data["car"]["left"],
+            scene_data["car"]["forward_left"],
+            scene_data["car"]["forward"],
+            scene_data["car"]["forward_right"],
+            scene_data["car"]["right"],
+        ]
+        return np.array(arr, dtype=np.float32)
     
-    def _do_action(self, action):
-        debug_print(action)
-        debug_print(type(action).__name__)
-        if type(action).__name__ == "ndarray":
-            #action_arr = action[0].tolist()
-            action_arr = action.tolist()
+    def reward_standard(self, data, data_arr, step_costs, job_id):
+        #print("donut standard")
+        self.env._episode_ended = False
+        last_step_cost = 0 if len(step_costs) < 2 else step_costs[len(step_costs)-2]
+        curr_step_cost = step_costs[len(step_costs)-1]
+        diff = abs(curr_step_cost) - abs(last_step_cost)
+        if diff < -0.5:
+             reward = 1*data_arr[1]
+        elif diff >= 0:
+            reward = -1
         else:
-            action_arr = action.numpy().tolist()
-        debug_print('Action: ' + str(action_arr))
-        acceleration=action_arr[0]
-        steering_angle=action_arr[1]
-        return self._api.DoApplyForceBlocking(
-            acceleration,
-            steering_angle)
+            reward = 0
+        log_reward(self.env.job_id, "did not fail", float(reward), diff=float(diff), extra_data=data, stat_array=data_arr)
+        return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
+    
+    def reward_success(self, curr_step_cost, job_id, data, data_arr, step_costs, position_history):
+        #print("donut success")
+        #m = interp1d([0,1,5,100],[100,10,1,0.5],fill_value="extrapolate")
+        #reward = float(m(curr_step_cost))
+        self.env._episode_ended = False
+        reward = 10*data_arr[1]
+        log_reward(self.env.job_id, "has succeeded", float(reward), extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
+        #term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
+        #return term_time_step
+        return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
+    
+    def reward_failure(self, job_id, step_costs, data, data_arr, position_history):
+        #print("donut failed")
+        self.env._episode_ended = True
+        #print(self.env._episode_ended)
+        reward = -1
+        log_reward(self.env.job_id, "has failed", float(reward),extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
+        term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
+        return term_time_step
 
-    def _get_empty_state(self):
+class SimpleCourse ():
+    def __init__(self, api, env):
+        self.env = env
+        self._api = api
+        self.action_spec = array_spec.BoundedArraySpec(
+            shape=(2, ), dtype=np.float32, 
+                minimum=[0,-1], 
+                maximum=[10,1], name='action')
+        self.observation_spec = array_spec.BoundedArraySpec(
+            shape=(9,), dtype=np.float32,
+            minimum=[0, -25, -10000, -10000, -10000,-100,0,0,0],
+            maximum=[1, 100, 10000, 10000, 10000,100,1000,1000,360],
+            name='observation')
+    
+    def get_empty_state(self):
         emptyState = [0,0,0,0,0,0,0,0,0]
         return emptyState
-
+        
+    def has_failed(self, data_arr, step_costs, position_history):
+        has_fallen = data_arr[3] < -0.5
+        int_rotation_z = round(data_arr[8])
+        has_too_many_steps = len(step_costs) > 150
+        is_stuck = not self.check_if_moving(position_history)
+        has_flipped = int_rotation_z == 90 or int_rotation_z == 180 or int_rotation_z == 270
+        return has_fallen or has_flipped or is_stuck or has_too_many_steps
     
-    def _scene_data_array(self, scene_data):
+    def has_succeeded(self, data_arr):
+        has_succeeded = data_arr[0] == 1
+        return has_succeeded
+    
+    def check_if_moving(self, arr):
+        last_position = len(arr)-1
+        debug_print(last_position)
+        if len(arr) < 6:
+            return True
+        for  i in reversed(range(last_position-5, last_position)):
+            dist = math.dist(arr[last_position], arr[i])
+            if dist >= 0.0001:
+                return True
+        return False
+    
+    def scene_data_array(self, scene_data):
         #print("in scene_data_array")
         #print(scene_data)
         # float64 speed
@@ -238,9 +218,10 @@ class PoleCartEnv(py_environment.PyEnvironment):
         # float64 cost
         # float64 dist_from_traj
         # float64 dist_from_goal
-        # bool has_not_crashed
+        # bool has_reached_goal
+        # bool has_crashed
         arr = [
-            1 if scene_data["car"]['has_not_crashed'] else 0,
+            1 if scene_data["car"]['has_reached_goal'] else 0,
             scene_data["car"]['speed'],
             scene_data["car"]['location_x'],
             scene_data["car"]['location_y'],
@@ -250,19 +231,140 @@ class PoleCartEnv(py_environment.PyEnvironment):
             scene_data["car"]["dist_from_goal"],
             scene_data["car"]["rotation_z"],
         ]
-        # arr = [
-        #     scene_data['joint_00'],
-        #     scene_data['joint_01'],
-        #     scene_data['joint_02'],
-        #     scene_data['joint_03'],
-        #     scene_data['joint_04'],
-        #     scene_data['joint_05'],
-        #     scene_data['pole_cart']['pole_hand_angle'],
-        #     scene_data['pole_cart']['pole_hand_angle_b'],
-        #     scene_data['pole_cart']['pole_angular_speed'],
-        #     scene_data['pole_cart']['pole_angular_speed_b']
-        # ]
         return np.array(arr, dtype=np.float32)
+    
+    def reward_standard(self, data, data_arr, step_costs, job_id):
+        self.env._episode_ended = False
+        last_step_cost = 0 if len(step_costs) < 2 else step_costs[len(step_costs)-2]
+        curr_step_cost = step_costs[len(step_costs)-1]
+        diff = abs(curr_step_cost) - abs(last_step_cost)
+        if curr_step_cost == 0:
+            reward = 1
+        elif diff < 0:
+            reward = 1
+        else:
+            reward = -1
+        log_reward(self.env.job_id, "did not fail", float(reward), diff=float(diff), extra_data=data)
+        return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
+    
+    def reward_success(self, curr_step_cost, job_id, data, data_arr, step_costs, position_history):
+        self.env._episode_ended = True
+        m = interp1d([0,1,5,100],[100,10,1,0.5],fill_value="extrapolate")
+        reward = float(m(curr_step_cost)) 
+        log_reward(self.env.job_id, "has succeeded", float(reward),extra_data=data, step_costs=step_costs, position_history=position_history)
+        term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
+        return term_time_step
+    
+    def reward_failure(self, job_id, step_costs, data, data_arr, position_history):
+        self.env._episode_ended = True
+        reward = -1 * np.mean(step_costs) if len(step_costs) > 0 and np.mean(step_costs) > 0  else -1
+        log_reward(self.env.job_id, "has failed", float(reward),extra_data=data, step_costs=step_costs, position_history=position_history)
+        term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
+        return term_time_step
+    
+class PoleCartEnv(py_environment.PyEnvironment):
+    def __init__(self, api):
+        self.course = DonutCourse(api, self)
+        self._api = api
+        self._action_spec = self.course.action_spec
+        ##self.course.action_spec
+        self._observation_spec = self.course.observation_spec
+        ##self.course.observation_spec
+        self._time_step_spec = ts.time_step_spec(self._observation_spec)
+        self._state = self.course.get_empty_state()
+        self._episode_ended = False
+        self.job_id=""
+
+    def action_spec(self):
+        return self._action_spec
+
+    def observation_spec(self):
+        return self._observation_spec
+
+    def _reset(self):
+        self._episode_ended = False
+        self._api.DoResetBlocking()
+        data = self._api.GetCarSceneDataBlocking()
+        data_arr=self.course.scene_data_array(data)
+        self._step_costs=[]
+        self._position_history=[]
+        return ts.restart(np.array(data_arr, dtype=np.float32))
+   
+    def __has_failed(self, data_arr):
+        return self.course.has_failed(
+            data_arr, self._step_costs, self._position_history)
+    
+    def __has_succeeded(self, data_arr):
+        return self.course.has_succeeded(data_arr)
+    
+    def _apply_force(self):
+        self._api.DoApplyForceBlocking()
+
+    def _step(self, action):
+        m = interp1d([0,1,5,100],[100,10,1,0.5],fill_value="extrapolate")
+        n = interp1d([-3,-0.001,1,3],[5,0,-2,-5],fill_value="extrapolate")
+        if self._episode_ended:
+            # The last action ended the episode. Ignore the current action and start
+            # a new episode
+            return self.reset()
+        data = self._do_action(action)
+        data_arr = self._scene_data_array(data)
+        curr_step_cost = abs(data_arr[7]) #abs(data_arr[6])
+        self._step_costs.append(curr_step_cost)
+        self._position_history.append(
+            [data_arr[2], #x position
+            data_arr[3], #y position
+            data_arr[4]]) #z position
+        if self.__has_failed(data_arr):
+            return self.course.reward_failure(
+                env.job_id, self._step_costs, data,
+                data_arr, self._position_history)
+            # reward = -1 * np.mean(self._step_costs) if len(self._step_costs) > 0 and np.mean(self._step_costs) > 0  else -1
+            # log_reward(self.job_id, "has failed", float(reward),extra_data=data,step_costs=self._step_costs, position_history=self._position_history)
+            # term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
+            # return term_time_step
+        if self.__has_succeeded(data_arr):
+            return self.course.reward_success(
+                curr_step_cost, env.job_id, data, data_arr,
+                self._step_costs, self._position_history)
+            # reward = float(m(curr_step_cost)) 
+            # log_reward(self.job_id, "has succeeded", float(reward),extra_data=data, step_costs=self._step_costs, position_history=self._position_history)
+            # term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
+            # return term_time_step
+        else:
+            return self.course.reward_standard(
+                data, data_arr, self._step_costs, env.job_id)
+            # mean_step_costs = np.mean(self._step_costs)
+            # max_step_costs = np.max(self._step_costs)
+            # last_step_costs = self._step_costs[len(self._step_costs)-1]
+            # last_step_cost = 0 if len(self._step_costs) < 2 else self._step_costs[len(self._step_costs)-2]
+            # curr_step_cost = self._step_costs[len(self._step_costs)-1]
+            # diff = abs(curr_step_cost) - abs(last_step_cost)
+            # if curr_step_cost == 0:
+            #     reward = 1
+            # elif diff < 0:
+            #     reward = 1
+            # else:
+            #     reward = -1
+            # log_reward(self.job_id, "did not fail", float(reward), diff=float(diff), extra_data=data)
+            # return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
+    
+    def _do_action(self, action):
+        if type(action).__name__ == "ndarray":
+            action_arr = action.tolist()
+        else:
+            action_arr = action.numpy().tolist()
+        acceleration=action_arr[0]
+        steering_angle=action_arr[1]
+        return self._api.DoApplyForceBlocking(
+            acceleration,
+            steering_angle)
+
+    def _get_empty_state(self):
+        return self.course.get_empty_state()
+    
+    def _scene_data_array(self, scene_data):
+        return self.course.scene_data_array(scene_data)
 
 def get_save_dir_root(policy):
     policy_type = get_policy_type_name(policy)
@@ -281,8 +383,9 @@ def get_policy_type_name(policy):
 def get_next_model_version(policy):
     path=get_save_dir_root(policy)
     file_list = os.listdir(path)
-    sorted_file_list=sorted(file_list,key=int,reverse=True)
-    next_model_version=str(int(sorted_file_list[0])+1)
+    sorted_file_list=sorted(file_list,key=str,reverse=True)
+    num_dirs = len(sorted_file_list)
+    next_model_version=str(num_dirs)
     debug_print(file_list)
     debug_print(sorted_file_list)
     debug_print(next_model_version)
@@ -325,13 +428,13 @@ def main(
     critic_joint_fc_layer_params_x=512,
     critic_joint_fc_layer_params_y=512,
     log_interval_val=50,
-    num_eval_episodes_val=20,
+    num_eval_episodes_val=5,#20
     eval_interval_val=50,
     policy_save_interval_val=50,
     model_type="SacAgent"):
     tempdir = tempfile.gettempdir()
     env_name = "NiryoPoleCart-v0" # @param {type:"string"}
-
+    #tf.debugging.experimental.enable_dump_debug_info(tempdir, tensor_debug_mode="FULL_HEALTH", circular_buffer_size=-1)
     num_iterations=num_iterations_val # @param {type:"integer"}
     initial_collect_steps = initial_collect_steps_val # @param {type:"integer"}
     collect_steps_per_iteration = collect_steps_per_iteration_val # @param {type:"integer"}
@@ -359,7 +462,7 @@ def main(
     use_gpu = False #@param {type:"boolean"}
     strategy = strategy_utils.get_strategy(tpu=False, use_gpu=use_gpu)
 
-
+    env.job_id=job_id
     # Critic network.
     observation_spec, action_spec, time_step_spec = (
         spec_utils.get_tensor_specs(env))
@@ -402,7 +505,9 @@ def main(
             td_errors_loss_fn=tf.math.squared_difference,
             gamma=gamma,
             reward_scale_factor=reward_scale_factor,
-            train_step_counter=train_step)
+            train_step_counter=train_step,
+            debug_summaries = True,
+            summarize_grads_and_vars = True)
         
         tf_agent.initialize()
     # Replay Buffer.
@@ -497,7 +602,7 @@ def main(
             tf_agent,
             train_step,
             interval=policy_save_interval),
-        triggers.StepPerSecondLogTrigger(train_step, interval=50),
+        triggers.StepPerSecondLogTrigger(train_step, interval=1000),
     ]
 
     agent_learner = learner.Learner(
@@ -519,7 +624,13 @@ def main(
     def log_eval_metrics(step, metrics):
         eval_results = (', ').join(
             '{} = {:.6f}'.format(name, result) for name, result in metrics.items())
-        
+        eval_results_blob= {}
+        for name, result in metrics.items():
+            eval_results_blob[str(name)] = float(result)
+        eval_results_blob["step"] = int(step)
+        eval_results_blob["type"] = "step update"
+        eval_results_blob["job_id"] = env.job_id
+        log_blob(eval_results_blob)
         print('step = {0}: {1}'.format(step, eval_results))
 
     log_eval_metrics(0, metrics)
@@ -533,40 +644,54 @@ def main(
     returns = [avg_return]
     curr_iteration=0
     print("Training started")
+    print("num iterations: " + str(num_iterations))
+    print("eval interval: " + str(eval_interval))
+    print("log interval: " + str(log_interval))
+    min_write_step = 10000
+    write_policy_interval=2000
     for _ in range(num_iterations):
         # Training.
-        
         collect_actor.run()
         loss_info = agent_learner.run(iterations=1)
-        debug_print("loss_info: " + str(loss_info))
         # Evaluating.
         step = agent_learner.train_step_numpy
-
         if eval_interval and step % eval_interval == 0:
             metrics = get_eval_metrics()
             log_eval_metrics(step, metrics)
             returns.append(metrics["AverageReturn"])
-
+            print("current iteration " +str(curr_iteration))
         if log_interval and step % log_interval == 0:
             print('step = {0}: loss = {1}'.format(step, loss_info.loss.numpy()))
+        if step >= min_write_step and step % write_policy_interval == 0:
+            tf_policy_saver = policy_saver.PolicySaver(tf_agent.policy)
+            save_dir_name=get_save_dir_name(tf_agent)+ "_step_" + str(step)
+            tf_policy_saver.save(save_dir_name)
+            robot_type = os.getenv('ROBOT_TYPE')
+            model_type=get_policy_type_name(tf_agent)
+            training_iterations=num_iterations
+            add_model(
+                save_dir_name,
+                robot_type, model_type,
+                training_iterations,
+                avg_return=metrics["AverageReturn"])
         curr_iteration=curr_iteration+1
     print("Training completed")
     rb_observer.close()
     reverb_server.stop()
-    tf_policy_saver = policy_saver.PolicySaver(tf_agent.policy)
-    save_dir_name=get_save_dir_name(tf_agent)
-    tf_policy_saver.save(save_dir_name)
-    robot_type=robot_type = os.getenv('ROBOT_TYPE')
-    model_type=get_policy_type_name(tf_agent)
-    training_iterations=num_iterations
-    add_model(save_dir_name, robot_type, model_type, training_iterations)
+    # tf_policy_saver = policy_saver.PolicySaver(tf_agent.policy)
+    # save_dir_name=get_save_dir_name(tf_agent)
+    # tf_policy_saver.save(save_dir_name)
+    # robot_type = os.getenv('ROBOT_TYPE')
+    # model_type=get_policy_type_name(tf_agent)
+    # training_iterations=num_iterations
+    # add_model(save_dir_name, robot_type, model_type, training_iterations)
  
 def run_episodes_and_create_video(saved_policy, tf_env, job_id=""):
-    debug_print("run episodes and create video")
+    print("run episodes and create video")
     train_step = train_utils.create_train_step()
     log_interval = 10 # @param {type:"integer"}
     num_eval_episodes = 5 # @param {type:"integer"}
-    max_episodes = 10
+    max_episodes = 1
     eval_dir=os.path.join(tempfile.gettempdir(), "eval" if str(job_id) == "" else str(job_id) + "_eval")
     batch_tf_env = batched_py_environment.BatchedPyEnvironment((tf_env,))
     debug_print("after batch_tf_env")
@@ -598,7 +723,6 @@ def run_episodes_and_create_video(saved_policy, tf_env, job_id=""):
     def log_eval_metrics(step, metrics):
         eval_results = (', ').join(
             '{} = {:.6f}'.format(name, result) for name, result in metrics.items())
-        
         print('step = {0}: {1}'.format(step, eval_results))
     curr_episode=0
     returns=[]
@@ -625,6 +749,7 @@ def get_saved_model(policy_type, version=None, path_arg=None):
 def load_saved_model(policy_type, version=None, path=None, job_id=""):
     # Environment. Use same for eval and collection, though this does not seem standard?
     env = PoleCartEnv(api)
+    env.job_id = job_id
     # Strategy
     use_gpu = False #@param {type:"boolean"}
     strategy = strategy_utils.get_strategy(tpu=False, use_gpu=use_gpu)
@@ -635,7 +760,7 @@ def load_saved_model(policy_type, version=None, path=None, job_id=""):
     results = run_episodes_and_create_video(saved_policy, env, job_id=job_id)
     save_results_to_db(path, results)
 
-def add_model(path, robot_type, model_type, training_iterations):
+def add_model(path, robot_type, model_type, training_iterations, avg_return=None):
     # "_id": ObjectID(),
     # model_type: 'SacAgent',
     # training_iterations: 50000,
@@ -651,7 +776,8 @@ def add_model(path, robot_type, model_type, training_iterations):
             "robot_type": robot_type,
             "model_type": model_type,
             "training_iterations": training_iterations,
-            "notes": "NA"
+            "notes": "NA",
+            "avg_return": float(avg_return)
         })
 
 def save_results_to_db(path, results):
@@ -681,6 +807,25 @@ async def robot_com():
     while True:
         await asyncio.sleep(1)
 
+def log_reward(job_id, type, score, diff=None, extra_data=None, step_costs=[], position_history=[],stat_array=[]):
+    dilimeter = ","
+    step_costs_valid = None if len(step_costs) == 0 else dilimeter.join([str(i) for i in step_costs])
+    position_history_valid = None if len(position_history) == 0 else dilimeter.join([str(i) for i in position_history])
+    stat_array_valid = None if len(stat_array) == 0 else dilimeter.join([str(i) for i in stat_array])
+    new_log = {
+        "job_id": job_id,
+        "type": type,
+        "score": score,
+        "diff": diff,
+        "extra_data": extra_data,
+        "step_costs": step_costs_valid,
+        "position_history": position_history_valid,
+        "stat_array": stat_array_valid
+    }
+    db.logs.insert_one(new_log)
+def log_blob(blob):
+    db.logs.insert_one(blob)
+
 def get_jobs():
     debug_print("in get_jobs")
     jobs = db.jobs.find({"status":"NOT_STARTED"})
@@ -690,6 +835,7 @@ def get_jobs():
     return jobs
 
 def do_job(job):
+    print(job["job_type"])
     if job["job_type"] == "TRAIN":
         num_iterations=job["num_iterations"]
         main(job_id=job["_id"], num_iterations_val=num_iterations)
@@ -766,7 +912,7 @@ def run_randompolicy_collect():
             #ts.transition(self._state, reward=1.0, discount=0.90)
             episode_reward += next_time_step.reward
             #print(episode_reward)
-            time.sleep(1)
+            #time.sleep(1)
         rewards.append(episode_reward)
         mean_reward = np.mean(rewards)
         print("mean reward: " + str(mean_reward))

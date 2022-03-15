@@ -7,25 +7,39 @@ import sys
 import os
 import asyncio
 import socket
+import errno
 
 async def handle_client(client, log_path):
-    loop = asyncio.get_running_loop()
-    proc = await asyncio.create_subprocess_shell(
-        'tail -n 1000 -F ' + log_path,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE) 
-    
-    async for line in proc.stdout:
-        await loop.sock_sendall(client, line)
-    
+    try:
+        loop = asyncio.get_running_loop()
+        proc = await asyncio.create_subprocess_shell(
+            'tail -n 1000 -F ' + log_path,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE) 
+        
+        async for line in proc.stdout:
+            #await loop.sock_sendall(client, line)
+            await loop.sock_sendall(client, line)
+    except socket.error as e:
+        print("Oops there was a broken pipe error")
+        if isinstance(e.args, tuple):
+            print("errno is %d" % e[0])
+            if e[0] == errno.EPIPE:
+               # remote peer disconnected
+               print("Detected remote disconnect")
+            else:
+               # determine and handle different error
+               pass
+        else:
+            print("socket error " + str(e))
+        client.close()
 
 async def run_server(server, log_path):
     loop = asyncio.get_running_loop()
     while True:
         client, _ = await loop.sock_accept(server)
         loop.create_task(handle_client(client, log_path))
-
 
 if __name__ == '__main__':
     port = int(sys.argv[1])

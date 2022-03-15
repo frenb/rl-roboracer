@@ -6,4 +6,16 @@ float64 cost
 float64 dist_from_traj
 float64 dist_from_goal
 float64 rotation_z
-bool has_not_crashed
+float64 angular_velocity
+float64 acceleration
+float64 left
+float64 forward_left
+float64 forward
+float64 forward_right
+float64 right
+float64 goal_1
+float64 goal_2
+float64 goal_3
+float64 goal_4
+bool has_reached_goal
+bool has_crashed
