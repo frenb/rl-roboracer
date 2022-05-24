@@ -56,28 +56,102 @@ class DonutCourse ():
         self.action_spec = array_spec.BoundedArraySpec(
             shape=(2, ), dtype=np.float32, 
                 minimum=[0,-1], 
-                maximum=[10,1], name='action')
+                maximum=[2,1], name='action')
         self.observation_spec = array_spec.BoundedArraySpec(
-            shape=(15,), dtype=np.float32,
-            minimum=[0, -25, -10000, -10000, -10000,-100,0,0,0,0,-1000, -1000, -1000, -1000,-1000],
-            maximum=[1, 100, 10000, 10000, 10000,100,1000,1000,360,1,1000, 1000, 1000, 1000, 1000],
+            shape=(32,), dtype=np.float32,
+            minimum=[
+                -100, #scene_data["car"]["dist_from_traj"] angle to next goal
+                -1000, #scene_data["car"]["dist_from_goal"]
+                -1000,  #scene_data["car"]["rotation_z"]
+                0, #scene_data["car"]["left"]
+                0, #scene_data["car"]["forward_left"]
+                0, #scene_data["car"]["forward_left_left"]
+                0, #scene_data["car"]["n_27_50"]
+                0, #scene_data["car"]["n_25_00"]
+                0, #scene_data["car"]["n_22_50"]
+                0, #scene_data["car"]["n_20_00"]
+                0, #scene_data["car"]["n_17_50"]
+                0, #scene_data["car"]["n_15_00"]
+                0, #scene_data["car"]["n_12_50"]
+                0, #scene_data["car"]["n_10_00
+                0, #scene_data["car"]["n_07_50"],
+                0, #scene_data["car"]["n_05_00"],
+                0, #scene_data["car"]["n_02_50"]
+                0, #scene_data["car"]["forward"], # float64 forward
+                0, #scene_data["car"]["p_02_50"],# float64 p_02_50
+                0, #scene_data["car"]["p_05_00"],# float64 p_05_00
+                0, #scene_data["car"]["p_07_50"],# float64 p_07_50
+                0, #scene_data["car"]["p_10_00"],# float64 p_10_00
+                0, #scene_data["car"]["p_12_50"],# float64 p_12_50
+                0, #scene_data["car"]["p_15_00"],# float64 p_15_00
+                0, #scene_data["car"]["p_17_50"],# float64 p_17_50
+                0, #scene_data["car"]["p_20_00"],# float64 p_20_00
+                0, #scene_data["car"]["p_22_50"],# float64 p_22_50
+                0, #scene_data["car"]["p_25_00"],# float64 p_25_00
+                0, #scene_data["car"]["p_27_50"],# float64 p_27_50
+                0, #scene_data["car"]["forward_right_right"],# float64 forward_right_right
+                0, #scene_data["car"]["forward_right"],
+                0, #scene_data["car"]["right"]
+                ],
+            maximum=[
+                100, #scene_data["car"]["dist_from_traj"]
+                1000, #scene_data["car"]["dist_from_goal"]
+                1000, #scene_data["car"]["rotation_z"]
+                1000, #scene_data["car"]["left"]
+                1000, #scene_data["car"]["forward_left"]
+                1000, #scene_data["car"]["forward_left_left"]
+                1000, #scene_data["car"]["n_27_50"]
+                1000, #scene_data["car"]["n_25_00"]
+                1000, #scene_data["car"]["n_22_50"]
+                1000, #scene_data["car"]["n_20_00"]
+                1000, #scene_data["car"]["n_17_50"]
+                1000, #scene_data["car"]["n_15_00"]
+                1000, #scene_data["car"]["n_12_50"]
+                1000, #scene_data["car"]["n_10_00
+                1000, #scene_data["car"]["n_07_50"],
+                1000, #scene_data["car"]["n_05_00"],
+                1000, #scene_data["car"]["n_02_50"]
+                1000, #scene_data["car"]["forward"], # float64 forward
+                1000, #scene_data["car"]["p_02_50"],# float64 p_02_50
+                1000, #scene_data["car"]["p_05_00"],# float64 p_05_00
+                1000, #scene_data["car"]["p_07_50"],# float64 p_07_50
+                1000, #scene_data["car"]["p_10_00"],# float64 p_10_00
+                1000, #scene_data["car"]["p_12_50"],# float64 p_12_50
+                1000, #scene_data["car"]["p_15_00"],# float64 p_15_00
+                1000, #scene_data["car"]["p_17_50"],# float64 p_17_50
+                1000, #scene_data["car"]["p_20_00"],# float64 p_20_00
+                1000, #scene_data["car"]["p_22_50"],# float64 p_22_50
+                1000, #scene_data["car"]["p_25_00"],# float64 p_25_00
+                1000, #scene_data["car"]["p_27_50"],# float64 p_27_50
+                1000, #scene_data["car"]["forward_right_right"],# float64 forward_right_right
+                1000, #scene_data["car"]["forward_right"],
+                1000, #scene_data["car"]["right"]
+                ],
             name='observation')
     
     def get_empty_state(self):
-        emptyState = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+        emptyState = [
+            0,0,0,0,0,
+            0,0,0,0,0,
+            0,0,0,0,0,
+            0,0,0,0,0,
+            0,0,0,0,0,
+            0,0,0,0,0,
+            0,0
+        ]
         return emptyState
         
-    def has_failed(self, data_arr, step_costs, position_history):
-        has_fallen = data_arr[3] < -0.5
-        int_rotation_z = round(data_arr[8])
-        has_crashed = data_arr[9]
-        has_too_many_steps = len(step_costs) > 1000
+    def has_failed(self, data, data_arr, step_costs, position_history):
+        has_fallen = data["car"]["location_y"] < -0.5
+        int_rotation_z = round(data["car"]["rotation_z"])
+        has_crashed = data["car"]["has_crashed"]
+        has_too_many_steps = len(step_costs) > 10000
         is_stuck = not self.check_if_moving(position_history)
         has_flipped = int_rotation_z == 90 or int_rotation_z == 180 or int_rotation_z == 270
         return has_fallen or has_flipped or is_stuck or has_too_many_steps or has_crashed
     
-    def has_succeeded(self, data_arr):
-        has_succeeded = data_arr[0] == 1
+    def has_succeeded(self, data, data_arr):
+        has_succeeded = data["car"]["has_reached_goal"] == 1
         return has_succeeded
     
     def check_if_moving(self, arr):
@@ -92,7 +166,7 @@ class DonutCourse ():
         return False
     
     def scene_data_array(self, scene_data):
-        #float64 speed
+        # float64 speed
         # float64 location_x
         # float64 location_y
         # float64 location_z
@@ -104,7 +178,31 @@ class DonutCourse ():
         # float64 acceleration
         # float64 left
         # float64 forward_left
+        # float64 forward_left_left
+        # float64 n_27_50
+        # float64 n_25_00
+        # float64 n_22_50
+        # float64 n_20_00
+        # float64 n_17_50
+        # float64 n_15_00
+        # float64 n_12_50
+        # float64 n_10_00
+        # float64 n_07_50
+        # float64 n_05_00
+        # float64 n_02_50
         # float64 forward
+        # float64 p_02_50
+        # float64 p_05_00
+        # float64 p_07_50
+        # float64 p_10_00
+        # float64 p_12_50
+        # float64 p_15_00
+        # float64 p_17_50
+        # float64 p_20_00
+        # float64 p_22_50
+        # float64 p_25_00
+        # float64 p_27_50
+        # float64 forward_right_right
         # float64 forward_right
         # float64 right
         # float64 goal_1
@@ -114,48 +212,54 @@ class DonutCourse ():
         # bool has_reached_goal
         # bool has_crashed
         arr = [
-            1 if scene_data["car"]['has_reached_goal'] else 0,
-            scene_data["car"]['speed'],
-            scene_data["car"]['location_x'],
-            scene_data["car"]['location_y'],
-            scene_data["car"]['location_z'],
-            scene_data["car"]["cost"],
             scene_data["car"]["dist_from_traj"],
             scene_data["car"]["dist_from_goal"],
             scene_data["car"]["rotation_z"],
-            1 if scene_data["car"]["has_crashed"] else 0,
             scene_data["car"]["left"],
             scene_data["car"]["forward_left"],
-            scene_data["car"]["forward"],
+            scene_data["car"]["forward_left_left"], # float64 forward_left_left
+            scene_data["car"]["n_27_50"],# float64 n_27_50
+            scene_data["car"]["n_25_00"],# float64 n_25_00
+            scene_data["car"]["n_22_50"],# float64 n_22_50
+            scene_data["car"]["n_20_00"],# float64 n_20_00
+            scene_data["car"]["n_17_50"],# float64 n_17_50
+            scene_data["car"]["n_15_00"],# float64 n_15_00
+            scene_data["car"]["n_12_50"],# float64 n_12_50
+            scene_data["car"]["n_10_00"],# float64 n_10_00
+            scene_data["car"]["n_07_50"],# float64 n_07_50
+            scene_data["car"]["n_05_00"],# float64 n_05_00
+            scene_data["car"]["n_02_50"], # float64 n_02_50
+            scene_data["car"]["forward"], # float64 forward
+            scene_data["car"]["p_02_50"],# float64 p_02_50
+            scene_data["car"]["p_05_00"],# float64 p_05_00
+            scene_data["car"]["p_07_50"],# float64 p_07_50
+            scene_data["car"]["p_10_00"],# float64 p_10_00
+            scene_data["car"]["p_12_50"],# float64 p_12_50
+            scene_data["car"]["p_15_00"],# float64 p_15_00
+            scene_data["car"]["p_17_50"],# float64 p_17_50
+            scene_data["car"]["p_20_00"],# float64 p_20_00
+            scene_data["car"]["p_22_50"],# float64 p_22_50
+            scene_data["car"]["p_25_00"],# float64 p_25_00
+            scene_data["car"]["p_27_50"],# float64 p_27_50
+            scene_data["car"]["forward_right_right"],# float64 forward_right_right
             scene_data["car"]["forward_right"],
             scene_data["car"]["right"],
         ]
         return np.array(arr, dtype=np.float32)
     
     def reward_standard(self, data, data_arr, step_costs, job_id):
-        #print("donut standard")
         self.env._episode_ended = False
         last_step_cost = 0 if len(step_costs) < 2 else step_costs[len(step_costs)-2]
         curr_step_cost = step_costs[len(step_costs)-1]
         diff = abs(curr_step_cost) - abs(last_step_cost)
-        if diff < -0.5:
-             reward = 1*data_arr[1]
-        elif diff >= 0:
-            reward = -1
-        else:
-            reward = 0
+        reward = 0
         log_reward(self.env.job_id, "did not fail", float(reward), diff=float(diff), extra_data=data, stat_array=data_arr)
         return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
     
     def reward_success(self, curr_step_cost, job_id, data, data_arr, step_costs, position_history):
-        #print("donut success")
-        #m = interp1d([0,1,5,100],[100,10,1,0.5],fill_value="extrapolate")
-        #reward = float(m(curr_step_cost))
         self.env._episode_ended = False
-        reward = 10*data_arr[1]
+        reward = 1
         log_reward(self.env.job_id, "has succeeded", float(reward), extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
-        #term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
-        #return term_time_step
         return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
     
     def reward_failure(self, job_id, step_costs, data, data_arr, position_history):
@@ -290,12 +394,12 @@ class PoleCartEnv(py_environment.PyEnvironment):
         self._position_history=[]
         return ts.restart(np.array(data_arr, dtype=np.float32))
    
-    def __has_failed(self, data_arr):
+    def __has_failed(self, data, data_arr):
         return self.course.has_failed(
-            data_arr, self._step_costs, self._position_history)
+            data, data_arr, self._step_costs, self._position_history)
     
-    def __has_succeeded(self, data_arr):
-        return self.course.has_succeeded(data_arr)
+    def __has_succeeded(self, data, data_arr):
+        return self.course.has_succeeded(data, data_arr)
     
     def _apply_force(self):
         self._api.DoApplyForceBlocking()
@@ -315,7 +419,7 @@ class PoleCartEnv(py_environment.PyEnvironment):
             [data_arr[2], #x position
             data_arr[3], #y position
             data_arr[4]]) #z position
-        if self.__has_failed(data_arr):
+        if self.__has_failed(data, data_arr):
             return self.course.reward_failure(
                 env.job_id, self._step_costs, data,
                 data_arr, self._position_history)
@@ -323,7 +427,7 @@ class PoleCartEnv(py_environment.PyEnvironment):
             # log_reward(self.job_id, "has failed", float(reward),extra_data=data,step_costs=self._step_costs, position_history=self._position_history)
             # term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
             # return term_time_step
-        if self.__has_succeeded(data_arr):
+        if self.__has_succeeded(data, data_arr):
             return self.course.reward_success(
                 curr_step_cost, env.job_id, data, data_arr,
                 self._step_costs, self._position_history)
