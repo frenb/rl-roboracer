@@ -38,6 +38,7 @@ class RobotApi:
         self.reset_event = asyncio.Event()
         self.apply_force_event = asyncio.Event()
         self.apply_force_events = {}
+        self.has_reached_goal = False
         self.move_events = {}
         self.scene_data_events = {}
         self.have_scene_data = asyncio.Event()
@@ -81,7 +82,9 @@ class RobotApi:
         self.latest_car_scene_data = car_scene_data
         self.have_car_scene_data.set()
         # Check if there are command waiting on this scene data
-        #print(car_scene_data)
+        if car_scene_data["car"]['has_reached_goal']:
+            print("_on_car_scene_data: " + str(car_scene_data["car"]['has_reached_goal']))
+            self.has_reached_goal = True
         #print("car_scene_data['last_executed_cmd_id']: " + str(car_scene_data['last_executed_cmd_id']))
         #print("self.scene_data_events: " + str(self.scene_data_events))
         if car_scene_data['last_executed_cmd_id'] in self.scene_data_events:
@@ -102,17 +105,17 @@ class RobotApi:
         #print(command)
         await self.rpc_client.Publish('sim_command', 'niryo_moveit/SimCommand', command)
 
-    def DoResetBlocking(self):
-        asyncio.run_coroutine_threadsafe(self.DoReset(), self.loop).result()
+    def DoResetBlocking(self, num_obstacles=20):
+        asyncio.run_coroutine_threadsafe(self.DoReset(num_obstacles), self.loop).result()
     
-    def DoApplyForceBlocking(self, acceleration=100.0, steering_angle=30.0):
+    def DoApplyForceBlocking(self, acceleration=100.0, steering_angle=30.0, num_obstacles=20):
         result = asyncio.run_coroutine_threadsafe(
-            self.DoApplyForce(acceleration, steering_angle),
+            self.DoApplyForce(acceleration, steering_angle, num_obstacles),
             self.loop
         ).result()
-        #print("++++++++++++++++++++++")
-        #print(result)
-        #print("++++++++++++++++++++++")
+        # print("++++++++++++++++++++++")
+        # print(result)
+        # print("++++++++++++++++++++++")
         return result
 
     def DoMoveBlocking(self, action):
@@ -123,13 +126,15 @@ class RobotApi:
     
     def GetCarSceneDataBlocking(self):
         return asyncio.run_coroutine_threadsafe(self.GetCarSceneData(), self.loop).result()
-
-    async def DoReset(self):
+    
+    
+    async def DoReset(self, num_obstacles=20):
         #print(673236)
         self.reset_event.clear()
         force_angle = {
             'acceleration': 0.0,
-            'steering_angle': 0.0
+            'steering_angle': 0.0,
+            'num_obstacles': num_obstacles
         }
         await self._do_sim_command( { 'cmd' : 0 , 'ApplyForce': force_angle} )
         try:
@@ -137,13 +142,14 @@ class RobotApi:
         except asyncio.TimeoutError:
             print('timed out waiting for reset. Ignoring')
     
-    async def DoApplyForce(self, acceleration=100.0, steering_angle=30.0):
-        #print("DoApplyForce")
+    async def DoApplyForce(self, acceleration=100.0, steering_angle=30.0, num_obstacles=20):
+        # print("DoApplyForce: " + str(num_obstacles))
         cmd_id = self._next_id()
         force_angle = {
             'acceleration': acceleration,
             'steering_angle': steering_angle,
-            'cmd_id': cmd_id
+            'cmd_id': cmd_id,
+            'num_obstacles': num_obstacles
         }
         self.apply_force_event.clear()
         self.scene_data_events[cmd_id] = asyncio.Event()
@@ -158,7 +164,7 @@ class RobotApi:
             #print("after wait")
         except asyncio.TimeoutError:
             print('Scene data events timed out waiting. Ignoring')
-
+        
         del self.scene_data_events[cmd_id]
         return self.latest_car_scene_data
 
