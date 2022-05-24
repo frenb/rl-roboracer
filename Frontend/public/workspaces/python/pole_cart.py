@@ -53,6 +53,25 @@ class DonutCourse ():
     def __init__(self, api, env):
         self.env = env
         self._api = api
+        self.speeds_arr=[]
+        self.steering_angle_ratio_arr=[]
+        self.goals_per_episode_arr=[]
+        self.steps_per_goal_arr=[]
+        self.num_obstacles_arr=[]
+        self.max_speed=0
+        self.avg_speed=0
+        self.avg_speed_last_30=0
+        self.max_speed_last_30=0
+        self.max_steps_per_goal=0
+        self.avg_steps_per_goal=0
+        self.avg_steps_per_goal_last_30=0
+        self.max_steps_per_goal_last_30=0
+        self.max_goals_per_episode=0
+        self.avg_goals_per_episode=0
+        self.max_goals_per_episode_last_30=0
+        self.avg_goals_per_episode_last_30=0
+        self.avg_steering_angle_ratio=0
+        self.avg_steering_angle_ratio_last_30=0
         self.action_spec = array_spec.BoundedArraySpec(
             shape=(2, ), dtype=np.float32, 
                 minimum=[0,-1], 
@@ -151,7 +170,10 @@ class DonutCourse ():
         return has_fallen or has_flipped or is_stuck or has_too_many_steps or has_crashed
     
     def has_succeeded(self, data, data_arr):
-        has_succeeded = data["car"]["has_reached_goal"] == 1
+        has_succeeded = self._api.has_reached_goal
+        if has_succeeded:
+            print("has_succeeded " + str(has_succeeded))
+            self._api.has_reached_goal = False
         return has_succeeded
     
     def check_if_moving(self, arr):
@@ -259,6 +281,9 @@ class DonutCourse ():
     def reward_success(self, curr_step_cost, job_id, data, data_arr, step_costs, position_history):
         self.env._episode_ended = False
         reward = 1
+        steps_since_last_goal = len(step_costs) - (0 if len(self.steps_per_goal_arr) == 0 else self.steps_per_goal_arr[len(self.steps_per_goal_arr)-1])
+        self.steps_per_goal_arr.append(steps_since_last_goal)
+        print("inside reward success " + str(self.steps_per_goal_arr))
         log_reward(self.env.job_id, "has succeeded", float(reward), extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
         return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
     
@@ -274,22 +299,62 @@ class DonutCourse ():
     def get_num_obstacles(self):
         return 0
     
-    def do_action(self, action):
-        if type(action).__name__ == "ndarray":
-            action_arr = action.tolist()
-        else:
-            action_arr = action.numpy().tolist()
-        acceleration=action_arr[0]
-        steering_angle=action_arr[1]
+    def reset_stats(self):
+        self.num_obstacles = self.get_num_obstacles()
+        #reset arrays
+        self.speeds_arr=[]
+        self.steering_angle_ratio_arr=[]
+        self.goals_per_episode_arr=[]
+        #self.steps_per_goal_arr=[]
+        self.num_obstacles_arr=[]
+        #reset variable values
+        self.max_speed=0
+        self.avg_speed=0
+        self.avg_speed_last_30=0
+        self.max_speed_last_30=0
+        self.max_steps_per_goal=0
+        self.avg_steps_per_goal=0
+        self.avg_steps_per_goal_last_30=0
+        self.max_steps_per_goal_last_30=0
+        self.max_goals_per_episode=0
+        self.avg_goals_per_episode=0
+        self.max_goals_per_episode_last_30=0
+        self.avg_goals_per_episode_last_30=0
+        self.avg_steering_angle_ratio=0
+        self.avg_steering_angle_ratio_last_30=0
+    
+    def do_action_after(self, action, data):
         num_obstacles = self.get_num_obstacles()
-        print("num_obstacles " + str(num_obstacles))
-        return self._api.DoApplyForceBlocking(
-            acceleration,
-            steering_angle,
-            num_obstacles=num_obstacles)
+        if data["car"]["has_reached_goal"]:
+            print("do_action_after.has_reached_goal: " + str(data["car"]["has_reached_goal"]))
+    
+    def update_stat_arrays(self, data, steps, goals):
+        self.speed_arr.add(data["car"]["speed"])
+        self.steps_per_goal_arr.append(steps)
+
+    def update_stats(self):
+        # self.speeds_arr=[]
+        # self.steering_angle_ratio_arr=[]
+        # self.goals_per_episode_arr=[]
+        # self.steps_per_episode_arr=[]
+        # self.num_obstacles_arr=[]
+        self.num_obstacles = self.get_num_obstacles()
+        self.max_speed=0
+        self.avg_speed=0
+        self.avg_speed_last_30=0
+        self.max_speed_last_30=0
+        self.max_steps_per_goal=0
+        self.avg_steps_per_goal=0
+        self.avg_steps_per_goal_last_30=0
+        self.max_steps_per_goal_last_30=0
+        self.max_goals_per_episode=0
+        self.avg_goals_per_episode=0
+        self.max_goals_per_episode_last_30=0
+        self.avg_goals_per_episode_last_30=0
 
     def do_reset_blocking(self):
         num_obstacles = self.get_num_obstacles()
+        self.reset_stats()
         self._api.DoResetBlocking(num_obstacles)
 
 class SimpleCourse ():
@@ -445,7 +510,7 @@ class PoleCartEnv(py_environment.PyEnvironment):
         return self.course.has_succeeded(data, data_arr)
     
     def _apply_force(self):
-        self._api.DoApplyForceBlocking()
+        return self._api.DoApplyForceBlocking()
 
     def _step(self, action):
         m = interp1d([0,1,5,100],[100,10,1,0.5],fill_value="extrapolate")
@@ -497,16 +562,18 @@ class PoleCartEnv(py_environment.PyEnvironment):
             # return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
     
     def _do_action(self, action):
-        return self.course.do_action(action)
-        # if type(action).__name__ == "ndarray":
-        #     action_arr = action.tolist()
-        # else:
-        #     action_arr = action.numpy().tolist()
-        # acceleration=action_arr[0]
-        # steering_angle=action_arr[1]
-        # return self._api.DoApplyForceBlocking(
-        #     acceleration,
-        #     steering_angle)
+        
+        if type(action).__name__ == "ndarray":
+            action_arr = action.tolist()
+        else:
+            action_arr = action.numpy().tolist()
+        acceleration=action_arr[0]
+        steering_angle=action_arr[1]
+        data = self._api.DoApplyForceBlocking(
+            acceleration,
+            steering_angle)
+        self.course.do_action_after(action, data)
+        return data
 
     def _get_empty_state(self):
         return self.course.get_empty_state()
