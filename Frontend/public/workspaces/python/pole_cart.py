@@ -270,6 +270,27 @@ class DonutCourse ():
         log_reward(self.env.job_id, "has failed", float(reward),extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
         term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
         return term_time_step
+    
+    def get_num_obstacles(self):
+        return 0
+    
+    def do_action(self, action):
+        if type(action).__name__ == "ndarray":
+            action_arr = action.tolist()
+        else:
+            action_arr = action.numpy().tolist()
+        acceleration=action_arr[0]
+        steering_angle=action_arr[1]
+        num_obstacles = self.get_num_obstacles()
+        print("num_obstacles " + str(num_obstacles))
+        return self._api.DoApplyForceBlocking(
+            acceleration,
+            steering_angle,
+            num_obstacles=num_obstacles)
+
+    def do_reset_blocking(self):
+        num_obstacles = self.get_num_obstacles()
+        self._api.DoResetBlocking(num_obstacles)
 
 class SimpleCourse ():
     def __init__(self, api, env):
@@ -366,6 +387,27 @@ class SimpleCourse ():
         term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
         return term_time_step
     
+    def get_num_obstacles(self):
+        return 0
+    
+    def do_action(self, action):
+        if type(action).__name__ == "ndarray":
+            action_arr = action.tolist()
+        else:
+            action_arr = action.numpy().tolist()
+        acceleration=action_arr[0]
+        steering_angle=action_arr[1]
+        num_obstacles = self.get_num_obstacles()
+        print("num_obstacles " + num_obstacles)
+        return self._api.DoApplyForceBlocking(
+            acceleration,
+            steering_angle,
+            num_obstacles)
+    
+    def do_reset_blocking(self):
+        num_obstacles = self.get_num_obstacles()
+        self._api.DoResetBlocking(num_obstacles)
+    
 class PoleCartEnv(py_environment.PyEnvironment):
     def __init__(self, api):
         self.course = DonutCourse(api, self)
@@ -387,7 +429,8 @@ class PoleCartEnv(py_environment.PyEnvironment):
 
     def _reset(self):
         self._episode_ended = False
-        self._api.DoResetBlocking()
+        #self._api.DoResetBlocking()
+        self.course.do_reset_blocking()
         data = self._api.GetCarSceneDataBlocking()
         data_arr=self.course.scene_data_array(data)
         self._step_costs=[]
@@ -454,15 +497,16 @@ class PoleCartEnv(py_environment.PyEnvironment):
             # return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
     
     def _do_action(self, action):
-        if type(action).__name__ == "ndarray":
-            action_arr = action.tolist()
-        else:
-            action_arr = action.numpy().tolist()
-        acceleration=action_arr[0]
-        steering_angle=action_arr[1]
-        return self._api.DoApplyForceBlocking(
-            acceleration,
-            steering_angle)
+        return self.course.do_action(action)
+        # if type(action).__name__ == "ndarray":
+        #     action_arr = action.tolist()
+        # else:
+        #     action_arr = action.numpy().tolist()
+        # acceleration=action_arr[0]
+        # steering_angle=action_arr[1]
+        # return self._api.DoApplyForceBlocking(
+        #     acceleration,
+        #     steering_angle)
 
     def _get_empty_state(self):
         return self.course.get_empty_state()
