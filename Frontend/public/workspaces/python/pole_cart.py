@@ -353,7 +353,7 @@ class DonutCourse ():
         self.avg_steps_per_goal_last_30=0
         self.max_steps_per_goal_last_30=0
         self.max_goals_per_episode=0
-        self.avg_goals_per_episode=0
+        self.avg_goals_per_episode=np.average(self.goals_per_episode_arr)
         self.max_goals_per_episode_last_30=0
         self.avg_goals_per_episode_last_30=0
 
@@ -676,6 +676,10 @@ def main(
     saved_model_dir = os.path.join(tempdir, learner.POLICY_SAVED_MODEL_DIR)
     # Environment. Use same for eval and collection, though this does not seem standard?
     env = PoleCartEnv(api)
+    logdir = "/tmp/scalars/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    file_writer = tf.summary.create_file_writer(logdir + "/metrics")
+    file_writer.set_as_default()
+    
     train_dir=os.path.join(tempdir, learner.TRAIN_DIR if str(job_id) == "" else str(job_id) + "_" + learner.TRAIN_DIR)
     eval_dir=os.path.join(tempdir, "eval" if str(job_id) == "" else str(job_id) + "_eval")
     # Strategy
@@ -855,7 +859,6 @@ def main(
 
     log_eval_metrics(0, metrics)
 
-
     # Reset the train step
     tf_agent.train_step_counter.assign(0)
 
@@ -877,6 +880,7 @@ def main(
         step = agent_learner.train_step_numpy
         if eval_interval and step % eval_interval == 0:
             metrics = get_eval_metrics()
+            tf.summary.scalar('avg_goals_per_episode', data=env.course.avg_goals_per_episode, step=step)
             log_eval_metrics(step, metrics)
             returns.append(metrics["AverageReturn"])
             print("current iteration " +str(curr_iteration))
