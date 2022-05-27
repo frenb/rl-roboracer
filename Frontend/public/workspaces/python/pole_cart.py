@@ -79,11 +79,9 @@ class DonutCourse ():
                 minimum=[0,-1], 
                 maximum=[2,1], name='action')
         self.observation_spec = array_spec.BoundedArraySpec(
-            shape=(32,), dtype=np.float32,
+            shape=(30,), dtype=np.float32,
             minimum=[
                 -100, #scene_data["car"]["dist_from_traj"] angle to next goal
-                -1000, #scene_data["car"]["dist_from_goal"]
-                -1000,  #scene_data["car"]["rotation_z"]
                 0, #scene_data["car"]["left"]
                 0, #scene_data["car"]["forward_left"]
                 0, #scene_data["car"]["forward_left_left"]
@@ -116,8 +114,6 @@ class DonutCourse ():
                 ],
             maximum=[
                 100, #scene_data["car"]["dist_from_traj"]
-                1000, #scene_data["car"]["dist_from_goal"]
-                1000, #scene_data["car"]["rotation_z"]
                 1000, #scene_data["car"]["left"]
                 1000, #scene_data["car"]["forward_left"]
                 1000, #scene_data["car"]["forward_left_left"]
@@ -158,7 +154,6 @@ class DonutCourse ():
             0,0,0,0,0,
             0,0,0,0,0,
             0,0,0,0,0,
-            0,0
         ]
         return emptyState
         
@@ -237,8 +232,6 @@ class DonutCourse ():
         # bool has_crashed
         arr = [
             scene_data["car"]["dist_from_traj"],
-            scene_data["car"]["dist_from_goal"],
-            scene_data["car"]["rotation_z"],
             scene_data["car"]["left"],
             scene_data["car"]["forward_left"],
             scene_data["car"]["forward_left_left"], # float64 forward_left_left
@@ -283,24 +276,22 @@ class DonutCourse ():
     
     def reward_success(self, curr_step_cost, job_id, data, data_arr, step_costs, position_history):
         self.env._episode_ended = False
-        reward = 1
         self.steps_since_last_goal+=1
         self.steps_per_goal_arr.append(self.steps_since_last_goal)
+        reward = ((max(1,500-self.steps_since_last_goal) / 500))
         self.steps_since_last_goal=0
         self.goals_reached += 1
-        print("steps per goal arr: " + str(self.steps_per_goal_arr))
-        print("steering angle ratio arr: " + str(self.steering_angle_ratio_arr))
+        print("goal reached: " + str(reward))
         log_reward(self.env.job_id, "has succeeded", float(reward), extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
         return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
     
     def reward_failure(self, job_id, step_costs, data, data_arr, position_history):
         self.env._episode_ended = True
-        reward = -1
+        reward = -0.5
         # reset values
-        self.goals_per_episode_arr.append(self.goals_reached)
+        self.goals_per_episode_arr.append(self.goals_reached) #append number of goals reached for finished episode to array
         self.steps_since_last_goal=0
         self.goals_reached=0
-        print("goals reached arr" + str(self.goals_per_episode_arr))
         log_reward(self.env.job_id, "has failed", float(reward),extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
         term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
         return term_time_step
@@ -308,32 +299,33 @@ class DonutCourse ():
     def get_num_obstacles(self):
         return 0
     
-    def reset_stats(self):
-        self.num_obstacles = self.get_num_obstacles()
-        #reset arrays
-        self.speeds_arr=[]
-        self.steering_angle_ratio_arr=[]
-        #self.goals_per_episode_arr=[]
-        #self.steps_per_goal_arr=[]
-        self.num_obstacles_arr=[]
-        #reset variable values
-        self.max_speed=0
-        self.avg_speed=0
-        self.avg_speed_last_30=0
-        self.max_speed_last_30=0
-        self.max_steps_per_goal=0
-        self.avg_steps_per_goal=0
-        self.avg_steps_per_goal_last_30=0
-        self.max_steps_per_goal_last_30=0
-        self.max_goals_per_episode=0
-        self.avg_goals_per_episode=0
-        self.max_goals_per_episode_last_30=0
-        self.avg_goals_per_episode_last_30=0
-        self.avg_steering_angle_ratio=0
-        self.avg_steering_angle_ratio_last_30=0
+    # def reset_stats(self):
+        # self.num_obstacles = self.get_num_obstacles()
+        # #reset arrays
+        # self.speeds_arr=[]
+        # self.steering_angle_ratio_arr=[]
+        # #self.goals_per_episode_arr=[]
+        # #self.steps_per_goal_arr=[]
+        # self.num_obstacles_arr=[]
+        # #reset variable values
+        # self.max_speed=0
+        # self.avg_speed=0
+        # self.avg_speed_last_30=0
+        # self.max_speed_last_30=0
+        # self.max_steps_per_goal=0
+        # self.avg_steps_per_goal=0
+        # self.avg_steps_per_goal_last_30=0
+        # self.max_steps_per_goal_last_30=0
+        # self.max_goals_per_episode=0
+        # self.avg_goals_per_episode=0
+        # self.max_goals_per_episode_last_30=0
+        # self.avg_goals_per_episode_last_30=0
+        # self.avg_steering_angle_ratio=0
+        # self.avg_steering_angle_ratio_last_30=0
     
     def do_action_after(self, action, data):
         num_obstacles = self.get_num_obstacles()
+        self.update_stats()
         steering_angle_ratio = action[1] / data["car"]["dist_from_traj"]
         self.steering_angle_ratio_arr.append(steering_angle_ratio)
 
@@ -352,14 +344,16 @@ class DonutCourse ():
         self.avg_steps_per_goal=0
         self.avg_steps_per_goal_last_30=0
         self.max_steps_per_goal_last_30=0
-        self.max_goals_per_episode=0
+        self.max_goals_per_episode=0 if len(self.goals_per_episode_arr) == 0 else np.max(self.goals_per_episode_arr)
         self.avg_goals_per_episode=np.average(self.goals_per_episode_arr)
-        self.max_goals_per_episode_last_30=0
-        self.avg_goals_per_episode_last_30=0
-
+        self.max_goals_per_episode_last_30=0 if len(self.goals_per_episode_arr) == 0 else np.max(self.goals_per_episode_arr[-30:])
+        self.avg_goals_per_episode_last_30=np.average(self.goals_per_episode_arr[-30:])
+        self.avg_steering_angle_ratio=np.average(self.steering_angle_ratio_arr)
+        self.avg_steering_angle_ratio_last_30=np.average(self.steering_angle_ratio_arr[-30:])
+    
     def do_reset_blocking(self):
         num_obstacles = self.get_num_obstacles()
-        self.reset_stats()
+        #self.reset_stats()
         self._api.DoResetBlocking(num_obstacles)
 
 class SimpleCourse ():
@@ -881,6 +875,11 @@ def main(
         if eval_interval and step % eval_interval == 0:
             metrics = get_eval_metrics()
             tf.summary.scalar('avg_goals_per_episode', data=env.course.avg_goals_per_episode, step=step)
+            tf.summary.scalar('avg_goals_per_episode_last_30', data=env.course.avg_goals_per_episode_last_30, step=step)
+            tf.summary.scalar('max_goals_per_episode', data=env.course.max_goals_per_episode, step=step)
+            tf.summary.scalar('max_goals_per_episode_last_30', data=env.course.max_goals_per_episode_last_30, step=step)
+            tf.summary.scalar('avg_steering_angle_ratio', data=env.course.avg_steering_angle_ratio, step=step)
+            tf.summary.scalar('avg_steering_angle_ratio_last_30', data=env.course.avg_steering_angle_ratio_last_30, step=step)
             log_eval_metrics(step, metrics)
             returns.append(metrics["AverageReturn"])
             print("current iteration " +str(curr_iteration))
