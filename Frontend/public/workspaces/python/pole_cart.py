@@ -454,20 +454,6 @@ class SimpleCourse ():
     def get_num_obstacles(self):
         return 0
     
-    def do_action(self, action):
-        if type(action).__name__ == "ndarray":
-            action_arr = action.tolist()
-        else:
-            action_arr = action.numpy().tolist()
-        acceleration=action_arr[0]
-        steering_angle=action_arr[1]
-        num_obstacles = self.get_num_obstacles()
-        print("num_obstacles " + num_obstacles)
-        return self._api.DoApplyForceBlocking(
-            acceleration,
-            steering_angle,
-            num_obstacles)
-    
     def do_reset_blocking(self):
         num_obstacles = self.get_num_obstacles()
         self._api.DoResetBlocking(num_obstacles)
@@ -484,6 +470,7 @@ class PoleCartEnv(py_environment.PyEnvironment):
         self._state = self.course.get_empty_state()
         self._episode_ended = False
         self.job_id=""
+        self.data = {}
 
     def action_spec(self):
         return self._action_spec
@@ -496,6 +483,7 @@ class PoleCartEnv(py_environment.PyEnvironment):
         #self._api.DoResetBlocking()
         self.course.do_reset_blocking()
         data = self._api.GetCarSceneDataBlocking()
+        self.data = data
         data_arr=self.course.scene_data_array(data)
         self._step_costs=[]
         self._position_history=[]
@@ -519,6 +507,7 @@ class PoleCartEnv(py_environment.PyEnvironment):
             # a new episode
             return self.reset()
         data = self._do_action(action)
+        self.data = data
         data_arr = self._scene_data_array(data)
         curr_step_cost = abs(data_arr[7]) #abs(data_arr[6])
         self._step_costs.append(curr_step_cost)
@@ -561,13 +550,14 @@ class PoleCartEnv(py_environment.PyEnvironment):
             # return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
     
     def _do_action(self, action):
-        
         if type(action).__name__ == "ndarray":
             action_arr = action.tolist()
         else:
             action_arr = action.numpy().tolist()
-        acceleration=action_arr[0]
-        steering_angle=action_arr[1]
+        # acceleration=action_arr[0]
+        # steering_angle=action_arr[1]
+        steering_angle=self.data["car"]["dist_from_traj"]
+        acceleration = 2 if self.data["car"]["speed"] < 3 else 0
         data = self._api.DoApplyForceBlocking(
             acceleration,
             steering_angle)
