@@ -53,6 +53,7 @@ class DonutCourse ():
     def __init__(self, api, env):
         self.env = env
         self._api = api
+        self.last_goal_reached=""
         self.speeds_arr=[]
         self.steering_angle_ratio_arr=[]
         self.goals_per_episode_arr=[]
@@ -77,11 +78,13 @@ class DonutCourse ():
         self.action_spec = array_spec.BoundedArraySpec(
             shape=(2, ), dtype=np.float32, 
                 minimum=[0,-1], 
-                maximum=[2,1], name='action')
+                maximum=[10,1], name='action')
         self.observation_spec = array_spec.BoundedArraySpec(
-            shape=(30,), dtype=np.float32,
+            shape=(32,), dtype=np.float32,
             minimum=[
-                -100, #scene_data["car"]["dist_from_traj"] angle to next goal
+                -1, #scene_data["car"]["dist_from_traj"] angle to next goal
+                -10, #scene_data["car"]["speed"] magnitude of car velocity
+                -1, #scene_data["car"]["goal_2"] angle from velocity to car
                 0, #scene_data["car"]["left"]
                 0, #scene_data["car"]["forward_left"]
                 0, #scene_data["car"]["forward_left_left"]
@@ -113,7 +116,9 @@ class DonutCourse ():
                 0, #scene_data["car"]["right"]
                 ],
             maximum=[
-                100, #scene_data["car"]["dist_from_traj"]
+                1, #scene_data["car"]["dist_from_traj"]
+                10, #scene_data["car"]["speed"] magnitude of car velocity
+                180, #scene_data["car"]["goal_2"] angle from velocity to car
                 1000, #scene_data["car"]["left"]
                 1000, #scene_data["car"]["forward_left"]
                 1000, #scene_data["car"]["forward_left_left"]
@@ -154,6 +159,7 @@ class DonutCourse ():
             0,0,0,0,0,
             0,0,0,0,0,
             0,0,0,0,0,
+            0,0
         ]
         return emptyState
         
@@ -167,9 +173,14 @@ class DonutCourse ():
         return has_fallen or has_flipped or is_stuck or has_too_many_steps or has_crashed
     
     def has_succeeded(self, data, data_arr):
-        has_succeeded = self._api.has_reached_goal
+        has_succeeded = self._api.has_reached_goal and data["car"]["last_goal_reached"] != "" and data["car"]["last_goal_reached"] != self.last_goal_reached
         if has_succeeded:
             print("has_succeeded " + str(has_succeeded))
+            print("data[car][last_goal_reached]: " + data["car"]["last_goal_reached"])
+            print("data[car][current_goal]: " + data["car"]["current_goal"])
+            print("self.last_goal_reached: " + self.last_goal_reached)
+            print("goals reached: " + str(self.goals_reached))
+            self.last_goal_reached = data["car"]["last_goal_reached"]
             self._api.has_reached_goal = False
         return has_succeeded
     
@@ -231,7 +242,9 @@ class DonutCourse ():
         # bool has_reached_goal
         # bool has_crashed
         arr = [
-            scene_data["car"]["dist_from_traj"],
+            scene_data["car"]["dist_from_traj"], # angle from car to next goal
+            scene_data["car"]["speed"], 
+            scene_data["car"]["goal_2"], # angle from velocity to car direction 
             scene_data["car"]["left"],
             scene_data["car"]["forward_left"],
             scene_data["car"]["forward_left_left"], # float64 forward_left_left
@@ -292,6 +305,7 @@ class DonutCourse ():
         self.goals_per_episode_arr.append(self.goals_reached) #append number of goals reached for finished episode to array
         self.steps_since_last_goal=0
         self.goals_reached=0
+        self.last_goal_reached=""
         log_reward(self.env.job_id, "has failed", float(reward),extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
         term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
         return term_time_step
@@ -512,9 +526,10 @@ class PoleCartEnv(py_environment.PyEnvironment):
         curr_step_cost = abs(data_arr[7]) #abs(data_arr[6])
         self._step_costs.append(curr_step_cost)
         self._position_history.append(
-            [data_arr[2], #x position
-            data_arr[3], #y position
-            data_arr[4]]) #z position
+            [self.data["car"]['location_x'], #x position
+            self.data["car"]['location_y'], #y position
+            self.data["car"]['location_z']
+            ]) #z position
         if self.__has_failed(data, data_arr):
             return self.course.reward_failure(
                 env.job_id, self._step_costs, data,
@@ -554,10 +569,10 @@ class PoleCartEnv(py_environment.PyEnvironment):
             action_arr = action.tolist()
         else:
             action_arr = action.numpy().tolist()
-        # acceleration=action_arr[0]
-        # steering_angle=action_arr[1]
-        steering_angle=self.data["car"]["dist_from_traj"]
-        acceleration = 2 if self.data["car"]["speed"] < 3 else 0
+        acceleration=action_arr[0]
+        steering_angle=action_arr[1]
+        # steering_angle=self.data["car"]["dist_from_traj"]
+        # acceleration = 2 if self.data["car"]["speed"] < 3 else 0
         data = self._api.DoApplyForceBlocking(
             acceleration,
             steering_angle)
