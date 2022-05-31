@@ -43,3 +43,5 @@ float64 goal_3
 float64 goal_4
 bool has_reached_goal
 bool has_crashed
+string last_goal_reached
+string current_goal
