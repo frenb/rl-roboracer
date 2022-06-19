@@ -138,7 +138,7 @@ class RobotApi:
         }
         await self._do_sim_command( { 'cmd' : 0 , 'ApplyForce': force_angle} )
         try:
-            await asyncio.wait_for(self.reset_event.wait(), 2)
+            await asyncio.wait_for(self.reset_event.wait(), 4)
         except asyncio.TimeoutError:
             print('timed out waiting for reset. Ignoring')
     
