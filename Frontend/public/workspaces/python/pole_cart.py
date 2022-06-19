@@ -173,15 +173,18 @@ class DonutCourse ():
         return has_fallen or has_flipped or is_stuck or has_too_many_steps or has_crashed
     
     def has_succeeded(self, data, data_arr):
-        has_succeeded = self._api.has_reached_goal and data["car"]["last_goal_reached"] != "" and data["car"]["last_goal_reached"] != self.last_goal_reached
+        has_succeeded = \
+            self._api.has_reached_goal \
+            and data["car"]["current_goal"] != "" \
+            and data["car"]["last_goal_reached"] != self.last_goal_reached
         if has_succeeded:
+            self.last_goal_reached = data["car"]["last_goal_reached"]
+            self._api.has_reached_goal = False
             print("has_succeeded " + str(has_succeeded))
             print("data[car][last_goal_reached]: " + data["car"]["last_goal_reached"])
             print("data[car][current_goal]: " + data["car"]["current_goal"])
             print("self.last_goal_reached: " + self.last_goal_reached)
             print("goals reached: " + str(self.goals_reached))
-            self.last_goal_reached = data["car"]["last_goal_reached"]
-            self._api.has_reached_goal = False
         return has_succeeded
     
     def check_if_moving(self, arr):
@@ -292,50 +295,31 @@ class DonutCourse ():
         self.steps_since_last_goal+=1
         self.steps_per_goal_arr.append(self.steps_since_last_goal)
         reward = ((max(1,500-self.steps_since_last_goal) / 500))
-        self.steps_since_last_goal=0
-        self.goals_reached += 1
         print("goal reached: " + str(reward))
         log_reward(self.env.job_id, "has succeeded", float(reward), extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
+        self.reset_after_goal_reached()
         return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
     
     def reward_failure(self, job_id, step_costs, data, data_arr, position_history):
         self.env._episode_ended = True
         reward = -0.5
-        # reset values
-        self.goals_per_episode_arr.append(self.goals_reached) #append number of goals reached for finished episode to array
-        self.steps_since_last_goal=0
-        self.goals_reached=0
-        self.last_goal_reached=""
         log_reward(self.env.job_id, "has failed", float(reward),extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
+        self.reset_after_episode()
         term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
         return term_time_step
     
     def get_num_obstacles(self):
         return 0
     
-    # def reset_stats(self):
-        # self.num_obstacles = self.get_num_obstacles()
-        # #reset arrays
-        # self.speeds_arr=[]
-        # self.steering_angle_ratio_arr=[]
-        # #self.goals_per_episode_arr=[]
-        # #self.steps_per_goal_arr=[]
-        # self.num_obstacles_arr=[]
-        # #reset variable values
-        # self.max_speed=0
-        # self.avg_speed=0
-        # self.avg_speed_last_30=0
-        # self.max_speed_last_30=0
-        # self.max_steps_per_goal=0
-        # self.avg_steps_per_goal=0
-        # self.avg_steps_per_goal_last_30=0
-        # self.max_steps_per_goal_last_30=0
-        # self.max_goals_per_episode=0
-        # self.avg_goals_per_episode=0
-        # self.max_goals_per_episode_last_30=0
-        # self.avg_goals_per_episode_last_30=0
-        # self.avg_steering_angle_ratio=0
-        # self.avg_steering_angle_ratio_last_30=0
+    def reset_after_episode(self):
+        self.goals_per_episode_arr.append(self.goals_reached) #append number of goals reached for finished episode to array
+        self.steps_since_last_goal=0
+        self.goals_reached=0
+        self.last_goal_reached=""
+    
+    def reset_after_goal_reached(self):
+        self.steps_since_last_goal=0
+        self.goals_reached += 1
     
     def do_action_after(self, action, data):
         num_obstacles = self.get_num_obstacles()
