@@ -77,7 +77,7 @@ class DonutCourse ():
         self.goals_reached=0
         self.action_spec = array_spec.BoundedArraySpec(
             shape=(2, ), dtype=np.float32, 
-                minimum=[0,-1], 
+                minimum=[0.5,-1], 
                 maximum=[10,1], name='action')
         self.observation_spec = array_spec.BoundedArraySpec(
             shape=(32,), dtype=np.float32,
@@ -294,7 +294,7 @@ class DonutCourse ():
         self.env._episode_ended = False
         self.steps_since_last_goal+=1
         self.steps_per_goal_arr.append(self.steps_since_last_goal)
-        reward = ((max(1,500-self.steps_since_last_goal) / 500))
+        reward = ((max(1,100-self.steps_since_last_goal) / 100))
         print("goal reached: " + str(reward))
         log_reward(self.env.job_id, "has succeeded", float(reward), extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
         self.reset_after_goal_reached()
@@ -324,8 +324,11 @@ class DonutCourse ():
     def do_action_after(self, action, data):
         num_obstacles = self.get_num_obstacles()
         self.update_stats()
+        # print("data[car][dist_from_traj]: " + str(data["car"]["dist_from_traj"]) + " steering angle: " + str(action[1]))
         steering_angle_ratio = action[1] / data["car"]["dist_from_traj"]
         self.steering_angle_ratio_arr.append(steering_angle_ratio)
+        self.speeds_arr.append(data["car"]["speed"])
+
 
     def update_stats(self):
         # self.speeds_arr=[]
@@ -334,20 +337,23 @@ class DonutCourse ():
         # self.steps_per_episode_arr=[]
         # self.num_obstacles_arr=[]
         self.num_obstacles = self.get_num_obstacles()
-        self.max_speed=0
-        self.avg_speed=0
-        self.avg_speed_last_30=0
-        self.max_speed_last_30=0
+        self.max_speed=0 if len(self.speeds_arr) == 0 else np.max(self.speeds_arr)
+        self.avg_speed=np.average(self.speeds_arr)
+        self.max_speed_last_30=0 if len(self.speeds_arr) <30 else np.max(self.speeds_arr[-30:])
+        self.avg_speed_last_30=np.average(self.speeds_arr[-30:])
         self.max_steps_per_goal=0
         self.avg_steps_per_goal=0
         self.avg_steps_per_goal_last_30=0
         self.max_steps_per_goal_last_30=0
         self.max_goals_per_episode=0 if len(self.goals_per_episode_arr) == 0 else np.max(self.goals_per_episode_arr)
         self.avg_goals_per_episode=np.average(self.goals_per_episode_arr)
-        self.max_goals_per_episode_last_30=0 if len(self.goals_per_episode_arr) == 0 else np.max(self.goals_per_episode_arr[-30:])
+        self.max_goals_per_episode_last_30=0 if len(self.goals_per_episode_arr) <30 else np.max(self.goals_per_episode_arr[-30:])
         self.avg_goals_per_episode_last_30=np.average(self.goals_per_episode_arr[-30:])
-        self.avg_steering_angle_ratio=np.average(self.steering_angle_ratio_arr)
-        self.avg_steering_angle_ratio_last_30=np.average(self.steering_angle_ratio_arr[-30:])
+        steering_angle_ratio_arr = np.array(self.steering_angle_ratio_arr)
+        self.avg_steering_angle_ratio=np.average(steering_angle_ratio_arr[~(np.isinf(steering_angle_ratio_arr)) & ~(np.isnan(steering_angle_ratio_arr))])
+        steering_angle_ratio_arr = np.array(self.steering_angle_ratio_arr)
+        steering_angle_ratio_arr_no_nan = steering_angle_ratio_arr[~(np.isinf(steering_angle_ratio_arr)) & ~(np.isnan(steering_angle_ratio_arr))]
+        self.avg_steering_angle_ratio_last_30=np.average(steering_angle_ratio_arr_no_nan[-30:])
     
     def do_reset_blocking(self):
         num_obstacles = self.get_num_obstacles()
@@ -869,6 +875,10 @@ def main(
             tf.summary.scalar('max_goals_per_episode_last_30', data=env.course.max_goals_per_episode_last_30, step=step)
             tf.summary.scalar('avg_steering_angle_ratio', data=env.course.avg_steering_angle_ratio, step=step)
             tf.summary.scalar('avg_steering_angle_ratio_last_30', data=env.course.avg_steering_angle_ratio_last_30, step=step)
+            tf.summary.scalar('max_speed', data=env.course.max_speed, step=step)
+            tf.summary.scalar('max_speed_last_30', data=env.course.max_speed_last_30, step=step)
+            tf.summary.scalar('avg_speed', data=env.course.avg_speed, step=step)
+            tf.summary.scalar('avg_speed_last_30', data=env.course.avg_speed_last_30, step=step)
             log_eval_metrics(step, metrics)
             returns.append(metrics["AverageReturn"])
             print("current iteration " +str(curr_iteration))
