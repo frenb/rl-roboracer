@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import rospy
+import os
 import socket
 import json
 import sys
@@ -48,8 +49,9 @@ class TcpServer:
             self.tcp_port = tcp_port
         else:
             self.tcp_port = rospy.get_param("/ROS_TCP_PORT", 10000)
-
-        unity_machine_ip = rospy.get_param("/UNITY_IP", '')
+        unity_machine_ip_env = os.getenv('UNITY_MACHINE_IP') if os.getenv('UNITY_MACHINE_IP') != None else ""
+        print("unity_machine_ip_env=" + unity_machine_ip_env)
+        unity_machine_ip = rospy.get_param("/UNITY_IP", unity_machine_ip_env)
         unity_machine_port = rospy.get_param("/UNITY_SERVER_PORT", 5005)
         self.unity_tcp_sender = UnityTcpSender(unity_machine_ip, unity_machine_port)
 

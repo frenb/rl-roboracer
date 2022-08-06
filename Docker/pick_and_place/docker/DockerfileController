@@ -1,0 +1,7 @@
+FROM docker_ros-server:latest
+
+ENV ROS_WORKSPACE=/catkin_ws
+ENV PYTHON_WORKSPACE=/python_ws
+
+COPY ./Frontend/public/workspaces/python/robotaxi.py $PYTHON_WORKSPACE/src/robotaxi.py
+COPY ./Frontend/public/workspaces/python/api.py $PYTHON_WORKSPACE/src/api.py

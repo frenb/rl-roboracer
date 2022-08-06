@@ -35,7 +35,7 @@ RUN /bin/bash -c "find $ROS_WORKSPACE -type f -print0 | xargs -0 dos2unix"
 RUN dos2unix /tutorial && dos2unix /setup.sh && chmod +x /setup.sh && /setup.sh && rm /setup.sh
 
 RUN /bin/bash -c "cd $PYTHON_WORKSPACE &&  python3 -m venv --system-site-packages ./venv && source ./venv/bin/activate && pip install -r requirements.txt && deactivate"
-
+RUN /bin/bash -c "cd /python_ws && pip install -r requirements.txt"
 WORKDIR $ROS_WORKSPACE
 
 ENTRYPOINT ["/tutorial"]

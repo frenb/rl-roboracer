@@ -170,12 +170,13 @@ class DonutCourse ():
         has_too_many_steps = len(step_costs) > 10000
         is_too_slow_arr = np.array(self.speeds_arr)
         is_too_slow_avg = np.average(is_too_slow_arr[-100:]) if len(is_too_slow_arr) > 100 else 1
-        is_too_slow = True if is_too_slow_avg < 1 else False
+        is_too_slow = False #True if is_too_slow_avg < 1 else False
         log_blob({"type": "is_too_slow", "is_too_slow":is_too_slow, "is_too_slow_avg":is_too_slow_avg})
-        if is_too_slow:
-            print("is to slow: " + str(is_too_slow) + " slow avg: " + str(is_too_slow_avg))
         is_stuck = not self.check_if_moving(position_history)
         has_flipped = int_rotation_z == 90 or int_rotation_z == 180 or int_rotation_z == 270
+        log_blob ({"type":"has_failed","has_fallen":str(has_fallen),"has_flipped": str(has_flipped),
+            "has_too_many_steps": str(has_too_many_steps), "has_crashed": str(has_crashed), 
+            "is_too_slow": str(is_too_slow)})
         return has_fallen or has_flipped or is_stuck or has_too_many_steps or has_crashed or is_too_slow
     
     def has_succeeded(self, data, data_arr):
@@ -186,11 +187,11 @@ class DonutCourse ():
         if has_succeeded:
             self.last_goal_reached = data["car"]["last_goal_reached"]
             self._api.has_reached_goal = False
-            print("has_succeeded " + str(has_succeeded))
-            print("data[car][last_goal_reached]: " + data["car"]["last_goal_reached"])
-            print("data[car][current_goal]: " + data["car"]["current_goal"])
-            print("self.last_goal_reached: " + self.last_goal_reached)
-            print("goals reached: " + str(self.goals_reached))
+            log_blob({"type":"has_succeeded","has_succeeded":str(has_succeeded),
+                "data[car][last_goal_reached]": data["car"]["last_goal_reached"],
+                "data[car][current_goal]": data["car"]["current_goal"],
+                "self.last_goal_reached": self.last_goal_reached,
+                "goals reached": str(self.goals_reached)})
         return has_succeeded
     
     def check_if_moving(self, arr):
@@ -479,6 +480,8 @@ class PoleCartEnv(py_environment.PyEnvironment):
         self._state = self.course.get_empty_state()
         self._episode_ended = False
         self.job_id=""
+        self.has_reset = False
+        self.pass_through_actions = False
         self.data = {}
 
     def action_spec(self):
@@ -564,10 +567,14 @@ class PoleCartEnv(py_environment.PyEnvironment):
             action_arr = action.tolist()
         else:
             action_arr = action.numpy().tolist()
-        acceleration=action_arr[0]
-        steering_angle=action_arr[1]
-        # steering_angle=self.data["car"]["dist_from_traj"]
-        # acceleration = 2 if self.data["car"]["speed"] < 10 else -10
+        
+        if (self.pass_through_actions == True):
+            steering_angle=self.data["car"]["dist_from_traj"]
+            acceleration = 2 if self.data["car"]["speed"] < 10 else -10
+        else:
+            acceleration=action_arr[0]
+            steering_angle=action_arr[1]
+    
         data = self._api.DoApplyForceBlocking(
             acceleration,
             steering_angle)
@@ -626,7 +633,8 @@ def main(
     checkpoint_restore=False, 
     version=None,
     num_iterations_val=50000,
-    initial_collect_steps_val=1000,
+    pass_through_actions=False,
+    initial_collect_steps_val=500,
     collect_steps_per_iteration_val=1,
     replay_buffer_capacity_val=200,
     batch_size_val=256,
@@ -642,10 +650,11 @@ def main(
     critic_joint_fc_layer_params_x=512,
     critic_joint_fc_layer_params_y=512,
     log_interval_val=50,
-    num_eval_episodes_val=10,#5
+    num_eval_episodes_val=5,#5
     eval_interval_val=50,
     policy_save_interval_val=50,
     model_type="SacAgent"):
+
     tempdir = tempfile.gettempdir()
     env_name = "NiryoPoleCart-v0" # @param {type:"string"}
     #tf.debugging.experimental.enable_dump_debug_info(tempdir, tensor_debug_mode="FULL_HEALTH", circular_buffer_size=-1)
@@ -670,8 +679,8 @@ def main(
     saved_model_dir = os.path.join(tempdir, learner.POLICY_SAVED_MODEL_DIR)
     # Environment. Use same for eval and collection, though this does not seem standard?
     env = PoleCartEnv(api)
-    logdir = "/tmp/scalars/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    file_writer = tf.summary.create_file_writer(logdir + "/metrics")
+    logdir = "/tmp/scalars/" + str(datetime.datetime.now().strftime("%Y%m%d-%H%M%S")) + "/metrics"
+    file_writer = tf.summary.create_file_writer(logdir)
     file_writer.set_as_default()
     
     train_dir=os.path.join(tempdir, learner.TRAIN_DIR if str(job_id) == "" else str(job_id) + "_" + learner.TRAIN_DIR)
@@ -679,8 +688,8 @@ def main(
     # Strategy
     use_gpu = False #@param {type:"boolean"}
     strategy = strategy_utils.get_strategy(tpu=False, use_gpu=use_gpu)
-
     env.job_id=job_id
+    env.pass_through_actions=pass_through_actions
     # Critic network.
     observation_spec, action_spec, time_step_spec = (
         spec_utils.get_tensor_specs(env))
@@ -835,6 +844,8 @@ def main(
         results = {}
         for metric in eval_actor.metrics:
             results[metric.name] = metric.result()
+            print("metric.name:" + str(metric.name))
+            print("metric.result():" + str(metric.result()))
         return results
 
     metrics = get_eval_metrics()
@@ -885,8 +896,11 @@ def main(
             tf.summary.scalar('avg_speed', data=env.course.avg_speed, step=step)
             tf.summary.scalar('avg_speed_last_30', data=env.course.avg_speed_last_30, step=step)
             log_eval_metrics(step, metrics)
-            returns.append(metrics["AverageReturn"])
-            print("current iteration " +str(curr_iteration))
+            # returns.append(metrics["AverageReturn"])
+            returns.append([metrics["AverageReturn"]])
+            print("current step " + str(step))
+            print("num returns " + str(len(returns)))
+            print("current iteration " + str(curr_iteration))
         if log_interval and step % log_interval == 0:
             print('step = {0}: loss = {1}'.format(step, loss_info.loss.numpy()))
         if step >= min_write_step and step % write_policy_interval == 0:
@@ -917,9 +931,10 @@ def run_episodes_and_create_video(saved_policy, tf_env, job_id=""):
     print("run episodes and create video")
     train_step = train_utils.create_train_step()
     log_interval = 10 # @param {type:"integer"}
-    num_eval_episodes = 20 # @param {type:"integer"}
+    num_eval_episodes = 5 # @param {type:"integer"}
     max_episodes = 1
-    eval_dir=os.path.join(tempfile.gettempdir(), "eval" if str(job_id) == "" else str(job_id) + "_eval")
+    eval_dir=os.path.join(tempfile.gettempdir(), datetime.datetime.now().strftime("%Y%m%d-%H%M%S"), \
+        "eval" if str(job_id) == "" else str(job_id) + "_eval")
     batch_tf_env = batched_py_environment.BatchedPyEnvironment((tf_env,))
     debug_print("after batch_tf_env")
     time_step = batch_tf_env.reset()
@@ -941,9 +956,9 @@ def run_episodes_and_create_video(saved_policy, tf_env, job_id=""):
         eval_actor.run()
         debug_print("after eval_actor.run()")
         results = {}
-        debug_print(eval_actor.metrics)
+        print(eval_actor.metrics)
         for metric in eval_actor.metrics:
-            debug_print("metric: " + str(metric))
+            print("metric: " + str(metric))
             results[metric.name] = metric.result()
         return results
     
@@ -1065,7 +1080,8 @@ def do_job(job):
     print(job["job_type"])
     if job["job_type"] == "TRAIN":
         num_iterations=job["num_iterations"]
-        main(job_id=job["_id"], num_iterations_val=num_iterations)
+        pass_through_actions=job["pass_through_actions"]
+        main(job_id=job["_id"], num_iterations_val=num_iterations,pass_through_actions=pass_through_actions)
     elif job["job_type"] == "EVAL":
         model_type=job["model_type"]
         location=job["location"]

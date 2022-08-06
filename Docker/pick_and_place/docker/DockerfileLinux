@@ -1,0 +1,16 @@
+FROM ubuntu:latest
+
+# Copy each directory explicitly to avoid workspace cruft
+
+#VOLUME $PYTHON_WORKSPACE/src
+# RUN pwd
+COPY ./WCourseServerBuildLinux2022.07.24v2 /linux_racer
+#export DISPLAY=172.25.176.1:0.0
+
+#set-variable -name DISPLAY -value 172.25.176.1:0.0
+# docker run -ti --rm -e DISPLAY=$DISPLAY racelinux:latest
+
+# RUN apt-get update && apt-get install -y x11-apps
+# CMD xclock
+CMD ./linux_racer/w-course-linux.x86_64
+
