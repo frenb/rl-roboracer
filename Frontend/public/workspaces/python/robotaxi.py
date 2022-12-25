@@ -177,7 +177,7 @@ class DonutCourse ():
         log_blob ({"type":"has_failed","has_fallen":str(has_fallen),"has_flipped": str(has_flipped),
             "has_too_many_steps": str(has_too_many_steps), "has_crashed": str(has_crashed), 
             "is_too_slow": str(is_too_slow)})
-        return has_fallen or has_flipped or is_stuck or has_too_many_steps or has_crashed or is_too_slow
+        return has_fallen or has_flipped or is_stuck or has_crashed or has_too_many_steps # or is_too_slow
     
     def has_succeeded(self, data, data_arr):
         has_succeeded = \
