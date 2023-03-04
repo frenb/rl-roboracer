@@ -81,6 +81,7 @@ class RobotApi:
         #print("in on_car_scene_data")
         self.latest_car_scene_data = car_scene_data
         self.have_car_scene_data.set()
+        #print("_on_car_scene_data: " + str(car_scene_data["car"]['has_reached_goal']))
         # Check if there are command waiting on this scene data
         if car_scene_data["car"]['has_reached_goal']:
             self.has_reached_goal = True

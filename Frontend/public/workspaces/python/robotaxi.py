@@ -13,7 +13,7 @@ import numpy as np
 from scipy.interpolate import interp1d
 from numpy import interp
 import tensorflow as tf
-
+from tf_agents.agents.ppo import ppo_agent
 from tf_agents.agents.ddpg import critic_network
 from tf_agents.agents.sac import sac_agent
 from tf_agents.agents.sac import tanh_normal_projection_network
@@ -25,6 +25,8 @@ from tf_agents.policies import random_py_policy
 from tf_agents.policies import policy_saver
 from tf_agents.replay_buffers import reverb_replay_buffer
 from tf_agents.replay_buffers import reverb_utils
+from tf_agents.trajectories import trajectory
+from tf_agents.specs import tensor_spec
 from tf_agents.train import actor
 from tf_agents.train import learner
 from tf_agents.train import triggers
@@ -59,6 +61,7 @@ class DonutCourse ():
         self.goals_per_episode_arr=[]
         self.steps_per_goal_arr=[]
         self.num_obstacles_arr=[]
+        self.avg_return_arr=[]
         self.max_speed=0
         self.avg_speed=0
         self.avg_speed_last_30=0
@@ -75,10 +78,15 @@ class DonutCourse ():
         self.avg_steering_angle_ratio_last_30=0
         self.steps_since_last_goal=0
         self.goals_reached=0
+        self.max_avg_return=0
+        # self.action_spec = array_spec.BoundedArraySpec(
+        #     shape=(2, ), dtype=np.float32, 
+        #         minimum=[0,-1], 
+        #         maximum=[10,1], name='action')
         self.action_spec = array_spec.BoundedArraySpec(
             shape=(2, ), dtype=np.float32, 
-                minimum=[0,-1], 
-                maximum=[10,1], name='action')
+                minimum=[0.5,-0.5], 
+                maximum=[10, 0.5], name='action')
         self.observation_spec = array_spec.BoundedArraySpec(
             shape=(32,), dtype=np.float32,
             minimum=[
@@ -192,6 +200,7 @@ class DonutCourse ():
                 "data[car][current_goal]": data["car"]["current_goal"],
                 "self.last_goal_reached": self.last_goal_reached,
                 "goals reached": str(self.goals_reached)})
+        # print(f"has_succeeded {self._api.has_reached_goal} current goal {data['car']['current_goal']} last goal reached {data['car']['last_goal_reached']}")
         return has_succeeded
     
     def check_if_moving(self, arr):
@@ -309,12 +318,25 @@ class DonutCourse ():
     
     def reward_failure(self, job_id, step_costs, data, data_arr, position_history):
         self.env._episode_ended = True
-        reward = -0.5
-        log_reward(self.env.job_id, "has failed", float(reward),extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
+        reward = 0
+        log_reward(self.env.job_id, "has failed - reward", float(reward),extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
         self.reset_after_episode()
         term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
         return term_time_step
     
+    def capture_trajectory(self, data, action, reward=None, discount=None):
+        reward = tf.constant([1], dtype=tf.float32)
+        discount = tf.constant([0.99], dtype=tf.float32)
+    
+        traj = trajectory.first(
+            observation=self.scene_data_array(data),
+            action=action,
+            policy_info=(),
+            reward=reward,
+            discount=discount)
+
+        print("traj: " + str(traj))
+
     def get_num_obstacles(self):
         return 0
     
@@ -331,17 +353,18 @@ class DonutCourse ():
     def do_action_after(self, action, data):
         num_obstacles = self.get_num_obstacles()
         self.update_stats()
-        # print("data[car][dist_from_traj]: " + str(data["car"]["dist_from_traj"]) + " steering angle: " + str(action[1]))
         steering_angle_ratio = action[1] / data["car"]["dist_from_traj"]
         self.steering_angle_ratio_arr.append(steering_angle_ratio)
         self.speeds_arr.append(data["car"]["speed"])
 
     def update_stats(self):
-        # self.speeds_arr=[]
-        # self.steering_angle_ratio_arr=[]
-        # self.goals_per_episode_arr=[]
-        # self.steps_per_episode_arr=[]
-        # self.num_obstacles_arr=[]
+        self.steps_per_goal_arr=self.steps_per_goal_arr[-100:]
+        self.avg_return_arr=self.avg_return_arr[-100:]
+        self.speeds_arr=self.speeds_arr[-100:]
+        self.steering_angle_ratio_arr=self.steering_angle_ratio_arr[-100:]
+        self.goals_per_episode_arr=self.goals_per_episode_arr[-100:]
+        self.num_obstacles_arr=self.num_obstacles_arr[-100:]
+        
         self.num_obstacles = self.get_num_obstacles()
         self.max_speed=0 if len(self.speeds_arr) == 0 else np.max(self.speeds_arr)
         self.avg_speed=np.average(self.speeds_arr)
@@ -650,7 +673,7 @@ def main(
     critic_joint_fc_layer_params_x=512,
     critic_joint_fc_layer_params_y=512,
     log_interval_val=50,
-    num_eval_episodes_val=5,#5
+    num_eval_episodes_val=5,
     eval_interval_val=50,
     policy_save_interval_val=50,
     model_type="SacAgent"):
@@ -671,7 +694,7 @@ def main(
     gamma = gamma_val # @param {type:"number"}
     reward_scale_factor = reward_scale_factor_val # @param {type:"number"}
     actor_fc_layer_params = (actor_fc_layer_params_x, actor_fc_layer_params_y)
-    critic_joint_fc_layer_params = (critic_joint_fc_layer_params_x,critic_joint_fc_layer_params_y)
+    critic_joint_fc_layer_params = (critic_joint_fc_layer_params_x, critic_joint_fc_layer_params_y)
     log_interval = log_interval_val # @param {type:"integer"}
     num_eval_episodes = num_eval_episodes_val # @param {type:"integer"}
     eval_interval = eval_interval_val # @param {type:"integer"}
@@ -679,6 +702,7 @@ def main(
     saved_model_dir = os.path.join(tempdir, learner.POLICY_SAVED_MODEL_DIR)
     # Environment. Use same for eval and collection, though this does not seem standard?
     env = PoleCartEnv(api)
+    print(f"Job arguments = num_iterations: {num_iterations}, nn_size_x: {actor_fc_layer_params_x}, nn_size_x: {actor_fc_layer_params_y}")
     logdir = "/tmp/scalars/" + str(datetime.datetime.now().strftime("%Y%m%d-%H%M%S")) + "/metrics"
     file_writer = tf.summary.create_file_writer(logdir)
     file_writer.set_as_default()
@@ -686,10 +710,11 @@ def main(
     train_dir=os.path.join(tempdir, learner.TRAIN_DIR if str(job_id) == "" else str(job_id) + "_" + learner.TRAIN_DIR)
     eval_dir=os.path.join(tempdir, "eval" if str(job_id) == "" else str(job_id) + "_eval")
     # Strategy
-    use_gpu = False #@param {type:"boolean"}
+    use_gpu = True #@param {type:"boolean"}
     strategy = strategy_utils.get_strategy(tpu=False, use_gpu=use_gpu)
     env.job_id=job_id
-    env.pass_through_actions=pass_through_actions
+    env.pass_through_actions=bool(pass_through_actions)
+    print(f"pass_through_actions: {env.pass_through_actions}")
     # Critic network.
     observation_spec, action_spec, time_step_spec = (
         spec_utils.get_tensor_specs(env))
@@ -715,7 +740,7 @@ def main(
     # Agent.
     with strategy.scope():
         train_step = train_utils.create_train_step()
-        
+
         tf_agent = sac_agent.SacAgent(
             time_step_spec,
             action_spec,
@@ -734,7 +759,10 @@ def main(
             reward_scale_factor=reward_scale_factor,
             train_step_counter=train_step,
             debug_summaries = True,
-            summarize_grads_and_vars = True)
+            summarize_grads_and_vars = True
+            #,alpha_loss_weight=0.25
+            #,entropy_regularization=0.05
+        )
         
         tf_agent.initialize()
     # Replay Buffer.
@@ -802,7 +830,7 @@ def main(
 
     # restore from checkpoint
     debug_print("+++++")
-    debug_print(train_dir) #os.path.join(tempdir, learner.TRAIN_DIR))
+    debug_print(train_dir)
     env_step_metric = py_metrics.EnvironmentSteps()
     debug_print("number of steps: " + str(py_metrics.EnvironmentSteps()))
     collect_actor = actor.Actor(
@@ -811,7 +839,7 @@ def main(
         train_step,
         steps_per_run=1,
         metrics=actor.collect_metrics(10),
-        summary_dir=train_dir, # os.path.join(tempdir, learner.TRAIN_DIR),
+        summary_dir=train_dir,
         observers=[rb_observer, env_step_metric])
     
     eval_actor = actor.Actor(
@@ -820,7 +848,7 @@ def main(
         train_step,
         episodes_per_run=num_eval_episodes,
         metrics=actor.eval_metrics(num_eval_episodes),
-        summary_dir=eval_dir) # os.path.join(tempdir, 'eval'),)
+        summary_dir=eval_dir)
     
     # Triggers to save the agent's policy checkpoints.
     learning_triggers = [
@@ -875,7 +903,7 @@ def main(
     print("num iterations: " + str(num_iterations))
     print("eval interval: " + str(eval_interval))
     print("log interval: " + str(log_interval))
-    min_write_step = 10000
+    min_write_step = 0 #10000 
     write_policy_interval=2000
     for _ in range(num_iterations):
         # Training.
@@ -896,25 +924,33 @@ def main(
             tf.summary.scalar('avg_speed', data=env.course.avg_speed, step=step)
             tf.summary.scalar('avg_speed_last_30', data=env.course.avg_speed_last_30, step=step)
             log_eval_metrics(step, metrics)
-            # returns.append(metrics["AverageReturn"])
-            returns.append([metrics["AverageReturn"]])
+            current_avg_return = metrics["AverageReturn"]
+            env.course.avg_return_arr.append(current_avg_return)
+            env.course.max_avg_return = np.max(env.course.avg_return_arr)
+            returns.append([current_avg_return])
+            is_new_max_avg = (current_avg_return + 1e-5) > env.course.max_avg_return
             print("current step " + str(step))
             print("num returns " + str(len(returns)))
             print("current iteration " + str(curr_iteration))
+            print(f"max return {env.course.max_avg_return}")
+            print(f"current avg return {current_avg_return}")
+            print(f"is new max average {is_new_max_avg}")
+            
+            if step >= min_write_step and is_new_max_avg: # step % write_policy_interval == 0
+                tf_policy_saver = policy_saver.PolicySaver(tf_agent.policy)
+                save_dir_name=get_save_dir_name(tf_agent)+ "_step_" + str(step)
+                tf_policy_saver.save(save_dir_name)
+                robot_type = os.getenv('ROBOT_TYPE')
+                model_type=get_policy_type_name(tf_agent)
+                training_iterations=num_iterations
+                add_model(
+                    save_dir_name,
+                    robot_type,
+                    model_type,
+                    training_iterations,
+                    avg_return=metrics["AverageReturn"])
         if log_interval and step % log_interval == 0:
             print('step = {0}: loss = {1}'.format(step, loss_info.loss.numpy()))
-        if step >= min_write_step and step % write_policy_interval == 0:
-            tf_policy_saver = policy_saver.PolicySaver(tf_agent.policy)
-            save_dir_name=get_save_dir_name(tf_agent)+ "_step_" + str(step)
-            tf_policy_saver.save(save_dir_name)
-            robot_type = os.getenv('ROBOT_TYPE')
-            model_type=get_policy_type_name(tf_agent)
-            training_iterations=num_iterations
-            add_model(
-                save_dir_name,
-                robot_type, model_type,
-                training_iterations,
-                avg_return=metrics["AverageReturn"])
         curr_iteration=curr_iteration+1
     print("Training completed")
     rb_observer.close()
@@ -943,12 +979,11 @@ def run_episodes_and_create_video(saved_policy, tf_env, job_id=""):
     debug_print("after eval metrics")
     eval_actor = actor.Actor(
         batch_tf_env,
-        #tf_env,
         saved_policy,
         train_step,
         episodes_per_run=num_eval_episodes,
         metrics=actor.eval_metrics(num_eval_episodes),
-        summary_dir=eval_dir) #os.path.join("/tmp", 'eval'),)
+        summary_dir=eval_dir)
     debug_print("after eval actor")
     print(eval_actor.metrics)
     def get_eval_metrics():
@@ -992,9 +1027,6 @@ def load_saved_model(policy_type, version=None, path=None, job_id=""):
     # Environment. Use same for eval and collection, though this does not seem standard?
     env = PoleCartEnv(api)
     env.job_id = job_id
-    # Strategy
-    use_gpu = False #@param {type:"boolean"}
-    strategy = strategy_utils.get_strategy(tpu=False, use_gpu=use_gpu)
     if path is not None:
         saved_policy, path = get_saved_model(policy_type, path_arg=path)
     else:
@@ -1072,16 +1104,32 @@ def get_jobs():
     debug_print("in get_jobs")
     jobs = db.jobs.find({"status":"NOT_STARTED"})
     debug_print(jobs)
-    # for x in jobs:
-    #     print(x)
     return jobs
 
 def do_job(job):
     print(job["job_type"])
-    if job["job_type"] == "TRAIN":
-        num_iterations=job["num_iterations"]
-        pass_through_actions=job["pass_through_actions"]
-        main(job_id=job["_id"], num_iterations_val=num_iterations,pass_through_actions=pass_through_actions)
+    if job["job_type"] == "DEMO":
+        num_iterations=job["num_iterations"] if job["num_iterations"] != "" else 50000
+        pass_through_actions=job["pass_through_actions"] if job["pass_through_actions"] != "" else False,
+        print(job)
+        env = PoleCartEnv(api)
+        collect_expert_demos(env, num_iterations, job["_id"])
+        print("after collect_expert_demos")
+    elif job["job_type"] == "TRAIN":
+        num_iterations=job["num_iterations"] if job["num_iterations"] != "" else 50000
+        pass_through_actions=job["pass_through_actions"] if job["pass_through_actions"] != "" else False,
+        actor_fc_layer_params_x=512 if job.get("nn_size_x") == None else int(job.get("nn_size_x"))
+        actor_fc_layer_params_y=512 if job.get("nn_size_y") == None else int(job.get("nn_size_y"))
+        critic_joint_fc_layer_params_x=512 if job.get("nn_size_x") == None else job.get("nn_size_x")
+        critic_joint_fc_layer_params_y=512 if job.get("nn_size_y") == None else job.get("nn_size_y")
+        print(job)
+        main(job_id=job["_id"], 
+            num_iterations_val=num_iterations,
+            pass_through_actions=pass_through_actions, 
+            actor_fc_layer_params_x=actor_fc_layer_params_x,
+            actor_fc_layer_params_y=actor_fc_layer_params_y,
+            critic_joint_fc_layer_params_x=critic_joint_fc_layer_params_x,
+            critic_joint_fc_layer_params_y=critic_joint_fc_layer_params_y)
     elif job["job_type"] == "EVAL":
         model_type=job["model_type"]
         location=job["location"]
@@ -1096,6 +1144,7 @@ def do_job(job):
         return
     myquery = { "_id": job["_id"] }
     newvalues = { "$set": { "status": "DONE" } }
+    print(f"updating job {job['_id']}")
     db.jobs.update_one(myquery,newvalues)
 
 def robot_com_main():
@@ -1112,12 +1161,131 @@ def run_randompolicy():
     random_policy_path=get_latest_save_dir_name(random_policy)
     debug_print(random_policy_path)
     save_results_to_db(random_policy_path, results)
-    
+
+def create_traj(
+    observation, 
+    action,
+    reward=tf.constant([1], dtype=tf.float32), 
+    discount=tf.constant([0.99], dtype=tf.float32)):
+    traj = trajectory.first(
+        observation=observation, #1
+        action=action, #2
+        policy_info=(), #3
+        reward=reward, #4
+        discount=discount #5
+    )
+    return traj
+
+def collect_expert_demos(environment, num_episodes, job_id=0):
+    """Collects expert demonstrations and returns a dataset of trajectories."""
+    folder_name = "/tfrecords/job_"+str(job_id)
+    create_folder(folder_name=folder_name)
+    action_steering_angle = np.float32(0)
+    action_apply_force = np.float32(1)
+    trajectories = []
+    max_trajectories=num_episodes
+    max_batch_size=1e3
+    num_trajectories=0
+    reset_every_n_episodes=1000
+    crashes=0
+    batch_number=0
+    for _ in range(num_episodes):
+        environment.reset()
+        action_apply_force = 0.2
+        while not environment._episode_ended:
+            if num_trajectories % reset_every_n_episodes == 0:
+                environment.reset()
+                action_apply_force = 0.2
+            numpy_action = np.array([action_apply_force, action_steering_angle])
+            action = tf.constant(numpy_action)
+            next_time_step=environment._step(action)
+            # data = environment._do_action(action)
+            # print(f"data: {data}")
+            action_steering_angle = next_time_step.observation[0]
+            
+            if next_time_step.observation[1] < 5:
+                action_apply_force = action_apply_force + 1e-3
+                action_apply_force = min(0.2, action_apply_force)
+            # elif next_time_step.observation[1] > 3:
+            #     action_apply_force = -1
+            else: 
+                action_apply_force = action_apply_force - 1e-3
+            
+            traj = create_traj(
+                next_time_step.observation,
+                action,
+                next_time_step.reward,
+                next_time_step.discount)
+
+            trajectories.append(traj)
+            num_trajectories+=1
+            
+            if environment._episode_ended:
+                crashes=crashes+1
+            print(f"num_trajectories: {num_trajectories} vs {max_batch_size}, crashes: {crashes}")
+            # if len(trajectories) >= max_batch_size:
+            #     path = folder_name + "/" + zero_pad_integer(batch_number,6) + "trajectories.tfrecord"
+            #     print(f"writing to {path}")
+            #     write_trajectories_to_file(trajectories, path)
+            #     trajectories=[]
+            #     batch_number+=1
+            if num_trajectories > max_trajectories:
+                break
+        if num_trajectories > max_trajectories:
+                break
+    path = folder_name + "/" + zero_pad_integer(batch_number,6) + "trajectories.tfrecord"
+    print(f"writing to {path}")
+    write_trajectories_to_file(trajectories, path)
+    # trajectories=[]
+    # batch_number+=1
+
+def zero_pad_integer(integer, length):
+    """Pads an integer with zeros to a given length."""
+    return str(integer).zfill(length)
+
+def create_folder(folder_name):
+    """Creates a folder if it doesn't already exist."""
+    if not os.path.exists(folder_name):
+        os.makedirs(folder_name)        
+ 
+def write_trajectories_to_file(trajectories, output_file):
+    """Writes a list of trajectories to a TFRecord file."""
+    writer = tf.io.TFRecordWriter(output_file)
+    for traj in trajectories:
+        print("writing trajectory")
+        print(traj)
+        observation = traj.observation
+        action = traj.action
+        reward = traj.reward
+        discount = traj.discount
+        print(f"reward: {reward}")
+        print(f"discount: {discount}")
+        feature_dict = {
+            'action': tf.train.Feature(float_list=tf.train.FloatList(value=action.numpy().ravel())),
+            'observation': tf.train.Feature(float_list=tf.train.FloatList(value=observation.numpy().ravel())),
+            'reward': tf.train.Feature(float_list=tf.train.FloatList(value=reward.numpy().ravel())),
+            'discount': tf.train.Feature(float_list=tf.train.FloatList(value=discount.numpy().ravel()))
+        }
+        example = tf.train.Example(features=tf.train.Features(feature=feature_dict))
+        writer.write(example.SerializeToString())
+    writer.close()   
+
+# def create_traj(
+#     observation, action,
+#     reward=tf.constant([1], dtype=tf.float32), 
+#     discount=tf.constant([0.99], dtype=tf.float32)):
+#     traj = trajectory.first(
+#         observation=observation,
+#         action=action,
+#         policy_info=(),
+#         reward=reward,
+#         discount=discount)
+#     return traj
+
 def run_randompolicy_collect():
     debug_print(666)
     time_step = env._reset()
     debug_print(time_step)
-    #print(1)
     rewards = []
     steps = []
     number_of_episodes = 100
@@ -1125,8 +1293,6 @@ def run_randompolicy_collect():
     episode_reward=0
     current_step=0
     for _ in range(number_of_episodes):
-        #print(2)
-        #print("current step: " + str(current_step))
         current_step=current_step+1
         reward_t=0
         steps_t=0
@@ -1134,34 +1300,20 @@ def run_randompolicy_collect():
         while True:
             action_apply_force = tf.random.uniform((1,),0,10,tf.dtypes.float32).numpy().tolist()[0]
             action_steering_angle = tf.random.uniform((1,),-45,45,tf.dtypes.float32).numpy().tolist()[0]
-            #action = tf.TensorArray([action_apply_force,action_steering_angle])
             numpy_action = np.array([action_apply_force, action_steering_angle])
             action = tf.constant(numpy_action)
-            #print("modified action: "+str(action))
             next_time_step=env.step(action)
-            #env._do_action(action)
-            #print(3)
-            #print("is last: " + str(next_time_step.is_last()))
-            #print(next_time_step)
-            #print(next_time_step.reward)
-            #print(env.current_time_step())
-            #print("is last: " + str(next_time_step.is_last()))
             if next_time_step.is_last():
-                #print("before break")
                 break
             episode_steps += 1
-            #print(4)
-            #print(episode_steps)
-            #ts.transition(self._state, reward=1.0, discount=0.90)
             episode_reward += next_time_step.reward
-            #print(episode_reward)
-            #time.sleep(1)
         rewards.append(episode_reward)
         mean_reward = np.mean(rewards)
         print("mean reward: " + str(mean_reward))
         steps.append(episode_steps)
         mean_no_of_steps = np.mean(steps)
         print("mean number of steps: " + str(mean_no_of_steps))
+        
     mean_reward = np.mean(rewards)
     mean_no_of_steps = np.mean(steps)
     print("mean reward: " + str(mean_reward))
@@ -1186,20 +1338,7 @@ if __name__ == "__main__":
     print('time_step_spec.step_type:', env.time_step_spec().step_type)
     print('time_step_spec.discount:', env.time_step_spec().discount)
     print('time_step_spec.reward:', env.time_step_spec().reward)
-    #tf_env = tf_py_environment.TFPyEnvironment(env)
-    #main(num_iterations_val=100)
-    #print(500)
-    #utils.validate_py_environment(env, episodes=5)
-    #run_randompolicy()
-    #run_randompolicy_collect()
-    # results = db.models.find_one({"model_type": "SacAgent"})
-    #env._apply_force()
-    # while True:
-    #     print("before getSceneData")
-    #     data = env._api.GetCarSceneDataBlocking()
-    #     print(data)
-    #     time.sleep(5)
-    #env._reset()
+
     while True:
         jobs = get_jobs()
         for j in jobs:
