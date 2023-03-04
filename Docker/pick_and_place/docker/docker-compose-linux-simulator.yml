@@ -1,16 +1,4 @@
 version: '3.4'
-#  docker 
-#   run -it --rm -v 
-#   $(pwd)/Frontend/public/workspaces/pole_cart_python:/python_ws/src 
-#   -p 10000:10000 
-#   -p 50051:50051 
-#   -p 60061:60061 
-#   -p 60062:60062 
-#   robottycoon.azurecr.io/unity-robotics-pick-and-place 
-#   ./src/start.sh
-#
-# host.docker.internal
-
 services:
   ros-server:
     extra_hosts:
@@ -41,7 +29,7 @@ services:
       # - "60062:60062"
     command: sh -c "./src/start.sh"
     links:
-      - "simulator"
+      #- "simulator"
       - "sim-controller"
   mongo:
     image: mongo
@@ -62,19 +50,6 @@ services:
       ME_CONFIG_MONGODB_ADMINUSERNAME: root
       ME_CONFIG_MONGODB_ADMINPASSWORD: example
       ME_CONFIG_MONGODB_URL: mongodb://root:example@mongo:27017/
-  # front-end:
-  #   image: node:15.8
-  #   restart: always
-  #   ports:
-  #     - "3000:3000"
-  #   volumes:
-  #     - type: bind
-  #       source: C:\Users\benja\Documents\robots\LATEST\robot-tycoon\Frontend
-  #       target: /Frontend
-  #   links:
-  #     - "ros-server"
-  #     # - "webapp"
-  #   command: sh -c "cd /Frontend && npm start"
   sim-controller:
     image: sim_controller:latest
     restart: always
@@ -83,6 +58,7 @@ services:
     environment:
       - SAVED_MODELS_DIR=/saved_models
       - ROBOT_TYPE=robotaxi
+      - NVIDIA_DEVICE_ID=0
     volumes:  
       - type: bind
         source: C:\Users\benja\Documents\robots\LATEST\robot-tycoon\Frontend\public\workspaces\python 
@@ -91,13 +67,10 @@ services:
         source: C:\Users\benja\Documents\robots\LATEST\saved_models 
         target: /saved_models
     ports:
-      # - "5005:5005"
       - "6006:6006"
       # - "60061:60061" 
       # - "60062:60062"
-    command: python robotaxi.py 2>&1 | tee robotaxi.out
-    # (tensorboard --bind_all --logdir /tmp --reload_multifile true &1> /tmp/tb.log)
-    # 2>&1 | tee robotaxi.out) & (cd /python_ws/src && tail -f robotaxi.out)"
+    command: bash -c "(tensorboard --bind_all --logdir /tmp --reload_multifile true &1> /tmp/tb.log) && cd /python_ws/src && python robotaxi.py 2>&1 | tee robotaxi.out"
     deploy:
       resources:
         reservations:
@@ -106,27 +79,28 @@ services:
               count: 1
               capabilities: [gpu]
     links:
-      - "simulator"
+      #- "simulator"
       - "mongo"
-  simulator:
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    image: racelinux:latest
-    restart: always
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    ports:
-      - "5005:5005"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+  # simulator:
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   image: racelinux:latest
+  #   restart: always
+  #   environment:
+  #     - NVIDIA_VISIBLE_DEVICES=all
+  #     - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+  #   ports:
+  #     - "5005:5005"
+  #   command: ["bash", "-c", "./linux_racer/w-course-linux.x86_64", "--env=DISPLAY=host.docker.internal:0", "--volume=/tmp/.X11-unix:/tmp/.X11-unix"]
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
     #links:
-      # - "ros-server"
+      #- "ros-server"
       # - "webapp"
   webapp:
     image: node:15.8
@@ -138,27 +112,3 @@ services:
         source: C:\Users\benja\Documents\robots\LATEST\robot-tycoon\WebApp
         target: /WebApp
     command: sh -c "cd /WebApp && npm start"                                                                       
-
-
-  # simulation:
-  #   image: mcr.microsoft.com/windows:10.0.19041.867
-  #   environment:
-  #     DB_UPSTREAM: http://${DOCKER_GATEWAY_HOST:-host.docker.internal}:3000
-  #   image: mcr.microsoft.com/windows/servercore:1903
-  #   platform: windows  
-  #   ports:
-  #     - "1-79:1-79"
-  #     - "81-2999:81-2999"
-  #     - "3001-65535:3001-65535"
-  #     - "49000-49500:49000-50000"E
-  #     - "135:135"
-  #     - "53432:53432"
-  #    - "3389:3389"
-  #       - "80:80"
-  #   volumes:
-  #     - type: bind
-  #       source: C:\Users\benja\Documents\robots\LATEST
-  #       target: C:\Sim
-  #   command: powershell -executionpolicy bypass "ls C:\Sim;cd C:\Sim; ls;./StreamingWrapper.ps1"
-  #   extra_hosts:
-  #     - "dockerhost: 192.168.96.1"
