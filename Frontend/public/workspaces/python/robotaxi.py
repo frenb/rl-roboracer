@@ -41,6 +41,11 @@ from tf_agents.specs import array_spec
 from tf_agents.trajectories import time_step as ts
 from tf_agents.utils import common
 from pymongo import MongoClient
+import collect_training_data
+import logging
+import sys
+
+logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
 from api import RobotApi
 
@@ -79,14 +84,19 @@ class DonutCourse ():
         self.steps_since_last_goal=0
         self.goals_reached=0
         self.max_avg_return=0
+        self.steps_total=0
+        self.num_episodes_total=0
+        self.speeds_total=0
+        self.goals_per_episode_total=0
+        self.steering_angle_ratio_total=0
         # self.action_spec = array_spec.BoundedArraySpec(
         #     shape=(2, ), dtype=np.float32, 
         #         minimum=[0,-1], 
         #         maximum=[10,1], name='action')
         self.action_spec = array_spec.BoundedArraySpec(
             shape=(2, ), dtype=np.float32, 
-                minimum=[0.5,-0.5], 
-                maximum=[10, 0.5], name='action')
+                minimum=[0.1,-1], 
+                maximum=[2, 1], name='action')
         self.observation_spec = array_spec.BoundedArraySpec(
             shape=(32,), dtype=np.float32,
             minimum=[
@@ -323,25 +333,14 @@ class DonutCourse ():
         self.reset_after_episode()
         term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
         return term_time_step
-    
-    def capture_trajectory(self, data, action, reward=None, discount=None):
-        reward = tf.constant([1], dtype=tf.float32)
-        discount = tf.constant([0.99], dtype=tf.float32)
-    
-        traj = trajectory.first(
-            observation=self.scene_data_array(data),
-            action=action,
-            policy_info=(),
-            reward=reward,
-            discount=discount)
-
-        print("traj: " + str(traj))
 
     def get_num_obstacles(self):
         return 0
     
     def reset_after_episode(self):
         self.goals_per_episode_arr.append(self.goals_reached) #append number of goals reached for finished episode to array
+        self.goals_per_episode_total+=self.goals_reached
+        self.num_episodes_total+=1
         self.steps_since_last_goal=0
         self.goals_reached=0
         self.last_goal_reached=""
@@ -355,32 +354,40 @@ class DonutCourse ():
         self.update_stats()
         steering_angle_ratio = action[1] / data["car"]["dist_from_traj"]
         self.steering_angle_ratio_arr.append(steering_angle_ratio)
+        self.steering_angle_ratio_total += steering_angle_ratio
         self.speeds_arr.append(data["car"]["speed"])
+        self.speeds_total += data["car"]["speed"]
 
     def update_stats(self):
+        #truncate arrays to last 100 elements
         self.steps_per_goal_arr=self.steps_per_goal_arr[-100:]
         self.avg_return_arr=self.avg_return_arr[-100:]
         self.speeds_arr=self.speeds_arr[-100:]
         self.steering_angle_ratio_arr=self.steering_angle_ratio_arr[-100:]
         self.goals_per_episode_arr=self.goals_per_episode_arr[-100:]
         self.num_obstacles_arr=self.num_obstacles_arr[-100:]
-        
+        # increment total steps
+        self.steps_total+=1
+        # get number of obstacles in scene, normally is 0
         self.num_obstacles = self.get_num_obstacles()
-        self.max_speed=0 if len(self.speeds_arr) == 0 else np.max(self.speeds_arr)
-        self.avg_speed=np.average(self.speeds_arr)
+        # speed stats
+        self.max_speed=0 if len(self.speeds_arr) == 0 else max(np.max(self.speeds_arr), self.max_speed)
+        self.avg_speed=self.speeds_total / self.steps_total
         self.max_speed_last_30=0 if len(self.speeds_arr) <30 else np.max(self.speeds_arr[-30:])
         self.avg_speed_last_30=np.average(self.speeds_arr[-30:])
+        # steps per goal stats
         self.max_steps_per_goal=0
         self.avg_steps_per_goal=0
         self.avg_steps_per_goal_last_30=0
         self.max_steps_per_goal_last_30=0
-        self.max_goals_per_episode=0 if len(self.goals_per_episode_arr) == 0 else np.max(self.goals_per_episode_arr)
-        self.avg_goals_per_episode=np.average(self.goals_per_episode_arr)
+        # goals per episode stats
+        self.max_goals_per_episode=0 if len(self.goals_per_episode_arr) == 0 else max(np.max(self.goals_per_episode_arr), self.max_goals_per_episode)
+        self.avg_goals_per_episode=self.goals_per_episode_total / max(1,self.num_episodes_total)
         self.max_goals_per_episode_last_30=0 if len(self.goals_per_episode_arr) <30 else np.max(self.goals_per_episode_arr[-30:])
         self.avg_goals_per_episode_last_30=np.average(self.goals_per_episode_arr[-30:])
+        # steering angle ratio stats, used to determine if car is driving off track
         steering_angle_ratio_arr = np.array(self.steering_angle_ratio_arr)
-        self.avg_steering_angle_ratio=np.average(steering_angle_ratio_arr[~(np.isinf(steering_angle_ratio_arr)) & ~(np.isnan(steering_angle_ratio_arr))])
-        steering_angle_ratio_arr = np.array(self.steering_angle_ratio_arr)
+        self.avg_steering_angle_ratio=self.steering_angle_ratio_total / self.steps_total
         steering_angle_ratio_arr_no_nan = steering_angle_ratio_arr[~(np.isinf(steering_angle_ratio_arr)) & ~(np.isnan(steering_angle_ratio_arr))]
         self.avg_steering_angle_ratio_last_30=np.average(steering_angle_ratio_arr_no_nan[-30:])
     
@@ -563,27 +570,9 @@ class PoleCartEnv(py_environment.PyEnvironment):
             return self.course.reward_success(
                 curr_step_cost, env.job_id, data, data_arr,
                 self._step_costs, self._position_history)
-            # reward = float(m(curr_step_cost)) 
-            # log_reward(self.job_id, "has succeeded", float(reward),extra_data=data, step_costs=self._step_costs, position_history=self._position_history)
-            # term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
-            # return term_time_step
         else:
             return self.course.reward_standard(
                 data, data_arr, self._step_costs, env.job_id)
-            # mean_step_costs = np.mean(self._step_costs)
-            # max_step_costs = np.max(self._step_costs)
-            # last_step_costs = self._step_costs[len(self._step_costs)-1]
-            # last_step_cost = 0 if len(self._step_costs) < 2 else self._step_costs[len(self._step_costs)-2]
-            # curr_step_cost = self._step_costs[len(self._step_costs)-1]
-            # diff = abs(curr_step_cost) - abs(last_step_cost)
-            # if curr_step_cost == 0:
-            #     reward = 1
-            # elif diff < 0:
-            #     reward = 1
-            # else:
-            #     reward = -1
-            # log_reward(self.job_id, "did not fail", float(reward), diff=float(diff), extra_data=data)
-            # return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
     
     def _do_action(self, action):
         if type(action).__name__ == "ndarray":
@@ -659,7 +648,7 @@ def main(
     pass_through_actions=False,
     initial_collect_steps_val=500,
     collect_steps_per_iteration_val=1,
-    replay_buffer_capacity_val=200,
+    replay_buffer_capacity_val=5000,
     batch_size_val=256,
     critic_learning_rate_val=3e-5,
     actor_learning_rate_val=3e-5,
@@ -672,9 +661,9 @@ def main(
     actor_fc_layer_params_y=512,
     critic_joint_fc_layer_params_x=512,
     critic_joint_fc_layer_params_y=512,
-    log_interval_val=50,
-    num_eval_episodes_val=5,
-    eval_interval_val=50,
+    log_interval_val=5000,
+    num_eval_episodes_val=10,
+    eval_interval_val=5000,
     policy_save_interval_val=50,
     model_type="SacAgent"):
 
@@ -714,6 +703,7 @@ def main(
     strategy = strategy_utils.get_strategy(tpu=False, use_gpu=use_gpu)
     env.job_id=job_id
     env.pass_through_actions=bool(pass_through_actions)
+    env.pass_through_actions = False
     print(f"pass_through_actions: {env.pass_through_actions}")
     # Critic network.
     observation_spec, action_spec, time_step_spec = (
@@ -736,6 +726,19 @@ def main(
             fc_layer_params=actor_fc_layer_params,
             continuous_projection_net=(
                 tanh_normal_projection_network.TanhNormalProjectionNetwork))
+
+    record_dir = '/tfrecords/job_64168c1b58d4d8ccdb76e721'
+    files = collect_training_data.get_files_from_directory(record_dir)
+    file = files[0]
+    parsed_dataset = collect_training_data.get_parsed_dataset(file)
+    
+    # collect_training_data.train_agent_sampling(
+    #     actor_net,
+    #     record_dir, 
+    #     training_steps=1000,
+    #     sampling_fraction=0.1,
+    #     parsed_dataset=parsed_dataset)
+
 
     # Agent.
     with strategy.scope():
@@ -760,8 +763,6 @@ def main(
             train_step_counter=train_step,
             debug_summaries = True,
             summarize_grads_and_vars = True
-            #,alpha_loss_weight=0.25
-            #,entropy_regularization=0.05
         )
         
         tf_agent.initialize()
@@ -813,8 +814,6 @@ def main(
         
     if checkpoint_restore is True:
         checkpoint_dir="/tmp/policies/checkpoints"
-        # eval_policy = py_tf_eager_policy.SavedModelPyTFEagerPolicy(
-        #     policy_dir, env.time_step_spec(), env.action_spec())
         train_checkpointer = common.Checkpointer(
             ckpt_dir=checkpoint_dir,
             max_to_keep=1,
@@ -899,10 +898,9 @@ def main(
     avg_return = get_eval_metrics()["AverageReturn"]
     returns = [avg_return]
     curr_iteration=0
-    print("Training started")
-    print("num iterations: " + str(num_iterations))
-    print("eval interval: " + str(eval_interval))
-    print("log interval: " + str(log_interval))
+    print("Num iterations: " + str(num_iterations))
+    print("Eval interval: " + str(eval_interval))
+    print("Log interval: " + str(log_interval))
     min_write_step = 0 #10000 
     write_policy_interval=2000
     for _ in range(num_iterations):
@@ -912,6 +910,14 @@ def main(
         # Evaluating.
         step = agent_learner.train_step_numpy
         if eval_interval and step % eval_interval == 0:
+            print("bc agent training started")
+            collect_training_data.train_agent_sampling(
+                actor_net,
+                record_dir, 
+                training_steps=2,
+                sampling_fraction=0.002,
+                parsed_dataset=parsed_dataset)
+            print("Evaluating agent")
             metrics = get_eval_metrics()
             tf.summary.scalar('avg_goals_per_episode', data=env.course.avg_goals_per_episode, step=step)
             tf.summary.scalar('avg_goals_per_episode_last_30', data=env.course.avg_goals_per_episode_last_30, step=step)
@@ -926,7 +932,7 @@ def main(
             log_eval_metrics(step, metrics)
             current_avg_return = metrics["AverageReturn"]
             env.course.avg_return_arr.append(current_avg_return)
-            env.course.max_avg_return = np.max(env.course.avg_return_arr)
+            env.course.max_avg_return = max(current_avg_return, env.course.max_avg_return)
             returns.append([current_avg_return])
             is_new_max_avg = (current_avg_return + 1e-5) > env.course.max_avg_return
             print("current step " + str(step))
@@ -1102,18 +1108,26 @@ def log_blob(blob):
 
 def get_jobs():
     debug_print("in get_jobs")
-    jobs = db.jobs.find({"status":"NOT_STARTED"})
+    is_not_started = {"status": "NOT_STARTED"}
+    is_in_progress = {"status": "IN_PROGRESS"}
+    jobs = db.jobs.find({"$or":[is_not_started, is_in_progress]})
     debug_print(jobs)
     return jobs
 
 def do_job(job):
     print(job["job_type"])
+    update_status(job["_id"], "IN_PROGRESS")
     if job["job_type"] == "DEMO":
         num_iterations=job["num_iterations"] if job["num_iterations"] != "" else 50000
-        pass_through_actions=job["pass_through_actions"] if job["pass_through_actions"] != "" else False,
         print(job)
         env = PoleCartEnv(api)
         collect_expert_demos(env, num_iterations, job["_id"])
+        root_dir = "/tfrecords/job_" + str(job["_id"])
+        collect_training_data.train_agent(root_dir, int(job["training_steps"]))
+        print("after collect_expert_demos")
+    elif job["job_type"] == "BC_TRAINING_ONLY":
+        root_dir = "/tfrecords/job_" + str(job["demo_job_id"])
+        collect_training_data.train_agent(root_dir, int(job["training_steps"]))
         print("after collect_expert_demos")
     elif job["job_type"] == "TRAIN":
         num_iterations=job["num_iterations"] if job["num_iterations"] != "" else 50000
@@ -1123,6 +1137,7 @@ def do_job(job):
         critic_joint_fc_layer_params_x=512 if job.get("nn_size_x") == None else job.get("nn_size_x")
         critic_joint_fc_layer_params_y=512 if job.get("nn_size_y") == None else job.get("nn_size_y")
         print(job)
+        print(f"in do_job pass_through_actions: {pass_through_actions}")
         main(job_id=job["_id"], 
             num_iterations_val=num_iterations,
             pass_through_actions=pass_through_actions, 
@@ -1142,10 +1157,16 @@ def do_job(job):
         debug_print(job["location"])
     else:
         return
-    myquery = { "_id": job["_id"] }
-    newvalues = { "$set": { "status": "DONE" } }
-    print(f"updating job {job['_id']}")
-    db.jobs.update_one(myquery,newvalues)
+    # myquery = { "_id": job["_id"] }
+    # newvalues = { "$set": { "status": "DONE" } }
+    # print(f"updating job {job['_id']}")
+    # db.jobs.update_one(myquery,newvalues)
+    update_status(job["_id"], "DONE")
+
+def update_status(id, status):
+    myquery = { "_id": id }
+    newvalues = { "$set": { "status": status } }
+    db.jobs.update_one(myquery, newvalues)
 
 def robot_com_main():
     loop = asyncio.new_event_loop()
@@ -1189,13 +1210,15 @@ def collect_expert_demos(environment, num_episodes, job_id=0):
     reset_every_n_episodes=1000
     crashes=0
     batch_number=0
+    base_force=0.2
+    min_force=0.001
     for _ in range(num_episodes):
         environment.reset()
         action_apply_force = 0.2
         while not environment._episode_ended:
             if num_trajectories % reset_every_n_episodes == 0:
                 environment.reset()
-                action_apply_force = 0.2
+                action_apply_force = base_force
             numpy_action = np.array([action_apply_force, action_steering_angle])
             action = tf.constant(numpy_action)
             next_time_step=environment._step(action)
@@ -1203,13 +1226,11 @@ def collect_expert_demos(environment, num_episodes, job_id=0):
             # print(f"data: {data}")
             action_steering_angle = next_time_step.observation[0]
             
-            if next_time_step.observation[1] < 5:
-                action_apply_force = action_apply_force + 1e-3
-                action_apply_force = min(0.2, action_apply_force)
-            # elif next_time_step.observation[1] > 3:
-            #     action_apply_force = -1
+            if next_time_step.observation[1] < 4:
+                action_apply_force = action_apply_force + 1e-4
+                action_apply_force = min(base_force, action_apply_force)
             else: 
-                action_apply_force = action_apply_force - 1e-3
+                action_apply_force = max(min_force,action_apply_force - 1e-3)
             
             traj = create_traj(
                 next_time_step.observation,
