@@ -3,24 +3,147 @@
 <head>
     <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.5.0/angular.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/angular-ui-grid/4.6.3/ui-grid.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/angular-ui-grid/4.6.3/ui-grid.min.css" type="text/css">
-    
+    <link rel="stylesheet" href="http://ui-grid.info/release/ui-grid.css"></link>
+    <link rel="stylesheet" href="http://ui-grid.info/docs/css/prettify.css"></link>
+    <link rel="stylesheet" href="http://ui-grid.info/docs/css/bootstrap-flatly.min.css"></link>
     <style>
+        td {
+            padding-left:10px
+        }
+         :root { /* Set CSS variable values - These values can be changed with JavaScript and DOM */
+            --myCSS_ValueOne: 800px;
+        }
+
         .uiGrd {
             width: 100%;
-            height: 100vh;
+            height: var(--myCSS_ValueOne);
+        }
+
+         /* Style the modal background */
+        .modal {
+            display: none; /* Hidden by default */
+            position: fixed; /* Stay in place */
+            z-index: 1; /* Sit on top */
+            left: 0;
+            top: 0;
+            width: 100%; /* Full width */
+            height: 100%; /* Full height */
+            overflow: auto; /* Enable scroll if needed */
+            background-color: rgba(0, 0, 0, 0.4); /* Black background with opacity */
+        }
+
+        /* Style the modal content */
+        .modal-content {
+            background-color: #fefefe;
+            margin: 15% auto; /* 15% from the top and centered */
+            padding: 20px;
+            border: 1px solid #888;
+            width: 350px; /* Could be more or less, depending on screen size */
         }
     </style>
 </head>
 
 <body>
-    
     <div ng-app="myApp" 
         ng-controller="myController">
+        <div id="myModal" class="modal">
+            <div class="modal-content"> 
+                <form>
+                    <table>
+                    <tr>
+                        <td>
+                            <label>
+                                Status
+                            </label>
+                        </td>
+                        <td>
+                            <select id="status"></select>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <label>
+                                Robot Type
+                            </label>
+                        </td>
+                        <td>
+                            <select id="robot_type"></select>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <label>
+                                Num Iterations
+                            </label>
+                        </td>
+                        <td>
+                            <input id="num_iterations" type="text" formControlName="num_iterations_val">
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <label>
+                                Trining Steps
+                            </label>
+                        </td>
+                        <td>
+                            <input id="training_steps" type="text" formControlName="training_steps_val">
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <label>
+                                Demo Job Id
+                            </label>
+                        </td>
+                        <td>
+                            <input id="demo_job_id" type="text" formControlName="demo_job_id_val">
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <label>
+                                Location
+                            </label>
+                        </td>
+                        <td>
+                            <input id="location" type="text" formControlName="location_val">
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <label>
+                                Model Type:
+                            </label>
+                        </td>
+                        <td>
+                            <select id="model_type"></select>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <label>
+                                Job Type
+                            </label>
+                        </td>
+                        <td>
+                            <select id="job_type"></select>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <button type="button" class="btn btn-success" ng-click="add_jobs()">Submit</button>
+                        </td>
+                    </tr>
+                    </table>
+                </form>
+            </div>
+        </div>
         <p>{{title}}</p>
         <button type="button" class="btn btn-success" ng-click="clearAll()">Clear All</button>
-        <button type="button" class="btn btn-success" ng-click="update_job_status_all()"> Update Status</button>
+        <button type="button" class="btn btn-success" ng-click="update_job_status_all()"> Set To Done</button>
         <button type="button" class="btn btn-success" ng-click="delete_jobs()"> Delete Jobs</button>
+        <button type="button" class="btn btn-success" ng-click="create_job()"> Create Job</button>
         <div class="uiGrd" id="grd" 
             ui-grid="gridOptions" 
                 ui-grid-resize-columns
@@ -28,11 +151,57 @@
                 ui-grid-pagination>
         </div>
     </div>
-</body>
-
 <!--The Controller -->
 <script>
     var app = angular.module('myApp', ['ui.grid', 'ui.grid.pagination','ui.grid.resizeColumns','ui.grid.selection']);
+    
+    function add_job(
+        $http,
+        location_val, 
+        status_val, 
+        robot_type_val,
+        num_iterations_val,
+        model_type_val,
+        job_type_val,
+        training_steps_val,
+        demo_job_id_val) {
+
+            console.log(location_val, status_val, robot_type_val, num_iterations_val, model_type_val, job_type_val)
+            var new_job = {
+                status: status_val,
+                job_type: job_type_val,
+                num_iterations: Number(num_iterations_val),
+                model_type: model_type_val,
+                location: location_val,
+                robot_type: robot_type_val,
+                pass_through_actions: false,
+                training_steps: Number(training_steps_val),
+                demo_job_id: String(demo_job_id_val)
+            }
+            
+            var postModel = {
+                method: 'post',
+                url: '/add_job',
+                dataType: 'json',
+                data: new_job,
+                contentType: "application/json"
+            };
+            
+            $http(postModel)
+                .success(function (jsonData) {
+                    console.log(jsonData)
+                })
+                .error(function () { });
+    }
+
+    window.onclick = function(event) {
+        var modal = document.getElementById("myModal");
+        if (event.target == modal) {
+            
+            modal.style.display = "none";
+        }
+    }
+
     function update_job_status($http, job_id,status){
         var update_params = {
             status: status,
@@ -68,19 +237,83 @@
         
         $http(postModel)
             .success(function (jsonData) {
-                console.log(jsonData)
+                console.log(jsonData);
             })
             .error(function () { });
     }
-    app.controller('myController', function ($scope, $http) {
+
+app.controller('myController', ['$scope','$http', 'uiGridConstants', 
+    function ($scope, $http, uiGridConstants) {
 
         $scope.title = "Jobs"
+        $scope.dataDoneCount = 0;
+        $scope.dataInProgressCount = 0;
+        $scope.dataNotStartedCount = 0;
+
         $scope.selected_jobs = [];
+        drop_down_options =
+            {
+                status: ["NOT_STARTED", "IN_PROGRESS", "DONE"],
+                model_type: ["SacAgent", "GreedyPolicy", "RandomPyPolicy"],
+                job_type: ["TRAIN", "DEMO", "EVAL", "BC_TRAINING_ONLY"],
+                robot_type: ["robotaxi", "niryo"]
+            };
+
+        $scope.add_jobs = function() {
+            console.log("in add jobs");
+            var location_val = document.getElementById("location").value;
+            var status_val = document.getElementById("status").value;
+            var robot_type_val = document.getElementById("robot_type").value;
+            var num_iterations_val = document.getElementById("num_iterations").value;
+            var training_steps_val = document.getElementById("training_steps").value;
+            var model_type_val = document.getElementById("model_type").value;
+            var job_type_val = document.getElementById("job_type").value;
+            var demo_job_id_val = document.getElementById("demo_job_id").value;
+            console.log(location_val, status_val, robot_type_val, num_iterations_val, training_steps_val, model_type_val, job_type_val,demo_job_id_val)
+            add_job(
+                $http,
+                location_val,
+                status_val,
+                robot_type_val,
+                num_iterations_val,
+                model_type_val,
+                job_type_val, 
+                training_steps_val,
+                demo_job_id_val
+            );
+        }
+        //foreach of the drop down options
+        var list_of_object_ids = ["status", "model_type", "job_type", "robot_type"]
+        var addOptions = function () {
+            console.log("length of list of object ids: " + list_of_object_ids.length)
+            for (i=0;i<list_of_object_ids.length;i++) {
+                //get the element by id
+                var id = list_of_object_ids[i];
+                console.log(id)
+                var select = document.getElementById(id);
+                console.log(select)
+                var options = drop_down_options[id];
+                //for each of the options
+                for (var j = 0; j < options.length; j++) {
+                    //create a new option
+                    var option = document.createElement("option");
+                    //set the text of the option
+                    option.text = options[j];
+                    console.log(option.text);
+                    //add the option to the select
+                    select.add(option);
+                }
+                console.log()
+            }
+        }
+        addOptions();
+
         // SPECIFY FILTERING OPTIONS.
         $scope.clearAll = function() {
             $scope.gridApi.selection.clearSelectedRows();
             $scope.selected_jobs=[];
         };
+        
         $scope.selectAll = function() {
             $scope.gridApi.selection.selectAllRows();
         };
@@ -103,10 +336,19 @@
             for(var i=0;i<$scope.selected_jobs.length;i++){
                 delete_job($http, $scope.selected_jobs[i].entity._id);
             }
+            $http(request)
+                .success(loadGridData)
+                .error(function () { });
         };
 
+        $scope.create_job = function() {
+            //window.open('job_form.html','Create Job','width=300,height=150');
+            var modal = document.getElementById("myModal");
+            modal.style.display = "block";
+        }
+        
         $scope.gridOptions = {
-            paginationPageSizes: [5, 10, 20],
+            paginationPageSizes: [20, 50, 100],
             paginationPageSize: 20,
             enableFiltering: true
         };
@@ -129,7 +371,6 @@
                             $scope.selected_jobs.splice(i,1)    
                         }
                     }
-                // add_model($http, row.entity.location);
             });
         
             gridApi.selection.on.rowSelectionChangedBatch($scope,function(rows){
@@ -143,34 +384,103 @@
                 console.log( $scope.selected_jobs);
             });
         };
+
         var request = {
             method: 'get',
-            url: '/get_jobs',
+            url: '/get_jobs?force=false',
             dataType: 'json',
             contentType: "application/json"
         };
 
-        $http(request)
-            .success(function (jsonData) {
+        var firstRequest = {
+            method: 'get',
+            url: '/get_jobs?force=true',
+            dataType: 'json',
+            contentType: "application/json"
+        };
+
+        var lastJsonData = null;
+        var loadGridData =  function (jsonData) {
+                console.log("step2")
+                lastJsonData = jsonData;
                 var results = [];
                 for(var i=0;i<jsonData.length; i++){
                     var model = jsonData[i];
                     console.log(model);
                     var new_model = {};
                     new_model._id = model["_id"];
-                    new_model.model_type = model["model_type"];
+                    new_model.job_type = model["job_type"];
+                    new_model.percent_complete = model["percent_complete"];
+                    new_model.status = model["status"];
+                    //new_model.model_type = model["model_type"];
                     new_model.location = model["location"];
-                    new_model.job_type = model["job_type"]; 
-                    new_model.status = model["status"];  
                     results.push(new_model) 
                 }
-                console.log(results)
-                $scope.gridOptions.data = results;     // BIND JSON TO THE GRID.
-            })
+                //console.log(results)
+                // sort results by _id in alphabetical order
+                results.sort(function(a, b) {
+                    var textA = b._id.toUpperCase();
+                    var textB = a._id.toUpperCase();
+                    return (textA < textB) ? -1 : (textA > textB) ? 1 : 0;
+                });
+
+                // filter results by status
+                resultsDone = results.filter(function(job){
+                    return job.status != "DONE";
+                });
+                resultsNotStarted = results.filter(function(job){
+                    return job.status != "NOT_STARTED";
+                });
+                resultsInProgress = results.filter(function(job){
+                    return job.status != "IN_PROGRESS";
+                });
+
+               
+
+                const diffDone = resultsDone.length != $scope.dataDoneCount; 
+                const diffNotStarted = resultsNotStarted.length != $scope.dataNotStartedCount;
+                const diffInProgress = resultsInProgress.length != $scope.dataInProgressCount;
+                const diff = diffDone || diffNotStarted || diffInProgress;
+                console.log(resultsDone.length + " " +  $scope.dataDoneCount);
+                console.log(resultsNotStarted.length + " " + $scope.dataNotStartedCount);
+                console.log(resultsInProgress.length + " " + $scope.dataInProgressCount);
+                console.log("diff: " + diff + " diffDone: " + diffDone + " diffNotStarted: " + diffNotStarted + " diffInProgress: " + diffInProgress);
+                // console.log("data: " + $scope.gridOptions.data)
+                // console.log("results: " + results)
+                if(diff){
+                    $scope.gridOptions.data = results;     // BIND JSON TO THE GRID.
+                }
+                $scope.dataDoneCount = resultsDone.length;
+                $scope.dataNotStartedCount = resultsNotStarted.length;
+                $scope.dataInProgressCount = resultsInProgress.length;   
+            } 
+            
+        $http(firstRequest)
+            .success(function (jsonData){
+                    if(jsonData == 'NO_CHANGES'){
+                        console.log("is NO_CHANGES");
+                        return;
+                    }
+                    loadGridData(jsonData);
+                })
             .error(function () { });
-       
+        
+        setInterval(function(){
+            $http(request)
+                .success(function (jsonData){
+                    if(jsonData == 'NO_CHANGES'){
+                        console.log("is NO_CHANGES");
+                        loadGridData(lastJsonData);
+                        return;
+                    }
+                    loadGridData(jsonData);
+                })
+                .error(function () { });
+        }, 5000);
+    }]);
 
-
-    });
+    var r = document.querySelector(':root');
+    r.style.setProperty('--myCSS_ValueOne', 730 + 'px');
+    console.log(r.style.getPropertyValue('--myCSS_ValueOne'));
 </script>
 </html>
