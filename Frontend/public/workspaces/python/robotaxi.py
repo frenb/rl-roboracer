@@ -2,6 +2,7 @@ import asyncio
 import random
 import os
 import math
+import shutil
 import reverb
 import tempfile
 import threading
@@ -54,7 +55,10 @@ api = None
 client = MongoClient('mongo', 
     username='root',
     password='example')
-db = client.local
+# db = client.local
+#set database_name variable to environment variable DATABASE_NAME
+database_name = os.environ['DATABASE_NAME']
+db = client.robotaxi
 
 class DonutCourse ():
     def __init__(self, api, env):
@@ -95,7 +99,7 @@ class DonutCourse ():
         #         maximum=[10,1], name='action')
         self.action_spec = array_spec.BoundedArraySpec(
             shape=(2, ), dtype=np.float32, 
-                minimum=[0.1,-1], 
+                minimum=[0.001,-1], 
                 maximum=[2, 1], name='action')
         self.observation_spec = array_spec.BoundedArraySpec(
             shape=(32,), dtype=np.float32,
@@ -667,7 +671,8 @@ def main(
     policy_save_interval_val=50,
     model_type="SacAgent"):
 
-    tempdir = tempfile.gettempdir()
+    #tempdir = tempfile.gettempdir()
+    tempdir = "/tmp/active/"
     env_name = "NiryoPoleCart-v0" # @param {type:"string"}
     #tf.debugging.experimental.enable_dump_debug_info(tempdir, tensor_debug_mode="FULL_HEALTH", circular_buffer_size=-1)
     num_iterations=num_iterations_val # @param {type:"integer"}
@@ -688,16 +693,16 @@ def main(
     num_eval_episodes = num_eval_episodes_val # @param {type:"integer"}
     eval_interval = eval_interval_val # @param {type:"integer"}
     policy_save_interval = policy_save_interval_val # @param {type:"integer"}
-    saved_model_dir = os.path.join(tempdir, learner.POLICY_SAVED_MODEL_DIR)
     # Environment. Use same for eval and collection, though this does not seem standard?
     env = PoleCartEnv(api)
     print(f"Job arguments = num_iterations: {num_iterations}, nn_size_x: {actor_fc_layer_params_x}, nn_size_x: {actor_fc_layer_params_y}")
-    logdir = "/tmp/scalars/" + str(datetime.datetime.now().strftime("%Y%m%d-%H%M%S")) + "/metrics"
-    file_writer = tf.summary.create_file_writer(logdir)
+    learner_dir = os.path.join(tempdir, str(job_id),"learner")
+    saved_model_dir = os.path.join(learner_dir, learner.POLICY_SAVED_MODEL_DIR)
+    log_dir = os.path.join(tempdir, str(job_id),"metrics")
+    train_dir=os.path.join(tempdir, str(job_id),"train")
+    eval_dir=os.path.join(tempdir, str(job_id),"eval")
+    file_writer = tf.summary.create_file_writer(log_dir)
     file_writer.set_as_default()
-    
-    train_dir=os.path.join(tempdir, learner.TRAIN_DIR if str(job_id) == "" else str(job_id) + "_" + learner.TRAIN_DIR)
-    eval_dir=os.path.join(tempdir, "eval" if str(job_id) == "" else str(job_id) + "_eval")
     # Strategy
     use_gpu = True #@param {type:"boolean"}
     strategy = strategy_utils.get_strategy(tpu=False, use_gpu=use_gpu)
@@ -812,26 +817,12 @@ def main(
         steps_per_run=initial_collect_steps,
         observers=[rb_observer])
         
-    if checkpoint_restore is True:
-        checkpoint_dir="/tmp/policies/checkpoints"
-        train_checkpointer = common.Checkpointer(
-            ckpt_dir=checkpoint_dir,
-            max_to_keep=1,
-            agent=tf_agent,
-            policy=tf_agent.policy,
-            replay_buffer=reverb_replay,
-            global_step= tf.compat.v1.train.get_global_step()
-        )
-    else:
-        debug_print("initial_collect_actor.run() :)")
-        initial_collect_actor.run()
-        print("Initial collection done")
+    print("initial_collect_actor.run() :)")
+    initial_collect_actor.run()
+    print("Initial collection done")
 
-    # restore from checkpoint
-    debug_print("+++++")
-    debug_print(train_dir)
     env_step_metric = py_metrics.EnvironmentSteps()
-    debug_print("number of steps: " + str(py_metrics.EnvironmentSteps()))
+    print("number of steps: " + str(py_metrics.EnvironmentSteps()))
     collect_actor = actor.Actor(
         env,
         collect_policy,
@@ -860,7 +851,7 @@ def main(
     ]
 
     agent_learner = learner.Learner(
-        tempdir,
+        learner_dir,
         train_step,
         tf_agent,
         experience_dataset_fn,
@@ -901,8 +892,7 @@ def main(
     print("Num iterations: " + str(num_iterations))
     print("Eval interval: " + str(eval_interval))
     print("Log interval: " + str(log_interval))
-    min_write_step = 0 #10000 
-    write_policy_interval=2000
+    min_write_step = 0
     for _ in range(num_iterations):
         # Training.
         collect_actor.run()
@@ -910,6 +900,9 @@ def main(
         # Evaluating.
         step = agent_learner.train_step_numpy
         if eval_interval and step % eval_interval == 0:
+            percent_complete = step/num_iterations
+            update_job(job_id, percent_complete, "percent_complete")
+            print(f"percent complete: {percent_complete}")
             print("bc agent training started")
             collect_training_data.train_agent_sampling(
                 actor_net,
@@ -971,11 +964,12 @@ def main(
  
 def run_episodes_and_create_video(saved_policy, tf_env, job_id=""):
     print("run episodes and create video")
+    tempdir = "/tmp/active/"
     train_step = train_utils.create_train_step()
     log_interval = 10 # @param {type:"integer"}
     num_eval_episodes = 5 # @param {type:"integer"}
     max_episodes = 1
-    eval_dir=os.path.join(tempfile.gettempdir(), datetime.datetime.now().strftime("%Y%m%d-%H%M%S"), \
+    eval_dir=os.path.join( tempdir,
         "eval" if str(job_id) == "" else str(job_id) + "_eval")
     batch_tf_env = batched_py_environment.BatchedPyEnvironment((tf_env,))
     debug_print("after batch_tf_env")
@@ -1116,8 +1110,12 @@ def get_jobs():
 
 def do_job(job):
     print(job["job_type"])
-    update_status(job["_id"], "IN_PROGRESS")
-    if job["job_type"] == "DEMO":
+    update_job(job["_id"], "IN_PROGRESS")
+    update_job(job["_id"], 0, "percent_complete")
+    #Move all data for jobs with _id = job["_id"] from /tmp to /jobsdata
+    job_type = job["job_type"]
+    
+    if job_type == "DEMO":
         num_iterations=job["num_iterations"] if job["num_iterations"] != "" else 50000
         print(job)
         env = PoleCartEnv(api)
@@ -1125,11 +1123,12 @@ def do_job(job):
         root_dir = "/tfrecords/job_" + str(job["_id"])
         collect_training_data.train_agent(root_dir, int(job["training_steps"]))
         print("after collect_expert_demos")
-    elif job["job_type"] == "BC_TRAINING_ONLY":
+    elif job_type == "BC_TRAINING_ONLY":
         root_dir = "/tfrecords/job_" + str(job["demo_job_id"])
         collect_training_data.train_agent(root_dir, int(job["training_steps"]))
         print("after collect_expert_demos")
-    elif job["job_type"] == "TRAIN":
+    elif job_type == "TRAIN":
+        move_all_jobs_data(job["_id"]) 
         num_iterations=job["num_iterations"] if job["num_iterations"] != "" else 50000
         pass_through_actions=job["pass_through_actions"] if job["pass_through_actions"] != "" else False,
         actor_fc_layer_params_x=512 if job.get("nn_size_x") == None else int(job.get("nn_size_x"))
@@ -1145,7 +1144,7 @@ def do_job(job):
             actor_fc_layer_params_y=actor_fc_layer_params_y,
             critic_joint_fc_layer_params_x=critic_joint_fc_layer_params_x,
             critic_joint_fc_layer_params_y=critic_joint_fc_layer_params_y)
-    elif job["job_type"] == "EVAL":
+    elif job_type == "EVAL":
         model_type=job["model_type"]
         location=job["location"]
         debug_print(location)
@@ -1161,11 +1160,44 @@ def do_job(job):
     # newvalues = { "$set": { "status": "DONE" } }
     # print(f"updating job {job['_id']}")
     # db.jobs.update_one(myquery,newvalues)
-    update_status(job["_id"], "DONE")
+    update_job(job["_id"], "DONE")
 
-def update_status(id, status):
+def move_all_jobs_data(id):
+    print(f"moving all jobs data excluding job with {id}")
+    # move eval, metrics, train
+    move_data(id, folders=["eval", "metrics", "train"])
+    jobs = get_job_ids(id)
+    print(f"jobs: {jobs}")
+    for job in jobs:
+        move_data(job["_id"])
+
+def get_job_ids(id):
+    # get job ids that are not equal to id
+    myquery = { "_id": { "$ne": id } }
+    # sort by _id in descending order
+    mysort = { "_id": -1 }
+    # db.jobs.find using myquery and sorted by mysort
+    results = db.jobs.find(myquery).sort("_id", -1).limit(10)
+    return results
+
+def move_data(job_id, folders=[""]):
+    #Move all data for jobs with _id = job["_id"] from /tmp to /jobsdata
+    for folder in folders:
+        if folder == "":
+            src = os.path.join("/tmp/active/", str(job_id))
+            dst = os.path.join("/tmp/jobsdata/", str(job_id))
+        else:
+            src = os.path.join("/tmp/active/", str(job_id), folder)
+            dst = os.path.join("/tmp/jobsdata/", str(job_id), folder)
+        print(f"moving {src} to {dst}")
+        #check if directory with name = job_id exists in /tmp
+        if os.path.isdir(src):
+            result = shutil.move(src, dst)
+            print(f"moved {result}")
+
+def update_job(id, value, field_name="status"):
     myquery = { "_id": id }
-    newvalues = { "$set": { "status": status } }
+    newvalues = { "$set": { field_name: value } }
     db.jobs.update_one(myquery, newvalues)
 
 def robot_com_main():
