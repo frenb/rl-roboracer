@@ -12,7 +12,6 @@ import datetime
 
 import numpy as np
 from scipy.interpolate import interp1d
-from numpy import interp
 import tensorflow as tf
 from tf_agents.agents.ppo import ppo_agent
 from tf_agents.agents.ddpg import critic_network
@@ -93,13 +92,10 @@ class DonutCourse ():
         self.speeds_total=0
         self.goals_per_episode_total=0
         self.steering_angle_ratio_total=0
-        # self.action_spec = array_spec.BoundedArraySpec(
-        #     shape=(2, ), dtype=np.float32, 
-        #         minimum=[0,-1], 
-        #         maximum=[10,1], name='action')
+        # shape=(2,) == [acceleration, steering_angle]
         self.action_spec = array_spec.BoundedArraySpec(
             shape=(2, ), dtype=np.float32, 
-                minimum=[0.001,-1], 
+                minimum=[0.1,-1], 
                 maximum=[2, 1], name='action')
         self.observation_spec = array_spec.BoundedArraySpec(
             shape=(32,), dtype=np.float32,
@@ -735,7 +731,7 @@ def main(
     record_dir = '/tfrecords/job_64168c1b58d4d8ccdb76e721'
     files = collect_training_data.get_files_from_directory(record_dir)
     file = files[0]
-    parsed_dataset = collect_training_data.get_parsed_dataset(file)
+    # parsed_dataset = collect_training_data.get_parsed_dataset(file)
     
     # collect_training_data.train_agent_sampling(
     #     actor_net,
@@ -889,28 +885,35 @@ def main(
     avg_return = get_eval_metrics()["AverageReturn"]
     returns = [avg_return]
     curr_iteration=0
-    print("Num iterations: " + str(num_iterations))
-    print("Eval interval: " + str(eval_interval))
-    print("Log interval: " + str(log_interval))
+    print("Num iterations: " + str(num_iterations), flush=True)
+    print("Eval interval: " + str(eval_interval), flush=True)
+    print("Log interval: " + str(log_interval), flush=True)
     min_write_step = 0
     for _ in range(num_iterations):
         # Training.
+        print("***************training agent**************", flush=True)
         collect_actor.run()
         loss_info = agent_learner.run(iterations=1)
         # Evaluating.
         step = agent_learner.train_step_numpy
+        print("step: " + str(step), flush=True)
+        print("eval_interval: " + str(eval_interval), flush=True)
         if eval_interval and step % eval_interval == 0:
+            print("***************evaluating agent**************", flush=True)
+            print("step: " + str(step), flush=True)
+            print("eval_interval: " + str(eval_interval))
             percent_complete = step/num_iterations
-            update_job(job_id, percent_complete, "percent_complete")
-            print(f"percent complete: {percent_complete}")
-            print("bc agent training started")
-            collect_training_data.train_agent_sampling(
-                actor_net,
-                record_dir, 
-                training_steps=2,
-                sampling_fraction=0.002,
-                parsed_dataset=parsed_dataset)
-            print("Evaluating agent")
+            update_job(job_id, percent_complete*100, "percent_complete")
+            update_job(job_id, int(step), "training_steps")
+            print(f"percent complete: {percent_complete}", flush=True)
+            print("bc agent training started", flush=True)
+            # collect_training_data.train_agent_sampling(
+            #     actor_net,
+            #     record_dir, 
+            #     training_steps=2,
+            #     sampling_fraction=0.002,
+            #     parsed_dataset=parsed_dataset)
+            # print("Evaluating agent")
             metrics = get_eval_metrics()
             tf.summary.scalar('avg_goals_per_episode', data=env.course.avg_goals_per_episode, step=step)
             tf.summary.scalar('avg_goals_per_episode_last_30', data=env.course.avg_goals_per_episode_last_30, step=step)
@@ -1143,7 +1146,8 @@ def do_job(job):
             actor_fc_layer_params_x=actor_fc_layer_params_x,
             actor_fc_layer_params_y=actor_fc_layer_params_y,
             critic_joint_fc_layer_params_x=critic_joint_fc_layer_params_x,
-            critic_joint_fc_layer_params_y=critic_joint_fc_layer_params_y)
+            critic_joint_fc_layer_params_y=critic_joint_fc_layer_params_y,
+            eval_interval_val=10)
     elif job_type == "EVAL":
         model_type=job["model_type"]
         location=job["location"]
@@ -1196,6 +1200,7 @@ def move_data(job_id, folders=[""]):
             print(f"moved {result}")
 
 def update_job(id, value, field_name="status"):
+    print(f"updating job {id} with {field_name} = {value}", flush=True)
     myquery = { "_id": id }
     newvalues = { "$set": { field_name: value } }
     db.jobs.update_one(myquery, newvalues)
