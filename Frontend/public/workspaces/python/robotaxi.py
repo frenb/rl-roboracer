@@ -431,6 +431,8 @@ def main(
         step = agent_learner.train_step_numpy
         print("step: " + str(step), flush=True)
         print("eval_interval: " + str(eval_interval), flush=True)
+        
+        #********** PRINT REPLAY BUFFER SIZE **********#
         print_replay_buffer_size(
             reverb_replay,
             table_name,
