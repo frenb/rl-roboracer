@@ -12,6 +12,7 @@ import datetime
 
 import numpy as np
 from scipy.interpolate import interp1d
+from numpy import interp
 import tensorflow as tf
 from tf_agents.agents.ppo import ppo_agent
 from tf_agents.agents.ddpg import critic_network
@@ -41,6 +42,9 @@ from tf_agents.specs import array_spec
 from tf_agents.trajectories import time_step as ts
 from tf_agents.utils import common
 from pymongo import MongoClient
+
+from environments.courses import donut_course,simple_course
+from environments import RobotaxiEnv as pce
 import collect_training_data
 import logging
 import sys
@@ -58,546 +62,6 @@ client = MongoClient('mongo',
 #set database_name variable to environment variable DATABASE_NAME
 database_name = os.environ['DATABASE_NAME']
 db = client.robotaxi
-
-class DonutCourse ():
-    def __init__(self, api, env):
-        self.env = env
-        self._api = api
-        self.last_goal_reached=""
-        self.speeds_arr=[]
-        self.steering_angle_ratio_arr=[]
-        self.goals_per_episode_arr=[]
-        self.steps_per_goal_arr=[]
-        self.num_obstacles_arr=[]
-        self.avg_return_arr=[]
-        self.max_speed=0
-        self.avg_speed=0
-        self.avg_speed_last_30=0
-        self.max_speed_last_30=0
-        self.max_steps_per_goal=0
-        self.avg_steps_per_goal=0
-        self.avg_steps_per_goal_last_30=0
-        self.max_steps_per_goal_last_30=0
-        self.max_goals_per_episode=0
-        self.avg_goals_per_episode=0
-        self.max_goals_per_episode_last_30=0
-        self.avg_goals_per_episode_last_30=0
-        self.avg_steering_angle_ratio=0
-        self.avg_steering_angle_ratio_last_30=0
-        self.steps_since_last_goal=0
-        self.goals_reached=0
-        self.max_avg_return=0
-        self.steps_total=0
-        self.num_episodes_total=0
-        self.speeds_total=0
-        self.goals_per_episode_total=0
-        self.steering_angle_ratio_total=0
-        # shape=(2,) == [acceleration, steering_angle]
-        self.action_spec = array_spec.BoundedArraySpec(
-            shape=(2, ), dtype=np.float32, 
-                minimum=[0.1,-1], 
-                maximum=[2, 1], name='action')
-        self.observation_spec = array_spec.BoundedArraySpec(
-            shape=(32,), dtype=np.float32,
-            minimum=[
-                -1, #scene_data["car"]["dist_from_traj"] angle to next goal
-                -10, #scene_data["car"]["speed"] magnitude of car velocity
-                -1, #scene_data["car"]["goal_2"] angle from velocity to car
-                0, #scene_data["car"]["left"]
-                0, #scene_data["car"]["forward_left"]
-                0, #scene_data["car"]["forward_left_left"]
-                0, #scene_data["car"]["n_27_50"]
-                0, #scene_data["car"]["n_25_00"]
-                0, #scene_data["car"]["n_22_50"]
-                0, #scene_data["car"]["n_20_00"]
-                0, #scene_data["car"]["n_17_50"]
-                0, #scene_data["car"]["n_15_00"]
-                0, #scene_data["car"]["n_12_50"]
-                0, #scene_data["car"]["n_10_00
-                0, #scene_data["car"]["n_07_50"],
-                0, #scene_data["car"]["n_05_00"],
-                0, #scene_data["car"]["n_02_50"]
-                0, #scene_data["car"]["forward"], # float64 forward
-                0, #scene_data["car"]["p_02_50"],# float64 p_02_50
-                0, #scene_data["car"]["p_05_00"],# float64 p_05_00
-                0, #scene_data["car"]["p_07_50"],# float64 p_07_50
-                0, #scene_data["car"]["p_10_00"],# float64 p_10_00
-                0, #scene_data["car"]["p_12_50"],# float64 p_12_50
-                0, #scene_data["car"]["p_15_00"],# float64 p_15_00
-                0, #scene_data["car"]["p_17_50"],# float64 p_17_50
-                0, #scene_data["car"]["p_20_00"],# float64 p_20_00
-                0, #scene_data["car"]["p_22_50"],# float64 p_22_50
-                0, #scene_data["car"]["p_25_00"],# float64 p_25_00
-                0, #scene_data["car"]["p_27_50"],# float64 p_27_50
-                0, #scene_data["car"]["forward_right_right"],# float64 forward_right_right
-                0, #scene_data["car"]["forward_right"],
-                0, #scene_data["car"]["right"]
-                ],
-            maximum=[
-                1, #scene_data["car"]["dist_from_traj"]
-                10, #scene_data["car"]["speed"] magnitude of car velocity
-                1, #scene_data["car"]["goal_2"] angle from velocity to car
-                1000, #scene_data["car"]["left"]
-                1000, #scene_data["car"]["forward_left"]
-                1000, #scene_data["car"]["forward_left_left"]
-                1000, #scene_data["car"]["n_27_50"]
-                1000, #scene_data["car"]["n_25_00"]
-                1000, #scene_data["car"]["n_22_50"]
-                1000, #scene_data["car"]["n_20_00"]
-                1000, #scene_data["car"]["n_17_50"]
-                1000, #scene_data["car"]["n_15_00"]
-                1000, #scene_data["car"]["n_12_50"]
-                1000, #scene_data["car"]["n_10_00
-                1000, #scene_data["car"]["n_07_50"],
-                1000, #scene_data["car"]["n_05_00"],
-                1000, #scene_data["car"]["n_02_50"]
-                1000, #scene_data["car"]["forward"], # float64 forward
-                1000, #scene_data["car"]["p_02_50"],# float64 p_02_50
-                1000, #scene_data["car"]["p_05_00"],# float64 p_05_00
-                1000, #scene_data["car"]["p_07_50"],# float64 p_07_50
-                1000, #scene_data["car"]["p_10_00"],# float64 p_10_00
-                1000, #scene_data["car"]["p_12_50"],# float64 p_12_50
-                1000, #scene_data["car"]["p_15_00"],# float64 p_15_00
-                1000, #scene_data["car"]["p_17_50"],# float64 p_17_50
-                1000, #scene_data["car"]["p_20_00"],# float64 p_20_00
-                1000, #scene_data["car"]["p_22_50"],# float64 p_22_50
-                1000, #scene_data["car"]["p_25_00"],# float64 p_25_00
-                1000, #scene_data["car"]["p_27_50"],# float64 p_27_50
-                1000, #scene_data["car"]["forward_right_right"],# float64 forward_right_right
-                1000, #scene_data["car"]["forward_right"],
-                1000, #scene_data["car"]["right"]
-                ],
-            name='observation')
-    
-    def get_empty_state(self):
-        emptyState = [
-            0,0,0,0,0,
-            0,0,0,0,0,
-            0,0,0,0,0,
-            0,0,0,0,0,
-            0,0,0,0,0,
-            0,0,0,0,0,
-            0,0
-        ]
-        return emptyState
-        
-    def has_failed(self, data, data_arr, step_costs, position_history):
-        has_fallen = data["car"]["location_y"] < -0.5
-        int_rotation_z = round(data["car"]["rotation_z"])
-        has_crashed = data["car"]["has_crashed"]
-        has_too_many_steps = len(step_costs) > 10000
-        is_too_slow_arr = np.array(self.speeds_arr)
-        is_too_slow_avg = np.average(is_too_slow_arr[-100:]) if len(is_too_slow_arr) > 100 else 1
-        is_too_slow = False #True if is_too_slow_avg < 1 else False
-        log_blob({"type": "is_too_slow", "is_too_slow":is_too_slow, "is_too_slow_avg":is_too_slow_avg})
-        is_stuck = not self.check_if_moving(position_history)
-        has_flipped = int_rotation_z == 90 or int_rotation_z == 180 or int_rotation_z == 270
-        log_blob ({"type":"has_failed","has_fallen":str(has_fallen),"has_flipped": str(has_flipped),
-            "has_too_many_steps": str(has_too_many_steps), "has_crashed": str(has_crashed), 
-            "is_too_slow": str(is_too_slow)})
-        return has_fallen or has_flipped or is_stuck or has_crashed or has_too_many_steps # or is_too_slow
-    
-    def has_succeeded(self, data, data_arr):
-        has_succeeded = \
-            self._api.has_reached_goal \
-            and data["car"]["current_goal"] != "" \
-            and data["car"]["last_goal_reached"] != self.last_goal_reached
-        if has_succeeded:
-            self.last_goal_reached = data["car"]["last_goal_reached"]
-            self._api.has_reached_goal = False
-            log_blob({"type":"has_succeeded","has_succeeded":str(has_succeeded),
-                "data[car][last_goal_reached]": data["car"]["last_goal_reached"],
-                "data[car][current_goal]": data["car"]["current_goal"],
-                "self.last_goal_reached": self.last_goal_reached,
-                "goals reached": str(self.goals_reached)})
-        # print(f"has_succeeded {self._api.has_reached_goal} current goal {data['car']['current_goal']} last goal reached {data['car']['last_goal_reached']}")
-        return has_succeeded
-    
-    def check_if_moving(self, arr):
-        last_position = len(arr)-1
-        debug_print(last_position)
-        if len(arr) < 6:
-            return True
-        for  i in reversed(range(last_position-5, last_position)):
-            dist = math.dist(arr[last_position], arr[i])
-            if dist >= 0.0001:
-                return True
-        return False
-    
-    def scene_data_array(self, scene_data):
-        # float64 speed
-        # float64 location_x
-        # float64 location_y
-        # float64 location_z
-        # float64 cost
-        # float64 dist_from_traj
-        # float64 dist_from_goal
-        # float64 rotation_z
-        # float64 angular_velocity
-        # float64 acceleration
-        # float64 left
-        # float64 forward_left
-        # float64 forward_left_left
-        # float64 n_27_50
-        # float64 n_25_00
-        # float64 n_22_50
-        # float64 n_20_00
-        # float64 n_17_50
-        # float64 n_15_00
-        # float64 n_12_50
-        # float64 n_10_00
-        # float64 n_07_50
-        # float64 n_05_00
-        # float64 n_02_50
-        # float64 forward
-        # float64 p_02_50
-        # float64 p_05_00
-        # float64 p_07_50
-        # float64 p_10_00
-        # float64 p_12_50
-        # float64 p_15_00
-        # float64 p_17_50
-        # float64 p_20_00
-        # float64 p_22_50
-        # float64 p_25_00
-        # float64 p_27_50
-        # float64 forward_right_right
-        # float64 forward_right
-        # float64 right
-        # float64 goal_1
-        # float64 goal_2
-        # float64 goal_3
-        # float64 goal_4
-        # bool has_reached_goal
-        # bool has_crashed
-        arr = [
-            scene_data["car"]["dist_from_traj"], # angle from car to next goal
-            scene_data["car"]["speed"], 
-            scene_data["car"]["goal_2"], # angle from velocity to car direction 
-            scene_data["car"]["left"],
-            scene_data["car"]["forward_left"],
-            scene_data["car"]["forward_left_left"], # float64 forward_left_left
-            scene_data["car"]["n_27_50"],# float64 n_27_50
-            scene_data["car"]["n_25_00"],# float64 n_25_00
-            scene_data["car"]["n_22_50"],# float64 n_22_50
-            scene_data["car"]["n_20_00"],# float64 n_20_00
-            scene_data["car"]["n_17_50"],# float64 n_17_50
-            scene_data["car"]["n_15_00"],# float64 n_15_00
-            scene_data["car"]["n_12_50"],# float64 n_12_50
-            scene_data["car"]["n_10_00"],# float64 n_10_00
-            scene_data["car"]["n_07_50"],# float64 n_07_50
-            scene_data["car"]["n_05_00"],# float64 n_05_00
-            scene_data["car"]["n_02_50"], # float64 n_02_50
-            scene_data["car"]["forward"], # float64 forward
-            scene_data["car"]["p_02_50"],# float64 p_02_50
-            scene_data["car"]["p_05_00"],# float64 p_05_00
-            scene_data["car"]["p_07_50"],# float64 p_07_50
-            scene_data["car"]["p_10_00"],# float64 p_10_00
-            scene_data["car"]["p_12_50"],# float64 p_12_50
-            scene_data["car"]["p_15_00"],# float64 p_15_00
-            scene_data["car"]["p_17_50"],# float64 p_17_50
-            scene_data["car"]["p_20_00"],# float64 p_20_00
-            scene_data["car"]["p_22_50"],# float64 p_22_50
-            scene_data["car"]["p_25_00"],# float64 p_25_00
-            scene_data["car"]["p_27_50"],# float64 p_27_50
-            scene_data["car"]["forward_right_right"],# float64 forward_right_right
-            scene_data["car"]["forward_right"],
-            scene_data["car"]["right"],
-        ]
-        return np.array(arr, dtype=np.float32)
-    
-    def reward_standard(self, data, data_arr, step_costs, job_id):
-        self.env._episode_ended = False
-        last_step_cost = 0 if len(step_costs) < 2 else step_costs[len(step_costs)-2]
-        curr_step_cost = step_costs[len(step_costs)-1]
-        diff = abs(curr_step_cost) - abs(last_step_cost)
-        self.steps_since_last_goal+=1
-        reward = 0
-        log_reward(self.env.job_id, "did not fail", float(reward), diff=float(diff), extra_data=data, stat_array=data_arr)
-        return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
-    
-    def reward_success(self, curr_step_cost, job_id, data, data_arr, step_costs, position_history):
-        self.env._episode_ended = False
-        self.steps_since_last_goal+=1
-        self.steps_per_goal_arr.append(self.steps_since_last_goal)
-        reward = ((max(1,100-self.steps_since_last_goal) / 100))
-        print("goal reached: " + str(reward))
-        log_reward(self.env.job_id, "has succeeded", float(reward), extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
-        self.reset_after_goal_reached()
-        return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
-    
-    def reward_failure(self, job_id, step_costs, data, data_arr, position_history):
-        self.env._episode_ended = True
-        reward = 0
-        log_reward(self.env.job_id, "has failed - reward", float(reward),extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
-        self.reset_after_episode()
-        term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
-        return term_time_step
-
-    def get_num_obstacles(self):
-        return 0
-    
-    def reset_after_episode(self):
-        self.goals_per_episode_arr.append(self.goals_reached) #append number of goals reached for finished episode to array
-        self.goals_per_episode_total+=self.goals_reached
-        self.num_episodes_total+=1
-        self.steps_since_last_goal=0
-        self.goals_reached=0
-        self.last_goal_reached=""
-    
-    def reset_after_goal_reached(self):
-        self.steps_since_last_goal=0
-        self.goals_reached += 1
-    
-    def do_action_after(self, action, data):
-        num_obstacles = self.get_num_obstacles()
-        self.update_stats()
-        steering_angle_ratio = action[1] / data["car"]["dist_from_traj"]
-        self.steering_angle_ratio_arr.append(steering_angle_ratio)
-        self.steering_angle_ratio_total += steering_angle_ratio
-        self.speeds_arr.append(data["car"]["speed"])
-        self.speeds_total += data["car"]["speed"]
-
-    def update_stats(self):
-        #truncate arrays to last 100 elements
-        self.steps_per_goal_arr=self.steps_per_goal_arr[-100:]
-        self.avg_return_arr=self.avg_return_arr[-100:]
-        self.speeds_arr=self.speeds_arr[-100:]
-        self.steering_angle_ratio_arr=self.steering_angle_ratio_arr[-100:]
-        self.goals_per_episode_arr=self.goals_per_episode_arr[-100:]
-        self.num_obstacles_arr=self.num_obstacles_arr[-100:]
-        # increment total steps
-        self.steps_total+=1
-        # get number of obstacles in scene, normally is 0
-        self.num_obstacles = self.get_num_obstacles()
-        # speed stats
-        self.max_speed=0 if len(self.speeds_arr) == 0 else max(np.max(self.speeds_arr), self.max_speed)
-        self.avg_speed=self.speeds_total / self.steps_total
-        self.max_speed_last_30=0 if len(self.speeds_arr) <30 else np.max(self.speeds_arr[-30:])
-        self.avg_speed_last_30=np.average(self.speeds_arr[-30:])
-        # steps per goal stats
-        self.max_steps_per_goal=0
-        self.avg_steps_per_goal=0
-        self.avg_steps_per_goal_last_30=0
-        self.max_steps_per_goal_last_30=0
-        # goals per episode stats
-        self.max_goals_per_episode=0 if len(self.goals_per_episode_arr) == 0 else max(np.max(self.goals_per_episode_arr), self.max_goals_per_episode)
-        self.avg_goals_per_episode=self.goals_per_episode_total / max(1,self.num_episodes_total)
-        self.max_goals_per_episode_last_30=0 if len(self.goals_per_episode_arr) <30 else np.max(self.goals_per_episode_arr[-30:])
-        self.avg_goals_per_episode_last_30=np.average(self.goals_per_episode_arr[-30:])
-        # steering angle ratio stats, used to determine if car is driving off track
-        steering_angle_ratio_arr = np.array(self.steering_angle_ratio_arr)
-        self.avg_steering_angle_ratio=self.steering_angle_ratio_total / self.steps_total
-        steering_angle_ratio_arr_no_nan = steering_angle_ratio_arr[~(np.isinf(steering_angle_ratio_arr)) & ~(np.isnan(steering_angle_ratio_arr))]
-        self.avg_steering_angle_ratio_last_30=np.average(steering_angle_ratio_arr_no_nan[-30:])
-    
-    def do_reset_blocking(self):
-        num_obstacles = self.get_num_obstacles()
-        #self.reset_stats()
-        self._api.DoResetBlocking(num_obstacles)
-
-class SimpleCourse ():
-    def __init__(self, api, env):
-        self.env = env
-        self._api = api
-        self.action_spec = array_spec.BoundedArraySpec(
-            shape=(2, ), dtype=np.float32, 
-                minimum=[0,-1], 
-                maximum=[10,1], name='action')
-        self.observation_spec = array_spec.BoundedArraySpec(
-            shape=(9,), dtype=np.float32,
-            minimum=[0, -25, -10000, -10000, -10000,-100,0,0,0],
-            maximum=[1, 100, 10000, 10000, 10000,100,1000,1000,360],
-            name='observation')
-    
-    def get_empty_state(self):
-        emptyState = [0,0,0,0,0,0,0,0,0]
-        return emptyState
-        
-    def has_failed(self, data_arr, step_costs, position_history):
-        has_fallen = data_arr[3] < -0.5
-        int_rotation_z = round(data_arr[8])
-        has_too_many_steps = len(step_costs) > 150
-        is_stuck = not self.check_if_moving(position_history)
-        has_flipped = int_rotation_z == 90 or int_rotation_z == 180 or int_rotation_z == 270
-        return has_fallen or has_flipped or is_stuck or has_too_many_steps
-    
-    def has_succeeded(self, data_arr):
-        has_succeeded = data_arr[0] == 1
-        return has_succeeded
-    
-    def check_if_moving(self, arr):
-        last_position = len(arr)-1
-        debug_print(last_position)
-        if len(arr) < 6:
-            return True
-        for  i in reversed(range(last_position-5, last_position)):
-            dist = math.dist(arr[last_position], arr[i])
-            if dist >= 0.0001:
-                return True
-        return False
-    
-    def scene_data_array(self, scene_data):
-        #print("in scene_data_array")
-        #print(scene_data)
-        # float64 speed
-        # float64 location_x
-        # float64 location_y
-        # float64 location_z
-        # float64 cost
-        # float64 dist_from_traj
-        # float64 dist_from_goal
-        # bool has_reached_goal
-        # bool has_crashed
-        arr = [
-            1 if scene_data["car"]['has_reached_goal'] else 0,
-            scene_data["car"]['speed'],
-            scene_data["car"]['location_x'],
-            scene_data["car"]['location_y'],
-            scene_data["car"]['location_z'],
-            scene_data["car"]["cost"],
-            scene_data["car"]["dist_from_traj"],
-            scene_data["car"]["dist_from_goal"],
-            scene_data["car"]["rotation_z"],
-        ]
-        return np.array(arr, dtype=np.float32)
-    
-    def reward_standard(self, data, data_arr, step_costs, job_id):
-        self.env._episode_ended = False
-        last_step_cost = 0 if len(step_costs) < 2 else step_costs[len(step_costs)-2]
-        curr_step_cost = step_costs[len(step_costs)-1]
-        diff = abs(curr_step_cost) - abs(last_step_cost)
-        if curr_step_cost == 0:
-            reward = 1
-        elif diff < 0:
-            reward = 1
-        else:
-            reward = -1
-        log_reward(self.env.job_id, "did not fail", float(reward), diff=float(diff), extra_data=data)
-        return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
-    
-    def reward_success(self, curr_step_cost, job_id, data, data_arr, step_costs, position_history):
-        self.env._episode_ended = True
-        m = interp1d([0,1,5,100],[100,10,1,0.5],fill_value="extrapolate")
-        reward = float(m(curr_step_cost)) 
-        log_reward(self.env.job_id, "has succeeded", float(reward),extra_data=data, step_costs=step_costs, position_history=position_history)
-        term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
-        return term_time_step
-    
-    def reward_failure(self, job_id, step_costs, data, data_arr, position_history):
-        self.env._episode_ended = True
-        reward = -1 * np.mean(step_costs) if len(step_costs) > 0 and np.mean(step_costs) > 0  else -1
-        log_reward(self.env.job_id, "has failed", float(reward),extra_data=data, step_costs=step_costs, position_history=position_history)
-        term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
-        return term_time_step
-    
-    def get_num_obstacles(self):
-        return 0
-    
-    def do_reset_blocking(self):
-        num_obstacles = self.get_num_obstacles()
-        self._api.DoResetBlocking(num_obstacles)
-    
-class PoleCartEnv(py_environment.PyEnvironment):
-    def __init__(self, api):
-        self.course = DonutCourse(api, self)
-        self._api = api
-        self._action_spec = self.course.action_spec
-        ##self.course.action_spec
-        self._observation_spec = self.course.observation_spec
-        ##self.course.observation_spec
-        self._time_step_spec = ts.time_step_spec(self._observation_spec)
-        self._state = self.course.get_empty_state()
-        self._episode_ended = False
-        self.job_id=""
-        self.has_reset = False
-        self.pass_through_actions = False
-        self.data = {}
-
-    def action_spec(self):
-        return self._action_spec
-
-    def observation_spec(self):
-        return self._observation_spec
-
-    def _reset(self):
-        self._episode_ended = False
-        #self._api.DoResetBlocking()
-        self.course.do_reset_blocking()
-        data = self._api.GetCarSceneDataBlocking()
-        self.data = data
-        data_arr=self.course.scene_data_array(data)
-        self._step_costs=[]
-        self._position_history=[]
-        return ts.restart(np.array(data_arr, dtype=np.float32))
-   
-    def __has_failed(self, data, data_arr):
-        return self.course.has_failed(
-            data, data_arr, self._step_costs, self._position_history)
-    
-    def __has_succeeded(self, data, data_arr):
-        return self.course.has_succeeded(data, data_arr)
-    
-    def _apply_force(self):
-        return self._api.DoApplyForceBlocking()
-
-    def _step(self, action):
-        m = interp1d([0,1,5,100],[100,10,1,0.5],fill_value="extrapolate")
-        n = interp1d([-3,-0.001,1,3],[5,0,-2,-5],fill_value="extrapolate")
-        if self._episode_ended:
-            # The last action ended the episode. Ignore the current action and start
-            # a new episode
-            return self.reset()
-        data = self._do_action(action)
-        self.data = data
-        data_arr = self._scene_data_array(data)
-        curr_step_cost = abs(data_arr[7]) #abs(data_arr[6])
-        self._step_costs.append(curr_step_cost)
-        self._position_history.append(
-            [self.data["car"]['location_x'], #x position
-            self.data["car"]['location_y'], #y position
-            self.data["car"]['location_z']
-            ]) #z position
-        if self.__has_failed(data, data_arr):
-            return self.course.reward_failure(
-                env.job_id, self._step_costs, data,
-                data_arr, self._position_history)
-            # reward = -1 * np.mean(self._step_costs) if len(self._step_costs) > 0 and np.mean(self._step_costs) > 0  else -1
-            # log_reward(self.job_id, "has failed", float(reward),extra_data=data,step_costs=self._step_costs, position_history=self._position_history)
-            # term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
-            # return term_time_step
-        if self.__has_succeeded(data, data_arr):
-            return self.course.reward_success(
-                curr_step_cost, env.job_id, data, data_arr,
-                self._step_costs, self._position_history)
-        else:
-            return self.course.reward_standard(
-                data, data_arr, self._step_costs, env.job_id)
-    
-    def _do_action(self, action):
-        if type(action).__name__ == "ndarray":
-            action_arr = action.tolist()
-        else:
-            action_arr = action.numpy().tolist()
-        
-        if (self.pass_through_actions == True):
-            steering_angle=self.data["car"]["dist_from_traj"]
-            acceleration = 2 if self.data["car"]["speed"] < 10 else -10
-        else:
-            acceleration=action_arr[0]
-            steering_angle=action_arr[1]
-    
-        data = self._api.DoApplyForceBlocking(
-            acceleration,
-            steering_angle)
-        self.course.do_action_after(action, data)
-        return data
-
-    def _get_empty_state(self):
-        return self.course.get_empty_state()
-    
-    def _scene_data_array(self, scene_data):
-        return self.course.scene_data_array(scene_data)
 
 def get_save_dir_root(policy):
     policy_type = get_policy_type_name(policy)
@@ -640,6 +104,13 @@ def get_save_dir_by_version(policy, version):
     sorted_file_list=sorted(file_list,reverse=True)
     return os.path.join(path, version)
 
+def print_replay_buffer_size(reverb_replay, table_name, replay_buffer_capacity):  
+    # Query the Reverb server for the current stats
+    server_info = reverb_replay.py_client.server_info()
+    # Extract the current size of your specific table
+    current_size = server_info[table_name].current_size
+    print(f"Current Replay Buffer length: {current_size} / {replay_buffer_capacity}")
+
 def main(
     job_id="",
     checkpoint_restore=False, 
@@ -648,7 +119,7 @@ def main(
     pass_through_actions=False,
     initial_collect_steps_val=500,
     collect_steps_per_iteration_val=1,
-    replay_buffer_capacity_val=5000,
+    replay_buffer_capacity_val=75000,#5000,
     batch_size_val=256,
     critic_learning_rate_val=3e-5,
     actor_learning_rate_val=3e-5,
@@ -690,7 +161,7 @@ def main(
     eval_interval = eval_interval_val # @param {type:"integer"}
     policy_save_interval = policy_save_interval_val # @param {type:"integer"}
     # Environment. Use same for eval and collection, though this does not seem standard?
-    env = PoleCartEnv(api)
+    env = pce(api, course_type="donut")
     print(f"Job arguments = num_iterations: {num_iterations}, nn_size_x: {actor_fc_layer_params_x}, nn_size_x: {actor_fc_layer_params_y}")
     learner_dir = os.path.join(tempdir, str(job_id),"learner")
     saved_model_dir = os.path.join(learner_dir, learner.POLICY_SAVED_MODEL_DIR)
@@ -729,8 +200,37 @@ def main(
                 tanh_normal_projection_network.TanhNormalProjectionNetwork))
 
     record_dir = '/tfrecords/job_64168c1b58d4d8ccdb76e721'
-    files = collect_training_data.get_files_from_directory(record_dir)
-    file = files[0]
+    # 1. You already loaded the expert demos into memory as a Trajectory object
+    # (Renaming the variable from 'files' to 'expert_trajectories' for clarity)
+    expert_trajectories = collect_training_data.read_files_from_directory(record_dir)
+    print(f"Loaded trajectories shape: {expert_trajectories.step_type.shape}")
+
+    # 2. Find our target length (e.g., 500001) based on the observation tensor
+    num_steps = tf.shape(expert_trajectories.observation)[0]
+    # Helper function to stretch length-1 tensors to match num_steps
+    def match_length(tensor, target_length):
+        if tensor.shape[0] == 1 and target_length > 1:
+            return tf.repeat(tensor, target_length, axis=0)
+        return tensor
+
+    # 3. Create a new, shape-aligned Trajectory object
+    aligned_trajectories = trajectory.Trajectory(
+        step_type=match_length(expert_trajectories.step_type, num_steps),
+        observation=expert_trajectories.observation,
+        action=expert_trajectories.action,
+        policy_info=(), # Keep empty
+        next_step_type=match_length(expert_trajectories.next_step_type, num_steps),
+        reward=match_length(expert_trajectories.reward, num_steps),
+        discount=match_length(expert_trajectories.discount, num_steps)
+    )
+
+    # 4. Now slice the perfectly aligned trajectories!
+    trajectory_dataset = tf.data.Dataset.from_tensor_slices(aligned_trajectories)
+
+    # 5. Add a batch dimension of 1 for Reverb
+    #batched_parsed_dataset = trajectory_dataset.batch(1)
+ 
+
     # parsed_dataset = collect_training_data.get_parsed_dataset(file)
     
     # collect_training_data.train_agent_sampling(
@@ -775,6 +275,7 @@ def main(
         sampler=reverb.selectors.Uniform(),
         remover=reverb.selectors.Fifo(),
         rate_limiter=reverb.rate_limiters.MinSize(1))
+    
     reverb_server = reverb.Server([table])
 
     reverb_replay = reverb_replay_buffer.ReverbReplayBuffer(
@@ -787,10 +288,11 @@ def main(
       sample_batch_size=batch_size, num_steps=2).prefetch(50)
     experience_dataset_fn = lambda: dataset
     
+    # Policies
     tf_eval_policy = tf_agent.policy
     eval_policy = py_tf_eager_policy.PyTFEagerPolicy(
         tf_eval_policy, use_tf_function=True)
-    # Policies
+    
 
     tf_collect_policy = tf_agent.collect_policy
     collect_policy = py_tf_eager_policy.PyTFEagerPolicy(
@@ -798,14 +300,28 @@ def main(
 
     random_policy = random_py_policy.RandomPyPolicy(
         env.time_step_spec(), env.action_spec())
-
+    
     # Actors
     rb_observer = reverb_utils.ReverbAddTrajectoryObserver( #ReverbConcurrentAddBatchObserver
         reverb_replay.py_client,
         table_name,
         sequence_length=2,
         stride_length=1)
+    
+    print("Loading expert demonstrations into Reverb...")
+    items_added = 0
+    for unbatched_traj in trajectory_dataset:
+        rb_observer(unbatched_traj)
+        items_added += 1
+        if items_added >=50000:
+            break
+        if items_added % 10000 == 0:
+            print(f"Batch trajectory {items_added} added")
+            
+    print(f"Successfully loaded {items_added} expert steps into Reverb.")
 
+    print_replay_buffer_size(reverb_replay,table_name,replay_buffer_capacity)
+    
     initial_collect_actor = actor.Actor(
         env,
         random_policy,
@@ -818,7 +334,7 @@ def main(
     print("Initial collection done")
 
     env_step_metric = py_metrics.EnvironmentSteps()
-    print("number of steps: " + str(py_metrics.EnvironmentSteps()))
+    print("number of steps: " + str(env_step_metric.result()))
     collect_actor = actor.Actor(
         env,
         collect_policy,
@@ -874,7 +390,7 @@ def main(
         eval_results_blob["type"] = "step update"
         eval_results_blob["job_id"] = env.job_id
         log_blob(eval_results_blob)
-        print('step = {0}: {1}'.format(step, eval_results))
+        print('step = {0}: {1}'.format(step, eval_results), flush=True)
 
     log_eval_metrics(0, metrics)
 
@@ -889,7 +405,24 @@ def main(
     print("Eval interval: " + str(eval_interval), flush=True)
     print("Log interval: " + str(log_interval), flush=True)
     min_write_step = 0
+
     for _ in range(num_iterations):
+        def diagnostic_check():
+            print("\n--- DIAGNOSTIC CHECK ---")
+            # 1. Check if the environment is giving rewards
+            test_time_step = env.reset()
+            print(f"Initial Step Type: {test_time_step.step_type}")
+            print(f"Initial Reward: {test_time_step.reward}")
+            # 2. Check what the Actor Network is outputting
+            # We pass the observation through the policy to see if it's producing NaNs
+            test_action_step = tf_eval_policy.action(test_time_step)
+            print(f"Agent Action Output: {test_action_step.action.numpy()}")
+            # 3. Step the environment with that action
+            next_test_time_step = env.step(test_action_step.action)
+            print(f"Next Step Type: {next_test_time_step.step_type}")
+            print(f"Next Reward: {next_test_time_step.reward}")
+            print("------------------------\n")
+        
         # Training.
         print("***************training agent**************", flush=True)
         collect_actor.run()
@@ -898,6 +431,11 @@ def main(
         step = agent_learner.train_step_numpy
         print("step: " + str(step), flush=True)
         print("eval_interval: " + str(eval_interval), flush=True)
+        print_replay_buffer_size(
+            reverb_replay,
+            table_name,
+            replay_buffer_capacity)
+        
         if eval_interval and step % eval_interval == 0:
             print("***************evaluating agent**************", flush=True)
             print("step: " + str(step), flush=True)
@@ -906,14 +444,15 @@ def main(
             update_job(job_id, percent_complete*100, "percent_complete")
             update_job(job_id, int(step), "training_steps")
             print(f"percent complete: {percent_complete}", flush=True)
-            print("bc agent training started", flush=True)
-            # collect_training_data.train_agent_sampling(
-            #     actor_net,
-            #     record_dir, 
-            #     training_steps=2,
-            #     sampling_fraction=0.002,
-            #     parsed_dataset=parsed_dataset)
-            # print("Evaluating agent")
+            def bc_agent_training():
+                print("bc agent training started", flush=True)
+                collect_training_data.train_agent_sampling(
+                    actor_net,
+                    record_dir, 
+                    training_steps=2,
+                    sampling_fraction=0.002,
+                    parsed_dataset=parsed_dataset)
+                print("Evaluating agent")
             metrics = get_eval_metrics()
             tf.summary.scalar('avg_goals_per_episode', data=env.course.avg_goals_per_episode, step=step)
             tf.summary.scalar('avg_goals_per_episode_last_30', data=env.course.avg_goals_per_episode_last_30, step=step)
@@ -989,6 +528,7 @@ def run_episodes_and_create_video(saved_policy, tf_env, job_id=""):
         summary_dir=eval_dir)
     debug_print("after eval actor")
     print(eval_actor.metrics)
+    
     def get_eval_metrics():
         debug_print("inside get_eval_metrics")
         eval_actor.run()
@@ -1028,7 +568,7 @@ def get_saved_model(policy_type, version=None, path_arg=None):
 
 def load_saved_model(policy_type, version=None, path=None, job_id=""):
     # Environment. Use same for eval and collection, though this does not seem standard?
-    env = PoleCartEnv(api)
+    env = pce(api)
     env.job_id = job_id
     if path is not None:
         saved_policy, path = get_saved_model(policy_type, path_arg=path)
@@ -1058,6 +598,11 @@ def add_model(path, robot_type, model_type, training_iterations, avg_return=None
         })
 
 def save_results_to_db(path, results):
+    if not results or len(results) == 0:
+        print("Warning: No results to save. Skipping DB insert.")
+        return
+    else:
+        print("Has results to save.")
     saved_model_object = db.models.find_one({"location": path})
     ts = time.time()
     iso_date = datetime.datetime.fromtimestamp(ts, None)
@@ -1121,7 +666,7 @@ def do_job(job):
     if job_type == "DEMO":
         num_iterations=job["num_iterations"] if job["num_iterations"] != "" else 50000
         print(job)
-        env = PoleCartEnv(api)
+        env = pce(api)
         collect_expert_demos(env, num_iterations, job["_id"])
         root_dir = "/tfrecords/job_" + str(job["_id"])
         collect_training_data.train_agent(root_dir, int(job["training_steps"]))
@@ -1390,7 +935,7 @@ if __name__ == "__main__":
     while not api:
         time.sleep(0.1)
     print("Robot API initialized")
-    env = PoleCartEnv(api)
+    env = pce(api)
     print('action_spec:', env.action_spec())
     print('time_step_spec.observation:', env.time_step_spec().observation)
     print('time_step_spec.step_type:', env.time_step_spec().step_type)
