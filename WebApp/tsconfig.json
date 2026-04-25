@@ -7,6 +7,7 @@
     "lib": ["dom","es5"],
     "sourceMap": false,
     "outDir":"build",
-    "rootDir":"src"
+    "rootDir":"src",
+    "experimentalDecorators": true,
   }
 }

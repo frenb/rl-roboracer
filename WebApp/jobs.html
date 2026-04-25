@@ -142,6 +142,7 @@
         <p>{{title}}</p>
         <button type="button" class="btn btn-success" ng-click="clearAll()">Clear All</button>
         <button type="button" class="btn btn-success" ng-click="update_job_status_all()"> Set To Done</button>
+        <button type="button" class="btn btn-success" ng-click="update_job_status_restart()"> Restart Jobs</button>
         <button type="button" class="btn btn-success" ng-click="delete_jobs()"> Delete Jobs</button>
         <button type="button" class="btn btn-success" ng-click="create_job()"> Create Job</button>
         <div class="uiGrd" id="grd" 
@@ -153,7 +154,8 @@
     </div>
 <!--The Controller -->
 <script>
-    var app = angular.module('myApp', ['ui.grid', 'ui.grid.pagination','ui.grid.resizeColumns','ui.grid.selection']);
+    var app = angular.module('myApp', 
+        ['ui.grid', 'ui.grid.pagination','ui.grid.resizeColumns','ui.grid.selection']);
     
     function add_job(
         $http,
@@ -166,7 +168,10 @@
         training_steps_val,
         demo_job_id_val) {
 
-            console.log(location_val, status_val, robot_type_val, num_iterations_val, model_type_val, job_type_val)
+            console.log(
+                location_val, status_val, robot_type_val, 
+                num_iterations_val, model_type_val, job_type_val);
+            
             var new_job = {
                 status: status_val,
                 job_type: job_type_val,
@@ -246,9 +251,6 @@ app.controller('myController', ['$scope','$http', 'uiGridConstants',
     function ($scope, $http, uiGridConstants) {
 
         $scope.title = "Jobs"
-        $scope.dataDoneCount = 0;
-        $scope.dataInProgressCount = 0;
-        $scope.dataNotStartedCount = 0;
 
         $scope.selected_jobs = [];
         drop_down_options =
@@ -325,6 +327,16 @@ app.controller('myController', ['$scope','$http', 'uiGridConstants',
                 return;
             for(var i=0;i<$scope.selected_jobs.length;i++){
                 update_job_status($http, $scope.selected_jobs[i].entity._id,"DONE");
+            }
+        };
+
+        $scope.update_job_status_restart = function() {
+            console.log("restart job");
+            console.log($scope.selected_jobs);
+            if (!$scope.selected_jobs)
+                return;
+            for(var i=0;i<$scope.selected_jobs.length;i++){
+                update_job_status($http, $scope.selected_jobs[i].entity._id,"NOT_STARTED");
             }
         };
 
@@ -406,7 +418,7 @@ app.controller('myController', ['$scope','$http', 'uiGridConstants',
                 var results = [];
                 for(var i=0;i<jsonData.length; i++){
                     var model = jsonData[i];
-                    console.log(model);
+                    //console.log(model);
                     var new_model = {};
                     new_model._id = model["_id"];
                     new_model.job_type = model["job_type"];
@@ -424,36 +436,8 @@ app.controller('myController', ['$scope','$http', 'uiGridConstants',
                     return (textA < textB) ? -1 : (textA > textB) ? 1 : 0;
                 });
 
-                // filter results by status
-                resultsDone = results.filter(function(job){
-                    return job.status != "DONE";
-                });
-                resultsNotStarted = results.filter(function(job){
-                    return job.status != "NOT_STARTED";
-                });
-                resultsInProgress = results.filter(function(job){
-                    return job.status != "IN_PROGRESS";
-                });
-
-               
-
-                const diffDone = resultsDone.length != $scope.dataDoneCount; 
-                const diffNotStarted = resultsNotStarted.length != $scope.dataNotStartedCount;
-                const diffInProgress = resultsInProgress.length != $scope.dataInProgressCount;
-                const diff = diffDone || diffNotStarted || diffInProgress;
-                console.log(resultsDone.length + " " +  $scope.dataDoneCount);
-                console.log(resultsNotStarted.length + " " + $scope.dataNotStartedCount);
-                console.log(resultsInProgress.length + " " + $scope.dataInProgressCount);
-                console.log("diff: " + diff + " diffDone: " + diffDone + " diffNotStarted: " + diffNotStarted + " diffInProgress: " + diffInProgress);
-                // console.log("data: " + $scope.gridOptions.data)
-                // console.log("results: " + results)
-                if(diff){
-                    $scope.gridOptions.data = results;     // BIND JSON TO THE GRID.
-                }
-                $scope.dataDoneCount = resultsDone.length;
-                $scope.dataNotStartedCount = resultsNotStarted.length;
-                $scope.dataInProgressCount = resultsInProgress.length;   
-            } 
+                $scope.gridOptions.data = results;     // BIND JSON TO THE GRID.   
+        } 
             
         $http(firstRequest)
             .success(function (jsonData){
@@ -468,9 +452,9 @@ app.controller('myController', ['$scope','$http', 'uiGridConstants',
         setInterval(function(){
             $http(request)
                 .success(function (jsonData){
+                    console.log(jsonData);
                     if(jsonData == 'NO_CHANGES'){
                         console.log("is NO_CHANGES");
-                        loadGridData(lastJsonData);
                         return;
                     }
                     loadGridData(jsonData);

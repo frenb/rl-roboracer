@@ -1,4 +1,8 @@
-$path = "../../../../UnityBinary/WCourseServerBuildWindows2022.03.06v2/robotaxi gym level 1.exe"
+#$path = "../../../../UnityBinary/WCourseServerBuildWindows2022.03.06v2/robotaxi gym level 1.exe"
+#$path = "C:\Users\benja\Documents\agents\robots\LATEST\UnityBinary\wCourseClientBuildWindows2022.07.03-ROS20hz3X-goal0.25f-checkAllGoals-better-goal-tracking-random-start-closest-point-goal-streamingv1\robotaxi gym level 1.exe"
+#$path = "C:\Users\benja\Documents\agents\robots\LATEST\UnityBinary\wCourseClientBuildWindows2022.06.30-ROS20hz3X-goal0.25f-checkAllGoals-better-goal-tracking-random-start-closest-point-goalv1\robotaxi gym level 1.exe"
+#$path = "C:\Users\benja\Documents\agents\robots\LATEST\UnityBinary\Win20232022\robotaxi gym level 1.exe"
+$path = "C:\Users\benja\Documents\agents\robots\LATEST\UnityBinary\win20230325_debug\robotaxi gym level 1.exe"
 $param1=$args[0]
 if ($param1)
 {

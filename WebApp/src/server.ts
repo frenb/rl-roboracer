@@ -7,20 +7,64 @@ import * as mongoDB from 'mongodb';
 import * as dotenv from 'dotenv';
 const ObjectID = require('mongodb').ObjectID;
 const cors = require('cors');
-
+const { spawn } = require('child_process');
+const Timestamp = mongoDB.Timestamp;
 import { log, LogLevel } from './log';
 import * as morgan from 'morgan';
 
+const WebSocket = require('ws');
+
+
 export const createServer = (config): express.Application => {
   const app: express.Application = express();
+  const databaseName = "robotaxi";
+  const collectionNames = ["leaderboard_scores", "jobs", "models"]
+  var jobsChanged=true;
+  var modelsChanged=true;
+  var leaderboardScoresChanged=true;
   var MongoClient = mongoDB.MongoClient;
   var url = "mongodb://root:example@mongo:27017";
   //var connectionstring = "mongodb+srv://root:example@mongo"
   var dbo;
   MongoClient.connect(url, function(err, db) {
     if (err) throw err;
-    dbo = db.db("local");
+    
+    dbo = db.db(databaseName);
+    // create a collection object for the collection based on collection_name
+    // collectionNames.forEach(function(collectionName) {
+    //   const collection = dbo.collection(collectionName);
+    //   const changeStream = collection.watch();
+  
+    //   // listen for changes in the collection
+    //   changeStream.on('change', function(change) {
+    //     console.log(`Change detected in ${collectionName}:`, change);
+    //     // handle the change event here
+    //   });
+    // });
+    const jobs = dbo.collection("jobs");
+    const models = dbo.collection("models");
+    const leaderboardScores = dbo.collection("leaderboard_scores");
+    
+    const jobsChangeStream = jobs.watch();
+    jobsChangeStream.on('change', (change) => {
+      console.log('Change detected:', change);
+      jobsChanged=true;
+    });
+
+    const modelsChangeStream = models.watch();
+    modelsChangeStream.on('change', (change) => {
+      console.log('Change detected:', change);
+      modelsChanged=true;
+    });
+
+    const leaderboardScoresChangeStream = leaderboardScores.watch();
+    leaderboardScoresChangeStream.on('change', (change) => {
+      console.log('Change detected:', change);
+      leaderboardScoresChanged=true;
+    });
+
   });
+  
   app.set('isPrivate', config.mode == "private");
   // logging http access
   if (config.logging != "none") {
@@ -54,27 +98,73 @@ export const createServer = (config): express.Application => {
     const lb: string = path.join(__dirname, '/../leaderboard.html');
     res.sendFile(lb);
   });
-  app.get('/leaderboard_scores', (req,res) => {
-    dbo.collection("leaderboard_scores").find({}).toArray(function(err, result) {
-      if (err) throw err;
-      console.log(result);
-      res.json(result)
-    });
+  app.get('/job_form', (req, res) => {
+    const lb: string = path.join(__dirname, '/../job_form.html');
+    res.sendFile(lb);
   });
+
+  var needsUpdate = function (req, changed) {
+    var force = (req.query.force == 'true');
+    console.log(`force: ${force} req.query.force: ${req.query.force} jobsChanged: ${changed}`);
+    return (changed || force);
+  }
+
+
+  app.get('/leaderboard_scores', (req,res) => {
+    if(needsUpdate(req, leaderboardScoresChanged))
+    {
+      leaderboardScoresChanged=false;
+      dbo.collection("leaderboard_scores").find({}).toArray(function(err, result) {
+        if (err) throw err;
+        //console.log(result);
+        console.log(`${result.length} leaderboard scores retrieved`);
+        res.json(result);
+      });
+      return;
+    }
+    
+    console.log(`No leaderboard scores retrieved`);
+    res.status(200).send('NO_CHANGES');
+  
+  });
+  app.get('/logs', (req, res) => {
+    const lb: string = path.join(__dirname, '/../logs.html');
+    res.sendFile(lb);
+    // const dockerLogs = spawn('tail', ['-f', '-n', '100', '/python_ws/src/robotaxi.out']);
+    // dockerLogs.stdout.on('data', (data) => {
+    //   res.write(`${data}\n`);
+    // });
+    // dockerLogs.stderr.on('data', (data) => {
+    //   console.error(`stderr: ${data}`);
+    // });
+    // dockerLogs.on('close', (code) => {
+    //   console.log(`child process exited with code ${code}`);
+    //   res.end();
+    // });
+
+  })
   app.post('/add_job', (req,res) => {
     console.log("add_job: " + JSON.stringify(req.body));
     dbo.collection("jobs").insertOne(req.body,function(err, result) {
       if (err) throw err;
-      console.log(result);
+      //console.log(result);
       res.json(result)
     });
   });
   app.get('/get_jobs', (req,res) => {
-    dbo.collection("jobs").find({}).toArray(function(err, result) {
-      if (err) throw err;
-      console.log(result);
-      res.json(result)
-    });
+    if (needsUpdate(req, jobsChanged)) {
+      jobsChanged=false;
+      dbo.collection("jobs").find({}).toArray(function(err, result) {
+          if (err) throw err;
+          //console.log(result);
+          console.log(`${result.length} jobs retrieved`)
+          res.json(result)
+      });
+      return;
+    }
+    
+    console.log(`No jobs retrieved`);
+    res.status(200).send('NO_CHANGES');
   });
 
   app.get('/jobs', (req, res) => {
@@ -111,11 +201,19 @@ export const createServer = (config): express.Application => {
     res.sendFile(lb);
   });
   app.get('/get_models', (req,res) => {
-    dbo.collection("models").find({}).toArray(function(err, result) {
-      if (err) throw err;
-      console.log(result);
-      res.json(result)
-    });
+    if(needsUpdate(req, modelsChanged))
+    {
+      modelsChanged=false;
+      dbo.collection("models").find({}).toArray(function(err, result) {
+        if (err) throw err;
+        //console.log(result);
+        console.log(`${result.length} models retrieved`)
+        res.json(result)
+      });
+      return;
+    }
+    console.log(`No models retrieved`);
+    res.status(200).send('NO_CHANGES');
   });
  
   app.get('/', (req, res) => {
@@ -131,3 +229,26 @@ export const createServer = (config): express.Application => {
   });
   return app;
 };
+// create websocket server
+const wss = new WebSocket.Server({ createServer, port:8080 });
+
+wss.on('connection', (ws) => {
+  const dockerLogs = spawn('tail', ['-f', '-n', '100', '/python_ws/src/robotaxi.out']);
+
+  dockerLogs.stdout.on('data', (data) => {
+    ws.send(data.toString());
+  });
+
+  dockerLogs.stderr.on('data', (data) => {
+    console.error(`stderr: ${data}`);
+  });
+
+  dockerLogs.on('close', (code) => {
+    console.log(`child process exited with code ${code}`);
+  });
+
+  ws.on('close', () => {
+    dockerLogs.kill();
+  });
+});
+

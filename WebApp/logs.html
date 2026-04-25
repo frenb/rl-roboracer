@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Docker Logs Streaming</title>
+  </head>
+  <body>
+    <pre id="log"></pre>
+    <script>
+      const log = document.getElementById('log');
+      const ws = new WebSocket('ws://localhost:8080');
+
+      ws.addEventListener('message', (event) => {
+        log.textContent += event.data;
+        // scroll to bottom of body
+        window.scrollTo(0, document.body.scrollHeight);
+      });
+      window.scrollTo(0, document.body.scrollHeight);
+    </script>
+  </body>
+</html>

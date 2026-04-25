@@ -15,8 +15,7 @@ services:
   ros-server:
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    image: docker_ros-server:latest
-    #image: robottycoon.azurecr.io/unity-robotics-pick-and-place
+    image: docker_ros-server:thin
     restart: always
     environment:
       - SAVED_MODELS_DIR=/saved_models
@@ -25,14 +24,14 @@ services:
       - UNITY_MACHINE_IP=host.docker.internal
     build:
       #from: robottycoon.azurecr.io/unity-robotics-pick-and-place 
-      context:  C:\Users\benja\Documents\robots\LATEST\robot-tycoon\Docker\pick_and_place
+      context:  C:\Users\benja\Documents\agents\robots\LATEST\robot-tycoon\Docker\pick_and_place
       dockerfile: docker\Dockerfile
     volumes:  
       - type: bind
-        source: C:\Users\benja\Documents\robots\LATEST\robot-tycoon\Frontend\public\workspaces\python 
+        source: C:\Users\benja\Documents\agents\robots\LATEST\robot-tycoon\Frontend\public\workspaces\python 
         target: /python_ws/src
       - type: bind
-        source: C:\Users\benja\Documents\robots\LATEST\saved_models 
+        source: C:\Users\benja\Documents\agents\robots\LATEST\saved_models 
         target: /saved_models
     ports:
       - "10000:10000" 
@@ -44,15 +43,26 @@ services:
     #   - "simulator"
     #   - "sim-controller"
   mongo:
-    image: mongo
+    #image: mongo
+    image: bitnami/mongodb:6.0
     restart: always
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: example
+      MONGODB_ROOT_PASSWORD: example
+      MONGODB_REPLICA_SET_MODE: primary
+      MONGODB_ADVERTISED_HOSTNAME: mongo
+      MONGODB_REPLICA_SET_KEY: 64321d2b6ce8b4318b337bb1
+    #entrypoint: [  "/usr/bin/mongod", "--bind_ip_all", "--replSet", "rs0" ]
+    ports:
+      - 27017:27017
     volumes:  
       - type: bind
-        source: C:\Users\benja\Documents\robots\LATEST\mongodb\
+        source: C:\Users\benja\Documents\agents\robots\LATEST\mongodb\
         target: /data/db
+      - type: bind
+        source: C:\Users\benja\Documents\agents\robots\LATEST\mongodb\
+        target: /bitnami/mongodb
   mongo-express:
     image: mongo-express
     restart: always
@@ -83,25 +93,37 @@ services:
     environment:
       - SAVED_MODELS_DIR=/saved_models
       - ROBOT_TYPE=robotaxi
+      - DATABASE_NAME=robotaxi
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     volumes:  
       - type: bind
-        source: C:\Users\benja\Documents\robots\LATEST\robot-tycoon\Frontend\public\workspaces\python 
+        source: C:\Users\benja\Documents\agents\robots\LATEST\robot-tycoon\Frontend\public\workspaces\python 
         target: /python_ws/src
       - type: bind
-        source: C:\Users\benja\Documents\robots\LATEST\saved_models 
+        source: C:\Users\benja\Documents\agents\robots\LATEST\saved_models 
         target: /saved_models
-    build:
-      context:  C:\Users\benja\Documents\robots\LATEST\robot-tycoon\Docker\pick_and_place
-      dockerfile: docker\Dockerfile
+      - type: bind
+        source: C:\Users\benja\Documents\agents\robots\LATEST\tfrecords 
+        target: /tfrecords
+      - type: bind
+        source: C:\Users\benja\Documents\agents\robots\LATEST\tmp 
+        target: /tmp
     ports:
       # - "5005:5005"
       - "6006:6006"
       # - "60061:60061" 
       # - "60062:60062"
-    command: sh -c "(tensorboard --bind_all --logdir /tmp --reload_multifile true &1> /tmp/tb.log) && cd /python_ws/src && python robotaxi.py"
+    command: sh -c "(tensorboard --bind_all --logdir /tmp/active --reload_multifile true &1> /tmp/tb.log) && cd /python_ws/src && python robotaxi.py 2>&1 | tee robotaxi.out"
     links:
       # - "simulator"
       - "mongo"
+      - "ros-server"
   # simulator:
   #   extra_hosts:
   #     - "host.docker.internal:host-gateway"
@@ -112,18 +134,27 @@ services:
   #   links:
   #     - "ros-server"
       # - "webapp"
-  # webapp:
-  #   image: node:15.8
-  #   restart: always
-  #   ports:
-  #     - "80:80"
-  #   volumes:
-  #     - type: bind
-  #       source: C:\Users\benja\Documents\robots\LATEST\robot-tycoon\WebApp
-  #       target: /WebApp
-  #   links:
-  #     - "ros-server"
-  #   command: sh -c "cd /WebApp && npm start"
+  webapp:
+    image: node:15.8
+    restart: always
+    ports:
+      - "80:80"
+      - "8080:8080"
+    environment:
+      - DATABASE_NAME=robotaxi
+    volumes:
+      - type: bind
+        source: C:\Users\benja\Documents\agents\robots\LATEST\robot-tycoon\WebApp
+        target: /WebApp
+      - type: bind
+        source: C:\Users\benja\Documents\agents\robots\LATEST\robot-tycoon\Frontend\public\workspaces\python 
+        target: /python_ws/src
+      - type: bind
+        source: C:\Users\benja\Documents\agents\robots\LATEST\tmp 
+        target: /tmp
+    command: sh -c "cd /WebApp && npm start"                                                                       
+
+
   # simulation:
   #   image: mcr.microsoft.com/windows:10.0.19041.867
   #   environment:
@@ -134,7 +165,7 @@ services:
   #     - "1-79:1-79"
   #     - "81-2999:81-2999"
   #     - "3001-65535:3001-65535"
-  #     - "49000-49500:49000-50000"
+  #     - "49000-49500:49000-50000"E
   #     - "135:135"
   #     - "53432:53432"
   #    - "3389:3389"

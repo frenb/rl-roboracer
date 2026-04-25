@@ -1,0 +1,3 @@
+edit c:\windows\system32\drivers\etc\hosts file and add webapp 127.0.0.1 ros-server 127.0.0.1
+netstat -ano -p tcp | findstr ":50051"
+run as administrator: netsh interface ipv4 delete excludedportrange protocol=tcp startport=50000 numberofports=60

@@ -1,3 +1,5 @@
+# root directory: .\Docker\pick_and_place\
+# build command: docker buildx build -f .\docker\Dockerfile .
 FROM ros:noetic-ros-base-focal
 
 RUN sudo apt-get update && sudo apt-get install -y vim iputils-ping net-tools python3-pip ros-noetic-robot-state-publisher ros-noetic-moveit ros-noetic-rosbridge-suite ros-noetic-joy ros-noetic-ros-control ros-noetic-ros-controllers dos2unix python3-venv
