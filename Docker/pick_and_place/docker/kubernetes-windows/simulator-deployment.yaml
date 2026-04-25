@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: C:\ProgramData\chocolatey\lib\kubernetes-kompose\tools\kompose.exe convert
+    kompose.version: 1.26.1 (a9d05d509)
+  creationTimestamp: null
+  labels:
+    io.kompose.service: simulator
+  name: simulator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: simulator
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: C:\ProgramData\chocolatey\lib\kubernetes-kompose\tools\kompose.exe convert
+        kompose.version: 1.26.1 (a9d05d509)
+      creationTimestamp: null
+      labels:
+        io.kompose.service: simulator
+    spec:
+      containers:
+        - name: windows-server
+          image: gcr.io/robo-racer/windows-server:latest
+          name: simulator
+          ports:
+            - containerPort: 80
+          resources: {}
+          volumeMounts:
+            - mountPath: /simulator
+              name: simulator-claim0
+      restartPolicy: Always
+      volumes:
+        - name: simulator-claim0
+          persistentVolumeClaim:
+            claimName: simulator-claim0
+status: {}
