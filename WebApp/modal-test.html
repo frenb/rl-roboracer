@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.5.0/angular.js"></script>
+    <link rel="stylesheet" href="http://ui-grid.info/docs/css/prettify.css"></link>
+    <link rel="stylesheet" href="http://ui-grid.info/docs/css/bootstrap-flatly.min.css"></link>
+  <title>Modal Dialog Example</title>
+  <style>
+    /* Style the modal background */
+    .modal {
+      display: none; /* Hidden by default */
+      position: fixed; /* Stay in place */
+      z-index: 1; /* Sit on top */
+      left: 0;
+      top: 0;
+      width: 100%; /* Full width */
+      height: 100%; /* Full height */
+      overflow: auto; /* Enable scroll if needed */
+      background-color: rgba(0, 0, 0, 0.4); /* Black background with opacity */
+    }
+
+    /* Style the modal content */
+    .modal-content {
+      background-color: #fefefe;
+      margin: 15% auto; /* 15% from the top and centered */
+      padding: 20px;
+      border: 1px solid #888;
+      width: 350px; /* Could be more or less, depending on screen size */
+    }
+  </style>
+</head>
+<body>
+
+  <!-- The Modal -->
+  <div id="myModal" class="modal">
+    <!-- Modal content -->
+    <div class="modal-content">
+        <div ng-app="JobForm"  ng-controller="JobFormController">
+            <form>
+                <table>
+                <tr>
+                    <td>
+                        <label>
+                            Status
+                        </label>
+                    </td>
+                    <td>
+                        <select id="status"></select>
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        <label>
+                            Robot Type
+                        </label>
+                    </td>
+                    <td>
+                        <select id="robot_type"></select>
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        <label>
+                            Num Iterations
+                        </label>
+                    </td>
+                    <td>
+                        <input id="num_iterations" type="text" formControlName="num_iterations_val">
+                    </td>
+                <tr>
+                    <td>
+                        <label>
+                            Location
+                        </label>
+                    </td>
+                    <td>
+                        <input id="location" type="text" formControlName="location_val">
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        <label>
+                            Model Type:
+                        </label>
+                    </td>
+                    <td>
+                        <select id="model_type"></select>
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        <label>
+                            Job Type
+                        </label>
+                    </td>
+                    <td>
+                        <select id="job_type"></select>
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        <button type="button" class="btn btn-success" ng-click="add_jobs()">Submit</button>
+                    </td>
+                </tr>
+                </table>
+            </form>
+        </div>
+    </div>
+
+  </div>
+
+  <!-- Button to open the modal -->
+  <button id="myBtn">Open Modal</button>
+
+  <script>
+    // Get the modal
+    var modal = document.getElementById("myModal");
+
+    // Get the button that opens the modal
+    var btn = document.getElementById("myBtn");
+
+    // When the user clicks the button, open the modal
+    btn.onclick = function() {
+      modal.style.display = "block";
+    }
+
+    // When the user clicks anywhere outside of the modal, close it
+    window.onclick = function(event) {
+      if (event.target == modal) {
+        modal.style.display = "none";
+      }
+    }
+    var app = angular.module('JobForm', []);
+    
+    function add_job(
+        $http,
+        location_val, 
+        status_val, 
+        robot_type_val,
+        num_iterations_val,
+        model_type_val,
+        job_type_val) {
+
+            console.log(location_val, status_val, robot_type_val, num_iterations_val, model_type_val, job_type_val)
+            var new_job = {
+                status: status_val,
+                job_type: job_type_val,
+                iterations: num_iterations_val,
+                model_type: model_type_val,
+                location: location_val
+            }
+            
+            var postModel = {
+                method: 'post',
+                url: '/add_job',
+                dataType: 'json',
+                data: new_job,
+                contentType: "application/json"
+            };
+            
+            $http(postModel)
+                .success(function (jsonData) {
+                    console.log(jsonData)
+                })
+                .error(function () { });
+    }
+
+    app.controller('JobFormController', function ($scope, $http) {
+
+        drop_down_options =
+            {
+                status: ["NOT_STARTED", "IN_PROGRESS", "DONE"],
+                model_type: ["SacAgent", "GreedyPolicy", "RandomPyPolicy"],
+                job_type: ["TRAIN", "DEMO", "EVAL"],
+                robot_type: ["robotaxi", "niryo"]
+            };
+
+        $scope.title = "Models"
+        $scope.add_jobs = function() {
+            console.log("in add jobs");
+            var location_val = document.getElementById("location").value;
+            var status_val = document.getElementById("status").value;
+            var robot_type_val = document.getElementById("robot_type").value;
+            var num_iterations_val = document.getElementById("num_iterations").value;
+            var model_type_val = document.getElementById("model_type").value;
+            var job_type_val = document.getElementById("job_type").value;
+            console.log(location_val, status_val, robot_type_val, num_iterations_val, model_type_val, job_type_val)
+            add_job(
+                $http,
+                location_val,
+                status_val,
+                robot_type_val,
+                num_iterations_val,
+                model_type_val,
+                job_type_val
+            );
+        }
+        //foreach of the drop down options
+        var list_of_object_ids = ["status", "model_type", "job_type", "robot_type"]
+        var addOptions = function () {
+            console.log("length of list of object ids: " + list_of_object_ids.length)
+            for (i=0;i<list_of_object_ids.length;i++) {
+                //get the element by id
+                var id = list_of_object_ids[i];
+                console.log(id)
+                var select = document.getElementById(id);
+                console.log(select)
+                var options = drop_down_options[id];
+                //for each of the options
+                for (var j = 0; j < options.length; j++) {
+                    //create a new option
+                    var option = document.createElement("option");
+                    //set the text of the option
+                    option.text = options[j];
+                    console.log(option.text);
+                    //add the option to the select
+                    select.add(option);
+                }
+                console.log()
+            }
+        }
+        addOptions();
+
+
+    });
+  </script>
+
+</body>
+</html>
