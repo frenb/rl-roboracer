@@ -3,12 +3,17 @@
 <head>
     <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.5.0/angular.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/angular-ui-grid/4.6.3/ui-grid.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/angular-ui-grid/4.6.3/ui-grid.min.css" type="text/css">
-    
+    <link rel="stylesheet" href="http://ui-grid.info/release/ui-grid.css"></link>
+    <link rel="stylesheet" href="http://ui-grid.info/docs/css/prettify.css"></link>
+    <link rel="stylesheet" href="http://ui-grid.info/docs/css/bootstrap-flatly.min.css"></link>
     <style>
+        :root { /* Set CSS variable values - These values can be changed with JavaScript and DOM */
+            --myCSS_ValueOne: 800px;
+        }
+
         .uiGrd {
             width: 100%;
-            height: 100vh;
+            height: var(--myCSS_ValueOne);
         }
     </style>
 </head>
@@ -36,7 +41,7 @@
         var new_model = {
             status: 'NOT_STARTED',
             job_type: 'EVAL',
-            iterations: 100,
+            iterations: 200,
             model_type: 'SacAgent',
             location: location_val
         }
@@ -55,6 +60,7 @@
             })
             .error(function () { });
     }
+
     app.controller('myController', function ($scope, $http) {
 
         $scope.title = "Models"
@@ -77,10 +83,13 @@
                 add_model($http, $scope.selected_jobs[i].entity.location);
             }
         };
-
+        
+        pageSize = 20;
         $scope.gridOptions = {
-            paginationPageSizes: [5, 10, 20],
-            paginationPageSize: 20,
+            paginationPageSizes: [20, 50, 100],
+            paginationPageSize: pageSize,
+            enablePaginationControls: true,
+            enableColumnResizing: true,
             enableFiltering: true
         };
         
@@ -102,7 +111,6 @@
                             $scope.selected_jobs.splice(i,1)    
                         }
                     }
-                // add_model($http, row.entity.location);
             });
         
             gridApi.selection.on.rowSelectionChangedBatch($scope,function(rows){
@@ -118,33 +126,71 @@
         };
         var request = {
             method: 'get',
-            url: '/get_models',
+            url: '/get_models?force=false',
             dataType: 'json',
             contentType: "application/json"
         };
 
-        $http(request)
-            .success(function (jsonData) {
+        var firstRequest = {
+            method: 'get',
+            url: '/get_models?force=true',
+            dataType: 'json',
+            contentType: "application/json"
+        };
+
+        var loadGridData = function (jsonData) {
                 var results = [];
                 for(var i=0;i<jsonData.length; i++){
                     var model = jsonData[i];
-                    console.log(model);
+                    //console.log(model);
                     var new_model = {};
                     new_model.id = model["_id"];
-                    new_model.avg_return = model["avg_return"];
+                    new_model.create_date = model["create_date"];
+                    new_model.avg_return = model["avg_return"]; // avg_return
 ;                   new_model.model_type = model["model_type"];
                     new_model.location = model["location"];
                     new_model.robot_type = model["robot_type"]; 
                     new_model.iterations = model["training_iterations"];
                     results.push(new_model) 
                 }
-                console.log(results)
+                //filter out models that have empty avg_return
+                results = results.filter(function( obj ) {
+                    if (obj.create_date == undefined || obj.create_date == "" || obj.create_date ==  null)
+                        return false;          
+                    return true;
+                });
+                
+                // sort results by create date
+                results.sort(function(a, b) {
+                    return new Date(b.create_date) - new Date(a.create_date);
+                });
                 $scope.gridOptions.data = results;     // BIND JSON TO THE GRID.
-            })
+        }
+        $http(firstRequest)
+            .success(function (jsonData){
+                    if(jsonData == 'NO_CHANGES'){
+                        console.log("is NO_CHANGES");
+                        return;
+                    }
+                    loadGridData(jsonData);
+                })
             .error(function () { });
-       
-
-
+        
+        setInterval(function(){
+            $http(request)
+                .success(function (jsonData){
+                    console.log(jsonData);
+                    if(jsonData == 'NO_CHANGES'){
+                        console.log("is NO_CHANGES");
+                        return;
+                    }
+                    loadGridData(jsonData);
+                })
+                .error(function () { });
+        }, 5000);
     });
+    var r = document.querySelector(':root');
+    r.style.setProperty('--myCSS_ValueOne', 730 + 'px');
+    console.log(r.style.getPropertyValue('--myCSS_ValueOne'));
 </script>
 </html>

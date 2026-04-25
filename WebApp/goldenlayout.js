@@ -6,11 +6,13 @@ var config = {
             {
                 type: 'column',
                 content: [
+                   
                     {
-                        type: 'component',
-                        componentName: 'iframeComponent',
-                        componentState: { src: 'http://localhost:3000/editor' }
-                    }
+                      type: 'component',
+                      title: 'Tensorboard',
+                      componentName: 'iframeComponent',
+                      componentState: { src: 'http://localhost:6006' }
+                    },
                 ]
             },
             {
@@ -18,16 +20,34 @@ var config = {
               content: [
                 {
                   type: 'component',
+                  title: 'sim controller logs',
                   componentName: 'iframeComponent',
-                  componentState: { src: 'videoplayer.html' }
+                  componentState: { src: 'http://localhost/logs' }
                 },
                 {
-                  type: 'component',
-                  componentName: 'iframeComponent',
-                  componentState: { src: "http://localhost:3000/logs" }
+                  type: 'stack',
+                  content: [
+                    {
+                      type: 'component',
+                      title: 'Jobs',
+                      componentName: 'iframeComponent',
+                      componentState: { src: 'http://localhost/jobs' }
+                    },
+                    {
+                      type: 'component',
+                      title: 'Models',
+                      componentName: 'iframeComponent',
+                      componentState: { src: 'http://localhost/models' }
+                    },
+                    {
+                      type: 'component',
+                      title: 'Leaderboard',
+                      componentName: 'iframeComponent',
+                      componentState: { src: "http://localhost/leaderboard" }
+                    }]
                 }
               ]
-            }
+              }
           ]
         }
     ]
@@ -62,7 +82,7 @@ var simpleComponent = function(container, componentState) {
       .appendChild(newChild);
 }
 
-myLayout.registerComponent( 'iframeComponent', iframeComponent);
+myLayout.registerComponent('iframeComponent', iframeComponent);
 myLayout.registerComponent('simpleComponent', simpleComponent);
 
 myLayout.init();

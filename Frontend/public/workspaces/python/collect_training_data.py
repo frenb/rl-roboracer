@@ -24,6 +24,7 @@ from tf_agents.train.utils import strategy_utils
 from tf_agents.train.utils import spec_utils
 from tf_agents.policies import policy_saver
 from tf_agents.eval import metric_utils
+
 import datetime
 
 current_time = datetime.datetime.now()
@@ -32,9 +33,11 @@ current_time = datetime.datetime.now()
 #job_63fc2233eadebe470b7d6641 -- maybe works
 #3/3 job_6401b355124fee671f8dffe3
 #3/4 job_6402f67e124fee671f8dffe7
-root_dir = "C:\\Users\\benja\\Documents\\robots\\LATEST\\tfrecords\\job_6402f67e124fee671f8dffe7"
+#3/4.1 job_6403b7a094b9d3d95304fcb7
+#3/15 job_6412bd37f6548aa06d94eea8
+root_dir = "C:\\Users\\benja\\Documents\\robots\\LATEST\\tfrecords\\job_6412bd37f6548aa06d94eea8"
 # batch_size = 50000
-training_steps = 5000
+training_steps = 10000
 observation_size = 32 
 action_size = 2
 
@@ -42,7 +45,7 @@ class robotaxi():
     def __init__(self):
         self._action_spec = tensor_spec.BoundedTensorSpec( #BoundedArraySpec(
             shape=(2, ), dtype=np.float32, 
-            minimum=[0.0,-1], 
+            minimum=[0.001,-1], 
             maximum=[2, 1],
             name='action')
         # self._observation_spec = tensor_spec.BoundedTensorSpec( #BoundedArraySpec(
@@ -260,20 +263,22 @@ def _parse_function(example_proto):
   # Parse the input `tf.train.Example` proto using the dictionary above.
   return tf.io.parse_single_example(example_proto, feature_description)
 
-def read_files_from_directory(directory=''):
+def get_files_from_directory(directory):
+    files = os.listdir(directory)
+    files.sort()
+    files = [os.path.join(directory, file) for file in files]
+    return files
+
+def read_files_from_directory(directory='',sampling_fraction=1.0, shuffle=False, parsed_dataset=None):
     """Read all files from a directory and return a list of parsed rows."""
     # get list of file in directory
-    files = os.listdir(directory)
-    #order list by name
-    files.sort()
-    # create list of full path
-    files = [os.path.join(directory, file) for file in files]
+    files = get_files_from_directory(directory)
     rows = []
     total_rows = 0
     for f in files:
         num_records=0
         row = None
-        num_records, parsed_rows = read_data_from_file(f)
+        num_records, parsed_rows = read_data_from_file(f, sampling_fraction, shuffle, parsed_dataset)
         total_rows += num_records
         rows = np.concatenate((rows, parsed_rows))
         print(f"reading {f}, length={num_records}")
@@ -285,21 +290,29 @@ def get_number_of_records(file_name):
     """Get the number of records in a TFRecord file."""
     return sum(1 for _ in tf.data.TFRecordDataset(file_name))
 
-def read_data_from_file(file):
-    """Read the data from a TFRecord file."""
+def get_parsed_dataset(file):
+    """Get the raw dataset from a TFRecord file."""
     raw_dataset = tf.data.TFRecordDataset(file)
-    
     parsed_dataset = raw_dataset.map(_parse_function)
+    return parsed_dataset
+
+def read_data_from_file(file, sampling_fraction=1.0, shuffle=False, parsed_dataset=None):
+    """Read the data from a TFRecord file."""
+    if(parsed_dataset is None):
+        parsed_dataset = get_parsed_dataset(file)
     num_records = get_number_of_records(file)
+    batch_size = int(num_records * sampling_fraction)
+    if shuffle:
+        parsed_dataset = parsed_dataset.shuffle(buffer_size=num_records)
     parsed_rows = []
-    for parsed_record in parsed_dataset.take(num_records): 
+    for parsed_record in parsed_dataset.take(batch_size): 
         # print(repr(parsed_record))
         # if parsed_record["reward"] > 0:
         #     print(f"reached goal reward {parsed_record['reward']}")
         parsed_rows.append(parsed_record)
-
-    print(f"num records {num_records}")
-    return num_records, parsed_rows
+    parsed_rows_count = len(parsed_rows)
+    print(f"num records {parsed_rows_count}")
+    return parsed_rows_count, parsed_rows
 
 def convert_tfrecord_to_trajectory(rows,batch_size=1000):
     """Read the data from a TFRecord file."""
@@ -330,45 +343,87 @@ def convert_tfrecord_to_trajectory(rows,batch_size=1000):
 
     return traj
 
+def train_agent(root_dir, training_steps=10000):
+    """Train the agent."""
+    print(f"training agent with {training_steps} steps")
+    parsed_dataset_traj = read_files_from_directory(directory=root_dir)
+    # parsed_dataset, parsed_dataset_traj = read_data('trajectories.tfrecord', batch_size)
 
-parsed_dataset_traj = read_files_from_directory(directory=root_dir)
-# parsed_dataset, parsed_dataset_traj = read_data('trajectories.tfrecord', batch_size)
+    # Create the behavioral cloning agent
+    optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=3e-5)
 
-# Create the behavioral cloning agent
-loss_fn = tf.keras.losses.MeanSquaredError()
-optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=3e-5)
+    strategy = strategy_utils.get_strategy(tpu=False, use_gpu=True)
 
-strategy = strategy_utils.get_strategy(tpu=False, use_gpu=True)
+    with strategy.scope():
+        observation_spec, action_spec, time_step_spec = (
+                spec_utils.get_tensor_specs(env))
+        
+        actor_net = actor_distribution_network.ActorDistributionNetwork(
+            observation_spec,
+            action_spec,
+            fc_layer_params=(512, 512),
+            continuous_projection_net=(
+                tanh_normal_projection_network.TanhNormalProjectionNetwork))
 
-observation_spec, action_spec, time_step_spec = (
-         spec_utils.get_tensor_specs(env))
+        agent = behavioral_cloning_agent.BehavioralCloningAgent(
+                time_step_spec=time_step_spec,
+                action_spec=action_spec,
+                cloning_network=actor_net,
+                optimizer=optimizer)
 
-with strategy.scope():
-    actor_net = actor_distribution_network.ActorDistributionNetwork(
-        observation_spec,
-        action_spec,
-        fc_layer_params=(256, 256),
-        continuous_projection_net=(
-            tanh_normal_projection_network.TanhNormalProjectionNetwork))
+    expert_data = parsed_dataset_traj
+    i=0
+    for _ in range(training_steps):
+        loss_info_after_ts = agent.train(expert_data)
+        if i%100==0:
+            print(f"after {i}: {loss_info_after_ts.loss}")
+        i=i+1
 
-    observation_spec, action_spec, time_step_spec = (
-            spec_utils.get_tensor_specs(env))
+    policy = agent.policy
 
-    agent = behavioral_cloning_agent.BehavioralCloningAgent(
-            time_step_spec=time_step_spec,
-            action_spec=action_spec,
-            cloning_network=actor_net,
-            optimizer=optimizer)
+    save_policy(policy, training_steps)
 
-expert_data = parsed_dataset_traj
-i=0
-for _ in range(training_steps):
-    loss_info_after_ts = agent.train(expert_data)
-    if i%100==0:
-        print(f"after {i}: {loss_info_after_ts.loss}")
-    i=i+1
+def train_agent_sampling(
+        actor_net, root_dir, training_steps=10000, 
+        sampling_fraction=1.0, parsed_dataset=None):
+    """Train the agent."""
+    print(f"training agent with {training_steps} steps")
+    parsed_dataset_traj = read_files_from_directory(
+            directory=root_dir,
+            sampling_fraction=sampling_fraction,
+            shuffle=True,
+            parsed_dataset=parsed_dataset)
 
-policy = agent.policy
+    # Create the behavioral cloning agent
+    optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=3e-5)
+
+    strategy = strategy_utils.get_strategy(tpu=False, use_gpu=True)
+
+    with strategy.scope():
+        actor_net = actor_net
+
+        observation_spec, action_spec, time_step_spec = (
+                spec_utils.get_tensor_specs(env))
+
+        agent = behavioral_cloning_agent.BehavioralCloningAgent(
+                time_step_spec=time_step_spec,
+                action_spec=action_spec,
+                cloning_network=actor_net,
+                optimizer=optimizer)    
+    
+    expert_data = parsed_dataset_traj
+    i=0
+    for _ in range(training_steps):
+        loss_info_after_ts = agent.train(expert_data)
+        if i%100==0:
+            print(f"after {i}: {loss_info_after_ts.loss}")
+        i=i+1
+
+    # policy = agent.policy
+
+    # save_policy(policy, training_steps)
+
+#train_agent(root_dir, training_steps)
 
 def get_policy_type_name(policy):
     if (isinstance(policy, str)):
@@ -390,7 +445,11 @@ def get_save_dir_root_docker(policy):
     return os.path.join(saved_models_dir,robot_type,policy_type)
 
 def get_next_model_version(policy):
-    path=get_save_dir_root(policy)
+    try:
+        path=get_save_dir_root_docker(policy)
+    except Exception as e:
+        path=get_save_dir_root_docker(policy)
+        print(e)
     file_list = os.listdir(path)
     sorted_file_list=sorted(file_list,key=str,reverse=True)
     num_dirs = len(sorted_file_list)
@@ -402,7 +461,7 @@ def get_save_dir_name(policy):
     save_dir_root_docker = get_save_dir_root_docker(policy)
     return os.path.join(path,next_dir_name), os.path.join(save_dir_root_docker,next_dir_name)
 
-client = MongoClient('localhost:27017', 
+client = MongoClient('mongo:27017', 
     username='root',
     password='example')
 db = client.local
@@ -435,7 +494,7 @@ def save_policy(policy, num_iterations):
     save_dir_name = save_dir_name + "_step_" + str(1)
     save_dir_name_docker = save_dir_name_docker + "_step_" + str(1)
     save_dir_name_docker = save_dir_name_docker.replace("\\", "/")
-    tf_policy_saver.save(save_dir_name)
+    tf_policy_saver.save(save_dir_name_docker)
     robot_type = "robotaxi" #os.getenv('ROBOT_TYPE')
     model_type=get_policy_type_name(policy)
     training_iterations=num_iterations
@@ -446,25 +505,25 @@ def save_policy(policy, num_iterations):
         training_iterations,
         path_docker=save_dir_name_docker)
 
-save_policy(policy, training_steps)
+# save_policy(policy, training_steps)
 
-def compute_avg_return(environment, policy, num_episodes=10):
+# def compute_avg_return(environment, policy, num_episodes=10):
 
-  total_return = 0.0
-  for _ in range(num_episodes):
+#   total_return = 0.0
+#   for _ in range(num_episodes):
 
-    time_step = environment.reset()
-    episode_return = 0.0
+#     time_step = environment.reset()
+#     episode_return = 0.0
 
-    while not environment._episode_ended:
-      action_step = policy.action(time_step)
-      time_step = environment.step(action_step.action)
-      episode_return += time_step.reward
-    total_return += episode_return
+#     while not environment._episode_ended:
+#       action_step = policy.action(time_step)
+#       time_step = environment.step(action_step.action)
+#       episode_return += time_step.reward
+#     total_return += episode_return
 
-  avg_return = total_return / num_episodes
-  return avg_return
+#   avg_return = total_return / num_episodes
+#   return avg_return
 
-for _ in range(10):
-    avg_return = compute_avg_return(env, policy, num_episodes=10)
-    print(f"avg_return: {avg_return}")
+# for _ in range(10):
+#     avg_return = compute_avg_return(env, policy, num_episodes=10)
+#     print(f"avg_return: {avg_return}")

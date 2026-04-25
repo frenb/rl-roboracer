@@ -3,12 +3,18 @@
 <head>
     <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.5.0/angular.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/angular-ui-grid/4.6.3/ui-grid.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/angular-ui-grid/4.6.3/ui-grid.min.css" type="text/css">
-    
+    <!--link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/angular-ui-grid/4.6.3/ui-grid.min.css" type="text/css"-->
+    <link rel="stylesheet" href="http://ui-grid.info/release/ui-grid.css"></link>
+    <link rel="stylesheet" href="http://ui-grid.info/docs/css/prettify.css"></link>
+    <link rel="stylesheet" href="http://ui-grid.info/docs/css/bootstrap-flatly.min.css"></link>
     <style>
+        :root { /* Set CSS variable values - These values can be changed with JavaScript and DOM */
+            --myCSS_ValueOne: 800px;
+        }
+
         .uiGrd {
             width: 100%;
-            height: 100vh;
+            height: var(--myCSS_ValueOne);
         }
     </style>
 </head>
@@ -32,24 +38,31 @@
     app.controller('myController', function ($scope, $http) {
 
         $scope.title = "Leaderboard Scores"
-
+        pageSize = 20;
         // SPECIFY FILTERING OPTIONS.
         $scope.gridOptions = {
-            paginationPageSizes: [5, 10, 20],
-            paginationPageSize: 20,
+            paginationPageSizes: [20, 50, 100],
+            paginationPageSize: pageSize,
+            enablePaginationControls: true,
             enableColumnResizing: true,
             enableFiltering: true
         };
 
         var request = {
             method: 'get',
-            url: '/leaderboard_scores',
+            url: '/leaderboard_scores?force=false',
             dataType: 'json',
             contentType: "application/json"
         };
 
-        $http(request)
-            .success(function (jsonData) {
+        var firstRequest = {
+            method: 'get',
+            url: '/leaderboard_scores?force=true',
+            dataType: 'json',
+            contentType: "application/json"
+        };
+
+        var loadGridData = function (jsonData) {
                 var results = [];
                 for(var i=0;i<jsonData.length; i++){
                     var score = jsonData[i];
@@ -60,9 +73,36 @@
                     results.push(new_score) 
                 }
                 console.log(results)
+                // sort results by create_date
+                results.sort(function(a, b) {
+                    return new Date(b.create_date) - new Date(a.create_date);
+                });
                 $scope.gridOptions.data = results;     // BIND JSON TO THE GRID.
-            })
-            .error(function () { });
+        }
+
+        $http(firstRequest)
+            .success(function (jsonData){
+                    if(jsonData == 'NO_CHANGES'){
+                        console.log("is NO_CHANGES");
+                        return;
+                    }
+                    loadGridData(jsonData);
+            }).error(function () { });
+
+        setInterval(function(){
+            $http(request)
+                .success(function (jsonData){
+                    console.log(jsonData);
+                    if(jsonData == 'NO_CHANGES'){
+                        console.log("is NO_CHANGES");
+                        return;
+                    }
+                    loadGridData(jsonData);
+                }).error(function () { });
+        }, 5000);
     });
+    var r = document.querySelector(':root');
+    r.style.setProperty('--myCSS_ValueOne', 730 + 'px');
+    console.log(r.style.getPropertyValue('--myCSS_ValueOne'));
 </script>
 </html>
