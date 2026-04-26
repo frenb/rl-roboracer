@@ -1,5 +1,16 @@
-FROM docker_ros-server:working
+# Build context: ./ros_server/
+# Build command (from repo root): docker buildx build -f ros_server/Dockerfile ros_server/
+FROM ros:noetic-ros-base-focal
 
+RUN sudo apt-get update && sudo apt-get install -y vim iputils-ping net-tools python3-pip ros-noetic-robot-state-publisher ros-noetic-moveit ros-noetic-rosbridge-suite ros-noetic-joy ros-noetic-ros-control ros-noetic-ros-controllers dos2unix python3-venv
+RUN sudo -H pip3 install rospkg jsonpickle
+RUN sudo ln -s /usr/bin/python3 /usr/bin/python
+RUN sudo python -m pip install grpcio google-api-python-client
+RUN pip3 install tensorboard
+RUN pip3 install pymongo
+RUN pip3 install numpy --upgrade
+RUN pip3 install scipy
+RUN pip3 install -U tensorboard-plugin-profile
 ENV ROS_WORKSPACE=/catkin_ws
 ENV PYTHON_WORKSPACE=/python_ws
 
@@ -18,8 +29,8 @@ COPY ./python_ws $PYTHON_WORKSPACE
 
 VOLUME $PYTHON_WORKSPACE/src
 
-COPY ./docker/set-up-workspace /setup.sh
-COPY docker/tutorial /
+COPY ./set-up-workspace /setup.sh
+COPY ./tutorial /
 
 RUN /bin/bash -c "find $ROS_WORKSPACE -type f -print0 | xargs -0 dos2unix"
 
@@ -30,4 +41,3 @@ RUN /bin/bash -c "cd /python_ws && pip install -r requirements.txt"
 WORKDIR $ROS_WORKSPACE
 
 ENTRYPOINT ["/tutorial"]
-

@@ -1,8 +1,0 @@
-tensorflow
-tf-nightly-gpu
-tf-agents[reverb]
-grpcio
-google-api-python-client
-tensorflow_hub
-
-
