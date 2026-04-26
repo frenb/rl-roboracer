@@ -1,0 +1,123 @@
+version: '3.4'
+# RL stack for the robotaxi Unity gym.
+# Run from repo root: `docker compose up -d`
+# Then start the Unity client:    `.\scripts\RunClientWrapper.ps1`
+#
+# Bind-mounts assume this layout (LATEST/ is the repo's parent dir):
+#   LATEST/
+#     robot-tycoon/         <- this repo
+#     saved_models/         <- model checkpoints
+#     mongodb/              <- mongo data dir
+#     tfrecords/            <- demo trajectories
+#     tmp/                  <- tensorboard / runtime scratch
+
+services:
+  ros-server:
+    image: docker_ros-server:thin
+    restart: always
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - SAVED_MODELS_DIR=/saved_models
+      - ROBOT_TYPE=robotaxi
+      - UNITY_MACHINE_IP=host.docker.internal
+    build:
+      context: ./ros_server
+      dockerfile: Dockerfile
+    volumes:
+      - type: bind
+        source: ./rl_agent
+        target: /python_ws/src
+      - type: bind
+        source: ../saved_models
+        target: /saved_models
+    ports:
+      - "10000:10000"
+      - "50051:50051"
+    command: sh -c "./src/start.sh"
+
+  mongo:
+    image: bitnami/mongodb:6.0
+    restart: always
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+      MONGODB_ROOT_PASSWORD: example
+      MONGODB_REPLICA_SET_MODE: primary
+      MONGODB_ADVERTISED_HOSTNAME: mongo
+      MONGODB_REPLICA_SET_KEY: 64321d2b6ce8b4318b337bb1
+    ports:
+      - "27017:27017"
+    volumes:
+      - type: bind
+        source: ../mongodb
+        target: /data/db
+      - type: bind
+        source: ../mongodb
+        target: /bitnami/mongodb
+
+  mongo-express:
+    image: mongo-express
+    restart: always
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: example
+      ME_CONFIG_MONGODB_URL: mongodb://root:example@mongo:27017/
+
+  sim-controller:
+    image: sim_controller:latest
+    restart: always
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - SAVED_MODELS_DIR=/saved_models
+      - ROBOT_TYPE=robotaxi
+      - DATABASE_NAME=robotaxi
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - type: bind
+        source: ./rl_agent
+        target: /python_ws/src
+      - type: bind
+        source: ../saved_models
+        target: /saved_models
+      - type: bind
+        source: ../tfrecords
+        target: /tfrecords
+      - type: bind
+        source: ../tmp
+        target: /tmp
+    ports:
+      - "6006:6006"
+    command: sh -c "(tensorboard --bind_all --logdir /tmp/active --reload_multifile true &1> /tmp/tb.log) && cd /python_ws/src && python robotaxi.py 2>&1 | tee robotaxi.out"
+    links:
+      - "mongo"
+      - "ros-server"
+
+  dashboard:
+    image: node:15.8
+    restart: always
+    ports:
+      - "80:80"
+      - "8080:8080"
+    environment:
+      - DATABASE_NAME=robotaxi
+    volumes:
+      - type: bind
+        source: ./dashboard
+        target: /dashboard
+      - type: bind
+        source: ./rl_agent
+        target: /python_ws/src
+      - type: bind
+        source: ../tmp
+        target: /tmp
+    command: sh -c "cd /dashboard && npm start"
