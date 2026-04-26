@@ -18,3 +18,32 @@
 
 # Python runtime files anywhere
 *__pycache__*
+
+
+Docker/pick_and_place/docker/WCourse*
+Docker/pick_and_place/docker/UnityBinary*
+
+Unity/Streaming/Assets/HDRPDefaultResources.meta
+Unity/Streaming/Assets/RosMessages.meta
+Unity/Streaming/Assets/HDRPDefaultResources/DefaultSettingsVolumeProfile.asset.meta
+Unity/Streaming/Assets/HDRPDefaultResources/Foliage Diffusion Profile.asset.meta
+Unity/Streaming/Assets/HDRPDefaultResources/HDRenderPipelineAsset.asset.meta
+Unity/Streaming/Assets/HDRPDefaultResources/Skin Diffusion Profile.asset.meta
+Unity/Streaming/Assets/Scenes/HDRPDefaultResources.meta
+Unity/Streaming/Assets/Scenes/HDRPDefaultResources/DefaultSettingsVolumeProfile.asset.meta
+Unity/Streaming/Assets/Scenes/HDRPDefaultResources/Foliage Diffusion Profile.asset.meta
+Unity/Streaming/Assets/Scenes/HDRPDefaultResources/HDRenderPipelineAsset.asset.meta
+Unity/Streaming/Assets/Scenes/HDRPDefaultResources/Skin Diffusion Profile.asset.meta
+Unity/Streaming/Assets/Scripts/RosMessages/NiryoMoveit/msg/ApplyForce.cs.meta
+Docker/pick_and_place/docker/roborace.log
+Docker/pick_and_place/docker/server.log
+Frontend/public/workspaces/python/tmp/scalars/20220501-194921/metrics/events.out.tfevents.1651434561.7916579aae83.29514.0.v2
+Frontend/public/workspaces/python/tmp/scalars/20220501-195220/metrics/events.out.tfevents.1651434740.7916579aae83.1141.0.v2
+Frontend/public/workspaces/python/tmp/scalars/20220501-202453/metrics/events.out.tfevents.1651436693.7916579aae83.19111.0.v2
+Docker/pick_and_place/ROS/src/niryo_moveit/intalled tf packages.txt
+trajectories_20230219.tfrecord
+trajectories.tfrecord
+data.tfrecord
+Docker/pick_and_place/docker/output.txt
+Frontend/public/workspaces/python/robotaxi copy.py
+Frontend/public/workspaces/python/robotaxi.out
