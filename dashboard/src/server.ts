@@ -2,13 +2,10 @@ import * as express from 'express';
 import * as bodyParser from 'body-parser';
 import * as path from 'path';
 import * as fs from 'fs';
-import signaling from './signaling';
 import * as mongoDB from 'mongodb';
-import * as dotenv from 'dotenv';
 const ObjectID = require('mongodb').ObjectID;
 const cors = require('cors');
 const { spawn } = require('child_process');
-const Timestamp = mongoDB.Timestamp;
 import { log, LogLevel } from './log';
 import * as morgan from 'morgan';
 
@@ -17,14 +14,12 @@ const WebSocket = require('ws');
 
 export const createServer = (config): express.Application => {
   const app: express.Application = express();
-  const databaseName = "robotaxi";
-  const collectionNames = ["leaderboard_scores", "jobs", "models"]
-  var jobsChanged=true;
-  var modelsChanged=true;
-  var leaderboardScoresChanged=true;
+  const databaseName = process.env.DATABASE_NAME || "robotaxi";
+  var jobsChanged = true;
+  var modelsChanged = true;
+  var leaderboardScoresChanged = true;
   var MongoClient = mongoDB.MongoClient;
-  var url = "mongodb://root:example@mongo:27017";
-  //var connectionstring = "mongodb+srv://root:example@mongo"
+  var url = process.env.MONGODB_URL || "mongodb://root:example@mongo:27017";
   var dbo;
   MongoClient.connect(url, function(err, db) {
     if (err) throw err;
@@ -64,36 +59,17 @@ export const createServer = (config): express.Application => {
     });
 
   });
-  
-  app.set('isPrivate', config.mode == "private");
-  // logging http access
+
   if (config.logging != "none") {
     app.use(morgan(config.logging));
   }
 
-  // TODO: REMOVE!
   app.use(cors());
   app.options('*', cors());
 
-  var corsOptions = {
-    origin: '*',
-    exposedHeaders: 'Date'
-  }
-
-  // const signal = require('./signaling');
   app.use(bodyParser.urlencoded({ extended: true }));
   app.use(bodyParser.json());
-  app.get('/protocol', cors(corsOptions), (req, res) => res.json({ useWebSocket: config.websocket }));
-  app.use('/signaling', cors(corsOptions),signaling);
-  app.use(express.static(path.join(__dirname, '/../public/stylesheets')));
-  app.use(express.static(path.join(__dirname, '/../public/scripts')));
-  app.use(express.static(path.join(__dirname, '/../bower_components')));
   app.use(express.static(path.join(__dirname, '/..')));
-  app.use('/images', express.static(path.join(__dirname, '/../public/images')));
-  app.get('/videoplayer', (req, res) => {
-    const videPagePath: string = path.join(__dirname, '/../videoplayer.html');
-    res.sendFile(videPagePath);
-  });
   app.get('/leaderboard', (req, res) => {
     const lb: string = path.join(__dirname, '/../leaderboard.html');
     res.sendFile(lb);
@@ -229,8 +205,8 @@ export const createServer = (config): express.Application => {
   });
   return app;
 };
-// create websocket server
-const wss = new WebSocket.Server({ createServer, port:8080 });
+// create websocket server for log tailing (used by logs.html)
+const wss = new WebSocket.Server({ port: 8080 });
 
 wss.on('connection', (ws) => {
   const dockerLogs = spawn('tail', ['-f', '-n', '100', '/python_ws/src/robotaxi.out']);
