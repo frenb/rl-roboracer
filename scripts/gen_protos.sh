@@ -3,8 +3,8 @@
 
 # ROS server (gRPC virtual endpoint)
 python -m grpc_tools.protoc -Iprotos \
-    --python_out=ros_server/ROS/src/virtual_endpoint/src/ \
-    --grpc_python_out=ros_server/ROS/src/virtual_endpoint/src/ \
+    --python_out=docker/ros_server/ROS/src/virtual_endpoint/src/ \
+    --grpc_python_out=docker/ros_server/ROS/src/virtual_endpoint/src/ \
     virtual_endpoint/proto/ros_service.proto
 
 # RL agent (Python client)
