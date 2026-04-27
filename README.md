@@ -18,7 +18,6 @@ The repo expects to live next to a few sibling data folders:
 
 ```
 LATEST/
-├── robot-tycoon/          # this repo
 ├── saved_models/          # tf-agents checkpoints           (bind-mounted)
 ├── mongodb/               # mongo data dir                  (bind-mounted)
 ├── tfrecords/             # demonstration trajectories      (bind-mounted)
