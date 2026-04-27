@@ -67,6 +67,9 @@ services:
 
   sim-controller:
     image: sim_controller:latest
+    build:
+      context: .
+      dockerfile: sim_controller/Dockerfile
     restart: always
     extra_hosts:
       - "host.docker.internal:host-gateway"
