@@ -6,12 +6,14 @@ RL training stack for the robotaxi Unity gym.
 
 ```
 robot-tycoon/
-├── docker-compose.yml     # the whole stack
-├── ros_server/            # ROS noetic + gRPC bridge (Docker build context)
-├── rl_agent/              # tf-agents Python code that drives training
-├── dashboard/             # Node/Express monitoring dashboard (port 80)
-├── protos/                # source of truth for the gRPC contract
-└── scripts/               # PowerShell helpers
+├── docker-compose.yml         # the whole stack
+├── docker/
+│   ├── ros_server/            # ROS noetic + gRPC bridge build context
+│   └── sim_controller/        # CUDA + tf-agents training image build context
+├── rl_agent/                  # tf-agents Python code that drives training
+├── dashboard/                 # Node/Express monitoring dashboard (port 80)
+├── protos/                    # source of truth for the gRPC contract
+└── scripts/                   # PowerShell helpers
 ```
 
 The repo expects to live next to a few sibling data folders:

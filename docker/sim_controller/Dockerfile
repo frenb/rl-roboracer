@@ -35,25 +35,25 @@ RUN pip install --upgrade pip
 ENV PYTHON_WORKSPACE=/python_ws
 ENV ROS_WORKSPACE=/catkin_ws
 
-COPY ./ros_server/python_ws $PYTHON_WORKSPACE
+COPY ./docker/ros_server/python_ws $PYTHON_WORKSPACE
 
-COPY ./ros_server/ROS/src/moveit_msgs              $ROS_WORKSPACE/src/moveit_msgs
-COPY ./ros_server/ROS/src/niryo_moveit             $ROS_WORKSPACE/src/niryo_moveit
-COPY ./ros_server/ROS/src/niryo_one_ros            $ROS_WORKSPACE/src/niryo_one_ros
-COPY ./ros_server/ROS/src/niryo_one_urdf           $ROS_WORKSPACE/src/niryo_one_urdf
-COPY ./ros_server/ROS/src/ros_tcp_endpoint         $ROS_WORKSPACE/src/ros_tcp_endpoint
-COPY ./ros_server/ROS/src/virtual_endpoint         $ROS_WORKSPACE/src/virtual_endpoint
-COPY ./ros_server/ROS/src/rospy_message_converter  $ROS_WORKSPACE/src/rospy_message_converter
-COPY ./ros_server/ROS/src/start.sh                 $ROS_WORKSPACE/src/start.sh
-COPY ./ros_server/ROS/src/ros_log_tail_server.py   $ROS_WORKSPACE/src/ros_log_tail_server.py
-COPY ./ros_server/ROS/src/python_workspace_server.py $ROS_WORKSPACE/src/python_workspace_server.py
-COPY ./ros_server/python_ws                        $PYTHON_WORKSPACE
+COPY ./docker/ros_server/ROS/src/moveit_msgs              $ROS_WORKSPACE/src/moveit_msgs
+COPY ./docker/ros_server/ROS/src/niryo_moveit             $ROS_WORKSPACE/src/niryo_moveit
+COPY ./docker/ros_server/ROS/src/niryo_one_ros            $ROS_WORKSPACE/src/niryo_one_ros
+COPY ./docker/ros_server/ROS/src/niryo_one_urdf           $ROS_WORKSPACE/src/niryo_one_urdf
+COPY ./docker/ros_server/ROS/src/ros_tcp_endpoint         $ROS_WORKSPACE/src/ros_tcp_endpoint
+COPY ./docker/ros_server/ROS/src/virtual_endpoint         $ROS_WORKSPACE/src/virtual_endpoint
+COPY ./docker/ros_server/ROS/src/rospy_message_converter  $ROS_WORKSPACE/src/rospy_message_converter
+COPY ./docker/ros_server/ROS/src/start.sh                 $ROS_WORKSPACE/src/start.sh
+COPY ./docker/ros_server/ROS/src/ros_log_tail_server.py   $ROS_WORKSPACE/src/ros_log_tail_server.py
+COPY ./docker/ros_server/ROS/src/python_workspace_server.py $ROS_WORKSPACE/src/python_workspace_server.py
+COPY ./docker/ros_server/python_ws                        $PYTHON_WORKSPACE
 
 COPY ./rl_agent/robotaxi.py $PYTHON_WORKSPACE/src/robotaxi.py
 COPY ./rl_agent/api.py      $PYTHON_WORKSPACE/src/api.py
 
-COPY ./ros_server/set-up-workspace /setup.sh
-COPY ./ros_server/tutorial /
+COPY ./docker/ros_server/set-up-workspace /setup.sh
+COPY ./docker/ros_server/tutorial /
 
 RUN /bin/bash -c "find $ROS_WORKSPACE -type f -print0 | xargs -0 dos2unix"
 RUN dos2unix /tutorial && dos2unix /setup.sh && chmod +x /setup.sh && /setup.sh && rm /setup.sh

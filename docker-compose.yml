@@ -21,7 +21,7 @@ services:
       - ROBOT_TYPE=robotaxi
       - UNITY_MACHINE_IP=host.docker.internal
     build:
-      context: ./ros_server
+      context: ./docker/ros_server
       dockerfile: Dockerfile
     volumes:
       - type: bind
@@ -69,7 +69,7 @@ services:
     image: sim_controller:latest
     build:
       context: .
-      dockerfile: sim_controller/Dockerfile
+      dockerfile: docker/sim_controller/Dockerfile
     restart: always
     extra_hosts:
       - "host.docker.internal:host-gateway"
