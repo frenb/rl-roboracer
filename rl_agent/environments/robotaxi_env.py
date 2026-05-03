@@ -28,6 +28,15 @@ class RobotaxiEnv(py_environment.PyEnvironment):
     def observation_spec(self):
         return self._observation_spec
 
+    def get_course_metrics(self):
+        """Snapshot the inner course's public metrics as a plain dict.
+
+        Exposed on the env so it can be invoked through
+        ``ParallelPyEnvironment.call('get_course_metrics')``, which only
+        dispatches methods declared on the env class itself.
+        """
+        return self.course.get_metrics()
+
     def _reset(self):
         self._episode_ended = False
         #self._api.DoResetBlocking()

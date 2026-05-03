@@ -1,11 +1,8 @@
-import asyncio
 import random
 import os
 import math
 import shutil
-import reverb
 import tempfile
-import threading
 import time
 import json
 import datetime
@@ -44,17 +41,14 @@ from tf_agents.utils import common
 from pymongo import MongoClient
 
 from environments.courses import donut_course,simple_course
-from environments import RobotaxiEnv as pce
+from envs import make_env
+from replay import make_local_replay
 import collect_training_data
 import logging
 import sys
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
-from api import RobotApi
-
-# Global reference to RobotApi
-api = None
 client = MongoClient('mongo', 
     username='root',
     password='example')
@@ -104,12 +98,32 @@ def get_save_dir_by_version(policy, version):
     sorted_file_list=sorted(file_list,reverse=True)
     return os.path.join(path, version)
 
-def print_replay_buffer_size(reverb_replay, table_name, replay_buffer_capacity):  
+def print_replay_buffer_size(reverb_replay, table_name, replay_buffer_capacity):
     # Query the Reverb server for the current stats
     server_info = reverb_replay.py_client.server_info()
     # Extract the current size of your specific table
     current_size = server_info[table_name].current_size
     print(f"Current Replay Buffer length: {current_size} / {replay_buffer_capacity}")
+
+
+def read_course_metrics(env):
+    """Read the inner course metric snapshot from a (possibly batched) env.
+
+    Single env: just delegate to env.get_course_metrics().
+    Parallel envs: aggregate across actors - max() for max_* keys, mean()
+    for the rest. Returns a dict with the same keys as a single env, so
+    the TensorBoard scalar names are unchanged regardless of N.
+    """
+    from tf_agents.environments import parallel_py_environment
+    if isinstance(env, parallel_py_environment.ParallelPyEnvironment):
+        per_actor = env.call('get_course_metrics')()  # tuple of dicts
+        out = {}
+        for k in per_actor[0]:
+            vals = [d[k] for d in per_actor]
+            out[k] = max(vals) if k.startswith('max_') else sum(vals) / len(vals)
+        return out
+    return env.get_course_metrics()
+
 
 def main(
     job_id="",
@@ -161,7 +175,13 @@ def main(
     eval_interval = eval_interval_val # @param {type:"integer"}
     policy_save_interval = policy_save_interval_val # @param {type:"integer"}
     # Environment. Use same for eval and collection, though this does not seem standard?
-    env = pce(api, course_type="donut")
+    env = make_env('ros-server-0:50051', course_type="donut")
+    # Bookkeeping that used to live on env.course; tracking it in main() lets
+    # us share the same code path for single- vs multi-env training (in
+    # multi-env mode the per-subprocess course state isn't reachable from
+    # main).
+    avg_return_arr = []
+    max_avg_return = 0.0
     print(f"Job arguments = num_iterations: {num_iterations}, nn_size_x: {actor_fc_layer_params_x}, nn_size_x: {actor_fc_layer_params_y}")
     learner_dir = os.path.join(tempdir, str(job_id),"learner")
     saved_model_dir = os.path.join(learner_dir, learner.POLICY_SAVED_MODEL_DIR)
@@ -268,24 +288,13 @@ def main(
         
         tf_agent.initialize()
     # Replay Buffer.
-    table_name = 'uniform_table'
-    table = reverb.Table(
-        table_name,
-        max_size=replay_buffer_capacity,
-        sampler=reverb.selectors.Uniform(),
-        remover=reverb.selectors.Fifo(),
-        rate_limiter=reverb.rate_limiters.MinSize(1))
-    
-    reverb_server = reverb.Server([table])
-
-    reverb_replay = reverb_replay_buffer.ReverbReplayBuffer(
+    reverb_server, reverb_replay, dataset, rb_observer = make_local_replay(
         tf_agent.collect_data_spec,
+        capacity=replay_buffer_capacity,
+        sample_batch_size=batch_size,
         sequence_length=2,
-        table_name=table_name,
-        local_server=reverb_server)
-
-    dataset = reverb_replay.as_dataset(
-      sample_batch_size=batch_size, num_steps=2).prefetch(50)
+        stride_length=1)
+    table_name = 'uniform_table'
     experience_dataset_fn = lambda: dataset
     
     # Policies
@@ -301,13 +310,7 @@ def main(
     random_policy = random_py_policy.RandomPyPolicy(
         env.time_step_spec(), env.action_spec())
     
-    # Actors
-    rb_observer = reverb_utils.ReverbAddTrajectoryObserver( #ReverbConcurrentAddBatchObserver
-        reverb_replay.py_client,
-        table_name,
-        sequence_length=2,
-        stride_length=1)
-    
+    # Actors. rb_observer is constructed by make_local_replay() above.
     print("Loading expert demonstrations into Reverb...")
     items_added = 0
     for unbatched_traj in trajectory_dataset:
@@ -456,26 +459,20 @@ def main(
                     parsed_dataset=parsed_dataset)
                 print("Evaluating agent")
             metrics = get_eval_metrics()
-            tf.summary.scalar('avg_goals_per_episode', data=env.course.avg_goals_per_episode, step=step)
-            tf.summary.scalar('avg_goals_per_episode_last_30', data=env.course.avg_goals_per_episode_last_30, step=step)
-            tf.summary.scalar('max_goals_per_episode', data=env.course.max_goals_per_episode, step=step)
-            tf.summary.scalar('max_goals_per_episode_last_30', data=env.course.max_goals_per_episode_last_30, step=step)
-            tf.summary.scalar('avg_steering_angle_ratio', data=env.course.avg_steering_angle_ratio, step=step)
-            tf.summary.scalar('avg_steering_angle_ratio_last_30', data=env.course.avg_steering_angle_ratio_last_30, step=step)
-            tf.summary.scalar('max_speed', data=env.course.max_speed, step=step)
-            tf.summary.scalar('max_speed_last_30', data=env.course.max_speed_last_30, step=step)
-            tf.summary.scalar('avg_speed', data=env.course.avg_speed, step=step)
-            tf.summary.scalar('avg_speed_last_30', data=env.course.avg_speed_last_30, step=step)
+            course_metrics = read_course_metrics(env)
+            for name, value in course_metrics.items():
+                tf.summary.scalar(name, data=value, step=step)
             log_eval_metrics(step, metrics)
             current_avg_return = metrics["AverageReturn"]
-            env.course.avg_return_arr.append(current_avg_return)
-            env.course.max_avg_return = max(current_avg_return, env.course.max_avg_return)
+            avg_return_arr.append(current_avg_return)
+            avg_return_arr = avg_return_arr[-100:]
+            max_avg_return = max(current_avg_return, max_avg_return)
             returns.append([current_avg_return])
-            is_new_max_avg = (current_avg_return + 1e-5) > env.course.max_avg_return
+            is_new_max_avg = (current_avg_return + 1e-5) > max_avg_return
             print("current step " + str(step))
             print("num returns " + str(len(returns)))
             print("current iteration " + str(curr_iteration))
-            print(f"max return {env.course.max_avg_return}")
+            print(f"max return {max_avg_return}")
             print(f"current avg return {current_avg_return}")
             print(f"is new max average {is_new_max_avg}")
             
@@ -570,7 +567,7 @@ def get_saved_model(policy_type, version=None, path_arg=None):
 
 def load_saved_model(policy_type, version=None, path=None, job_id=""):
     # Environment. Use same for eval and collection, though this does not seem standard?
-    env = pce(api)
+    env = make_env('ros-server-0:50051')
     env.job_id = job_id
     if path is not None:
         saved_policy, path = get_saved_model(policy_type, path_arg=path)
@@ -623,14 +620,6 @@ def save_results_to_db(path, results):
             "model_id": saved_model_object["_id"]
         })
 
-async def robot_com():
-    global api
-    api_not_init = RobotApi()
-    await api_not_init.Initialize()
-    api = api_not_init
-    while True:
-        await asyncio.sleep(1)
-
 def log_reward(job_id, type, score, diff=None, extra_data=None, step_costs=[], position_history=[],stat_array=[]):
     dilimeter = ","
     step_costs_valid = None if len(step_costs) == 0 else dilimeter.join([str(i) for i in step_costs])
@@ -668,7 +657,7 @@ def do_job(job):
     if job_type == "DEMO":
         num_iterations=job["num_iterations"] if job["num_iterations"] != "" else 50000
         print(job)
-        env = pce(api)
+        env = make_env('ros-server-0:50051')
         collect_expert_demos(env, num_iterations, job["_id"])
         root_dir = "/tfrecords/job_" + str(job["_id"])
         collect_training_data.train_agent(root_dir, int(job["training_steps"]))
@@ -751,11 +740,6 @@ def update_job(id, value, field_name="status"):
     myquery = { "_id": id }
     newvalues = { "$set": { field_name: value } }
     db.jobs.update_one(myquery, newvalues)
-
-def robot_com_main():
-    loop = asyncio.new_event_loop()
-    loop.run_until_complete(robot_com())
-    loop.close()
 
 def run_randompolicy():
     debug_print("in random policy")
@@ -929,21 +913,14 @@ def debug_print(text):
     if debug_print_enabled:
         print(text)
 
-if __name__ == "__main__":
-    robot_com_thread = threading.Thread(target=robot_com_main)
-    robot_com_thread.start()
+def run_jobs_loop():
+    """Poll MongoDB for jobs and dispatch them indefinitely.
 
-    # Wait for api to be initialized.
-    while not api:
-        time.sleep(0.1)
-    print("Robot API initialized")
-    env = pce(api)
-    print('action_spec:', env.action_spec())
-    print('time_step_spec.observation:', env.time_step_spec().observation)
-    print('time_step_spec.step_type:', env.time_step_spec().step_type)
-    print('time_step_spec.discount:', env.time_step_spec().discount)
-    print('time_step_spec.reward:', env.time_step_spec().reward)
-
+    Each individual job constructs its own env via make_env() (and tears
+    it down with the process when the job ends), so no module-global
+    RobotApi or background thread is needed at startup.
+    """
+    print("Polling for jobs...")
     while True:
         jobs = get_jobs()
         for j in jobs:
@@ -953,5 +930,5 @@ if __name__ == "__main__":
         time.sleep(5)
 
 
-
-
+if __name__ == "__main__":
+    run_jobs_loop()
