@@ -30,7 +30,8 @@ unity/[Ll]ibrary/
 unity/[Tt]emp/
 unity/[Oo]bj/
 unity/[Bb]uild/
-unity/[Bb]uilds/
+unity/[Bb]uilds/*
+!unity/[Bb]uilds/.gitkeep
 unity/[Ll]ogs/
 unity/[Uu]serSettings/
 unity/[Mm]emoryCaptures/
