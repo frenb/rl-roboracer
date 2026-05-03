@@ -125,8 +125,29 @@ def read_course_metrics(env):
     return env.get_course_metrics()
 
 
+def build_train_env(num_envs, course_type='donut'):
+    """Construct the training env (single or parallel) for main()."""
+    if num_envs <= 1:
+        return make_env('ros-server-0:50051', course_type=course_type)
+
+    from tf_agents.environments import parallel_py_environment
+    return parallel_py_environment.ParallelPyEnvironment(
+        [(lambda i=i: make_env(f'ros-server-{i}:50051', course_type=course_type))
+         for i in range(num_envs)])
+
+
+def configure_env(env, job_id="", pass_through_actions=False):
+    """Apply per-job config to a single env or all parallel subprocess envs."""
+    from tf_agents.environments import parallel_py_environment
+    if isinstance(env, parallel_py_environment.ParallelPyEnvironment):
+        env.call('configure', job_id, pass_through_actions)()
+    else:
+        env.configure(job_id, pass_through_actions)
+
+
 def main(
     job_id="",
+    num_envs=1,
     checkpoint_restore=False, 
     version=None,
     num_iterations_val=50000,
@@ -175,14 +196,14 @@ def main(
     eval_interval = eval_interval_val # @param {type:"integer"}
     policy_save_interval = policy_save_interval_val # @param {type:"integer"}
     # Environment. Use same for eval and collection, though this does not seem standard?
-    env = make_env('ros-server-0:50051', course_type="donut")
+    env = build_train_env(num_envs, course_type="donut")
     # Bookkeeping that used to live on env.course; tracking it in main() lets
     # us share the same code path for single- vs multi-env training (in
     # multi-env mode the per-subprocess course state isn't reachable from
     # main).
     avg_return_arr = []
     max_avg_return = 0.0
-    print(f"Job arguments = num_iterations: {num_iterations}, nn_size_x: {actor_fc_layer_params_x}, nn_size_x: {actor_fc_layer_params_y}")
+    print(f"Job arguments = num_envs: {num_envs}, num_iterations: {num_iterations}, nn_size_x: {actor_fc_layer_params_x}, nn_size_x: {actor_fc_layer_params_y}")
     learner_dir = os.path.join(tempdir, str(job_id),"learner")
     saved_model_dir = os.path.join(learner_dir, learner.POLICY_SAVED_MODEL_DIR)
     log_dir = os.path.join(tempdir, str(job_id),"metrics")
@@ -193,10 +214,11 @@ def main(
     # Strategy
     use_gpu = True #@param {type:"boolean"}
     strategy = strategy_utils.get_strategy(tpu=False, use_gpu=use_gpu)
-    env.job_id=job_id
-    env.pass_through_actions=bool(pass_through_actions)
-    env.pass_through_actions = False
-    print(f"pass_through_actions: {env.pass_through_actions}")
+    # Existing code unconditionally overwrote pass_through_actions to False
+    # immediately after assigning the requested value, so the requested
+    # value never took effect. Preserve that here by passing False directly.
+    configure_env(env, job_id=job_id, pass_through_actions=False)
+    print(f"pass_through_actions: False")
     # Critic network.
     observation_spec, action_spec, time_step_spec = (
         spec_utils.get_tensor_specs(env))
@@ -647,7 +669,7 @@ def get_jobs():
     debug_print(jobs)
     return jobs
 
-def do_job(job):
+def do_job(job, num_envs=1):
     print(job["job_type"])
     update_job(job["_id"], "IN_PROGRESS")
     update_job(job["_id"], 0, "percent_complete")
@@ -676,9 +698,10 @@ def do_job(job):
         critic_joint_fc_layer_params_y=512 if job.get("nn_size_y") == None else job.get("nn_size_y")
         print(job)
         print(f"in do_job pass_through_actions: {pass_through_actions}")
-        main(job_id=job["_id"], 
+        main(job_id=job["_id"],
+            num_envs=num_envs,
             num_iterations_val=num_iterations,
-            pass_through_actions=pass_through_actions, 
+            pass_through_actions=pass_through_actions,
             actor_fc_layer_params_x=actor_fc_layer_params_x,
             actor_fc_layer_params_y=actor_fc_layer_params_y,
             critic_joint_fc_layer_params_x=critic_joint_fc_layer_params_x,
@@ -913,22 +936,34 @@ def debug_print(text):
     if debug_print_enabled:
         print(text)
 
-def run_jobs_loop():
+def run_jobs_loop(num_envs=1):
     """Poll MongoDB for jobs and dispatch them indefinitely.
 
-    Each individual job constructs its own env via make_env() (and tears
-    it down with the process when the job ends), so no module-global
-    RobotApi or background thread is needed at startup.
+    Each individual job constructs its own env(s) via make_env() (and
+    tears them down with the process when the job ends), so no
+    module-global RobotApi or background thread is needed at startup.
+
+    num_envs is process-wide configuration (passed in via --num-envs).
+    Forwarded to do_job() so the TRAIN job_type can build a parallel
+    env. DEMO and EVAL job types are unaffected.
     """
-    print("Polling for jobs...")
+    print(f"Polling for jobs (num_envs={num_envs})...")
     while True:
         jobs = get_jobs()
         for j in jobs:
             print("doing job")
-            do_job(j)
+            do_job(j, num_envs=num_envs)
         print("sleep")
         time.sleep(5)
 
 
 if __name__ == "__main__":
-    run_jobs_loop()
+    import argparse
+    p = argparse.ArgumentParser(description="Robotaxi RL training driver.")
+    p.add_argument(
+        '--num-envs', type=int, default=1,
+        help="Number of parallel ros-server endpoints to collect from. "
+             "Default 1 (single-actor). When >1, each TRAIN job uses "
+             "ParallelPyEnvironment over ros-server-0..ros-server-(N-1).")
+    args = p.parse_args()
+    run_jobs_loop(num_envs=args.num_envs)

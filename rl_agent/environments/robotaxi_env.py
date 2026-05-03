@@ -37,6 +37,16 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         """
         return self.course.get_metrics()
 
+    def configure(self, job_id="", pass_through_actions=False):
+        """Apply per-job configuration to this env.
+
+        Exposed as a method (rather than direct attribute writes) so the
+        same call site can dispatch through ``ParallelPyEnvironment.call``
+        in multi-env training.
+        """
+        self.job_id = job_id
+        self.pass_through_actions = pass_through_actions
+
     def _reset(self):
         self._episode_ended = False
         #self._api.DoResetBlocking()
