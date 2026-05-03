@@ -24,3 +24,43 @@ dashboard/build/
 rl_agent/robotaxi.out
 rl_agent/robotaxi copy.py
 rl_agent/tmp/
+
+# Unity (https://github.com/github/gitignore/blob/main/Unity.gitignore)
+unity/[Ll]ibrary/
+unity/[Tt]emp/
+unity/[Oo]bj/
+unity/[Bb]uild/
+unity/[Bb]uilds/
+unity/[Ll]ogs/
+unity/[Uu]serSettings/
+unity/[Mm]emoryCaptures/
+unity/[Rr]ecordings/
+
+# Auto-generated VS / Rider project files
+unity/*.csproj
+unity/*.sln
+unity/*.unityproj
+unity/*.suo
+unity/*.user
+unity/*.userprefs
+unity/*.tmp
+unity/*.pidb*
+unity/*.booproj
+unity/*.svd
+unity/*.pdb
+unity/*.mdb
+unity/*.opendb
+unity/*.VC.db
+
+# Unity build artifacts
+unity/*.apk
+unity/*.aab
+unity/*.unitypackage
+unity/*.app
+
+# Crashlytics generated file
+unity/crashlytics-build.properties
+
+# Packages produced by Unity Asset Store
+unity/[Aa]ssets/AssetStoreTools*
+
