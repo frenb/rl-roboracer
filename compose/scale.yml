@@ -1,0 +1,84 @@
+# Multi-actor scale overlay for the RL stack.
+#
+# Adds three additional ros-server services (1..3) to the base
+# docker-compose.yml so 4 Unity clients can each connect to their own
+# ROS-TCP/gRPC endpoint. Run with:
+#
+#   docker compose -f docker-compose.yml -f compose/scale.yml up -d
+#
+# The base service "ros-server" gets a "ros-server-0" network alias so
+# Python code can address all four endpoints with a consistent
+# ros-server-0..ros-server-3 scheme.
+#
+# Host port map (Unity clients on the Windows host connect via these):
+#
+#   actor 0  ROS-TCP host.docker.internal:10000 -> ros-server   :10000
+#            gRPC                          50051 -> ros-server   :50051
+#   actor 1  ROS-TCP                       10001 -> ros-server-1 :10000
+#            gRPC                          50052 -> ros-server-1 :50051
+#   actor 2  ROS-TCP                       10002 -> ros-server-2 :10000
+#            gRPC                          50053 -> ros-server-2 :50051
+#   actor 3  ROS-TCP                       10003 -> ros-server-3 :10000
+#            gRPC                          50054 -> ros-server-3 :50051
+#
+# Inside the Compose network, services on the sim-controller side reach
+# them as ros-server-0:50051 .. ros-server-3:50051.
+
+x-ros-server-base: &ros-server-base
+  image: docker_ros-server:thin
+  restart: always
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  environment:
+    - SAVED_MODELS_DIR=/saved_models
+    - ROBOT_TYPE=robotaxi
+    - UNITY_MACHINE_IP=host.docker.internal
+  build:
+    context: ./docker/ros_server
+    dockerfile: Dockerfile
+  volumes:
+    - type: bind
+      source: ./rl_agent
+      target: /python_ws/src
+    - type: bind
+      source: ../saved_models
+      target: /saved_models
+  command: sh -c "./src/start.sh"
+
+services:
+  # Give the base service a numbered alias for symmetric Python naming.
+  ros-server:
+    networks:
+      default:
+        aliases:
+          - ros-server-0
+
+  ros-server-1:
+    <<: *ros-server-base
+    ports:
+      - "10001:10000"
+      - "50052:50051"
+    networks:
+      default:
+        aliases:
+          - ros-server-1
+
+  ros-server-2:
+    <<: *ros-server-base
+    ports:
+      - "10002:10000"
+      - "50053:50051"
+    networks:
+      default:
+        aliases:
+          - ros-server-2
+
+  ros-server-3:
+    <<: *ros-server-base
+    ports:
+      - "10003:10000"
+      - "50054:50051"
+    networks:
+      default:
+        aliases:
+          - ros-server-3
