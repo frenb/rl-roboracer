@@ -50,6 +50,30 @@
     exit before any logger initializes. 3s gives the previous instance
     time to finish GfxDevice creation before the next one starts. Set
     to 0 to disable.
+
+.PARAMETER GridCols
+.PARAMETER GridRows
+    Lays out the N Unity windows in a GridCols x GridRows grid on the
+    primary monitor's working area instead of letting Unity stack them
+    all at the default spawn position. Defaults: GridCols =
+    ceil(sqrt(N)) and GridRows = ceil(N / GridCols), so N=4 is 2x2,
+    N=2 is 2x1, N=9 is 3x3. Pass GridCols=0 (or GridRows=0) to opt out
+    and keep the old stack-on-top behavior.
+
+.PARAMETER Minimized
+    Start the supervisor consoles minimized to the taskbar so they
+    don't cover the Unity windows on launch. Default $true. Pass
+    -Minimized:$false to keep them in the foreground (useful when
+    actively debugging a supervisor).
+
+.PARAMETER UseWindowsTerminal
+    Group the N supervisor consoles into one Windows Terminal window
+    with N tabs (named ``actor-0`` ... ``actor-N-1``) instead of
+    spawning N separate powershell.exe console windows. Default
+    $true; auto-detected (falls back to separate consoles if
+    ``wt.exe`` isn't on PATH). Each tab still runs RunClientWrapper.ps1
+    so Stop-Stack.ps1's CommandLine-based filter cleans them up the
+    same way.
 #>
 [CmdletBinding()]
 param(
@@ -59,8 +83,23 @@ param(
     [int]$WindowHeight = 0,
     [string]$WindowQuality = 'Fastest',
     [switch]$Popup,
-    [double]$StaggerSeconds = 3.0
+    [double]$StaggerSeconds = 3.0,
+    [int]$GridCols = -1,
+    [int]$GridRows = -1,
+    [bool]$Minimized = $true,
+    [bool]$UseWindowsTerminal = $true
 )
+
+# Auto-compute a square-ish default grid from $N if the caller didn't
+# specify cols/rows. ceil(sqrt(N)) cols, then enough rows to cover N.
+# Caller can pass GridCols=0 (or GridRows=0) to disable grid placement
+# entirely; both >0 to use a custom layout.
+if ($GridCols -lt 0) {
+    $GridCols = [int][Math]::Ceiling([Math]::Sqrt($N))
+}
+if ($GridRows -lt 0) {
+    $GridRows = [int][Math]::Ceiling($N / [double]$GridCols)
+}
 
 $ErrorActionPreference = 'Stop'
 
@@ -120,8 +159,29 @@ for ($i = 0; $i -lt $N; $i++) {
     $indexExePaths += $exePath
 }
 
-Write-Host "Launching $N supervised Unity clients (stagger ${StaggerSeconds}s)..."
-$pids = @()
+# Hosting strategy: prefer Windows Terminal (wt.exe) if available so
+# the N supervisors share one window with N tabs instead of cluttering
+# the taskbar with N separate powershell consoles. Auto-falls back to
+# plain powershell consoles if wt isn't on PATH or the user opted out.
+# Search by name 'wt' (no extension) because Windows registers wt as
+# an App Execution Alias - Get-Command 'wt.exe' won't see it, but
+# Get-Command 'wt' resolves to <LocalAppData>\Microsoft\WindowsApps\wt.exe.
+$wtCommand = $null
+if ($UseWindowsTerminal) {
+    $wtCommand = Get-Command 'wt' -ErrorAction SilentlyContinue
+}
+$useWt = ($null -ne $wtCommand)
+$wtWindowName = 'robotaxi-stack'
+
+$gridLayoutMsg = if ($GridCols -gt 0 -and $GridRows -gt 0) {
+    "${GridCols}x${GridRows} grid on primary monitor"
+} else {
+    "no grid (default Unity spawn position)"
+}
+$hostMsg = if ($useWt) { "wt tabs in window '$wtWindowName'" } else { 'separate powershell consoles' }
+$visibilityMsg = if ($Minimized) { 'minimized' } else { 'normal' }
+Write-Host "Launching $N supervised Unity clients (stagger ${StaggerSeconds}s, ${gridLayoutMsg}, ${hostMsg}, ${visibilityMsg})..."
+
 # We build the spawned-powershell argument list as a single explicitly-
 # quoted string. PowerShell 5.1's Start-Process -ArgumentList @(...) joins
 # array elements with spaces but does NOT auto-quote, so a path arg
@@ -134,7 +194,7 @@ for ($i = 0; $i -lt $N; $i++) {
     }
 
     $exePath = $indexExePaths[$i]
-    $cmdLine = @(
+    $psCmdLine = @(
         '-NoExit'
         '-File "{0}"'           -f $wrapperPath
         '-Index {0}'            -f $i
@@ -143,18 +203,100 @@ for ($i = 0; $i -lt $N; $i++) {
         '-WindowWidth {0}'      -f $WindowWidth
         '-WindowHeight {0}'     -f $WindowHeight
         '-WindowQuality "{0}"'  -f $WindowQuality
+        '-GridCols {0}'         -f $GridCols
+        '-GridRows {0}'         -f $GridRows
     ) -join ' '
-    if ($Popup) { $cmdLine += ' -Popup' }
+    if ($Popup) { $psCmdLine += ' -Popup' }
 
-    $proc = Start-Process -FilePath 'powershell' -ArgumentList $cmdLine -PassThru
-    $pids += $proc.Id
-    Write-Host "  [$i] supervisor PID=$($proc.Id) -> $exePath"
+    $startArgs = @{ PassThru = $true }
+    if ($Minimized) { $startArgs.WindowStyle = 'Minimized' }
+
+    if ($useWt) {
+        # `wt -w <name>` finds-or-creates a wt window with that name.
+        # First iteration creates it; subsequent iterations attach
+        # new tabs. Each tab runs powershell with the same wrapper
+        # arguments as the fallback path, so RunClientWrapper.ps1 sees
+        # an identical command line in either mode.
+        $wtCmdLine = @(
+            '-w', $wtWindowName
+            'new-tab'
+            '--title', "actor-$i"
+            'powershell'
+            $psCmdLine
+        ) -join ' '
+        $startArgs.FilePath     = 'wt.exe'
+        $startArgs.ArgumentList = $wtCmdLine
+        $proc = Start-Process @startArgs
+        Write-Host "  [$i] tab created in wt window '$wtWindowName' -> $exePath"
+    } else {
+        $startArgs.FilePath     = 'powershell'
+        $startArgs.ArgumentList = $psCmdLine
+        $proc = Start-Process @startArgs
+        Write-Host "  [$i] supervisor PID=$($proc.Id) -> $exePath"
+    }
+}
+
+# Re-minimize the wt window after all tabs are added. The first
+# `Start-Process wt -WindowStyle Minimized` creates the window
+# minimized, but each subsequent ``wt -w <name> new-tab ...`` call
+# brings the existing window to the foreground (that's wt's
+# focus-on-new-tab behavior, not configurable per-call). Net effect:
+# without this fix-up, the window ends up unminimized after tab 1
+# even though the user asked for minimized. Find the wt host PID by
+# walking up from a supervisor's parent chain, then call ShowWindow
+# with SW_SHOWMINNOACTIVE (minimize without stealing focus).
+if ($Minimized -and $useWt) {
+    # Give wt a moment to register the last tab before we touch it.
+    Start-Sleep -Milliseconds 500
+
+    $sup = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*RunClientWrapper.ps1*' }) | Select-Object -First 1
+    if ($sup) {
+        $wtPid = $null
+        $current = $sup
+        for ($depth = 0; $depth -lt 5; $depth++) {
+            if (-not $current.ParentProcessId) { break }
+            $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($current.ParentProcessId)" -ErrorAction SilentlyContinue
+            if (-not $parent) { break }
+            if ($parent.Name -match '^WindowsTerminal') {
+                $wtPid = $parent.ProcessId
+                break
+            }
+            $current = $parent
+        }
+
+        if ($wtPid) {
+            if (-not ('Win32WindowMinimize' -as [type])) {
+                Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class Win32WindowMinimize {
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    public const int SW_SHOWMINNOACTIVE = 7;
+}
+'@
+            }
+            $wtProc = Get-Process -Id $wtPid -ErrorAction SilentlyContinue
+            if ($wtProc -and $wtProc.MainWindowHandle -ne [IntPtr]::Zero) {
+                [void][Win32WindowMinimize]::ShowWindow(
+                    $wtProc.MainWindowHandle,
+                    [Win32WindowMinimize]::SW_SHOWMINNOACTIVE)
+                Write-Host "Re-minimized wt host window (PID=$wtPid)"
+            }
+        }
+    }
 }
 
 Write-Host ""
-Write-Host "All $N clients launched. Each has its own PowerShell window."
-Write-Host "Supervisor PIDs: $($pids -join ', ')"
-Write-Host "Close a window to stop supervising that client."
+if ($useWt) {
+    Write-Host "All $N clients launched as tabs in Windows Terminal window '$wtWindowName'."
+    Write-Host "Click the wt taskbar icon to switch between actor-0 .. actor-$($N-1)."
+    Write-Host "Stop-Stack.ps1 will clean them up (or close the wt window manually)."
+} else {
+    Write-Host "All $N clients launched as separate PowerShell windows."
+    Write-Host "Close a window to stop supervising that client, or run Stop-Stack.ps1."
+}
 Write-Host ""
 Write-Host "If the Unity windows don't appear, check the supervisor consoles for"
 Write-Host "'Status = Exited: Restart...' loops - that means Unity is dying right"

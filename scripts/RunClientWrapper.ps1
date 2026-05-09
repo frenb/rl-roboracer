@@ -80,6 +80,19 @@
     at the same %LOCALAPPDATA%/<Co>/<Product>/Player.log, which makes
     diagnosing concurrent-client crashes impossible). Pass an empty
     string to fall back to Unity's default location.
+
+.PARAMETER GridCols
+.PARAMETER GridRows
+    When both are > 0, the spawned Unity window is moved into the
+    grid cell at column ($Index % GridCols), row ($Index / GridCols)
+    of the primary monitor's working area. Tile size is
+    (screen_width / GridCols) by (screen_height / GridRows) so the
+    N tiles fill the screen exactly with no overlap. Default 0/0
+    leaves Unity's spawn position untouched (it stacks new windows on
+    top of each other - which is annoying when running 4 actors).
+
+    Re-applies on supervisor respawn so a recycled Unity client
+    doesn't drift back to the default spawn location.
 #>
 [CmdletBinding()]
 param(
@@ -90,6 +103,8 @@ param(
     [string]$Path,
     [int]$PollSeconds = 15,
     [int]$UnresponsiveStrikes = 3,
+    [int]$GridCols = 0,
+    [int]$GridRows = 0,
     [int]$WindowWidth = 0,
     [int]$WindowHeight = 0,
     [string]$WindowQuality = 'Fastest',
@@ -164,8 +179,76 @@ $exeArgs = @(
 )
 if ($Popup) { $exeArgs += '-popupwindow' }
 
+# Grid-positioning plumbing. Loaded only once, even if the wrapper
+# script gets re-sourced. Pulls in System.Windows.Forms for screen
+# dimensions and adds a tiny user32.dll shim for SetWindowPos.
+if ($GridCols -gt 0 -and $GridRows -gt 0) {
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+    if (-not ('Win32WindowPlacement' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class Win32WindowPlacement {
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool SetWindowPos(
+        IntPtr hWnd, IntPtr hWndInsertAfter,
+        int X, int Y, int cx, int cy, uint uFlags);
+    public const uint SWP_NOZORDER = 0x0004;
+    public const uint SWP_NOACTIVATE = 0x0010;
+}
+'@
+    }
+}
+
+function Move-ProcessWindowToGrid {
+    param([int]$ProcessId, [int]$Index, [int]$Cols, [int]$Rows)
+
+    if ($Cols -le 0 -or $Rows -le 0) { return }
+
+    # Unity takes a few seconds to create its main window. Poll for
+    # MainWindowHandle to become non-zero, with a deadline. If Unity
+    # crashes during boot we exit early so the supervisor's normal
+    # restart logic still kicks in.
+    $deadline = (Get-Date).AddSeconds(45)
+    $hwnd = [IntPtr]::Zero
+    while ((Get-Date) -lt $deadline) {
+        $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+        if (-not $p) {
+            Write-Host "[$Index] grid: process exited before window appeared; skipping placement"
+            return
+        }
+        if ($p.MainWindowHandle -ne [IntPtr]::Zero) {
+            $hwnd = $p.MainWindowHandle
+            break
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    if ($hwnd -eq [IntPtr]::Zero) {
+        Write-Host "[$Index] grid: main window didn't appear in 45s; skipping placement"
+        return
+    }
+
+    $screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $tileW = [int]($screen.Width / $Cols)
+    $tileH = [int]($screen.Height / $Rows)
+    $col = $Index % $Cols
+    $row = [int][Math]::Floor($Index / $Cols)
+    $x = $screen.X + $col * $tileW
+    $y = $screen.Y + $row * $tileH
+
+    $flags = [Win32WindowPlacement]::SWP_NOZORDER -bor [Win32WindowPlacement]::SWP_NOACTIVATE
+    [void][Win32WindowPlacement]::SetWindowPos(
+        $hwnd, [IntPtr]::Zero,
+        $x, $y, $tileW, $tileH, $flags)
+
+    Write-Host ("[{0}] grid: cell=(c{1},r{2}) -> ({3},{4}) size {5}x{6}" -f `
+        $Index, $col, $row, $x, $y, $tileW, $tileH)
+}
+
 function Start-Client {
-    return Start-Process -FilePath $Path -ArgumentList $exeArgs -WorkingDirectory $cwdForUnity -PassThru
+    $p = Start-Process -FilePath $Path -ArgumentList $exeArgs -WorkingDirectory $cwdForUnity -PassThru
+    Move-ProcessWindowToGrid -ProcessId $p.Id -Index $Index -Cols $GridCols -Rows $GridRows
+    return $p
 }
 
 $proc = Start-Client
