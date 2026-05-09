@@ -113,7 +113,24 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         else:
             acceleration=action_arr[0]
             steering_angle=action_arr[1]
-    
+
+        # One-line per-step action trace. In multi-actor training each
+        # worker's stdout is wrapped with [actor-N] (see
+        # rl_agent/envs.py::_install_actor_prefix), so the rendered
+        # output looks like
+        #     [actor-0] ACTION accel=+1.234 steer=-0.567
+        #     [actor-1] ACTION accel=-0.890 steer=+0.123
+        #     [actor-2] ACTION accel=+0.456 steer=+0.789
+        #     [actor-3] ACTION accel=+1.999 steer=-1.000
+        # making it trivial to confirm visually that the learner is
+        # producing four independently-conditioned actions per step
+        # (different cars, different observations, stochastic SAC
+        # sampling) rather than broadcasting one action to all actors.
+        # `flush=True` belt-and-suspenders against pipe block-buffering
+        # if anyone ever runs without `python -u`.
+        print("ACTION accel={:+.4f} steer={:+.4f}".format(
+            acceleration, steering_angle), flush=True)
+
         data = self._api.DoApplyForceBlocking(
             acceleration,
             steering_angle)
