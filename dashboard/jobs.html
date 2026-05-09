@@ -103,16 +103,6 @@
                     <tr>
                         <td>
                             <label>
-                                Location
-                            </label>
-                        </td>
-                        <td>
-                            <input id="location" type="text" formControlName="location_val">
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>
-                            <label>
                                 Model Type:
                             </label>
                         </td>
@@ -157,10 +147,15 @@
     var app = angular.module('myApp', 
         ['ui.grid', 'ui.grid.pagination','ui.grid.resizeColumns','ui.grid.selection']);
     
+    // Location field intentionally absent from this modal. To run an
+    // EVAL job against an existing saved model, go to the Models tab,
+    // select the model row, and click "Add Jobs" - that flow reads
+    // the location from the model's MongoDB record. This form is for
+    // TRAIN, DEMO, BC_TRAINING_ONLY, and EVAL-of-RandomPyPolicy jobs
+    // that don't need a model path.
     function add_job(
         $http,
-        location_val, 
-        status_val, 
+        status_val,
         robot_type_val,
         num_iterations_val,
         model_type_val,
@@ -169,15 +164,14 @@
         demo_job_id_val) {
 
             console.log(
-                location_val, status_val, robot_type_val, 
+                status_val, robot_type_val,
                 num_iterations_val, model_type_val, job_type_val);
-            
+
             var new_job = {
                 status: status_val,
                 job_type: job_type_val,
                 num_iterations: Number(num_iterations_val),
                 model_type: model_type_val,
-                location: location_val,
                 robot_type: robot_type_val,
                 pass_through_actions: false,
                 training_steps: Number(training_steps_val),
@@ -263,7 +257,6 @@ app.controller('myController', ['$scope','$http', 'uiGridConstants',
 
         $scope.add_jobs = function() {
             console.log("in add jobs");
-            var location_val = document.getElementById("location").value;
             var status_val = document.getElementById("status").value;
             var robot_type_val = document.getElementById("robot_type").value;
             var num_iterations_val = document.getElementById("num_iterations").value;
@@ -271,15 +264,14 @@ app.controller('myController', ['$scope','$http', 'uiGridConstants',
             var model_type_val = document.getElementById("model_type").value;
             var job_type_val = document.getElementById("job_type").value;
             var demo_job_id_val = document.getElementById("demo_job_id").value;
-            console.log(location_val, status_val, robot_type_val, num_iterations_val, training_steps_val, model_type_val, job_type_val,demo_job_id_val)
+            console.log(status_val, robot_type_val, num_iterations_val, training_steps_val, model_type_val, job_type_val,demo_job_id_val)
             add_job(
                 $http,
-                location_val,
                 status_val,
                 robot_type_val,
                 num_iterations_val,
                 model_type_val,
-                job_type_val, 
+                job_type_val,
                 training_steps_val,
                 demo_job_id_val
             );
