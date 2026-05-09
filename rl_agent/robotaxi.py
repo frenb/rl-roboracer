@@ -7,6 +7,21 @@ import time
 import json
 import datetime
 
+# tf-agents 0.11.0rc0 ships an OpenAIGymStateSaver (registered globally
+# in tf_agents.system.system_multiprocessing._STATE_SAVERS at import
+# time) that runs inside every ParallelPyEnvironment worker and does
+#     if not isinstance(state, gym.envs.registration.EnvRegistry): ...
+# That class existed in gym <= 0.23. gym 0.26 (what this container has)
+# made the registry a plain dict and removed EnvRegistry entirely, so
+# every worker dies with AttributeError before our env factories run.
+# Aliasing EnvRegistry to the registry's actual type makes the
+# isinstance check pass without affecting any real gym usage. Done at
+# module level so the spawn-reimported children pick it up too.
+import gym.envs.registration as _gym_reg
+if not hasattr(_gym_reg, 'EnvRegistry'):
+    _gym_reg.EnvRegistry = type(_gym_reg.registry)
+del _gym_reg
+
 import numpy as np
 from scipy.interpolate import interp1d
 from numpy import interp
@@ -110,13 +125,22 @@ def read_course_metrics(env):
     """Read the inner course metric snapshot from a (possibly batched) env.
 
     Single env: just delegate to env.get_course_metrics().
-    Parallel envs: aggregate across actors - max() for max_* keys, mean()
-    for the rest. Returns a dict with the same keys as a single env, so
-    the TensorBoard scalar names are unchanged regardless of N.
+    Parallel envs: dispatch to each underlying ProcessPyEnvironment and
+    aggregate across actors - max() for max_* keys, mean() for the rest.
+    Returns a dict with the same keys as a single env, so the
+    TensorBoard scalar names are unchanged regardless of N.
+
+    The same caveat as configure_env applies: ParallelPyEnvironment in
+    tf-agents 0.11 has no public .call() proxy of its own, so we go
+    through the per-subprocess wrappers in env._envs and use the
+    fire-all-then-wait-all promise pattern that the library's own
+    seed() helper uses.
     """
     from tf_agents.environments import parallel_py_environment
     if isinstance(env, parallel_py_environment.ParallelPyEnvironment):
-        per_actor = env.call('get_course_metrics')()  # tuple of dicts
+        promises = [proc_env.call('get_course_metrics')
+                    for proc_env in env._envs]
+        per_actor = [promise() for promise in promises]
         out = {}
         for k in per_actor[0]:
             vals = [d[k] for d in per_actor]
@@ -137,10 +161,24 @@ def build_train_env(num_envs, course_type='donut'):
 
 
 def configure_env(env, job_id="", pass_through_actions=False):
-    """Apply per-job config to a single env or all parallel subprocess envs."""
+    """Apply per-job config to a single env or all parallel subprocess envs.
+
+    tf-agents 0.11 doesn't put a public `call()` proxy on
+    ParallelPyEnvironment itself; the dispatch lives on each underlying
+    ProcessPyEnvironment in env._envs. ProcessPyEnvironment.call() is
+    asynchronous and returns a no-arg promise-callable; following the
+    same fire-all-then-wait-all pattern that ParallelPyEnvironment.seed
+    uses internally lets all four subprocess configure() calls run
+    concurrently instead of serially.
+    """
     from tf_agents.environments import parallel_py_environment
     if isinstance(env, parallel_py_environment.ParallelPyEnvironment):
-        env.call('configure', job_id, pass_through_actions)()
+        promises = [
+            proc_env.call('configure', job_id, pass_through_actions)
+            for proc_env in env._envs
+        ]
+        for promise in promises:
+            promise()
     else:
         env.configure(job_id, pass_through_actions)
 
@@ -310,12 +348,19 @@ def main(
         
         tf_agent.initialize()
     # Replay Buffer.
-    reverb_server, reverb_replay, dataset, rb_observer = make_local_replay(
+    # collect_observer is fan-out-aware: in multi-env mode it splits the
+    # batched Trajectory produced by ParallelPyEnvironment into N
+    # per-env writes. expert_observer is always plain-unbatched and is
+    # what the offline expert-demo loop below feeds directly. In
+    # single-env mode the two are the same instance.
+    (reverb_server, reverb_replay, dataset,
+     rb_observer, expert_observer) = make_local_replay(
         tf_agent.collect_data_spec,
         capacity=replay_buffer_capacity,
         sample_batch_size=batch_size,
         sequence_length=2,
-        stride_length=1)
+        stride_length=1,
+        num_envs=num_envs)
     table_name = 'uniform_table'
     experience_dataset_fn = lambda: dataset
     
@@ -333,10 +378,14 @@ def main(
         env.time_step_spec(), env.action_spec())
     
     # Actors. rb_observer is constructed by make_local_replay() above.
+    # The expert demonstrations were saved as single-actor trajectories
+    # and must go through the always-unbatched expert_observer; in
+    # multi-env mode rb_observer is a fan-out that would slice into
+    # leaves expecting a leading parallel-env batch dim.
     print("Loading expert demonstrations into Reverb...")
     items_added = 0
     for unbatched_traj in trajectory_dataset:
-        rb_observer(unbatched_traj)
+        expert_observer(unbatched_traj)
         items_added += 1
         if items_added >=50000:
             break
@@ -413,7 +462,13 @@ def main(
             eval_results_blob[str(name)] = float(result)
         eval_results_blob["step"] = int(step)
         eval_results_blob["type"] = "step update"
-        eval_results_blob["job_id"] = env.job_id
+        # Use the local job_id arg of main() rather than env.job_id. On
+        # multi-env training the parent is a ParallelPyEnvironment and
+        # the actual job_id-bearing RobotApi lives on each subprocess
+        # env (set via env._envs[i].call('configure', job_id, ...) in
+        # configure_env above), so a parent-level env.job_id read raises
+        # AttributeError. The same value is in scope as a closure.
+        eval_results_blob["job_id"] = job_id
         log_blob(eval_results_blob)
         print('step = {0}: {1}'.format(step, eval_results), flush=True)
 
@@ -516,6 +571,12 @@ def main(
         curr_iteration=curr_iteration+1
     print("Training completed")
     rb_observer.close()
+    # In multi-env mode rb_observer is the fan-out wrapper; expert_observer
+    # is a separate writer into the same table that we have to close on
+    # its own. In single-env mode they're the same instance and the
+    # second close() is a harmless no-op on an already-closed writer.
+    if expert_observer is not rb_observer:
+        expert_observer.close()
     reverb_server.stop()
     # tf_policy_saver = policy_saver.PolicySaver(tf_agent.policy)
     # save_dir_name=get_save_dir_name(tf_agent)
@@ -726,25 +787,83 @@ def do_job(job, num_envs=1):
     update_job(job["_id"], "DONE")
 
 def move_all_jobs_data(id):
-    print(f"moving all jobs data excluding job with {id}")
-    # move eval, metrics, train
-    move_data(id, folders=["eval", "metrics", "train"])
-    jobs = get_job_ids(id)
-    print(f"jobs: {jobs}")
-    for job in jobs:
-        move_data(job["_id"])
+    """Archive every /tmp/active/ entry that isn't the current job's.
 
-def get_job_ids(id):
-    # get job ids that are not equal to id
-    myquery = { "_id": { "$ne": id } }
-    # sort by _id in descending order
-    mysort = { "_id": -1 }
-    # db.jobs.find using myquery and sorted by mysort
-    results = db.jobs.find(myquery).sort("_id", -1).limit(10)
-    return results
+    Background: TensorBoard runs with ``--logdir /tmp/active`` (see
+    sim-controller's docker-compose command), so anything sitting in
+    /tmp/active/ shows up as a separate Run in the TensorBoard UI. The
+    intent of this function is to keep that view to exactly one run at
+    a time - the job currently training. Old jobs' summaries are moved
+    out to /tmp/jobsdata/ where the dashboard service can browse them.
+
+    The previous implementation enumerated stale jobs by MongoDB query
+    (``get_job_ids`` with ``.limit(10)``) and only archived directories
+    matching the canonical ``<job_id>`` naming convention. That left two
+    classes of cruft visible in TensorBoard forever:
+
+      * Older legacy ``<id>_eval`` / ``<id>_<suffix>`` flat directories
+        produced by an earlier version of the training loop never got
+        recognized.
+      * Anything beyond the 10 most-recent other jobs (in MongoDB
+        order) was never enumerated, so accumulated tail cruft stayed.
+
+    This rewrite walks /tmp/active/ on the filesystem instead, which is
+    the source of truth TensorBoard actually scans. Everything that
+    isn't the current job_id (under either ``<id>`` or ``<id>_<suffix>``
+    naming) gets moved out, and any leftover subdirs of the current job
+    from a previous failed attempt of the same id get cleaned out so
+    this run starts with empty train/eval/metrics/learner.
+    """
+    print(f"archiving prior /tmp/active entries (keeping {id})")
+    active_root = "/tmp/active"
+    if not os.path.isdir(active_root):
+        return
+
+    str_id = str(id)
+    for entry in os.listdir(active_root):
+        # Keep anything belonging to the current job. ``<id>`` is the
+        # canonical layout used by main(); ``<id>_<suffix>`` is also
+        # accepted because some legacy code paths produced flat dirs
+        # like ``<id>_eval`` for the same job.
+        if entry == str_id or entry.startswith(str_id + "_"):
+            continue
+        src = os.path.join(active_root, entry)
+        if not os.path.exists(src):
+            continue
+
+        # Group all dir variants of the same underlying job id under
+        # one /tmp/jobsdata/<id>/... archive, so the dashboard sees a
+        # single bucket per job rather than fragmenting into
+        # /tmp/jobsdata/<id>/ and /tmp/jobsdata/<id>_eval/.
+        base_id = entry.split("_", 1)[0] if "_" in entry else entry
+        archive_root = os.path.join("/tmp/jobsdata", base_id)
+        dst = os.path.join(archive_root, entry)
+        os.makedirs(archive_root, exist_ok=True)
+
+        if os.path.isdir(dst):
+            print(f"  archive dst {dst} already exists; replacing")
+            shutil.rmtree(dst)
+        elif os.path.exists(dst):
+            os.remove(dst)
+        shutil.move(src, dst)
+        print(f"  archived {src} -> {dst}")
+
+    # Cleanup of any leftover subdirs of THIS job from a previous
+    # failed attempt with the same job_id. Without this, a partial
+    # /tmp/active/<id>/train from a crash would be merged with the new
+    # run's summaries and TensorBoard would show two overlapping
+    # learning curves under the same Run name.
+    move_data(id, folders=["eval", "metrics", "train", "learner"])
 
 def move_data(job_id, folders=[""]):
     #Move all data for jobs with _id = job["_id"] from /tmp to /jobsdata
+    # shutil.move is non-idempotent: if dst already exists as a
+    # directory, it puts src INSIDE dst (so the next move with the same
+    # arguments fails with "Destination already exists"). That's exactly
+    # what bites us when a previous run of the same job crashed mid-way
+    # through and we re-pick the same MongoDB IN_PROGRESS job. Clean up
+    # any pre-existing dst first so the move is a true overwrite-with-
+    # latest, not an accidental nested-recursive archive.
     for folder in folders:
         if folder == "":
             src = os.path.join("/tmp/active/", str(job_id))
@@ -753,8 +872,13 @@ def move_data(job_id, folders=[""]):
             src = os.path.join("/tmp/active/", str(job_id), folder)
             dst = os.path.join("/tmp/jobsdata/", str(job_id), folder)
         print(f"moving {src} to {dst}")
-        #check if directory with name = job_id exists in /tmp
         if os.path.isdir(src):
+            if os.path.isdir(dst):
+                print(f"  dst {dst} already exists from a previous run; replacing")
+                shutil.rmtree(dst)
+            elif os.path.exists(dst):
+                # rare: dst is a file or symlink, not a directory
+                os.remove(dst)
             result = shutil.move(src, dst)
             print(f"moved {result}")
 
@@ -959,11 +1083,30 @@ def run_jobs_loop(num_envs=1):
 
 if __name__ == "__main__":
     import argparse
+    import sys
+    # tf-agents' ParallelPyEnvironment refuses to start unless the
+    # multiprocessing 'spawn' context has been initialized at the program
+    # entrypoint via system_multiprocessing.handle_main. The single-env
+    # branch in build_train_env() doesn't trigger this requirement, so
+    # the importable test from yesterday passed - but --num-envs > 1
+    # crashes with "Unable to load multiprocessing context". Wrap the
+    # job loop accordingly.
+    from tf_agents.system import system_multiprocessing as multiprocessing
+
     p = argparse.ArgumentParser(description="Robotaxi RL training driver.")
     p.add_argument(
         '--num-envs', type=int, default=1,
         help="Number of parallel ros-server endpoints to collect from. "
              "Default 1 (single-actor). When >1, each TRAIN job uses "
              "ParallelPyEnvironment over ros-server-0..ros-server-(N-1).")
-    args = p.parse_args()
-    run_jobs_loop(num_envs=args.num_envs)
+    # handle_main -> absl.app.run, which parses sys.argv and rejects
+    # unknown flags. Consume our own flag with parse_known_args and
+    # strip it so absl only sees what it understands.
+    args, remaining = p.parse_known_args()
+    sys.argv = [sys.argv[0]] + remaining
+
+    def _absl_main(argv):
+        del argv  # absl already parsed its own flags from sys.argv
+        run_jobs_loop(num_envs=args.num_envs)
+
+    multiprocessing.handle_main(_absl_main)
