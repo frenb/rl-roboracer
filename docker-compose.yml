@@ -13,6 +13,13 @@
 services:
   ros-server:
     image: docker_ros-server:thin
+    # Pin the container name so Compose doesn't auto-suffix it with the
+    # replica index ("-1"). Without this, the base container ends up
+    # named "<project>-ros-server-1", which Docker's embedded DNS then
+    # also resolves under the short name "ros-server-1" - colliding
+    # with the actual ros-server-1 service brought up by compose/scale.yml
+    # and silently routing actor-1's worker to actor-0's container.
+    container_name: robot-tycoonrefactor-ros-server-base
     restart: always
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -33,6 +40,14 @@ services:
     ports:
       - "10000:10000"
       - "50051:50051"
+    # ros-server-0 alias keeps the Python default (ros-server-0:50051) working
+    # whether or not compose/scale.yml is layered in. With the scale overlay,
+    # actors 1..3 reach the additional ros-server-1..3 services by their
+    # service names; the overlay does not need to redeclare this alias.
+    networks:
+      default:
+        aliases:
+          - ros-server-0
     command: sh -c "./src/start.sh"
 
   mongo:
@@ -100,9 +115,18 @@ services:
     ports:
       - "6006:6006"
     command: sh -c "(tensorboard --bind_all --logdir /tmp/active --reload_multifile true &1> /tmp/tb.log) && cd /python_ws/src && python robotaxi.py 2>&1 | tee robotaxi.out"
-    links:
-      - "mongo"
-      - "ros-server"
+    # No `links:` block. Compose's legacy links: ["ros-server"] would
+    # also auto-add per-link aliases of the form
+    #   <linked-container>:<service>-<replica-index>
+    # i.e. "ros-server-base:ros-server-1". Those aliases are scoped to
+    # this container's view of the embedded DNS and SHADOW the network-
+    # wide alias "ros-server-1" registered on the dedicated ros-server-1
+    # service from compose/scale.yml - meaning sim-controller's actor-1
+    # worker silently routes back to the base ros-server container
+    # alongside actor-0, while the real ros-server-1 sits idle.
+    # On modern Compose networks every service on the default network
+    # already resolves its peers by service name and explicit
+    # `networks.<net>.aliases:`, so links: is unnecessary.
 
   dashboard:
     image: node:15.8
