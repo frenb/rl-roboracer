@@ -61,8 +61,9 @@ def make_env(grpc_addr='ros-server-0:50051', course_type='donut'):
       grpc_addr: ``host:port`` of a ros-server's gRPC virtual_endpoint.
         For multi-actor training, pass ``ros-server-0:50051``,
         ``ros-server-1:50051``, etc. For single-actor training, the default
-        ``ros-server-0:50051`` matches the network alias added by
-        ``compose/scale.yml`` to the base ros-server.
+        ``ros-server-0:50051`` matches the network alias declared on the
+        base ros-server service in ``docker-compose.yml`` (so single-env
+        works without the ``compose/scale.yml`` overlay).
       course_type: ``'donut'`` (default) or ``'simple'``; selected when
         building the inner course.
 
