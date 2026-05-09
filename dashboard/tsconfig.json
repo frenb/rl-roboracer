@@ -9,5 +9,6 @@
     "outDir":"build",
     "rootDir":"src",
     "experimentalDecorators": true,
+    "skipLibCheck": true,
   }
 }
