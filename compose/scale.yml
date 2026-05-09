@@ -87,3 +87,31 @@ services:
       default:
         aliases:
           - ros-server-3
+
+  # Override sim-controller's auto-run-trainer command. The base
+  # docker-compose.yml command starts `python robotaxi.py` (single-env)
+  # automatically so single-actor users on `docker compose up -d` get
+  # training driving the moment the stack is alive. In scale-overlay
+  # mode that auto-run is unwanted: it polls the same MongoDB job queue
+  # the user's multi-env exec is also polling, and (worse) it drives
+  # actor-0's car continuously - which makes the [actor-0] log volume
+  # dwarf [actor-1..3] until the multi-env trainer reaches its first
+  # collect step.
+  #
+  # When the overlay is active, the container instead just hosts
+  # tensorboard and waits. The user starts the multi-env trainer
+  # explicitly:
+  #
+  #   docker compose -f docker-compose.yml -f compose/scale.yml \
+  #     exec sim-controller bash -c \
+  #     'cd /python_ws/src && python robotaxi.py --num-envs 4 \
+  #      2>&1 | tee robotaxi.out'
+  #
+  # The trailing `tee robotaxi.out` keeps the dashboard log panel
+  # working - the dashboard tails /python_ws/src/robotaxi.out which
+  # the base command also wrote. Without `tee`, the file stays stale
+  # and the dashboard log view shows old data.
+  sim-controller:
+    command: >-
+      sh -c "tensorboard --bind_all --logdir /tmp/active
+      --reload_multifile true 2>&1 | tee /tmp/tb.log"

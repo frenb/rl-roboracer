@@ -43,16 +43,6 @@
             <tr>
                 <td>
                     <label>
-                        Location
-                    </label>
-                </td>
-                <td>
-                    <input id="location" type="text" formControlName="location_val">
-                </td>
-            </tr>
-            <tr>
-                <td>
-                    <label>
                         Model Type:
                     </label>
                 </td>
@@ -82,22 +72,26 @@
 <script>
     var app = angular.module('JobForm', []);
     
+    // Location field intentionally absent from this form. To run an
+    // EVAL job against an existing saved model, go to the Models tab,
+    // select the model row, and click "Add Jobs" - that flow reads
+    // the location from the model's MongoDB record. The form here is
+    // for TRAIN, DEMO, and EVAL-of-RandomPyPolicy jobs that don't need
+    // a model path.
     function add_job(
         $http,
-        location_val, 
-        status_val, 
+        status_val,
         robot_type_val,
         num_iterations_val,
         model_type_val,
         job_type_val) {
 
-            console.log(location_val, status_val, robot_type_val, num_iterations_val, model_type_val, job_type_val)
+            console.log(status_val, robot_type_val, num_iterations_val, model_type_val, job_type_val)
             var new_job = {
                 status: status_val,
                 job_type: job_type_val,
                 num_iterations: Number(num_iterations_val),
                 model_type: model_type_val,
-                location: location_val,
                 robot_type: robot_type_val,
                 pass_through_actions: false
             }
@@ -130,16 +124,14 @@
         $scope.title = "Models"
         $scope.add_jobs = function() {
             console.log("in add jobs");
-            var location_val = document.getElementById("location").value;
             var status_val = document.getElementById("status").value;
             var robot_type_val = document.getElementById("robot_type").value;
             var num_iterations_val = document.getElementById("num_iterations").value;
             var model_type_val = document.getElementById("model_type").value;
             var job_type_val = document.getElementById("job_type").value;
-            console.log(location_val, status_val, robot_type_val, num_iterations_val, model_type_val, job_type_val)
+            console.log(status_val, robot_type_val, num_iterations_val, model_type_val, job_type_val)
             add_job(
                 $http,
-                location_val,
                 status_val,
                 robot_type_val,
                 num_iterations_val,
