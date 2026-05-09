@@ -85,8 +85,8 @@ public class SimController : MonoBehaviour
         //     cameraPublisher.camera = publishedCamera.GetComponent<UnityEngine.Camera>();
         //     cameraPublisher.topic = publishedCameraTopic;
         // }
-        Debug.Log("yyyyyyy ros.rosIPAddress=" + ros.rosIPAddress);
-        Debug.Log("qqqqqqqqq ros.overrideUnityIP=" + ros.overrideUnityIP);
+        Debug.Log("ros.rosIPAddress=" + ros.rosIPAddress);
+        Debug.Log("ros.overrideUnityIP=" + ros.overrideUnityIP);
         ros.Subscribe<SimCommand>(simCommandTopic, onCommand);
     }
 
