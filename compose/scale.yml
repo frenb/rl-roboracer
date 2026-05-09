@@ -6,9 +6,10 @@
 #
 #   docker compose -f docker-compose.yml -f compose/scale.yml up -d
 #
-# The base service "ros-server" gets a "ros-server-0" network alias so
-# Python code can address all four endpoints with a consistent
-# ros-server-0..ros-server-3 scheme.
+# Python code addresses all four endpoints with a consistent
+# ros-server-0..ros-server-3 scheme. The "ros-server-0" alias on the base
+# service is declared in docker-compose.yml so single-actor runs (without
+# this overlay) also resolve ros-server-0:50051.
 #
 # Host port map (Unity clients on the Windows host connect via these):
 #
@@ -45,16 +46,18 @@ x-ros-server-base: &ros-server-base
       target: /saved_models
   command: sh -c "./src/start.sh"
 
+# Each container_name below is pinned to "<service>-pinned" rather than
+# letting Compose auto-suffix the replica index. Docker's embedded DNS
+# treats the auto-numbered "<project>-ros-server-N-1" form as also
+# resolvable under the short suffix "ros-server-N-1", which happens to
+# not collide with anything we currently look up - but the same trap
+# bit us on the base service (see docker-compose.yml). Pinning here is
+# defensive against a future actor-N indexing scheme that tripped over
+# the same surprise.
 services:
-  # Give the base service a numbered alias for symmetric Python naming.
-  ros-server:
-    networks:
-      default:
-        aliases:
-          - ros-server-0
-
   ros-server-1:
     <<: *ros-server-base
+    container_name: robot-tycoonrefactor-ros-server-1-pinned
     ports:
       - "10001:10000"
       - "50052:50051"
@@ -65,6 +68,7 @@ services:
 
   ros-server-2:
     <<: *ros-server-base
+    container_name: robot-tycoonrefactor-ros-server-2-pinned
     ports:
       - "10002:10000"
       - "50053:50051"
@@ -75,6 +79,7 @@ services:
 
   ros-server-3:
     <<: *ros-server-base
+    container_name: robot-tycoonrefactor-ros-server-3-pinned
     ports:
       - "10003:10000"
       - "50054:50051"
