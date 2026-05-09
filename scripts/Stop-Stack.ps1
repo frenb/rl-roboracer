@@ -27,20 +27,64 @@
     Unity-side launch without churning the containers (rebuilds reverb
     state, MongoDB connections, etc.).
 
+.PARAMETER CloseWtWindow
+    Whether to close the Windows Terminal window that hosted the
+    supervisor tabs. Default $true. Without this, the wt window stays
+    around with each tab showing ``[process exited]`` because wt's
+    default ``closeOnExit`` policy is ``graceful`` (only auto-closes
+    tabs that exited with code 0; hard-killed tabs persist as
+    placeholders). Pass -CloseWtWindow:$false to leave wt open (e.g.
+    if you want to scroll back through a crashed supervisor's last
+    log lines before closing manually).
+
 .EXAMPLE
     .\scripts\Stop-Stack.ps1
 
 .EXAMPLE
     .\scripts\Stop-Stack.ps1 -KeepDocker
+
+.EXAMPLE
+    .\scripts\Stop-Stack.ps1 -CloseWtWindow:$false
 #>
 [CmdletBinding()]
 param(
-    [switch]$KeepDocker
+    [switch]$KeepDocker,
+    [bool]$CloseWtWindow = $true
 )
 
 $ErrorActionPreference = 'Continue'
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
+
+# 0. If wt cleanup is requested, capture the WindowsTerminal PID(s)
+# hosting our supervisors BEFORE we kill them. Once supervisors are
+# gone we lose the parent linkage and can't reliably tell which wt
+# window was ours vs. the user's other unrelated wt sessions. The
+# walk goes up to 5 levels of parents looking for a process named
+# WindowsTerminal* - direct parent depends on wt version (sometimes
+# the wt process itself, sometimes an OpenConsole.exe wrapper).
+$wtPidsToClose = @()
+if ($CloseWtWindow) {
+    $supervisorsPreKill = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*RunClientWrapper.ps1*' })
+    foreach ($sup in $supervisorsPreKill) {
+        $current = $sup
+        for ($depth = 0; $depth -lt 5; $depth++) {
+            if (-not $current.ParentProcessId) { break }
+            $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($current.ParentProcessId)" -ErrorAction SilentlyContinue
+            if (-not $parent) { break }
+            if ($parent.Name -match '^WindowsTerminal') {
+                $wtPidsToClose += $parent.ProcessId
+                break
+            }
+            $current = $parent
+        }
+    }
+    $wtPidsToClose = @($wtPidsToClose | Sort-Object -Unique)
+    if ($wtPidsToClose.Count -gt 0) {
+        Write-Host "Found wt host PID(s) hosting our supervisors: $($wtPidsToClose -join ', ')"
+    }
+}
 
 # 1. Supervisor PowerShell windows. RunNClients.ps1 spawns each
 # RunClientWrapper.ps1 instance under its own powershell.exe with
@@ -93,6 +137,22 @@ if (-not $KeepDocker) {
     }
 } else {
     Write-Host "Skipping docker compose down (-KeepDocker)."
+}
+
+# 4. Close the Windows Terminal window(s) that hosted the now-dead
+# supervisors. Using Stop-Process (rather than WM_CLOSE) so we don't
+# trigger wt's "confirm closing all tabs" prompt - the supervisors are
+# already gone, the tabs are just stale [process exited] placeholders
+# at this point.
+if ($CloseWtWindow -and $wtPidsToClose.Count -gt 0) {
+    Write-Host "Closing Windows Terminal host(s)..."
+    foreach ($wtPid in $wtPidsToClose) {
+        $p = Get-Process -Id $wtPid -ErrorAction SilentlyContinue
+        if ($p) {
+            Write-Host "  closing wt PID=$wtPid"
+            Stop-Process -Id $wtPid -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 Write-Host ""

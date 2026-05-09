@@ -90,10 +90,15 @@ if ($SkipUnity) {
 Write-Host "Waiting ${WaitForRosServersSeconds}s for ros-server containers to start listening..."
 Start-Sleep -Seconds $WaitForRosServersSeconds
 
-Write-Host "Launching $N Unity clients via RunNClients.ps1..."
-$runNClients = Join-Path $PSScriptRoot 'RunNClients.ps1'
-if (-not (Test-Path -LiteralPath $runNClients)) {
-    throw "RunNClients.ps1 not found at $runNClients"
+Write-Host "Launching $N Unity clients via Start-Clients.ps1..."
+# Delegate to Start-Clients (rather than calling RunNClients
+# directly) so we inherit its idempotent cleanup-first behavior:
+# if a previous Start-Stack left supervisors or Unity instances
+# running, they get killed before we spawn the new set rather than
+# piling up additional wt tabs and Unity processes.
+$startClients = Join-Path $PSScriptRoot 'Start-Clients.ps1'
+if (-not (Test-Path -LiteralPath $startClients)) {
+    throw "Start-Clients.ps1 not found at $startClients"
 }
 
 $invokeArgs = @{
@@ -101,9 +106,23 @@ $invokeArgs = @{
     StaggerSeconds = $StaggerSeconds
 }
 if ($Popup) { $invokeArgs.Popup = $true }
-& $runNClients @invokeArgs
+& $startClients @invokeArgs
 
 Write-Host ""
 Write-Host "Stack up. Multi-env training can now be started with:"
 $composeArgs = "docker compose -f docker-compose.yml -f compose/scale.yml"
-Write-Host "  $composeArgs exec sim-controller bash -c 'cd /python_ws/src && python robotaxi.py --num-envs $N'"
+# Two important pieces of the printed command:
+#
+# `python -u`: forces unbuffered stdout. When Python detects stdout is
+# a pipe (which it is via `| tee`), it switches from line-buffered to
+# 8 KB block-buffered, so [actor-N] lines get held back for several
+# seconds at a time. -u disables that so the dashboard log view and
+# the user's terminal both see lines as they're emitted.
+#
+# `| tee robotaxi.out`: the dashboard log panel
+# (dashboard/src/server.ts) tails /python_ws/src/robotaxi.out over a
+# WebSocket; without `tee`, the file stays stale and the panel shows
+# old data because the scale-overlay sim-controller no longer writes
+# to it from its default command (the auto-run trainer is disabled in
+# overlay mode - see compose/scale.yml).
+Write-Host "  $composeArgs exec sim-controller bash -c 'cd /python_ws/src && python -u robotaxi.py --num-envs $N 2>&1 | tee robotaxi.out'"

@@ -78,9 +78,23 @@ so the bidirectional ROS-TCP-Connector protocol routes correctly per actor.
 Once all four Unity windows are up, kick off training:
 
 ```powershell
-docker compose exec sim-controller `
-  bash -c 'cd /python_ws/src && python robotaxi.py --num-envs 4'
+docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller `
+  bash -c 'cd /python_ws/src && python -u robotaxi.py --num-envs 4 2>&1 | tee robotaxi.out'
 ```
+
+Two important pieces in that command:
+
+- `python -u` forces unbuffered stdout. When Python detects that stdout
+  is a pipe (which it is when piped to `tee`), it switches from
+  line-buffered to ~8 KB block-buffered, holding back lines until the
+  buffer fills. With `-u`, every `[actor-N]` line lands in `robotaxi.out`
+  (and the dashboard's live log view) the moment it's emitted.
+- `| tee robotaxi.out` feeds the dashboard's live log panel —
+  `dashboard/src/server.ts` tails `/python_ws/src/robotaxi.out` over a
+  WebSocket. The `compose/scale.yml` overlay disables sim-controller's
+  default auto-run of the single-env trainer (so it doesn't compete with
+  your multi-env exec for MongoDB jobs), which means without the `tee`
+  the file stays stale and the dashboard panel shows old data.
 
 TensorBoard at `http://localhost:6006/` will show one run with `metrics/`,
 `eval/`, `train/`, and `learner/train/` summaries. The dashboard at
@@ -111,12 +125,31 @@ Useful after edits that need a fresh container state (changes to
 pure `rl_agent/` Python edits, the bind mount picks them up live — no
 restart needed, just re-run `python robotaxi.py --num-envs 4`.
 
+### Unity-side-only lifecycle
+
+For the common case of "I edited `RunClientWrapper.ps1` / re-promoted a
+Unity build / want to re-grid the windows" without churning Docker
+(which would lose sim-controller's warm reverb buffer + MongoDB state),
+there's a parallel set of scripts that touch only the Unity side:
+
+| Script | Purpose |
+|---|---|
+| `scripts\Start-Clients.ps1`  | Launch N Unity clients + supervisor tabs (assumes Docker is up) |
+| `scripts\Stop-Clients.ps1`   | Kill Unity + supervisors only (equivalent to `Stop-Stack.ps1 -KeepDocker`) |
+| `scripts\Restart-Clients.ps1`| Stop-Clients followed by Start-Clients |
+
+Same parameters as the `*-Stack` versions (`-N`, `-StaggerSeconds`,
+`-Popup`, `-GridCols`, `-GridRows`, `-Minimized`, `-UseWindowsTerminal`).
+
 ### Common variations
 
 ```powershell
-# Single-actor smoke test (one Unity client, no parallelism)
+# Single-actor smoke test (one Unity client, no parallelism). When the
+# scale.yml overlay is loaded sim-controller's auto-run is disabled, so
+# even with -N 1 you start the trainer manually:
 .\scripts\Start-Stack.ps1 -N 1
-docker compose exec sim-controller bash -c 'cd /python_ws/src && python robotaxi.py'
+docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller `
+  bash -c 'cd /python_ws/src && python -u robotaxi.py 2>&1 | tee robotaxi.out'
 
 # Tile small popup windows for quick visual inspection of multi-actor runs
 .\scripts\Start-Stack.ps1 -Popup
@@ -126,8 +159,16 @@ docker compose exec sim-controller bash -c 'cd /python_ws/src && python robotaxi
 
 # Recycle just the Unity clients without touching docker (keeps reverb /
 # MongoDB / tensorboard state warm)
-.\scripts\Stop-Stack.ps1 -KeepDocker
-.\scripts\RunNClients.ps1 -N 4 -StaggerSeconds 5
+.\scripts\Restart-Clients.ps1
+
+# Custom 4-wide single-row layout for ultrawide monitors
+.\scripts\Start-Clients.ps1 -N 4 -GridCols 4 -GridRows 1
+
+# Foreground supervisors (not minimized) for actively watching debug output
+.\scripts\Start-Clients.ps1 -Minimized:$false
+
+# Force separate-windows fallback (skip Windows Terminal even if installed)
+.\scripts\Start-Clients.ps1 -UseWindowsTerminal:$false
 ```
 
 ### Service map
