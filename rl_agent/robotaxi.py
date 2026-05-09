@@ -155,8 +155,13 @@ def build_train_env(num_envs, course_type='donut'):
         return make_env('ros-server-0:50051', course_type=course_type)
 
     from tf_agents.environments import parallel_py_environment
+    # actor_index=i wraps each worker's stdout/stderr with [actor-N] so
+    # robotaxi.out (and the dashboard log view) become legible when
+    # multiple workers are emitting interleaved per-step prints.
     return parallel_py_environment.ParallelPyEnvironment(
-        [(lambda i=i: make_env(f'ros-server-{i}:50051', course_type=course_type))
+        [(lambda i=i: make_env(f'ros-server-{i}:50051',
+                               course_type=course_type,
+                               actor_index=i))
          for i in range(num_envs)])
 
 
@@ -586,55 +591,116 @@ def main(
     # training_iterations=num_iterations
     # add_model(save_dir_name, robot_type, model_type, training_iterations)
  
-def run_episodes_and_create_video(saved_policy, tf_env, job_id=""):
-    print("run episodes and create video")
+def run_policy(saved_policy, tf_env, job_id="",
+                                  max_episodes=3,
+                                  num_eval_episodes=5,
+                                  log_interval=10):
+    """Run an EVAL job for ``saved_policy`` and report the metrics.
+
+    Args:
+      saved_policy: a ``PyPolicy`` to evaluate (a saved SAC actor or a
+        ``RandomPyPolicy`` baseline; whatever the EVAL dispatch passed in).
+      tf_env: a single (non-batched) ``PyEnvironment`` connected to
+        ros-server-0. Wrapped here in a ``BatchedPyEnvironment(batch=1)``
+        so it satisfies ``actor.Actor``'s batched-env contract.
+      job_id: MongoDB job ObjectId; used for the per-job TensorBoard
+        eval-log directory ``/tmp/active/<job_id>_eval/``.
+      max_episodes: number of outer passes; each pass runs
+        ``num_eval_episodes`` episodes and produces one
+        ``(AverageReturn, AverageEpisodeLength)`` sample point. Default
+        3, so a stock EVAL job evaluates 3 x 5 = 15 episodes total and
+        the returned ``returns`` list has 3 entries (one mean-of-N per
+        pass). Useful for measuring run-to-run variance of a stochastic
+        policy without manually re-submitting jobs.
+      num_eval_episodes: episodes within one pass. Used both as the
+        target episode count per pass (we keep stepping the env in
+        ``log_interval``-sized chunks until this many episodes have
+        completed) and as ``actor.eval_metrics``'s buffer size (each
+        metric averages over the last N episodes). Default 5.
+      log_interval: env-step granularity for in-pass progress logging.
+        Drives ``actor.Actor.steps_per_run``, so each call to
+        ``eval_actor.run()`` advances exactly ``log_interval`` env
+        steps before printing one progress line; the pass loop keeps
+        calling ``.run()`` until ``num_eval_episodes`` have completed.
+        Default 10.
+    """
+    print("run policy")
     tempdir = "/tmp/active/"
     train_step = train_utils.create_train_step()
-    log_interval = 10 # @param {type:"integer"}
-    num_eval_episodes = 5 # @param {type:"integer"}
-    max_episodes = 1
     eval_dir=os.path.join( tempdir,
         "eval" if str(job_id) == "" else str(job_id) + "_eval")
     batch_tf_env = batched_py_environment.BatchedPyEnvironment((tf_env,))
     debug_print("after batch_tf_env")
     time_step = batch_tf_env.reset()
     debug_print("after reset")
-    actor.eval_metrics(num_eval_episodes)
+
+    # Per-pass eval metrics + a fresh NumberOfEpisodes counter to know
+    # when each pass's episode budget has been spent. The counter
+    # piggybacks on actor.Actor's metrics= argument so step_type=LAST
+    # transitions auto-increment it; we read .result() between
+    # ``eval_actor.run()`` calls and bail when it reaches
+    # num_eval_episodes.
+    eval_metrics_list = list(actor.eval_metrics(num_eval_episodes))
+    episodes_metric = py_metrics.NumberOfEpisodes()
     debug_print("after eval metrics")
+
+    # steps_per_run=log_interval (instead of episodes_per_run) so each
+    # .run() call advances a fixed step budget regardless of where the
+    # env is in the current episode. That gives us a stable cadence
+    # for the in-pass progress prints (one line per log_interval
+    # steps), matching main()'s inline-eval logging style. Without
+    # this, .run() would block for the full pass before printing
+    # anything.
     eval_actor = actor.Actor(
         batch_tf_env,
         saved_policy,
         train_step,
-        episodes_per_run=num_eval_episodes,
-        metrics=actor.eval_metrics(num_eval_episodes),
+        steps_per_run=log_interval,
+        metrics=eval_metrics_list + [episodes_metric],
         summary_dir=eval_dir)
     debug_print("after eval actor")
     print(eval_actor.metrics)
-    
-    def get_eval_metrics():
-        debug_print("inside get_eval_metrics")
-        eval_actor.run()
-        debug_print("after eval_actor.run()")
-        results = {}
-        print(eval_actor.metrics)
-        for metric in eval_actor.metrics:
-            print("metric: " + str(metric))
-            results[metric.name] = metric.result()
-        return results
-    
-    def log_eval_metrics(step, metrics):
+
+    def run_one_pass(pass_idx):
+        """Step the env in log_interval-sized chunks until
+        num_eval_episodes episodes have completed. Returns the final
+        per-pass metric dict.
+        """
+        # Reset metrics at the start of each pass so AverageReturn /
+        # AverageEpisodeLength reflect only this pass's episodes; the
+        # outer ``returns`` list collects per-pass means independently.
+        for m in eval_metrics_list:
+            m.reset()
+        episodes_metric.reset()
+
+        step = 0
+        while int(episodes_metric.result()) < num_eval_episodes:
+            eval_actor.run()
+            step += log_interval
+            episodes_done = int(episodes_metric.result())
+            partial = ', '.join(
+                '{} = {:.4f}'.format(m.name, float(m.result()))
+                for m in eval_metrics_list)
+            print('pass {0}: step = {1}: {2}/{3} episodes, {4}'.format(
+                pass_idx, step, episodes_done, num_eval_episodes, partial),
+                flush=True)
+
+        return {m.name: m.result() for m in eval_metrics_list}
+
+    def log_eval_metrics(pass_idx, metrics):
         eval_results = (', ').join(
             '{} = {:.6f}'.format(name, result) for name, result in metrics.items())
-        print('step = {0}: {1}'.format(step, eval_results))
-    curr_episode=0
+        print('pass {0} final: {1}'.format(pass_idx, eval_results), flush=True)
+
+    curr_pass=0
     returns=[]
-    while curr_episode < max_episodes:
+    while curr_pass < max_episodes:
         debug_print("in loop")
-        metrics = get_eval_metrics()
-        log_eval_metrics(0, metrics)
+        metrics = run_one_pass(curr_pass + 1)
+        log_eval_metrics(curr_pass + 1, metrics)
         avg_return = metrics["AverageReturn"]
         returns.append(avg_return)
-        curr_episode=curr_episode+1
+        curr_pass=curr_pass+1
     return returns
 
 def get_saved_model(policy_type, version=None, path_arg=None):
@@ -656,7 +722,7 @@ def load_saved_model(policy_type, version=None, path=None, job_id=""):
         saved_policy, path = get_saved_model(policy_type, path_arg=path)
     else:
         saved_policy, path = get_saved_model(policy_type, version)
-    results = run_episodes_and_create_video(saved_policy, env, job_id=job_id)
+    results = run_policy(saved_policy, env, job_id=job_id)
     save_results_to_db(path, results)
 
 def add_model(path, robot_type, model_type, training_iterations, avg_return=None):
@@ -769,15 +835,30 @@ def do_job(job, num_envs=1):
             critic_joint_fc_layer_params_y=critic_joint_fc_layer_params_y,
             eval_interval_val=10)
     elif job_type == "EVAL":
+        # Dispatch on model_type (a constrained dropdown in the
+        # dashboard's job form: SacAgent / GreedyPolicy /
+        # RandomPyPolicy) rather than substring-matching the
+        # free-text ``location`` field.
+        #
+        # ``location`` is no longer captured by the create-job form -
+        # the supported way to evaluate an existing saved snapshot is
+        # to open the dashboard's Models tab, select the row, and
+        # click Add Jobs. That flow POSTs an EVAL job whose
+        # ``location`` is read from the model's MongoDB record. Form-
+        # created EVAL jobs (RandomPyPolicy baseline) reach this
+        # branch with no ``location`` field; ``.get(...)`` defaults
+        # safely. Saved-model EVAL jobs from the form would have an
+        # empty ``location`` and crash inside tf.saved_model.load - by
+        # design, since that workflow is now Models-tab-only.
         model_type=job["model_type"]
-        location=job["location"]
+        location=job.get("location", "")
         debug_print(location)
-        if "RandomPyPolicy" in location:
-            run_randompolicy()
+        if model_type == "RandomPyPolicy":
+            run_randompolicy(job_id=job["_id"])
         else:
-            load_saved_model(model_type, path=job["location"], job_id=job["_id"])
+            load_saved_model(model_type, path=location, job_id=job["_id"])
         debug_print(model_type)
-        debug_print(job["location"])
+        debug_print(location)
     else:
         return
     # myquery = { "_id": job["_id"] }
@@ -888,13 +969,36 @@ def update_job(id, value, field_name="status"):
     newvalues = { "$set": { field_name: value } }
     db.jobs.update_one(myquery, newvalues)
 
-def run_randompolicy():
+def run_randompolicy(job_id=""):
+    """Run a uniformly-random-action EVAL job as a baseline benchmark.
+
+    Mirrors load_saved_model's pattern: builds a single env on
+    ros-server-0, attaches the job_id for course metric tracking,
+    constructs a RandomPyPolicy whose action distribution comes from
+    the env's action_spec, and runs num_eval_episodes episodes through
+    run_policy. The resulting AverageReturn /
+    AverageEpisodeLength land in MongoDB via save_results_to_db so the
+    dashboard leaderboard can compare a learned policy against the
+    random baseline.
+
+    Reachable from do_job's EVAL branch when ``job["location"]``
+    contains ``"RandomPyPolicy"``. Multi-actor (--num-envs N) doesn't
+    affect this path - same as load_saved_model, EVAL is hardcoded
+    single-env on ros-server-0.
+
+    Previously broke with `NameError: name 'env' is not defined`
+    because it referenced a module-global env that was removed in the
+    rl_agent factory refactor (commit fbe3bce). This fix builds its
+    own env exactly like load_saved_model does.
+    """
     debug_print("in random policy")
+    env = make_env('ros-server-0:50051')
+    env.job_id = job_id
     random_policy = random_py_policy.RandomPyPolicy(
-          env.time_step_spec(), env.action_spec())
-    results=run_episodes_and_create_video(random_policy, env)
+        env.time_step_spec(), env.action_spec())
+    results = run_policy(random_policy, env, job_id=job_id)
     debug_print(results)
-    random_policy_path=get_latest_save_dir_name(random_policy)
+    random_policy_path = get_latest_save_dir_name(random_policy)
     debug_print(random_policy_path)
     save_results_to_db(random_policy_path, results)
 
@@ -1017,43 +1121,6 @@ def write_trajectories_to_file(trajectories, output_file):
 #         reward=reward,
 #         discount=discount)
 #     return traj
-
-def run_randompolicy_collect():
-    debug_print(666)
-    time_step = env._reset()
-    debug_print(time_step)
-    rewards = []
-    steps = []
-    number_of_episodes = 100
-    episode_steps=0
-    episode_reward=0
-    current_step=0
-    for _ in range(number_of_episodes):
-        current_step=current_step+1
-        reward_t=0
-        steps_t=0
-        env.reset()
-        while True:
-            action_apply_force = tf.random.uniform((1,),0,10,tf.dtypes.float32).numpy().tolist()[0]
-            action_steering_angle = tf.random.uniform((1,),-45,45,tf.dtypes.float32).numpy().tolist()[0]
-            numpy_action = np.array([action_apply_force, action_steering_angle])
-            action = tf.constant(numpy_action)
-            next_time_step=env.step(action)
-            if next_time_step.is_last():
-                break
-            episode_steps += 1
-            episode_reward += next_time_step.reward
-        rewards.append(episode_reward)
-        mean_reward = np.mean(rewards)
-        print("mean reward: " + str(mean_reward))
-        steps.append(episode_steps)
-        mean_no_of_steps = np.mean(steps)
-        print("mean number of steps: " + str(mean_no_of_steps))
-        
-    mean_reward = np.mean(rewards)
-    mean_no_of_steps = np.mean(steps)
-    print("mean reward: " + str(mean_reward))
-    print("mean number of steps: " + str(mean_no_of_steps))
 
 def debug_print(text):
     debug_print_enabled = False
