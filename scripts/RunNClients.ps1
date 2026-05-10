@@ -184,10 +184,11 @@ Write-Host "Launching $N supervised Unity clients (stagger ${StaggerSeconds}s, $
 
 # We build the spawned-powershell argument list as a single explicitly-
 # quoted string. PowerShell 5.1's Start-Process -ArgumentList @(...) joins
-# array elements with spaces but does NOT auto-quote, so a path arg
-# containing "robot-tycoon Refactor" would be split mid-value when the
-# child shell parses it - the supervisor would crash in param binding
-# before ever launching Unity (and you'd see no Player.log).
+# array elements with spaces but does NOT auto-quote, so any path arg
+# containing a space (e.g. a workspace dir whose name has a space in it)
+# would be split mid-value when the child shell parses it - the
+# supervisor would crash in param binding before ever launching Unity
+# (and you'd see no Player.log).
 for ($i = 0; $i -lt $N; $i++) {
     if ($i -gt 0 -and $StaggerSeconds -gt 0) {
         Start-Sleep -Seconds $StaggerSeconds

@@ -57,7 +57,7 @@ x-ros-server-base: &ros-server-base
 services:
   ros-server-1:
     <<: *ros-server-base
-    container_name: robot-tycoonrefactor-ros-server-1-pinned
+    container_name: rl-roboracer-ros-server-1-pinned
     ports:
       - "10001:10000"
       - "50052:50051"
@@ -68,7 +68,7 @@ services:
 
   ros-server-2:
     <<: *ros-server-base
-    container_name: robot-tycoonrefactor-ros-server-2-pinned
+    container_name: rl-roboracer-ros-server-2-pinned
     ports:
       - "10002:10000"
       - "50053:50051"
@@ -79,7 +79,7 @@ services:
 
   ros-server-3:
     <<: *ros-server-base
-    container_name: robot-tycoonrefactor-ros-server-3-pinned
+    container_name: rl-roboracer-ros-server-3-pinned
     ports:
       - "10003:10000"
       - "50054:50051"

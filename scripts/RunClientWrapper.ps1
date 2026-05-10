@@ -155,8 +155,9 @@ if (-not $LogFile) {
 }
 
 # Start-Process -ArgumentList joins elements with spaces and does NOT
-# auto-quote, so a path containing spaces (e.g. "robot-tycoon Refactor")
-# would be split. Sidestep the quoting question entirely: launch Unity
+# auto-quote, so a path containing spaces (e.g. a workspace dir whose
+# name has a space in it) would be split. Sidestep the quoting question
+# entirely: launch Unity
 # with cwd = $exeDir and pass a relative -logfile filename. The log
 # file ends up at $LogFile but no spaces traverse the command line.
 $logFileFileName = [System.IO.Path]::GetFileName($LogFile)

@@ -1,11 +1,11 @@
-# robot-tycoon
+# rl-roboracer
 
 RL training stack for the robotaxi Unity gym.
 
 ## Layout
 
 ```
-robot-tycoon/
+rl-roboracer/
 ├── docker-compose.yml         # the whole stack
 ├── docker/
 │   ├── ros_server/            # ROS noetic + gRPC bridge build context
