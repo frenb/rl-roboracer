@@ -4,7 +4,7 @@
 #
 # Bind-mounts assume this layout (LATEST/ is the repo's parent dir):
 #   LATEST/
-#     robot-tycoon/         <- this repo
+#     rl-roboracer/         <- this repo
 #     saved_models/         <- model checkpoints
 #     mongodb/              <- mongo data dir
 #     tfrecords/            <- demo trajectories
@@ -19,7 +19,7 @@ services:
     # also resolves under the short name "ros-server-1" - colliding
     # with the actual ros-server-1 service brought up by compose/scale.yml
     # and silently routing actor-1's worker to actor-0's container.
-    container_name: robot-tycoonrefactor-ros-server-base
+    container_name: rl-roboracer-ros-server-base
     restart: always
     extra_hosts:
       - "host.docker.internal:host-gateway"
