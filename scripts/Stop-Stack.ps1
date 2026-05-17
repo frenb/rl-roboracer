@@ -56,52 +56,70 @@ $ErrorActionPreference = 'Continue'
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
 
-# 0. If wt cleanup is requested, capture the WindowsTerminal PID(s)
-# hosting our supervisors BEFORE we kill them. Once supervisors are
-# gone we lose the parent linkage and can't reliably tell which wt
-# window was ours vs. the user's other unrelated wt sessions. The
-# walk goes up to 5 levels of parents looking for a process named
-# WindowsTerminal* - direct parent depends on wt version (sometimes
-# the wt process itself, sometimes an OpenConsole.exe wrapper).
-$wtPidsToClose = @()
+# Shared stack-state helpers. The supervisors and the wt host self-
+# register on startup, so we can find their PIDs from disk instead
+# of asking WMI (which we used to do via Get-CimInstance
+# Win32_Process and which freezes the whole script when the WMI
+# service is wedged - common on long-running Windows sessions).
+. (Join-Path $PSScriptRoot '_StackState.ps1')
+
+# Aggregate the PIDs we want to kill in this object first, then
+# do the actual Stop-Process pass in one place. Lets the discovery
+# phase be fully best-effort without bleeding into the kill order.
+$supervisorPids = @()
+$wtPidsToClose  = @()
+
+# 0a. Primary discovery: read the on-disk registry. Each entry has
+# already been validated for liveness + process-image kind by
+# Get-RegisteredSupervisors (it filters out stale PIDs and PIDs the
+# OS has recycled to non-powershell processes).
+$registered = @(Get-RegisteredSupervisors)
+foreach ($r in $registered) {
+    $supervisorPids += [int]$r.ProcessId
+    $idxLabel = if ($r.Index -ge 0) { " (actor-$($r.Index))" } else { '' }
+    Write-Host "  found registered supervisor PID=$($r.ProcessId)$idxLabel"
+}
+
+# 0b. wt host PID from the same registry.
 if ($CloseWtWindow) {
-    $supervisorsPreKill = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like '*RunClientWrapper.ps1*' })
-    foreach ($sup in $supervisorsPreKill) {
-        $current = $sup
-        for ($depth = 0; $depth -lt 5; $depth++) {
-            if (-not $current.ParentProcessId) { break }
-            $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($current.ParentProcessId)" -ErrorAction SilentlyContinue
-            if (-not $parent) { break }
-            if ($parent.Name -match '^WindowsTerminal') {
-                $wtPidsToClose += $parent.ProcessId
-                break
-            }
-            $current = $parent
-        }
-    }
-    $wtPidsToClose = @($wtPidsToClose | Sort-Object -Unique)
-    if ($wtPidsToClose.Count -gt 0) {
-        Write-Host "Found wt host PID(s) hosting our supervisors: $($wtPidsToClose -join ', ')"
+    $wtPid = Get-WtHostPid
+    if ($wtPid -gt 0) {
+        $wtPidsToClose += $wtPid
+        Write-Host "  found registered wt host PID=$wtPid"
     }
 }
 
-# 1. Supervisor PowerShell windows. RunNClients.ps1 spawns each
-# RunClientWrapper.ps1 instance under its own powershell.exe with
-# -NoExit so the console stays open for log inspection. Detect them by
-# CommandLine substring rather than by PID, since we don't want to
-# rely on a sidecar pid file (gets out of sync if a window was closed
-# manually). Win32_Process exposes CommandLine for processes the
-# current user owns without elevation.
+# 0c. Best-effort WMI fallback for stragglers - supervisors started
+# under the old code that didn't self-register, or any leftover
+# powershell.exe running RunClientWrapper.ps1 that for whatever
+# reason isn't in the registry. Wrapped in a hard timeout so a
+# wedged WMI service can't freeze the script: the foreground
+# returns within $TimeoutSec with a warning, the stuck WMI call is
+# orphaned in the background.
+$wmiFallback = Invoke-WithTimeout -TimeoutSec 6 -Description 'WMI supervisor scan' -ScriptBlock {
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*RunClientWrapper.ps1*' } |
+        Select-Object ProcessId, ParentProcessId
+}
+if ($wmiFallback) {
+    foreach ($w in $wmiFallback) {
+        if ($supervisorPids -notcontains [int]$w.ProcessId) {
+            $supervisorPids += [int]$w.ProcessId
+            Write-Host "  found legacy (non-registered) supervisor PID=$($w.ProcessId) via WMI fallback"
+        }
+    }
+}
+
+# 1. Kill supervisor PowerShell windows. Both the directly-registered
+# set and any WMI-fallback stragglers go through the same loop.
 Write-Host "Stopping supervisor PowerShell processes..."
-$supervisors = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -like '*RunClientWrapper.ps1*' })
-if ($supervisors.Count -eq 0) {
+$supervisorPids = @($supervisorPids | Sort-Object -Unique)
+if ($supervisorPids.Count -eq 0) {
     Write-Host "  (none found)"
 } else {
-    foreach ($s in $supervisors) {
-        Write-Host "  killing supervisor PID=$($s.ProcessId)"
-        Stop-Process -Id $s.ProcessId -Force -ErrorAction SilentlyContinue
+    foreach ($pidToKill in $supervisorPids) {
+        Write-Host "  killing supervisor PID=$pidToKill"
+        Stop-Process -Id $pidToKill -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -144,6 +162,7 @@ if (-not $KeepDocker) {
 # trigger wt's "confirm closing all tabs" prompt - the supervisors are
 # already gone, the tabs are just stale [process exited] placeholders
 # at this point.
+$wtPidsToClose = @($wtPidsToClose | Sort-Object -Unique)
 if ($CloseWtWindow -and $wtPidsToClose.Count -gt 0) {
     Write-Host "Closing Windows Terminal host(s)..."
     foreach ($wtPid in $wtPidsToClose) {
@@ -154,6 +173,14 @@ if ($CloseWtWindow -and $wtPidsToClose.Count -gt 0) {
         }
     }
 }
+
+# 5. Reset the stack-state dir now that everything tracked there is
+# gone. The supervisors' own Unregister-Supervisor finally blocks
+# don't run when we Stop-Process -Force them, so we have to clean
+# up the leftovers ourselves. Without this, the next Start-Clients
+# would race the consistency check on resurrected-but-stale PIDs
+# (harmless but noisy).
+Clear-StackState
 
 Write-Host ""
 Write-Host "Stack down."

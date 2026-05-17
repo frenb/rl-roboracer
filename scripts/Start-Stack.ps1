@@ -26,13 +26,16 @@
     -WaitForRosServersSeconds if your machine is faster.
 
 .PARAMETER N
-    Number of Unity clients to spawn. Default 4. Forwarded to
+    Number of Unity clients to spawn. Default 2. Forwarded to
     RunNClients.ps1.
 
 .PARAMETER StaggerSeconds
-    Seconds between spawning each Unity client. Default 5. Multi-actor
+    Seconds between spawning each Unity client. Default 15. Multi-actor
     GPU contention during simultaneous D3D / Mono / scene init causes
-    silent exits without staggering, see RunNClients.ps1 docs.
+    silent exits or permanent CreateDevice deadlocks (Player.log frozen
+    at "GfxDevice: creating device client"), see RunNClients.ps1 docs.
+    15s is conservative-but-reliable; lower with care after confirming
+    your specific GPU + driver handles a shorter window cleanly.
 
 .PARAMETER Popup
     Use Unity's -popupwindow flag (small borderless tiles, useful when
@@ -59,8 +62,8 @@
 #>
 [CmdletBinding()]
 param(
-    [int]$N = 4,
-    [double]$StaggerSeconds = 5,
+    [int]$N = 2,
+    [double]$StaggerSeconds = 15,
     [switch]$Popup,
     [int]$WaitForRosServersSeconds = 8,
     [switch]$SkipUnity

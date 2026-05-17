@@ -114,6 +114,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Self-register with the shared stack-state directory so Stop-Stack
+# can find this supervisor by PID without needing to ask WMI. The
+# matching Unregister-Supervisor call lives in the try/finally
+# wrapping the supervise loop at the bottom of the file. See
+# scripts/_StackState.ps1 for the rationale (WMI's Win32_Process
+# queries hang indefinitely when the Windows WMI service is wedged,
+# and PowerShell's -OperationTimeoutSec doesn't reliably cancel a
+# stuck call).
+. (Join-Path $PSScriptRoot '_StackState.ps1')
+
 if ($RosPort   -le 0) { $RosPort   = 10000 + $Index }
 if ($UnityPort -le 0) { $UnityPort = 5005  + $Index }
 
@@ -252,51 +262,67 @@ function Start-Client {
     return $p
 }
 
-$proc = Start-Client
-$mode = if ($Popup) { 'popup' } else { 'windowed' }
-Write-Host ("[{0}] started PID={1}, ROS endpoint {2}:{3} <-> unityPort {4}, {5} {6}x{7} {8}" -f `
-    $Index, $proc.Id, $RosIp, $RosPort, $UnityPort, $mode, $WindowWidth, $WindowHeight, $WindowQuality)
-Write-Host "[$Index] log: $LogFile"
+# Self-register before doing anything else that could fail, so an
+# early crash during Unity launch still leaves a record Stop-Stack
+# can use to clean us up. The matching Unregister-Supervisor lives in
+# the finally below; together they cover normal exit, Stop-Stack
+# kills (file gets removed by the consistency check on stale entries),
+# and Ctrl-C.
+Register-Supervisor -ProcessId $PID -Index $Index -Exe $Path
 
-# Track consecutive .Responding misses so a transient main-thread stall
-# under multi-actor GPU contention doesn't get punished with a Kill().
-# Only a sustained N-poll-window unresponsive streak is treated as a
-# real hang (e.g. Unity is genuinely deadlocked, not just slow).
-$missStreak = 0
+try {
+    $proc = Start-Client
+    $mode = if ($Popup) { 'popup' } else { 'windowed' }
+    Write-Host ("[{0}] started PID={1}, ROS endpoint {2}:{3} <-> unityPort {4}, {5} {6}x{7} {8}" -f `
+        $Index, $proc.Id, $RosIp, $RosPort, $UnityPort, $mode, $WindowWidth, $WindowHeight, $WindowQuality)
+    Write-Host "[$Index] log: $LogFile"
 
-while ($true) {
-    Start-Sleep -Seconds $PollSeconds
+    # Track consecutive .Responding misses so a transient main-thread stall
+    # under multi-actor GPU contention doesn't get punished with a Kill().
+    # Only a sustained N-poll-window unresponsive streak is treated as a
+    # real hang (e.g. Unity is genuinely deadlocked, not just slow).
+    $missStreak = 0
 
-    # Re-fetch so .Responding reads live state.
-    $current = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
+    while ($true) {
+        Start-Sleep -Seconds $PollSeconds
 
-    if (-not $current) {
-        Write-Host "[$Index] Status = Exited: Restart..."
-        $proc = Start-Client
-        Write-Host "[$Index] respawned PID=$($proc.Id)"
-        $missStreak = 0
-        continue
-    }
+        # Re-fetch so .Responding reads live state.
+        $current = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
 
-    if (-not $current.Responding) {
-        $missStreak++
-        if ($missStreak -ge $UnresponsiveStrikes) {
-            Write-Host "[$Index] Status = Not Responding x$missStreak (PID=$($current.Id)): Kill & Restart..."
-            try { $current.Kill() } catch { Write-Host "[$Index] kill failed: $_" }
+        if (-not $current) {
+            Write-Host "[$Index] Status = Exited: Restart..."
             $proc = Start-Client
             Write-Host "[$Index] respawned PID=$($proc.Id)"
             $missStreak = 0
-        } else {
-            Write-Host "[$Index] Status = Not Responding x$missStreak (PID=$($current.Id)): tolerating, scene-init / GPU / ROS sync stalls are common under load"
+            continue
         }
-    } else {
-        if ($missStreak -gt 0) {
-            Write-Host "[$Index] working fine again (PID=$($current.Id)) after $missStreak unresponsive poll(s)"
+
+        if (-not $current.Responding) {
+            $missStreak++
+            if ($missStreak -ge $UnresponsiveStrikes) {
+                Write-Host "[$Index] Status = Not Responding x$missStreak (PID=$($current.Id)): Kill & Restart..."
+                try { $current.Kill() } catch { Write-Host "[$Index] kill failed: $_" }
+                $proc = Start-Client
+                Write-Host "[$Index] respawned PID=$($proc.Id)"
+                $missStreak = 0
+            } else {
+                Write-Host "[$Index] Status = Not Responding x$missStreak (PID=$($current.Id)): tolerating, scene-init / GPU / ROS sync stalls are common under load"
+            }
         } else {
-            Write-Host "[$Index] working fine (PID=$($current.Id))"
+            if ($missStreak -gt 0) {
+                Write-Host "[$Index] working fine again (PID=$($current.Id)) after $missStreak unresponsive poll(s)"
+            } else {
+                Write-Host "[$Index] working fine (PID=$($current.Id))"
+            }
+            $missStreak = 0
         }
-        $missStreak = 0
     }
+} finally {
+    # Drop the registration on normal exit / Ctrl-C. Hard kills
+    # (Stop-Process -Force) bypass finally; the stale file is
+    # harmless and gets reaped on the next Get-RegisteredSupervisors
+    # call (it checks the PID is still alive AND still a powershell).
+    Unregister-Supervisor -ProcessId $PID
 }
 
 # Source: https://community.idera.com/database-tools/powershell/ask_the_experts/f/powershell_for_windows-12/7002/how-to-detect-process-not-responding

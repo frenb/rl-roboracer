@@ -1,196 +1,1006 @@
 <!DOCTYPE html>
-<html>
+<html lang="en" class="dark h-full">
 <head>
-    <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.5.0/angular.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/angular-ui-grid/4.6.3/ui-grid.js"></script>
-    <link rel="stylesheet" href="http://ui-grid.info/release/ui-grid.css"></link>
-    <link rel="stylesheet" href="http://ui-grid.info/docs/css/prettify.css"></link>
-    <link rel="stylesheet" href="http://ui-grid.info/docs/css/bootstrap-flatly.min.css"></link>
-    <style>
-        :root { /* Set CSS variable values - These values can be changed with JavaScript and DOM */
-            --myCSS_ValueOne: 800px;
-        }
-
-        .uiGrd {
-            width: 100%;
-            height: var(--myCSS_ValueOne);
-        }
-    </style>
+  <meta charset="utf-8">
+  <title>Models · rl-roboracer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/tailwind.init.js"></script>
+  <!-- Tabulator: see jobs.html for the rationale. The "simple" theme
+       is loaded first so our styles.css overrides can win on CSS
+       cascade (load order = priority for equal-specificity rules). -->
+  <link rel="stylesheet" href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator_simple.min.css">
+  <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+  <link rel="stylesheet" href="/styles.css">
 </head>
+<body class="h-full m-0 font-sans antialiased text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-[#0b1120]">
 
-<body>
-    
-    <div ng-app="myApp" 
-        ng-controller="myController">
-        <p>{{title}}</p>
-        <button type="button" class="btn btn-success" ng-click="clearAll()">Clear All</button>
-        <button type="button" class="btn btn-success" ng-click="add_jobs()">Add Jobs</button>
-        <div class="uiGrd" id="grd" 
-            ui-grid="gridOptions" 
-                ui-grid-resize-columns
-                ui-grid-selection
-                ui-grid-pagination>
-        </div>
+  <div class="flex flex-col h-screen w-full">
+
+    <div class="flex flex-wrap items-center gap-3 px-5 py-4 row-gap-2
+                bg-white dark:bg-slate-900
+                border-b border-slate-200 dark:border-slate-700
+                shadow-card relative z-[3] flex-shrink-0">
+      <h1 class="text-2xl font-semibold tracking-tight m-0 mr-3">Models</h1>
+      <span data-role="model-count"
+            class="text-xs font-medium text-slate-500 dark:text-slate-400"
+            aria-live="polite"></span>
+
+      <!-- Freshness pill - see RoboracerUI.FreshnessIndicator in
+           components.js. Green = within one 5s poll cycle, amber =
+           one cycle missed, red = polling appears broken. -->
+      <span data-role="freshness"
+            class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400"
+            aria-live="polite"
+            title="Time since the last successful poll of /get_models and /leaderboard_scores (the eval-history columns join these two).">
+        <span data-role="freshness-dot"
+              class="inline-block w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+        <span data-role="freshness-text">connecting…</span>
+      </span>
+
+      <!-- View-side controls. Kept separate from the right-aligned
+           action group below so it's clear at a glance which controls
+           change WHAT YOU SEE (left side, with the freshness pill) vs
+           which controls change THE STATE OF THE WORLD (right side,
+           the actual job-submitting buttons). The toggle's state
+           persists across page reloads via localStorage so a user's
+           preferred view sticks between sessions. -->
+      <label data-role="only-evaluated-wrap"
+             class="inline-flex items-center gap-2 ml-3 px-2.5 py-1
+                    rounded-md cursor-pointer select-none
+                    text-xs font-medium text-slate-600 dark:text-slate-300
+                    border border-transparent hover:bg-slate-100 dark:hover:bg-slate-800
+                    transition-colors"
+             title="Hide rows that have no EVAL leaderboard scores yet. Useful when scanning for models you've actually evaluated.">
+        <input type="checkbox" data-role="only-evaluated"
+               class="w-3.5 h-3.5 cursor-pointer accent-indigo-600">
+        <span>Only evaluated</span>
+        <span data-role="only-evaluated-count"
+              class="text-[10px] font-normal text-slate-500 dark:text-slate-400"></span>
+      </label>
+
+      <div class="flex flex-wrap gap-2 ml-auto">
+        <button data-action="clear-selection" disabled class="btn-base btn-secondary">Clear selection</button>
+        <button data-action="compare" disabled class="btn-base btn-secondary"
+                title="Side-by-side statistical comparison (mean ± CI, box plots, t-test / permutation test vs baseline). The first selected model is treated as the baseline.">Compare in Analysis</button>
+        <button data-action="add-jobs" disabled class="btn-base btn-primary"
+                title="Submit an EVAL job for each selected model. The job's location is auto-populated from the model's MongoDB record.">+ Eval selected</button>
+      </div>
     </div>
-</body>
 
-<!--The Controller -->
-<script>
-    var app = angular.module('myApp', ['ui.grid', 'ui.grid.pagination','ui.grid.resizeColumns','ui.grid.selection']);
-    function add_model($http, location_val){
-        var new_model = {
-            status: 'NOT_STARTED',
-            job_type: 'EVAL',
-            iterations: 200,
-            model_type: 'SacAgent',
-            location: location_val
+    <div class="flex-1 overflow-hidden flex flex-col p-4 gap-4 bg-slate-50 dark:bg-[#0b1120]">
+      <div data-role="table"></div>
+    </div>
+
+  </div>
+
+  <!-- Submit-EVAL modal. Replaces the previous bare confirm dialog so
+       the user can pick the trial count up-front instead of accepting
+       the trainer's default of 3. Mirrors the look-and-feel of
+       jobs.html's "+ New job" modal (same shell, same animation, same
+       Cancel / primary buttons). Wired up in the script below. -->
+  <div data-role="eval-modal" aria-hidden="true"
+       class="fixed inset-0 z-[100] modal-blur bg-slate-900/40 dark:bg-slate-950/65
+              flex items-center justify-center p-4
+              opacity-0 transition-opacity duration-200 pointer-events-none">
+    <div role="dialog" aria-modal="true" aria-labelledby="eval-modal-title"
+         class="w-full max-w-[440px] max-h-[calc(100vh-2rem)]
+                bg-white dark:bg-slate-900
+                border border-slate-200 dark:border-slate-700
+                rounded-2xl shadow-card-lg
+                flex flex-col
+                opacity-0 -translate-y-3 scale-[0.98]
+                transition duration-200">
+      <div class="px-6 py-5 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+        <h2 id="eval-modal-title" class="m-0 text-base font-semibold tracking-tight">
+          Submit <span data-role="eval-modal-count">0</span> EVAL job<span data-role="eval-modal-plural">s</span>
+        </h2>
+        <button data-action="close-eval-modal" aria-label="Close"
+                class="px-2 py-1 text-sm rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400">×</button>
+      </div>
+      <div class="px-6 py-6 overflow-y-auto">
+        <p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed mb-5">
+          One EVAL job will be queued for each selected model, using the
+          model&rsquo;s saved <code>location</code>. The trainer in
+          sim-controller picks them up on its next poll. Set the number
+          of <strong>trials</strong> &mdash; each trial runs
+          <code>num_eval_episodes</code> raw episodes (default 5) and
+          emits one mean-of-N scalar that the Analysis tab pools across
+          eval runs. More trials = tighter confidence intervals but
+          longer eval time.
+        </p>
+        <form id="eval-job-form" onsubmit="return false;"
+              class="grid grid-cols-[minmax(140px,max-content)_1fr] gap-4 items-center">
+          <label for="f-eval-num-trials" class="text-xs font-medium text-slate-600 dark:text-slate-300">
+            Number of trials
+          </label>
+          <input id="f-eval-num-trials" name="num_trials" type="number"
+                 min="1" max="100" step="1" value="3"
+                 class="w-full input-base"
+                 title="Number of independent trials per EVAL job. Default 3.">
+
+          <!-- Preset chips. Each cell label nudges the user toward a
+               sensible value without locking them into the chip's
+               number - the free-form input above is still the source
+               of truth and the chip row is just a one-click shortcut.
+               The values were chosen by what each n actually buys you
+               on the Analysis tab:
+                  3   = quick smoke test (default; CI is wide)
+                  10  = meaningful CI; minimum for any real claim
+                  30  = CLT comfort; t-based and bootstrap CIs match
+                  50  = tight estimate; good for write-ups / publication
+               The currently-active chip (matching the input's exact
+               value) gets a filled / primary-tinted style; the others
+               read as secondary buttons.
+            -->
+          <span class="text-xs font-medium text-slate-600 dark:text-slate-300">
+            Presets
+          </span>
+          <div data-role="eval-presets" class="flex flex-wrap gap-2">
+            <!-- Short ALL-CAPS tags so all four chips fit on one row
+                 in the ~280px form column without wrapping. The
+                 longer-form rationale ("quick smoke test", "CLT
+                 comfort", ...) lives in the per-chip title= tooltip
+                 below, so hover reveals the full meaning. -->
+            <button type="button" data-preset="3"
+                    class="eval-preset-chip"
+                    title="Quick smoke test (matches run_policy's max_episodes default of 3). Wide CIs; OK for sanity checking a checkpoint.">
+              <span class="eval-preset-n">3</span>
+              <span class="eval-preset-tag">smoke</span>
+            </button>
+            <button type="button" data-preset="10"
+                    class="eval-preset-chip"
+                    title="Standard - meaningful CI. Minimum n for any honest model-vs-model comparison; CI widths roughly halve vs n=3.">
+              <span class="eval-preset-n">10</span>
+              <span class="eval-preset-tag">std</span>
+            </button>
+            <button type="button" data-preset="30"
+                    class="eval-preset-chip"
+                    title="Tight CI / CLT comfort - t-based and bootstrap CIs typically agree above this. Good default for serious comparisons.">
+              <span class="eval-preset-n">30</span>
+              <span class="eval-preset-tag">tight</span>
+            </button>
+            <button type="button" data-preset="50"
+                    class="eval-preset-chip"
+                    title="Publication-grade - very tight CI. Costs ~50 x num_eval_episodes raw episodes per model, so expect a long wait.">
+              <span class="eval-preset-n">50</span>
+              <span class="eval-preset-tag">paper</span>
+            </button>
+          </div>
+        </form>
+        <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-3 leading-relaxed">
+          With <span data-role="eval-modal-total-episodes" class="font-semibold">15</span>
+          total episodes per model
+          (<span data-role="eval-modal-trials-echo">3</span>
+          trial<span data-role="eval-modal-trials-echo-plural">s</span> &times; 5 episodes/trial),
+          expect roughly
+          <span data-role="eval-modal-eta" class="font-semibold">~30&ndash;90 s</span>
+          per model on the eval ros-server.
+        </p>
+      </div>
+      <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
+        <button data-action="close-eval-modal" class="btn-base btn-secondary">Cancel</button>
+        <button data-action="submit-eval" class="btn-base btn-primary">Submit</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cache-busted (see comment in jobs.html). Bump ?v=... when you
+       edit components.js so the iframe inside GoldenLayout actually
+       fetches the new file. -->
+  <script src="/components.js?v=20260516-selectcol"></script>
+  <script>
+    (function () {
+      const { TableView, formatters, showToast } = window.RoboracerUI;
+
+      const tableHost = document.querySelector('[data-role="table"]');
+      const table = new TableView(tableHost, {
+        selectable: true,
+        rowKey: (row) => row._id || row.id,
+        pageSize: 25,
+        emptyMessage: 'No saved models yet — completed TRAIN jobs will publish models here whenever they hit a new max-AvgReturn.',
+        // The previous row-level "recently evaluated" visual lift
+        // (a 3px indigo left border for rows whose Last eval was in
+        // the last hour or 24h) was removed because it collided
+        // visually with the selection indicator (also a 2px indigo
+        // left border) and read as random colour noise without an
+        // on-table legend. The dot prefix in the Last eval cell
+        // (see renderLastEvalCell) carries the same fresh / recent
+        // signal in a more localised, hover-explained form, so we
+        // keep that and drop the row-level rowClass entirely.
+        columns: [
+          { key: '_id',                 label: 'ID',         sortable: true,  filter: true,
+            sortValue: (r) => r._id || r.id,
+            render: (v, row) => formatters.shortId(v || row.id) },
+          { key: 'create_date',         label: 'Created',    sortable: true,
+            // Preset-dropdown filter (Last hour / 24h / 7d / 30d / 90d).
+            // The TableView uses this column's sortValue to extract
+            // ms-since-epoch for the comparison, so create_date's
+            // Date.parse-friendly ISO strings work automatically.
+            filter: { type: 'date-range' },
+            sortValue: (r) => r.create_date ? Date.parse(r.create_date) : 0,
+            render: (v) => formatters.relativeTime(v) },
+          { key: 'avg_return',          label: 'Avg return', sortable: true,
+            // Numeric range filter (two number inputs: min / max).
+            // sortValue is Number(...) so an empty/NaN row falls out
+            // automatically when either bound is set.
+            filter: { type: 'numeric-range' },
+            sortValue: (r) => Number(r.avg_return),
+            render: (v) => formatters.number(v, { decimals: 4 }),
+            cellClass: 'text-right' },
+          // Compat: whether this model's training-time observation /
+          // action specs match the current env's. Sortable by status
+          // order (incompatible < unknown < compatible) so a single
+          // descending sort surfaces "definitely won't work" rows
+          // first. The renderer carries the full diff in a title=
+          // tooltip; no need to expand the cell width.
+          { key: 'compat_status',       label: 'Compat',     sortable: true,  filter: false,
+            sortValue: (r) => {
+              const s = r.compat_status;
+              if (s === 'incompatible') return 0;
+              if (s === 'unknown')      return 1;
+              if (s === 'compatible')   return 2;
+              return 1;
+            },
+            render: renderCompatCell },
+          { key: 'model_type',          label: 'Model',      sortable: true,  filter: true,
+            render: (v) => formatters.modelTypeBadge(v) },
+          { key: 'robot_type',          label: 'Robot',      sortable: true,  filter: true,
+            render: (v) => formatters.robotTypeBadge(v) },
+          { key: 'training_iterations', label: 'Iterations', sortable: true,  filter: false,
+            sortValue: (r) => Number(r.training_iterations) || 0,
+            render: (v) => formatters.number(v, { decimals: 0 }),
+            cellClass: 'text-right' },
+          // -------- eval-history columns ------------------------------
+          // Derived client-side from /leaderboard_scores (one row per
+          // EVAL job, joined by model_id with fallback path==location).
+          // The derived fields are stamped onto the model row in
+          // mergeWithLeaderboard() below, so the sortValue / render
+          // callbacks here just read them directly. Sorting by either
+          // column gives the user a fast way to surface
+          //   - "which models have I evaluated more than once?"   (Evals)
+          //   - "which models did I just evaluate?"                (Last eval)
+          // both of which were hard to answer from the table before.
+          { key: 'eval_count',          label: 'Evals',      sortable: true,  filter: false,
+            sortValue: (r) => Number(r.eval_count) || 0,
+            render: renderEvalsCell,
+            cellClass: 'text-right' },
+          { key: 'last_eval_at',        label: 'Last eval',  sortable: true,  filter: false,
+            // Sort by the underlying timestamp (ms since epoch). Null
+            // sorts last so never-evaluated models cluster at the end
+            // of an ascending sort (and the top of a descending sort -
+            // useful either way).
+            sortValue: (r) => r.last_eval_at == null ? null : Number(r.last_eval_at),
+            render: renderLastEvalCell },
+          { key: 'location',            label: 'Location',   sortable: true,  filter: true,
+            render: (v) => formatters.truncatePath(v) },
+        ],
+      });
+
+      // -------- renderers for the eval-history columns ----------------
+      // Inline so models.html stays self-contained; they're small and
+      // they need access to `formatters.relativeTime` from the closure
+      // anyway.
+
+      function renderEvalsCell(_v, row) {
+        const evals = Number(row.eval_count) || 0;
+        const trials = Number(row.trial_count) || 0;
+        if (evals === 0) {
+          // Never evaluated. Show an em-dash and a hint via title= so
+          // the user knows to click "+ Eval selected" to populate.
+          return '<span class="font-mono tabular-nums text-right text-slate-500 dark:text-slate-400" ' +
+                 'title="No EVAL jobs have produced a leaderboard_score for this model yet. ' +
+                 'Select the row and click \'+ Eval selected\' to evaluate it.">—</span>';
         }
-        
-        var postModel = {
-            method: 'post',
-            url: '/add_job',
-            dataType: 'json',
-            data: new_model,
-            contentType: "application/json"
-        };
-        
-        $http(postModel)
-            .success(function (jsonData) {
-                console.log(jsonData)
-            })
-            .error(function () { });
-    }
+        // The chip-style "MULTI" badge calls out models that have been
+        // evaluated more than once - those are the ones whose pooled
+        // trial-mean distribution on the Analysis tab is actually wide
+        // enough to make the CI meaningful. Single-eval models still
+        // render but without the badge.
+        const multiBadge = evals >= 2
+          ? '<span class="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full ' +
+            'text-[9px] font-semibold uppercase tracking-[0.04em] ' +
+            'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300" ' +
+            'title="This model has been evaluated more than once. Trial-means from every ' +
+            'eval run are pooled in the Analysis tab.">multi</span>'
+          : '';
+        const evalsLabel = `${evals} run${evals === 1 ? '' : 's'}`;
+        const trialsLabel = `${trials} trial${trials === 1 ? '' : 's'}`;
+        return `<span class="inline-flex items-center justify-end gap-1 ` +
+               `font-mono tabular-nums text-right text-slate-700 dark:text-slate-200" ` +
+               `title="${evalsLabel} · ${trialsLabel} pooled. Click 'Compare in Analysis' ` +
+               `with this row + another selected to see the trial-mean distribution.">` +
+               `<span>${evalsLabel}</span>` +
+               `<span class="text-slate-400 dark:text-slate-500">·</span>` +
+               `<span>${trialsLabel}</span>` +
+               `${multiBadge}` +
+               `</span>`;
+      }
 
-    app.controller('myController', function ($scope, $http) {
+      function renderCompatCell(_v, row) {
+        // Three states mapped to badge tones the user already learns
+        // from the rest of the dashboard: emerald = good, red = bad,
+        // slate = unknown. The full diff goes in the title= tooltip
+        // so the cell stays compact and the table doesn't horizontally
+        // overflow even at high N.
+        const status = row.compat_status || 'unknown';
+        const reason = row.compat_reason || '';
+        const BADGE_BASE =
+          'inline-flex items-center px-2 py-0.5 rounded-full ' +
+          'text-[10px] font-semibold uppercase tracking-[0.04em] ' +
+          'whitespace-nowrap leading-5';
+        const escapeAttr = (s) => String(s).replace(/[&<>"']/g, (c) => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+        })[c]);
+        if (status === 'compatible') {
+          return `<span class="${BADGE_BASE} bg-emerald-100 text-emerald-700 ` +
+                 `dark:bg-emerald-900/40 dark:text-emerald-300 cursor-help" ` +
+                 `title="${escapeAttr(reason)}">ok</span>`;
+        }
+        if (status === 'incompatible') {
+          // The bold dot prefix + red tone makes incompatible rows
+          // pop hard - this is the failure mode that previously
+          // crashed sim-controller, so it earns the visual weight.
+          return `<span class="${BADGE_BASE} bg-red-100 text-red-700 ` +
+                 `dark:bg-red-900/40 dark:text-red-300 cursor-help" ` +
+                 `title="${escapeAttr(reason)}">⚠ mismatch</span>`;
+        }
+        return `<span class="${BADGE_BASE} bg-slate-100 text-slate-600 ` +
+               `dark:bg-slate-800 dark:text-slate-300 cursor-help" ` +
+               `title="${escapeAttr(reason)}">unknown</span>`;
+      }
 
-        $scope.title = "Models"
-        $scope.selected_jobs = [];
-        // SPECIFY FILTERING OPTIONS.
-        $scope.clearAll = function() {
-            $scope.gridApi.selection.clearSelectedRows();
-            $scope.selected_jobs=[];
+      function renderLastEvalCell(_v, row) {
+        if (row.last_eval_at == null) {
+          return '<span class="text-slate-500 dark:text-slate-400 whitespace-nowrap">—</span>';
+        }
+        // formatters.relativeTime accepts either an ISO string or a
+        // Date instance and renders "5m ago", "2 days ago", etc. with
+        // the absolute ISO timestamp in the title= tooltip. We stamp
+        // last_eval_at as ms-since-epoch so we wrap it in a Date.
+        // Recently-evaluated rows additionally get a subtle indigo
+        // dot prefix as a "fresh" cue so users can scan the column
+        // for hot rows without sorting.
+        const ageMs = Date.now() - Number(row.last_eval_at);
+        const isFresh = ageMs >= 0 && ageMs < 60 * 60 * 1000;  // < 1h
+        const isRecent = ageMs >= 0 && ageMs < 24 * 60 * 60 * 1000;  // < 24h
+        const dot = isFresh
+          ? '<span class="inline-block w-1.5 h-1.5 rounded-full bg-indigo-500 mr-1.5 align-middle" title="Evaluated within the last hour."></span>'
+          : isRecent
+          ? '<span class="inline-block w-1.5 h-1.5 rounded-full bg-indigo-300 mr-1.5 align-middle" title="Evaluated within the last 24 hours."></span>'
+          : '';
+        return dot + formatters.relativeTime(new Date(Number(row.last_eval_at)));
+      }
+
+      table.setLoading(true);
+
+      const countEl = document.querySelector('[data-role="model-count"]');
+      function updateCounts(rows) {
+        countEl.textContent = rows.length === 0
+          ? ''
+          : `${rows.length} model${rows.length === 1 ? '' : 's'}`;
+      }
+
+      const clearBtn   = document.querySelector('[data-action="clear-selection"]');
+      const compareBtn = document.querySelector('[data-action="compare"]');
+      const addJobsBtn = document.querySelector('[data-action="add-jobs"]');
+
+      function refreshButtons(selected) {
+        const has = selected.length > 0;
+        const canCompare = selected.length >= 2;
+        clearBtn.disabled   = !has;
+        addJobsBtn.disabled = !has;
+        // Compare requires at least two models so there's something to
+        // compare against. The button stays visible at all times so its
+        // affordance is discoverable; we just disable until the user
+        // makes a second selection.
+        compareBtn.disabled = !canCompare;
+        compareBtn.textContent = canCompare
+          ? `Compare ${selected.length} in Analysis`
+          : 'Compare in Analysis';
+        addJobsBtn.textContent = has
+          ? `+ Eval ${selected.length} selected`
+          : '+ Eval selected';
+      }
+      table.onSelectionChange(refreshButtons);
+
+      clearBtn.addEventListener('click', () => table.clearSelection());
+
+      compareBtn.addEventListener('click', () => {
+        const sel = table.getSelectedRows();
+        if (sel.length < 2) return;
+        const modelIds = sel.map((m) => String(m._id || m.id || ''));
+        // Hand the selection off to the parent GoldenLayout shell.
+        // The shell (see goldenlayout.js) listens for this message,
+        // activates the Analysis tab, and forwards the payload into
+        // the Analysis iframe so it renders the comparison.
+        //
+        // If the page happens to be open standalone (no parent shell),
+        // we fall back to navigating to /analysis?ids=... so the same
+        // flow works without GoldenLayout.
+        const payload = { type: 'roboracer:open-analysis', modelIds: modelIds };
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage(payload, '*');
+          showToast({
+            type: 'info',
+            message: `Opening Analysis with ${modelIds.length} models…`,
+            duration: 1800,
+          });
+        } else {
+          // Standalone (non-GoldenLayout) fallback. Use the static
+          // file path so this works on a dashboard container that
+          // hasn't yet been rebuilt with the new /analysis server
+          // route - the bind-mounted HTML is enough.
+          window.location.href = '/analysis.html?ids=' + encodeURIComponent(modelIds.join(','));
+        }
+      });
+
+      /* ---------- EVAL submission modal ---------------------------
+       *
+       * Replaces the previous bare confirmDialog. Lets the user pick a
+       * trial count per EVAL job (default 3, matching run_policy's
+       * max_episodes default in robotaxi.py) so the same Models-tab
+       * flow can produce a tighter eval (more trials = lower CI width
+       * on the Analysis tab) without having to round-trip a code edit.
+       *
+       * The trial count is sent as `num_trials` in the /add_job body;
+       * robotaxi.py's do_job EVAL branch reads it and threads it
+       * through load_saved_model / run_randompolicy into
+       * run_policy(max_episodes=N). Jobs that omit the field
+       * (legacy rows + the jobs.html "+ New job" form) fall back to
+       * run_policy's defaults, so this change is backward compatible.
+       * --------------------------------------------------------- */
+
+      const evalModal       = document.querySelector('[data-role="eval-modal"]');
+      const evalDialogEl    = evalModal.querySelector('[role="dialog"]');
+      const evalForm        = document.getElementById('eval-job-form');
+      const evalNumTrialsEl = document.getElementById('f-eval-num-trials');
+      const evalSubmitBtn   = evalModal.querySelector('[data-action="submit-eval"]');
+      const evalCountEl     = evalModal.querySelector('[data-role="eval-modal-count"]');
+      const evalPluralEl    = evalModal.querySelector('[data-role="eval-modal-plural"]');
+      const evalTrialsEcho  = evalModal.querySelector('[data-role="eval-modal-trials-echo"]');
+      const evalTrialsEchoPluralEl = evalModal.querySelector('[data-role="eval-modal-trials-echo-plural"]');
+      const evalTotalEpsEl  = evalModal.querySelector('[data-role="eval-modal-total-episodes"]');
+      const evalEtaEl       = evalModal.querySelector('[data-role="eval-modal-eta"]');
+
+      // Episodes per trial is currently fixed at the trainer default
+      // (run_policy's num_eval_episodes=5). If we expose an input for
+      // it later, derive these from the form too.
+      const EPISODES_PER_TRIAL = 5;
+      // Eval cost is dominated by env-step wall time; ~2-6s/episode on
+      // ros-server-0 in practice. The footer line just gives the user
+      // a rough sense of "is 50 trials going to take an hour?" before
+      // they click submit.
+      const SECS_PER_EPISODE_LOW = 2;
+      const SECS_PER_EPISODE_HIGH = 6;
+
+      function clampTrialCount() {
+        const raw = Number(evalNumTrialsEl.value);
+        if (!Number.isFinite(raw) || raw < 1) return 1;
+        if (raw > 100) return 100;
+        return Math.floor(raw);
+      }
+
+      // Preset chips. Reusing the same query selector list at every
+      // refresh is fine - there are only 4 nodes and they're inside a
+      // modal that's only visible for short stretches. Caching the
+      // NodeList up front instead would be a micro-optimisation that
+      // would break if we ever rebuild the chip row dynamically.
+      const evalPresetButtons = () =>
+        evalModal.querySelectorAll('[data-role="eval-presets"] button[data-preset]');
+
+      function refreshActivePreset() {
+        const n = clampTrialCount();
+        evalPresetButtons().forEach((btn) => {
+          const matches = Number(btn.dataset.preset) === n;
+          btn.classList.toggle('is-active', matches);
+          btn.setAttribute('aria-pressed', matches ? 'true' : 'false');
+        });
+      }
+
+      function refreshEvalModalFooter() {
+        const n = clampTrialCount();
+        const totalEps = n * EPISODES_PER_TRIAL;
+        evalTrialsEcho.textContent = String(n);
+        evalTrialsEchoPluralEl.textContent = n === 1 ? '' : 's';
+        evalTotalEpsEl.textContent = String(totalEps);
+        const lowMin = (totalEps * SECS_PER_EPISODE_LOW / 60);
+        const highMin = (totalEps * SECS_PER_EPISODE_HIGH / 60);
+        // Pick a tidy time unit. Under a minute: seconds. Otherwise
+        // minutes with one decimal so 15s vs 90s reads differently.
+        const fmt = (mins) => mins < 1
+          ? `${Math.round(mins * 60)}s`
+          : `${mins.toFixed(mins < 10 ? 1 : 0)}m`;
+        evalEtaEl.textContent = `~${fmt(lowMin)}–${fmt(highMin)}`;
+        refreshActivePreset();
+      }
+
+      evalNumTrialsEl.addEventListener('input', refreshEvalModalFooter);
+
+      // Preset click handler. Fills the number input from the chip's
+      // data-preset value, then re-runs the same refresh path the
+      // input's 'input' listener uses (footer + active-chip recompute).
+      // We dispatch an explicit 'input' event so any future listeners
+      // attached to the input itself stay in sync; in the current
+      // code refreshEvalModalFooter is wired to 'input' so this
+      // works without an explicit call.
+      evalModal.addEventListener('click', (ev) => {
+        const btn = ev.target.closest('[data-role="eval-presets"] button[data-preset]');
+        if (!btn) return;
+        const n = Number(btn.dataset.preset);
+        if (!Number.isFinite(n) || n < 1) return;
+        evalNumTrialsEl.value = String(n);
+        evalNumTrialsEl.dispatchEvent(new Event('input', { bubbles: true }));
+        // Briefly refocus the number input so Enter still submits and
+        // the user can tweak the value (e.g. 30 -> 35) without
+        // re-clicking it. select() lets a typed digit replace the
+        // preset value cleanly.
+        evalNumTrialsEl.focus();
+        evalNumTrialsEl.select();
+      });
+
+      function openEvalModal(selectionCount) {
+        evalCountEl.textContent = String(selectionCount);
+        evalPluralEl.textContent = selectionCount === 1 ? '' : 's';
+        refreshEvalModalFooter();
+        evalModal.classList.remove('opacity-0', 'pointer-events-none');
+        evalModal.classList.add('opacity-100', 'pointer-events-auto');
+        evalDialogEl.classList.remove('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        evalDialogEl.classList.add('opacity-100', 'translate-y-0', 'scale-100');
+        evalModal.setAttribute('aria-hidden', 'false');
+        // Focus the number field so power users can just type N + Enter
+        // instead of clicking through. select() so retyping replaces
+        // the current value rather than appending to it.
+        setTimeout(() => {
+          evalNumTrialsEl.focus();
+          evalNumTrialsEl.select();
+        }, 60);
+      }
+
+      function closeEvalModal() {
+        evalModal.classList.add('opacity-0', 'pointer-events-none');
+        evalModal.classList.remove('opacity-100', 'pointer-events-auto');
+        evalDialogEl.classList.add('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        evalDialogEl.classList.remove('opacity-100', 'translate-y-0', 'scale-100');
+        evalModal.setAttribute('aria-hidden', 'true');
+      }
+
+      evalModal.addEventListener('click', (ev) => {
+        if (ev.target === evalModal) closeEvalModal();
+      });
+      evalModal.querySelectorAll('[data-action="close-eval-modal"]').forEach((b) =>
+        b.addEventListener('click', closeEvalModal));
+      // Esc to cancel / Enter to submit. Same convention as the
+      // confirmDialog this modal replaced.
+      document.addEventListener('keydown', (ev) => {
+        if (!evalModal.classList.contains('opacity-100')) return;
+        if (ev.key === 'Escape') closeEvalModal();
+        if (ev.key === 'Enter' && document.activeElement !== evalSubmitBtn) {
+          // Don't fight a synthetic Enter on the Submit button itself.
+          ev.preventDefault();
+          evalSubmitBtn.click();
+        }
+      });
+
+      addJobsBtn.addEventListener('click', () => {
+        const sel = table.getSelectedRows();
+        if (!sel.length) return;
+        // Heads-up before opening the modal: any selected model that
+        // we already know is spec-incompatible with the live env will
+        // produce an empty eval (job marked DONE with eval_error but
+        // no leaderboard_score). The toast lets the user back out
+        // before queuing 3+ doomed jobs.
+        const bad = sel.filter((m) => m.compat_status === 'incompatible');
+        if (bad.length) {
+          showToast({
+            type: 'warning',
+            message: `${bad.length} of ${sel.length} selected model${sel.length === 1 ? '' : 's'} ` +
+                     `${bad.length === 1 ? 'is' : 'are'} marked spec-incompatible. ` +
+                     `EVAL will mark ${bad.length === 1 ? 'it' : 'them'} DONE with eval_error.`,
+            duration: 5000,
+          });
+        }
+        openEvalModal(sel.length);
+      });
+
+      evalSubmitBtn.addEventListener('click', async () => {
+        const sel = table.getSelectedRows();
+        if (!sel.length) {
+          closeEvalModal();
+          return;
+        }
+        const numTrials = clampTrialCount();
+        closeEvalModal();
+        await submitEvalJobs(sel, numTrials);
+      });
+
+      async function submitEvalJobs(rows, numTrials) {
+        const results = await Promise.all(rows.map((m) =>
+          fetch('/add_job', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              status: 'NOT_STARTED',
+              job_type: 'EVAL',
+              iterations: 200,
+              model_type: 'SacAgent',
+              location: m.location,
+              // New: lets the trainer's run_policy use a non-default
+              // max_episodes. robotaxi.py's do_job EVAL branch reads
+              // this field and passes it through; legacy trainers
+              // that don't know the field will just ignore it (the
+              // job document field is purely additive).
+              num_trials: numTrials,
+            }),
+          })
+            .then((r) => r.ok ? null : `HTTP ${r.status}`)
+            .catch((e) => String(e))
+        ));
+        const errors = results.filter((e) => e !== null);
+        if (errors.length === 0) {
+          showToast({
+            type: 'success',
+            message: `${rows.length} EVAL job${rows.length === 1 ? '' : 's'} queued (${numTrials} trial${numTrials === 1 ? '' : 's'} each).`,
+          });
+          table.clearSelection();
+        } else {
+          showToast({
+            type: 'error',
+            message: `${errors.length} of ${rows.length} submissions failed: ${errors[0]}`,
+          });
+        }
+      }
+
+      const freshness = new RoboracerUI.FreshnessIndicator(
+        document.querySelector('[data-role="freshness-dot"]'),
+        document.querySelector('[data-role="freshness-text"]'));
+
+      let pollHandle = null;
+      let pollInFlight = false;
+
+      // Cached responses from the three endpoints we poll. Each can
+      // change independently of the others - a TRAIN job finishing
+      // adds to /get_models; an EVAL job finishing adds to
+      // /leaderboard_scores; sim-controller picking up a job
+      // (re)publishes /get_env_specs - so we cache all three and re-
+      // render whenever ANY one has new data. On a NO_CHANGES short-
+      // circuit we keep the existing cache and skip the re-render.
+      let modelsCache = [];
+      let leaderboardCache = [];
+      let envSpecsCache = [];
+      let hadFirstModelsPayload = false;
+      let hadFirstLeaderboardPayload = false;
+      let hadFirstEnvSpecsPayload = false;
+
+      // ----- merge -----------------------------------------------------
+      // Stamp three derived fields onto each model row from the joined
+      // leaderboard_scores set:
+      //   eval_count    : # of leaderboard_score docs for this model
+      //   trial_count   : sum of `scores.length` across those docs - the
+      //                   pooled n that the Analysis tab uses for stats
+      //   last_eval_at  : most recent create_date as ms-since-epoch (or
+      //                   null if never evaluated). The Last eval column
+      //                   sorts by this and renders relative-time of it.
+      //
+      // Primary join key is leaderboard_score.model_id == model._id
+      // (set by save_results_to_db in robotaxi.py). Fallback to
+      // leaderboard_score.path == model.location so leaderboard rows
+      // written before model_id was added still attribute correctly.
+      // --------- spec-compatibility helpers --------------------------
+      // Mirror of _spec_to_dict / _specs_compatible in robotaxi.py.
+      // Kept in JS so the dashboard can compute compat status without
+      // a server round-trip per model. Defensive against legacy rows
+      // that pre-date the observation_spec / action_spec fields: any
+      // missing piece short-circuits to "unknown" compat (the Compat
+      // column then renders a "?" badge rather than green or red).
+
+      function normalizeDtype(s) {
+        if (!s) return '';
+        let t = String(s).trim().toLowerCase();
+        if (t.indexOf("'") !== -1) {
+          const m = t.split("'");
+          if (m.length >= 2) t = m[1];
+        }
+        return t.replace(/^tf\./, '').replace(/^numpy\./, '').replace(/^np\./, '');
+      }
+
+      function specsCompatible(a, b) {
+        // Mirror of robotaxi.py:_specs_compatible. None on either
+        // side → unknown (caller treats as "?", not "incompatible").
+        if (!a || !b) return null;
+        const as = a.shape || [];
+        const bs = b.shape || [];
+        if (as.length !== bs.length) return false;
+        for (let i = 0; i < as.length; i++) {
+          const da = as[i], db = bs[i];
+          if (da == null || db == null) continue;
+          if (da !== db) return false;
+        }
+        const at = normalizeDtype(a.dtype);
+        const bt = normalizeDtype(b.dtype);
+        if (at && bt && at !== bt) return false;
+        return true;
+      }
+
+      function specDiff(modelSpec, envSpec) {
+        // Used only for tooltips, so a terse human-readable form.
+        // Both sides may be missing.
+        const fmt = (s) => {
+          if (!s) return 'unknown';
+          const shape = s.shape == null ? '?' : `[${s.shape.join(', ')}]`;
+          const dt = normalizeDtype(s.dtype) || '?';
+          return `${shape} ${dt}`;
         };
-        $scope.selectAll = function() {
-            $scope.gridApi.selection.selectAllRows();
-        };
-        
-        $scope.add_jobs = function() {
-            console.log("in add jobs");
-            console.log($scope.selected_jobs);
-            if (!$scope.selected_jobs)
-                return;
-            for(var i=0;i<$scope.selected_jobs.length;i++){
-                add_model($http, $scope.selected_jobs[i].entity.location);
+        return `model: ${fmt(modelSpec)}  ·  env: ${fmt(envSpec)}`;
+      }
+
+      function computeCompat(model, envSpecsByRobot) {
+        const envSpec = envSpecsByRobot.get(String(model.robot_type || ''));
+        // We need BOTH the model's recorded specs AND a current env
+        // spec for the same robot_type to make any claim. Anything
+        // missing on either side renders as "?".
+        if (!model.observation_spec || !model.action_spec) {
+          return {
+            status: 'unknown',
+            reason: model.observation_spec ? 'Missing action_spec on model record (legacy row).'
+                                           : 'Missing observation_spec on model record (legacy row).',
+          };
+        }
+        if (!envSpec) {
+          return {
+            status: 'unknown',
+            reason: `No env_spec published yet for robot_type=${model.robot_type || '?'}. ` +
+                    `Start a TRAIN or EVAL job and the sim-controller will publish one.`,
+          };
+        }
+        const obsOk = specsCompatible(model.observation_spec, envSpec.observation_spec);
+        const actOk = specsCompatible(model.action_spec, envSpec.action_spec);
+        if (obsOk === false || actOk === false) {
+          const reasons = [];
+          if (obsOk === false) {
+            reasons.push('Observation: ' + specDiff(model.observation_spec, envSpec.observation_spec));
+          }
+          if (actOk === false) {
+            reasons.push('Action: ' + specDiff(model.action_spec, envSpec.action_spec));
+          }
+          return {
+            status: 'incompatible',
+            reason: 'EVAL would fail with EvalSpecMismatchError. ' + reasons.join(' | '),
+          };
+        }
+        if (obsOk === null || actOk === null) {
+          return { status: 'unknown', reason: 'Partial spec - cannot verify.' };
+        }
+        return { status: 'compatible', reason: 'Observation + action specs match the current env.' };
+      }
+
+      function mergeWithLeaderboard(models, leaderboard, envSpecs) {
+        // Bucket leaderboard scores by both join keys up-front so each
+        // model is O(1) instead of O(L) per lookup. Saves a noticeable
+        // chunk of work once L gets into the hundreds.
+        const byModelId = new Map();
+        const byPath = new Map();
+        for (const s of leaderboard) {
+          if (!s) continue;
+          if (s.model_id) {
+            const k = String(s.model_id);
+            if (!byModelId.has(k)) byModelId.set(k, []);
+            byModelId.get(k).push(s);
+          }
+          if (s.path) {
+            const k = String(s.path);
+            if (!byPath.has(k)) byPath.set(k, []);
+            byPath.get(k).push(s);
+          }
+        }
+        // Env specs are keyed by robot_type; build a lookup map once
+        // per merge so each model row is an O(1) Map.get instead of
+        // an array scan.
+        const envSpecsByRobot = new Map();
+        for (const e of (envSpecs || [])) {
+          if (e && e.robot_type) envSpecsByRobot.set(String(e.robot_type), e);
+        }
+        return models.map((m) => {
+          const idKey = String(m._id);
+          const locKey = String(m.location || '');
+          // Prefer model_id match; fall back to path match for legacy
+          // rows that didn't write model_id. Deduplicate in case both
+          // match for the same leaderboard_score doc (would over-count
+          // otherwise).
+          const seen = new Set();
+          const hits = [];
+          for (const s of (byModelId.get(idKey) || [])) {
+            if (s && s._id && !seen.has(String(s._id))) {
+              seen.add(String(s._id));
+              hits.push(s);
             }
-        };
-        
-        pageSize = 20;
-        $scope.gridOptions = {
-            paginationPageSizes: [20, 50, 100],
-            paginationPageSize: pageSize,
-            enablePaginationControls: true,
-            enableColumnResizing: true,
-            enableFiltering: true
-        };
-        
-        $scope.gridOptions.onRegisterApi = function(gridApi){
-            //set gridApi on scope
-            $scope.gridApi = gridApi;
-            gridApi.selection.on.rowSelectionChanged($scope,function(row){
-                var msg = 'row selected ' + row.isSelected;
-                console.log(msg);
-                console.log(row.entity)
-                if(row.isSelected)
-                    $scope.selected_jobs.push(row);
-                else
-                    for(var i=0;i<$scope.selected_jobs.length;i++)
-                    {
-                        if($scope.selected_jobs[i].entity.location
-                            == row.entity.location)
-                        {
-                            $scope.selected_jobs.splice(i,1)    
-                        }
-                    }
-            });
-        
-            gridApi.selection.on.rowSelectionChangedBatch($scope,function(rows){
-                var msg = 'rows changed ' + rows.length;
-                if(rows[0].isSelected==true)
-                    $scope.selected_jobs = rows;
-                else
-                    $scope.selected_jobs = [];
+          }
+          for (const s of (byPath.get(locKey) || [])) {
+            if (s && s._id && !seen.has(String(s._id))) {
+              seen.add(String(s._id));
+              hits.push(s);
+            }
+          }
 
-                console.log(msg);
-                console.log( $scope.selected_jobs);
-            });
-        };
-        var request = {
-            method: 'get',
-            url: '/get_models?force=false',
-            dataType: 'json',
-            contentType: "application/json"
-        };
+          let trialCount = 0;
+          let lastEvalAt = null;
+          for (const s of hits) {
+            if (Array.isArray(s.scores)) trialCount += s.scores.length;
+            const ts = s.create_date ? Date.parse(s.create_date) : NaN;
+            if (Number.isFinite(ts) && (lastEvalAt == null || ts > lastEvalAt)) {
+              lastEvalAt = ts;
+            }
+          }
+          // compat status against the live env for this robot_type.
+          // Stamped onto the row so the Compat column renderer and
+          // the Compat sortValue can read it directly. computeCompat
+          // gracefully degrades to 'unknown' when either the model's
+          // spec metadata or the env_spec for this robot_type is
+          // missing, which is the right behaviour for legacy rows.
+          const compat = computeCompat(m, envSpecsByRobot);
+          return Object.assign({}, m, {
+            eval_count: hits.length,
+            trial_count: trialCount,
+            last_eval_at: lastEvalAt,
+            compat_status: compat.status,
+            compat_reason: compat.reason,
+          });
+        });
+      }
 
-        var firstRequest = {
-            method: 'get',
-            url: '/get_models?force=true',
-            dataType: 'json',
-            contentType: "application/json"
-        };
+      // -------- "Only evaluated" quick filter --------------------------
+      // State is held in module scope (a single boolean) and mirrored
+      // to localStorage so it persists across page reloads. We always
+      // compute BOTH the full merged set and the filtered set on each
+      // render so the toolbar count widget can show "5 of 20 hidden"
+      // affordance regardless of which view is active.
+      const ONLY_EVAL_KEY = 'roboracer:models-only-evaluated';
+      let onlyEvaluated = false;
+      try {
+        onlyEvaluated = window.localStorage.getItem(ONLY_EVAL_KEY) === '1';
+      } catch (err) {
+        // localStorage may be unavailable in odd contexts (private mode
+        // quirks, etc.); fall back to off-by-default and don't persist.
+      }
+      const onlyEvalCheckbox = document.querySelector('[data-role="only-evaluated"]');
+      const onlyEvalCountEl  = document.querySelector('[data-role="only-evaluated-count"]');
+      const onlyEvalWrapEl   = document.querySelector('[data-role="only-evaluated-wrap"]');
+      onlyEvalCheckbox.checked = onlyEvaluated;
+      applyOnlyEvalChrome();
 
-        var loadGridData = function (jsonData) {
-                var results = [];
-                for(var i=0;i<jsonData.length; i++){
-                    var model = jsonData[i];
-                    //console.log(model);
-                    var new_model = {};
-                    new_model.id = model["_id"];
-                    new_model.create_date = model["create_date"];
-                    new_model.avg_return = model["avg_return"]; // avg_return
-;                   new_model.model_type = model["model_type"];
-                    new_model.location = model["location"];
-                    new_model.robot_type = model["robot_type"]; 
-                    new_model.iterations = model["training_iterations"];
-                    results.push(new_model) 
-                }
-                //filter out models that have empty avg_return
-                results = results.filter(function( obj ) {
-                    if (obj.create_date == undefined || obj.create_date == "" || obj.create_date ==  null)
-                        return false;          
-                    return true;
-                });
-                
-                // sort results by create date
-                results.sort(function(a, b) {
-                    return new Date(b.create_date) - new Date(a.create_date);
-                });
-                $scope.gridOptions.data = results;     // BIND JSON TO THE GRID.
+      function applyOnlyEvalChrome() {
+        // When the filter is active, give the toggle a faint indigo
+        // tint so it's obvious at a glance that the table is filtered
+        // and not just empty.
+        if (onlyEvaluated) {
+          onlyEvalWrapEl.classList.add('!bg-indigo-50', 'dark:!bg-indigo-900/30',
+                                       '!border-indigo-200', 'dark:!border-indigo-700/50');
+        } else {
+          onlyEvalWrapEl.classList.remove('!bg-indigo-50', 'dark:!bg-indigo-900/30',
+                                          '!border-indigo-200', 'dark:!border-indigo-700/50');
         }
-        $http(firstRequest)
-            .success(function (jsonData){
-                    if(jsonData == 'NO_CHANGES'){
-                        console.log("is NO_CHANGES");
-                        return;
-                    }
-                    loadGridData(jsonData);
-                })
-            .error(function () { });
-        
-        setInterval(function(){
-            $http(request)
-                .success(function (jsonData){
-                    console.log(jsonData);
-                    if(jsonData == 'NO_CHANGES'){
-                        console.log("is NO_CHANGES");
-                        return;
-                    }
-                    loadGridData(jsonData);
-                })
-                .error(function () { });
-        }, 5000);
-    });
-    var r = document.querySelector(':root');
-    r.style.setProperty('--myCSS_ValueOne', 730 + 'px');
-    console.log(r.style.getPropertyValue('--myCSS_ValueOne'));
-</script>
+      }
+
+      onlyEvalCheckbox.addEventListener('change', (ev) => {
+        onlyEvaluated = !!ev.target.checked;
+        try { window.localStorage.setItem(ONLY_EVAL_KEY, onlyEvaluated ? '1' : '0'); } catch (err) {}
+        applyOnlyEvalChrome();
+        rerenderTable();
+      });
+
+      function rerenderTable() {
+        // Filter out legacy rows that never wrote a create_date (same
+        // behaviour as the previous single-poll path).
+        const live = modelsCache.filter((m) => m.create_date != null && m.create_date !== '');
+        live.sort((a, b) => Date.parse(b.create_date) - Date.parse(a.create_date));
+        const merged = mergeWithLeaderboard(live, leaderboardCache, envSpecsCache);
+
+        // Apply the "Only evaluated" filter as a final pass before
+        // handing rows to the TableView. Done here (rather than in
+        // mergeWithLeaderboard) so the merge work is reusable and the
+        // filter feels light at the call-site.
+        const totalCount = merged.length;
+        const visibleRows = onlyEvaluated
+          ? merged.filter((m) => Number(m.eval_count) > 0)
+          : merged;
+        const hiddenCount = totalCount - visibleRows.length;
+        // Per-toggle "5 of 20" hint - silent when the filter is off
+        // or when nothing is being hidden.
+        if (onlyEvaluated && totalCount > 0) {
+          onlyEvalCountEl.textContent =
+            `(${visibleRows.length} of ${totalCount}` +
+            (hiddenCount > 0 ? `, ${hiddenCount} hidden` : '') + `)`;
+        } else {
+          onlyEvalCountEl.textContent = '';
+        }
+
+        table.setData(visibleRows);
+        updateCounts(visibleRows);
+      }
+
+      async function pollOnce(force) {
+        if (pollInFlight) return;
+        pollInFlight = true;
+        try {
+          // Three endpoints in parallel so the worst-case wall time is
+          // max(t_models, t_leaderboard, t_env_specs), not their sum.
+          // Each one independently sets a dirty flag below; we only
+          // re-render if at least one returned fresh data.
+          const [modelsRes, lbRes, envRes] = await Promise.all([
+            fetch(`/get_models?force=${force ? 'true' : 'false'}`),
+            fetch(`/leaderboard_scores?force=${force ? 'true' : 'false'}`),
+            fetch(`/get_env_specs?force=${force ? 'true' : 'false'}`),
+          ]);
+          if (!modelsRes.ok) throw new Error(`/get_models HTTP ${modelsRes.status}`);
+          if (!lbRes.ok)     throw new Error(`/leaderboard_scores HTTP ${lbRes.status}`);
+          // /get_env_specs is allowed to 404 on dashboard containers
+          // that haven't been rebuilt yet (the route was added later
+          // than /get_models). Treat the failure as "no env specs yet"
+          // rather than aborting the whole poll - models still render,
+          // just with compat_status='unknown' for every row.
+          const envOk = envRes.ok;
+          const [modelsTxt, lbTxt, envTxt] = await Promise.all([
+            modelsRes.text(),
+            lbRes.text(),
+            envOk ? envRes.text() : Promise.resolve('NO_CHANGES'),
+          ]);
+          // Either path counts as a healthy server contact for the
+          // freshness pill - NO_CHANGES means the server reached
+          // MongoDB and reported "nothing new", which is just as much
+          // proof of reachability as fresh JSON.
+          freshness.markSuccess();
+
+          let dirty = false;
+          if (modelsTxt !== 'NO_CHANGES') {
+            const parsed = JSON.parse(modelsTxt);
+            if (!Array.isArray(parsed)) throw new Error('Unexpected /get_models response shape');
+            modelsCache = parsed;
+            hadFirstModelsPayload = true;
+            dirty = true;
+          }
+          if (lbTxt !== 'NO_CHANGES') {
+            const parsed = JSON.parse(lbTxt);
+            if (!Array.isArray(parsed)) throw new Error('Unexpected /leaderboard_scores response shape');
+            leaderboardCache = parsed;
+            hadFirstLeaderboardPayload = true;
+            dirty = true;
+          }
+          if (envOk && envTxt !== 'NO_CHANGES') {
+            const parsed = JSON.parse(envTxt);
+            if (!Array.isArray(parsed)) throw new Error('Unexpected /get_env_specs response shape');
+            envSpecsCache = parsed;
+            hadFirstEnvSpecsPayload = true;
+            dirty = true;
+          } else if (!envOk) {
+            // 404 on the env_specs route - dashboard server is old.
+            // Mark as "we've checked", so the bootstrap render below
+            // doesn't keep waiting for it forever.
+            hadFirstEnvSpecsPayload = true;
+          }
+          // Render only when one or both of:
+          //  (a) we got new data this cycle, OR
+          //  (b) this is the first time we've had ALL responses
+          //      (NO_CHANGES from some and fresh from others on the
+          //      very first poll would otherwise leave the join half-
+          //      finished). The `hadFirst*` flags cover that case.
+          if (dirty || (hadFirstModelsPayload && hadFirstLeaderboardPayload && hadFirstEnvSpecsPayload && table._rows.length === 0)) {
+            rerenderTable();
+          }
+        } catch (err) {
+          console.error(err);
+          if (table._rows.length === 0) table.setError(String(err.message || err));
+          else showToast({ type: 'error', message: `Refresh failed: ${err.message || err}` });
+        } finally {
+          pollInFlight = false;
+        }
+      }
+
+      pollOnce(true);
+      pollHandle = setInterval(() => pollOnce(false), 5000);
+      window.addEventListener('beforeunload', () => {
+        clearInterval(pollHandle);
+        freshness.destroy();
+      });
+    })();
+  </script>
+</body>
 </html>

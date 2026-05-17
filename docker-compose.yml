@@ -92,6 +92,14 @@ services:
       - SAVED_MODELS_DIR=/saved_models
       - ROBOT_TYPE=robotaxi
       - DATABASE_NAME=robotaxi
+      # Silence the per-env-step `ACTION accel=... steer=...` trace from
+      # rl_agent/environments/robotaxi_env.py. Each actor emits one
+      # ACTION line per step, so under multi-env training this is
+      # ~10s of lines per second per actor and dominates robotaxi.out
+      # log volume. Flip to 1 (or remove this line) to re-enable the
+      # diagnostic, e.g. when validating that N parallel actors are
+      # producing independent stochastic actions per step.
+      - ROBOTAXI_LOG_ACTIONS=0
     deploy:
       resources:
         reservations:

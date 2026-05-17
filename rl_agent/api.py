@@ -49,6 +49,38 @@ class RobotApi:
         self.latest_overhead_camera_frame = None
         self.have_overhead_camera_frame = asyncio.Event()
 
+        # Timeout counters. Incremented in each `except asyncio.TimeoutError`
+        # branch below. Exposed via get_timeout_counts() so the trainer
+        # in robotaxi.py can aggregate across all ParallelPyEnvironment
+        # workers and write the totals as tf.summary scalars under the
+        # `timeouts/` namespace in TensorBoard. The four buckets map to
+        # the four wait_for() sites in this file:
+        #   - reset:       DoReset, 4s wait on reset_event
+        #   - apply_force: DoApplyForce, first wait on apply_force_event
+        #   - scene_data:  DoApplyForce, second wait on scene_data_events[cmd_id]
+        #   - move:        DoMove, either of the two wait_for()s in its
+        #                  shared try/except (rare in current training)
+        self.reset_timeouts = 0
+        self.apply_force_timeouts = 0
+        self.scene_data_timeouts = 0
+        self.move_timeouts = 0
+
+    def get_timeout_counts(self):
+        """Snapshot the running tally of asyncio.TimeoutError occurrences.
+
+        Returns a plain dict so it serialises cleanly across
+        ParallelPyEnvironment's RPC layer when the trainer pulls
+        per-actor counts via env.call('get_timeout_counts').
+        Counts are cumulative since this RobotApi was constructed
+        (one instance per env, so one per actor in multi-env mode).
+        """
+        return {
+            'reset_timeouts': self.reset_timeouts,
+            'apply_force_timeouts': self.apply_force_timeouts,
+            'scene_data_timeouts': self.scene_data_timeouts,
+            'move_timeouts': self.move_timeouts,
+        }
+
     def _next_id(self):
         ret = self.next_id
         self.next_id += 1
@@ -141,6 +173,7 @@ class RobotApi:
         try:
             await asyncio.wait_for(self.reset_event.wait(), 4)
         except asyncio.TimeoutError:
+            self.reset_timeouts += 1
             print('timed out waiting for reset. Ignoring')
     
     async def DoApplyForce(self, acceleration=100.0, steering_angle=30.0, num_obstacles=20):
@@ -155,15 +188,27 @@ class RobotApi:
         self.apply_force_event.clear()
         self.scene_data_events[cmd_id] = asyncio.Event()
         await self._do_sim_command( { 'cmd' : 1, 'ApplyForce': force_angle } )
+        # Timeout bumped 3s -> 8s. The apply_force_event wait is load-
+        # bearing back-pressure (gates each DoApplyForce on Unity
+        # reaching the "force applied" state of its loop), so we keep
+        # it - but at 4-actor GPU contention the global sim_status==2
+        # ack frequently arrives 3-7s after publish, generating thousands
+        # of spurious "Apply force timed out waiting. Ignoring" prints
+        # per run while the next wait (scene_data_events[cmd_id], 5s)
+        # still completes successfully. Bumping to 8s captures those
+        # late acks within the wait window so the print only fires on
+        # genuinely stalled steps.
         try:
-            await asyncio.wait_for(self.apply_force_event.wait(), 3)
+            await asyncio.wait_for(self.apply_force_event.wait(), 8)
         except asyncio.TimeoutError:
+            self.apply_force_timeouts += 1
             print('Apply force timed out waiting. Ignoring')
-        
+
         try:
             await asyncio.wait_for(self.scene_data_events[cmd_id].wait(), 5)
             #print("after wait")
         except asyncio.TimeoutError:
+            self.scene_data_timeouts += 1
             print('Scene data events timed out waiting. Ignoring')
         
         del self.scene_data_events[cmd_id]
@@ -183,6 +228,7 @@ class RobotApi:
             await asyncio.wait_for(self.scene_data_events[cmd_id].wait(), timeout)
             
         except asyncio.TimeoutError:
+            self.move_timeouts += 1
             print('timed out waiting for move. Ignoring')
 
 

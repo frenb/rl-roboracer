@@ -13,10 +13,11 @@
     Restart-Stack.ps1 instead.
 
 .PARAMETER N
-    Number of Unity clients to launch on the way back up. Default 4.
+    Number of Unity clients to launch on the way back up. Default 2.
 
 .PARAMETER StaggerSeconds
-    Seconds between supervisor spawns. Default 5.
+    Seconds between supervisor spawns. Default 15. See RunNClients.ps1
+    for the multi-actor GPU-init rationale.
 
 .PARAMETER Popup
     Use Unity's -popupwindow flag for compact tile mode.
@@ -33,8 +34,8 @@
 #>
 [CmdletBinding()]
 param(
-    [int]$N = 4,
-    [double]$StaggerSeconds = 5,
+    [int]$N = 2,
+    [double]$StaggerSeconds = 15,
     [switch]$Popup,
     [int]$GridCols = -1,
     [int]$GridRows = -1,

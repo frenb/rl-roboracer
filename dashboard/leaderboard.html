@@ -1,108 +1,123 @@
 <!DOCTYPE html>
-<html>
+<html lang="en" class="dark h-full">
 <head>
-    <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.5.0/angular.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/angular-ui-grid/4.6.3/ui-grid.js"></script>
-    <!--link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/angular-ui-grid/4.6.3/ui-grid.min.css" type="text/css"-->
-    <link rel="stylesheet" href="http://ui-grid.info/release/ui-grid.css"></link>
-    <link rel="stylesheet" href="http://ui-grid.info/docs/css/prettify.css"></link>
-    <link rel="stylesheet" href="http://ui-grid.info/docs/css/bootstrap-flatly.min.css"></link>
-    <style>
-        :root { /* Set CSS variable values - These values can be changed with JavaScript and DOM */
-            --myCSS_ValueOne: 800px;
-        }
-
-        .uiGrd {
-            width: 100%;
-            height: var(--myCSS_ValueOne);
-        }
-    </style>
+  <meta charset="utf-8">
+  <title>Leaderboard · rl-roboracer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/tailwind.init.js"></script>
+  <!-- Tabulator: see jobs.html. -->
+  <link rel="stylesheet" href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator_simple.min.css">
+  <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+  <link rel="stylesheet" href="/styles.css">
 </head>
+<body class="h-full m-0 font-sans antialiased text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-[#0b1120]">
 
-<body>
-    <div ng-app="myApp" 
-        ng-controller="myController">
+  <div class="flex flex-col h-screen w-full">
 
-        <p>{{title}}</p>
-        <div class="uiGrd" id="grd" 
-            ui-grid="gridOptions" 
-                ui-grid-resize-columns
-                ui-grid-pagination>
-        </div>
+    <div class="flex flex-wrap items-center gap-3 px-5 py-4 row-gap-2
+                bg-white dark:bg-slate-900
+                border-b border-slate-200 dark:border-slate-700
+                shadow-card relative z-[3] flex-shrink-0">
+      <h1 class="text-2xl font-semibold tracking-tight m-0 mr-3">Leaderboard</h1>
+      <span data-role="row-count"
+            class="text-xs font-medium text-slate-500 dark:text-slate-400"
+            aria-live="polite"></span>
+
+      <!-- Freshness pill - see RoboracerUI.FreshnessIndicator in
+           components.js. Green = within one 5s poll cycle, amber =
+           one cycle missed, red = polling appears broken. -->
+      <span data-role="freshness"
+            class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400"
+            aria-live="polite"
+            title="Time since the last successful poll of /leaderboard_scores">
+        <span data-role="freshness-dot"
+              class="inline-block w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+        <span data-role="freshness-text">connecting…</span>
+      </span>
     </div>
-</body>
 
-<!--The Controller -->
-<script>
-    var app = angular.module('myApp', ['ui.grid', 'ui.grid.pagination','ui.grid.resizeColumns']);
-    app.controller('myController', function ($scope, $http) {
+    <div class="flex-1 overflow-hidden flex flex-col p-4 gap-4 bg-slate-50 dark:bg-[#0b1120]">
+      <div data-role="table"></div>
+    </div>
 
-        $scope.title = "Leaderboard Scores"
-        pageSize = 20;
-        // SPECIFY FILTERING OPTIONS.
-        $scope.gridOptions = {
-            paginationPageSizes: [20, 50, 100],
-            paginationPageSize: pageSize,
-            enablePaginationControls: true,
-            enableColumnResizing: true,
-            enableFiltering: true
-        };
+  </div>
 
-        var request = {
-            method: 'get',
-            url: '/leaderboard_scores?force=false',
-            dataType: 'json',
-            contentType: "application/json"
-        };
+  <!-- Cache-busted (see jobs.html). Bump ?v=... when components.js changes. -->
+  <script src="/components.js?v=20260516-selectcol"></script>
+  <script>
+    (function () {
+      const { TableView, formatters, showToast } = window.RoboracerUI;
 
-        var firstRequest = {
-            method: 'get',
-            url: '/leaderboard_scores?force=true',
-            dataType: 'json',
-            contentType: "application/json"
-        };
+      const tableHost = document.querySelector('[data-role="table"]');
+      const table = new TableView(tableHost, {
+        selectable: false,
+        // Leaderboard rows have no single-field id surfaced by the API;
+        // composite key keeps row identity stable across polls.
+        rowKey: (row) => `${row.path || ''}|${row.create_date || ''}`,
+        pageSize: 25,
+        emptyMessage: 'No leaderboard scores yet — finished EVAL jobs will publish their mean scores here.',
+        columns: [
+          { key: 'create_date', label: 'Created',        sortable: true, filter: false,
+            sortValue: (r) => r.create_date ? Date.parse(r.create_date) : 0,
+            render: (v) => formatters.relativeTime(v) },
+          { key: 'mean_score',  label: 'Mean score',     sortable: true, filter: false,
+            sortValue: (r) => Number(r.mean_score),
+            render: (v) => formatters.number(v, { decimals: 4 }),
+            cellClass: 'text-right' },
+          { key: 'path',        label: 'Model location', sortable: true, filter: true,
+            render: (v) => formatters.truncatePath(v) },
+        ],
+      });
 
-        var loadGridData = function (jsonData) {
-                var results = [];
-                for(var i=0;i<jsonData.length; i++){
-                    var score = jsonData[i];
-                    var new_score = {};
-                    new_score.create_date = score.create_date;
-                    new_score.path = score.path;
-                    new_score.mean_score = score.mean_score;  
-                    results.push(new_score) 
-                }
-                console.log(results)
-                // sort results by create_date
-                results.sort(function(a, b) {
-                    return new Date(b.create_date) - new Date(a.create_date);
-                });
-                $scope.gridOptions.data = results;     // BIND JSON TO THE GRID.
+      table.setLoading(true);
+
+      const countEl = document.querySelector('[data-role="row-count"]');
+      function updateCounts(rows) {
+        countEl.textContent = rows.length === 0
+          ? ''
+          : `${rows.length} score${rows.length === 1 ? '' : 's'}`;
+      }
+
+      const freshness = new RoboracerUI.FreshnessIndicator(
+        document.querySelector('[data-role="freshness-dot"]'),
+        document.querySelector('[data-role="freshness-text"]'));
+
+      let pollHandle = null;
+      let pollInFlight = false;
+
+      async function pollOnce(force) {
+        if (pollInFlight) return;
+        pollInFlight = true;
+        try {
+          const url = `/leaderboard_scores?force=${force ? 'true' : 'false'}`;
+          const res = await fetch(url);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const text = await res.text();
+          freshness.markSuccess();
+          if (text === 'NO_CHANGES') return;
+          const json = JSON.parse(text);
+          if (!Array.isArray(json)) throw new Error('Unexpected response shape');
+          const rows = json.slice().sort(
+            (a, b) => Date.parse(b.create_date) - Date.parse(a.create_date)
+          );
+          table.setData(rows);
+          updateCounts(rows);
+        } catch (err) {
+          console.error(err);
+          if (table._rows.length === 0) table.setError(String(err.message || err));
+          else showToast({ type: 'error', message: `Refresh failed: ${err.message || err}` });
+        } finally {
+          pollInFlight = false;
         }
+      }
 
-        $http(firstRequest)
-            .success(function (jsonData){
-                    if(jsonData == 'NO_CHANGES'){
-                        console.log("is NO_CHANGES");
-                        return;
-                    }
-                    loadGridData(jsonData);
-            }).error(function () { });
-
-        setInterval(function(){
-            $http(request)
-                .success(function (jsonData){
-                    console.log(jsonData);
-                    if(jsonData == 'NO_CHANGES'){
-                        console.log("is NO_CHANGES");
-                        return;
-                    }
-                    loadGridData(jsonData);
-                }).error(function () { });
-        }, 5000);
-    });
-    var r = document.querySelector(':root');
-    r.style.setProperty('--myCSS_ValueOne', 730 + 'px');
-    console.log(r.style.getPropertyValue('--myCSS_ValueOne'));
-</script>
+      pollOnce(true);
+      pollHandle = setInterval(() => pollOnce(false), 5000);
+      window.addEventListener('beforeunload', () => {
+        clearInterval(pollHandle);
+        freshness.destroy();
+      });
+    })();
+  </script>
+</body>
 </html>

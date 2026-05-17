@@ -27,7 +27,7 @@
     instances/0 mutex, blocking actor 0 from launching).
 
 .PARAMETER N
-    Number of clients to spawn. Default 4. Each gets Index 0..N-1.
+    Number of clients to spawn. Default 2. Each gets Index 0..N-1.
 
 .PARAMETER RosIp
     Forwarded to each RunClientWrapper.ps1. Default 127.0.0.1, since
@@ -47,9 +47,20 @@
     Seconds to wait between supervisor spawns. Without a stagger, all N
     Unity instances race their D3D / Mono / Subsystems initialization
     simultaneously and lose under contention - some processes silently
-    exit before any logger initializes. 3s gives the previous instance
-    time to finish GfxDevice creation before the next one starts. Set
-    to 0 to disable.
+    exit before any logger initializes, others wedge mid-CreateDevice
+    with no main window and no further log output (you'll see Player.log
+    stop at "GfxDevice: creating device client; threaded=1"). 15s is
+    the conservative-but-reliable default and is plenty for actor i to
+    finish CreateDevice + scene init before actor i+1 starts touching
+    the GPU on typical hardware. Set to 0 to disable.
+
+    The previous default of 3s was tuned on a faster GPU and bit users
+    on more contended systems where CreateDevice alone takes 5-10s; the
+    failure mode there is a permanent two-process deadlock that can
+    only be cleared with Stop-Stack. Most of the launch time you "save"
+    by lowering this you'll pay back in retries when the first attempt
+    wedges. Lower it only if you've confirmed your specific GPU + driver
+    + N is happy with the shorter window.
 
 .PARAMETER GridCols
 .PARAMETER GridRows
@@ -77,13 +88,13 @@
 #>
 [CmdletBinding()]
 param(
-    [int]$N = 4,
+    [int]$N = 2,
     [string]$RosIp = '127.0.0.1',
     [int]$WindowWidth = 0,
     [int]$WindowHeight = 0,
     [string]$WindowQuality = 'Fastest',
     [switch]$Popup,
-    [double]$StaggerSeconds = 3.0,
+    [double]$StaggerSeconds = 15.0,
     [int]$GridCols = -1,
     [int]$GridRows = -1,
     [bool]$Minimized = $true,
@@ -102,6 +113,20 @@ if ($GridRows -lt 0) {
 }
 
 $ErrorActionPreference = 'Stop'
+
+# Shared stack-state helpers (see scripts/_StackState.ps1 for the
+# rationale - we record supervisor / wt-host PIDs on disk so
+# Stop-Stack doesn't need to query WMI's Win32_Process and freeze
+# when WMI is wedged).
+. (Join-Path $PSScriptRoot '_StackState.ps1')
+
+# Start from a clean slate. Any stale registrations from a previous
+# Start-Clients run that wasn't properly torn down would otherwise
+# confuse the next Stop-Stack into trying to kill PIDs that have
+# been recycled. Get-RegisteredSupervisors already filters those
+# out, but resetting upfront keeps the on-disk state small and the
+# code paths predictable.
+Clear-StackState
 
 $wrapperPath = Join-Path $PSScriptRoot 'RunClientWrapper.ps1'
 if (-not (Test-Path -LiteralPath $wrapperPath)) {
@@ -237,38 +262,120 @@ for ($i = 0; $i -lt $N; $i++) {
     }
 }
 
-# Re-minimize the wt window after all tabs are added. The first
-# `Start-Process wt -WindowStyle Minimized` creates the window
-# minimized, but each subsequent ``wt -w <name> new-tab ...`` call
-# brings the existing window to the foreground (that's wt's
-# focus-on-new-tab behavior, not configurable per-call). Net effect:
-# without this fix-up, the window ends up unminimized after tab 1
-# even though the user asked for minimized. Find the wt host PID by
-# walking up from a supervisor's parent chain, then call ShowWindow
-# with SW_SHOWMINNOACTIVE (minimize without stealing focus).
-if ($Minimized -and $useWt) {
+# Find the wt host PID without WMI. We rely on the supervisors having
+# self-registered into the stack-state dir by the time we get here
+# (RunClientWrapper.ps1 calls Register-Supervisor as its first
+# action), then walk up from a registered supervisor to the wt host
+# via the .NET Process class. This intentionally avoids any
+# Get-CimInstance / Win32_Process call so a wedged WMI service
+# doesn't freeze the script.
+#
+# Why we need the wt host PID:
+#   * To re-minimize the wt window (the per-tab Start-Process
+#     -WindowStyle Minimized only takes effect for the FIRST tab;
+#     each subsequent `wt new-tab` un-minimizes the window).
+#   * Stop-Stack uses it to close the wt window when tearing down.
+function Get-WtHostPidByWalk {
+    # Wait briefly for at least one supervisor to register itself.
+    # Without this the timing-sensitive "right after wt new-tab" case
+    # races against RunClientWrapper.ps1's startup.
+    $deadline = (Get-Date).AddSeconds(10)
+    while ((Get-Date) -lt $deadline) {
+        $supervisors = @(Get-RegisteredSupervisors)
+        foreach ($s in $supervisors) {
+            $p = Get-Process -Id $s.ProcessId -ErrorAction SilentlyContinue
+            if (-not $p) { continue }
+            # Walk up via parent process IDs. .NET's
+            # System.Diagnostics.Process doesn't expose parent on its
+            # own, but NtQueryInformationProcess does. We compile a
+            # tiny shim once per session.
+            $wtPid = Resolve-AncestorWindowsTerminal -StartPid $p.Id -MaxDepth 6
+            if ($wtPid) { return $wtPid }
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    return 0
+}
+
+if (-not ('Win32ParentPid' -as [type])) {
+    # Pulls the ParentProcessId out of NtQueryInformationProcess's
+    # PROCESS_BASIC_INFORMATION struct. Faster and far more reliable
+    # than WMI Win32_Process for "what's my parent?" lookups. The
+    # underlying NT API is unaffected by the WMI service's state.
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class Win32ParentPid {
+    [StructLayout(LayoutKind.Sequential)]
+    struct PROCESS_BASIC_INFORMATION {
+        public IntPtr Reserved1;
+        public IntPtr PebBaseAddress;
+        public IntPtr Reserved2_0;
+        public IntPtr Reserved2_1;
+        public IntPtr UniqueProcessId;
+        public IntPtr InheritedFromUniqueProcessId;
+    }
+
+    [DllImport("ntdll.dll", SetLastError=true)]
+    static extern int NtQueryInformationProcess(
+        IntPtr ProcessHandle, int ProcessInformationClass,
+        ref PROCESS_BASIC_INFORMATION ProcessInformation,
+        int ProcessInformationLength, ref int ReturnLength);
+
+    public static int Get(int pid) {
+        try {
+            var p = System.Diagnostics.Process.GetProcessById(pid);
+            var pbi = new PROCESS_BASIC_INFORMATION();
+            int returnLen = 0;
+            int status = NtQueryInformationProcess(
+                p.Handle, 0, ref pbi, Marshal.SizeOf(pbi), ref returnLen);
+            if (status != 0) return 0;
+            return pbi.InheritedFromUniqueProcessId.ToInt32();
+        } catch {
+            return 0;
+        }
+    }
+}
+'@
+}
+
+function Resolve-AncestorWindowsTerminal {
+    param([int]$StartPid, [int]$MaxDepth = 6)
+    $cur = $StartPid
+    for ($d = 0; $d -lt $MaxDepth; $d++) {
+        $parentPid = [Win32ParentPid]::Get($cur)
+        if ($parentPid -le 0) { return 0 }
+        $parent = Get-Process -Id $parentPid -ErrorAction SilentlyContinue
+        if (-not $parent) { return 0 }
+        if ($parent.ProcessName -match '^WindowsTerminal') {
+            return $parentPid
+        }
+        $cur = $parentPid
+    }
+    return 0
+}
+
+if ($useWt) {
     # Give wt a moment to register the last tab before we touch it.
     Start-Sleep -Milliseconds 500
+    $wtHostPid = Get-WtHostPidByWalk
+    if ($wtHostPid) {
+        Set-WtHostPid -ProcessId $wtHostPid
+        Write-Host "Recorded wt host PID=$wtHostPid in stack state."
+    } else {
+        Write-Warning "Could not resolve the wt host PID. Stop-Stack will still kill supervisors; the wt window may need manual close."
+    }
 
-    $sup = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like '*RunClientWrapper.ps1*' }) | Select-Object -First 1
-    if ($sup) {
-        $wtPid = $null
-        $current = $sup
-        for ($depth = 0; $depth -lt 5; $depth++) {
-            if (-not $current.ParentProcessId) { break }
-            $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($current.ParentProcessId)" -ErrorAction SilentlyContinue
-            if (-not $parent) { break }
-            if ($parent.Name -match '^WindowsTerminal') {
-                $wtPid = $parent.ProcessId
-                break
-            }
-            $current = $parent
-        }
-
-        if ($wtPid) {
-            if (-not ('Win32WindowMinimize' -as [type])) {
-                Add-Type -TypeDefinition @'
+    # Re-minimize the wt window after all tabs are added. The first
+    # `Start-Process wt -WindowStyle Minimized` creates the window
+    # minimized, but each subsequent ``wt -w <name> new-tab ...`` call
+    # brings the existing window to the foreground (that's wt's
+    # focus-on-new-tab behavior, not configurable per-call). Net
+    # effect: without this fix-up, the window ends up unminimized
+    # after tab 1 even though the user asked for minimized.
+    if ($Minimized -and $wtHostPid) {
+        if (-not ('Win32WindowMinimize' -as [type])) {
+            Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public class Win32WindowMinimize {
@@ -277,14 +384,13 @@ public class Win32WindowMinimize {
     public const int SW_SHOWMINNOACTIVE = 7;
 }
 '@
-            }
-            $wtProc = Get-Process -Id $wtPid -ErrorAction SilentlyContinue
-            if ($wtProc -and $wtProc.MainWindowHandle -ne [IntPtr]::Zero) {
-                [void][Win32WindowMinimize]::ShowWindow(
-                    $wtProc.MainWindowHandle,
-                    [Win32WindowMinimize]::SW_SHOWMINNOACTIVE)
-                Write-Host "Re-minimized wt host window (PID=$wtPid)"
-            }
+        }
+        $wtProc = Get-Process -Id $wtHostPid -ErrorAction SilentlyContinue
+        if ($wtProc -and $wtProc.MainWindowHandle -ne [IntPtr]::Zero) {
+            [void][Win32WindowMinimize]::ShowWindow(
+                $wtProc.MainWindowHandle,
+                [Win32WindowMinimize]::SW_SHOWMINNOACTIVE)
+            Write-Host "Re-minimized wt host window (PID=$wtHostPid)"
         }
     }
 }
