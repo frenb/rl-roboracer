@@ -19,10 +19,11 @@
     to recycle the containers).
 
 .PARAMETER N
-    Number of Unity clients to spawn on the way back up. Default 4.
+    Number of Unity clients to spawn on the way back up. Default 2.
 
 .PARAMETER StaggerSeconds
-    Seconds between spawning each Unity client. Default 5.
+    Seconds between spawning each Unity client. Default 15. See
+    RunNClients.ps1 for the multi-actor GPU-init rationale.
 
 .PARAMETER Popup
     Use Unity's -popupwindow flag for the relaunched clients.
@@ -43,8 +44,8 @@
 #>
 [CmdletBinding()]
 param(
-    [int]$N = 4,
-    [double]$StaggerSeconds = 5,
+    [int]$N = 2,
+    [double]$StaggerSeconds = 15,
     [switch]$Popup,
     [int]$WaitForRosServersSeconds = 8,
     [switch]$SkipUnity

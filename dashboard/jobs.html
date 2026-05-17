@@ -1,462 +1,455 @@
 <!DOCTYPE html>
-<html>
+<html lang="en" class="dark h-full">
 <head>
-    <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.5.0/angular.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/angular-ui-grid/4.6.3/ui-grid.js"></script>
-    <link rel="stylesheet" href="http://ui-grid.info/release/ui-grid.css"></link>
-    <link rel="stylesheet" href="http://ui-grid.info/docs/css/prettify.css"></link>
-    <link rel="stylesheet" href="http://ui-grid.info/docs/css/bootstrap-flatly.min.css"></link>
-    <style>
-        td {
-            padding-left:10px
-        }
-         :root { /* Set CSS variable values - These values can be changed with JavaScript and DOM */
-            --myCSS_ValueOne: 800px;
-        }
-
-        .uiGrd {
-            width: 100%;
-            height: var(--myCSS_ValueOne);
-        }
-
-         /* Style the modal background */
-        .modal {
-            display: none; /* Hidden by default */
-            position: fixed; /* Stay in place */
-            z-index: 1; /* Sit on top */
-            left: 0;
-            top: 0;
-            width: 100%; /* Full width */
-            height: 100%; /* Full height */
-            overflow: auto; /* Enable scroll if needed */
-            background-color: rgba(0, 0, 0, 0.4); /* Black background with opacity */
-        }
-
-        /* Style the modal content */
-        .modal-content {
-            background-color: #fefefe;
-            margin: 15% auto; /* 15% from the top and centered */
-            padding: 20px;
-            border: 1px solid #888;
-            width: 350px; /* Could be more or less, depending on screen size */
-        }
-    </style>
+  <meta charset="utf-8">
+  <title>Jobs · rl-roboracer</title>
+  <!-- Tailwind first, then config, then base styles. Order matters:
+       tailwind.init.js depends on `window.tailwind` being defined by
+       the CDN script, and styles.css imports the Inter / JetBrains
+       Mono fonts that tailwind.config references. -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/tailwind.init.js"></script>
+  <!-- Tabulator: powers the per-tab data grids via the TableView
+       wrapper in components.js. We use the "simple" theme as a near-
+       blank base, then override its CSS variables in styles.css to
+       match the dashboard's slate / indigo palette. -->
+  <link rel="stylesheet" href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator_simple.min.css">
+  <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+  <link rel="stylesheet" href="/styles.css">
 </head>
+<body class="h-full m-0 font-sans antialiased text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-[#0b1120]">
 
-<body>
-    <div ng-app="myApp" 
-        ng-controller="myController">
-        <div id="myModal" class="modal">
-            <div class="modal-content"> 
-                <form>
-                    <table>
-                    <tr>
-                        <td>
-                            <label>
-                                Status
-                            </label>
-                        </td>
-                        <td>
-                            <select id="status"></select>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>
-                            <label>
-                                Robot Type
-                            </label>
-                        </td>
-                        <td>
-                            <select id="robot_type"></select>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>
-                            <label>
-                                Num Iterations
-                            </label>
-                        </td>
-                        <td>
-                            <input id="num_iterations" type="text" formControlName="num_iterations_val">
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>
-                            <label>
-                                Trining Steps
-                            </label>
-                        </td>
-                        <td>
-                            <input id="training_steps" type="text" formControlName="training_steps_val">
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>
-                            <label>
-                                Demo Job Id
-                            </label>
-                        </td>
-                        <td>
-                            <input id="demo_job_id" type="text" formControlName="demo_job_id_val">
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>
-                            <label>
-                                Model Type:
-                            </label>
-                        </td>
-                        <td>
-                            <select id="model_type"></select>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>
-                            <label>
-                                Job Type
-                            </label>
-                        </td>
-                        <td>
-                            <select id="job_type"></select>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>
-                            <button type="button" class="btn btn-success" ng-click="add_jobs()">Submit</button>
-                        </td>
-                    </tr>
-                    </table>
-                </form>
-            </div>
-        </div>
-        <p>{{title}}</p>
-        <button type="button" class="btn btn-success" ng-click="clearAll()">Clear All</button>
-        <button type="button" class="btn btn-success" ng-click="update_job_status_all()"> Set To Done</button>
-        <button type="button" class="btn btn-success" ng-click="update_job_status_restart()"> Restart Jobs</button>
-        <button type="button" class="btn btn-success" ng-click="delete_jobs()"> Delete Jobs</button>
-        <button type="button" class="btn btn-success" ng-click="create_job()"> Create Job</button>
-        <div class="uiGrd" id="grd" 
-            ui-grid="gridOptions" 
-                ui-grid-resize-columns
-                ui-grid-selection
-                ui-grid-pagination>
-        </div>
+  <div class="flex flex-col h-screen w-full">
+
+    <!-- Toolbar -->
+    <div class="flex flex-wrap items-center gap-3 px-5 py-4 row-gap-2
+                bg-white dark:bg-slate-900
+                border-b border-slate-200 dark:border-slate-700
+                shadow-card relative z-[3] flex-shrink-0">
+      <h1 class="text-2xl font-semibold tracking-tight m-0 mr-3">Jobs</h1>
+      <span data-role="job-count"
+            class="text-xs font-medium text-slate-500 dark:text-slate-400"
+            aria-live="polite"></span>
+
+      <!-- Freshness pill. Shows time since the last successful poll of
+           /get_jobs (counting both fresh-data and NO_CHANGES responses
+           because either confirms the server is reachable). The dot's
+           color ramps from green to amber to red as the poll goes
+           stale - a clear signal if the dashboard server or
+           sim-controller's Mongo connection has died. -->
+      <span data-role="freshness"
+            class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400"
+            aria-live="polite"
+            title="Time since the last successful poll of /get_jobs">
+        <span data-role="freshness-dot"
+              class="inline-block w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+        <span data-role="freshness-text">connecting…</span>
+      </span>
+
+      <div class="flex flex-wrap gap-2 ml-auto">
+        <button data-action="clear-selection" disabled
+                class="btn-base btn-secondary">Clear selection</button>
+        <button data-action="restart" disabled
+                class="btn-base btn-secondary"
+                title="Set selected jobs back to NOT_STARTED so the trainer picks them up again">Restart</button>
+        <button data-action="set-done" disabled
+                class="btn-base btn-secondary"
+                title="Mark selected jobs as DONE without running them">Set to done</button>
+        <button data-action="delete" disabled
+                class="btn-base btn-danger">Delete</button>
+        <button data-action="create" class="btn-base btn-primary">+ New job</button>
+      </div>
     </div>
-<!--The Controller -->
-<script>
-    var app = angular.module('myApp', 
-        ['ui.grid', 'ui.grid.pagination','ui.grid.resizeColumns','ui.grid.selection']);
-    
-    // Location field intentionally absent from this modal. To run an
-    // EVAL job against an existing saved model, go to the Models tab,
-    // select the model row, and click "Add Jobs" - that flow reads
-    // the location from the model's MongoDB record. This form is for
-    // TRAIN, DEMO, BC_TRAINING_ONLY, and EVAL-of-RandomPyPolicy jobs
-    // that don't need a model path.
-    function add_job(
-        $http,
-        status_val,
-        robot_type_val,
-        num_iterations_val,
-        model_type_val,
-        job_type_val,
-        training_steps_val,
-        demo_job_id_val) {
 
-            console.log(
-                status_val, robot_type_val,
-                num_iterations_val, model_type_val, job_type_val);
+    <!-- Body -->
+    <div class="flex-1 overflow-hidden flex flex-col p-4 gap-4 bg-slate-50 dark:bg-[#0b1120]">
+      <div data-role="table"></div>
+    </div>
 
-            var new_job = {
-                status: status_val,
-                job_type: job_type_val,
-                num_iterations: Number(num_iterations_val),
-                model_type: model_type_val,
-                robot_type: robot_type_val,
-                pass_through_actions: false,
-                training_steps: Number(training_steps_val),
-                demo_job_id: String(demo_job_id_val)
-            }
-            
-            var postModel = {
-                method: 'post',
-                url: '/add_job',
-                dataType: 'json',
-                data: new_job,
-                contentType: "application/json"
-            };
-            
-            $http(postModel)
-                .success(function (jsonData) {
-                    console.log(jsonData)
-                })
-                .error(function () { });
-    }
+  </div>
 
-    window.onclick = function(event) {
-        var modal = document.getElementById("myModal");
-        if (event.target == modal) {
-            
-            modal.style.display = "none";
+  <!-- Create-job modal -->
+  <div data-role="create-modal" aria-hidden="true"
+       class="fixed inset-0 z-[100] modal-blur bg-slate-900/40 dark:bg-slate-950/65
+              flex items-center justify-center p-4
+              opacity-0 transition-opacity duration-200 pointer-events-none">
+    <div role="dialog" aria-modal="true" aria-labelledby="create-modal-title"
+         class="w-full max-w-[520px] max-h-[calc(100vh-2rem)]
+                bg-white dark:bg-slate-900
+                border border-slate-200 dark:border-slate-700
+                rounded-2xl shadow-card-lg
+                flex flex-col
+                opacity-0 -translate-y-3 scale-[0.98]
+                transition duration-200">
+      <div class="px-6 py-5 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+        <h2 id="create-modal-title" class="m-0 text-base font-semibold tracking-tight">New job</h2>
+        <button data-action="close-modal" aria-label="Close"
+                class="px-2 py-1 text-sm rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400">×</button>
+      </div>
+      <div class="px-6 py-6 overflow-y-auto">
+        <form id="create-job-form" onsubmit="return false;"
+              class="grid grid-cols-[minmax(140px,max-content)_1fr] gap-4 items-center">
+          <label for="f-status" class="text-xs font-medium text-slate-600 dark:text-slate-300">Status</label>
+          <select id="f-status" name="status" class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="NOT_STARTED" selected>NOT_STARTED</option>
+            <option value="IN_PROGRESS">IN_PROGRESS</option>
+            <option value="DONE">DONE</option>
+          </select>
+
+          <label for="f-job-type" class="text-xs font-medium text-slate-600 dark:text-slate-300">Job type</label>
+          <select id="f-job-type" name="job_type" class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="TRAIN" selected>TRAIN</option>
+            <option value="DEMO">DEMO</option>
+            <option value="EVAL">EVAL</option>
+            <option value="BC_TRAINING_ONLY">BC_TRAINING_ONLY</option>
+          </select>
+
+          <label for="f-model-type" class="text-xs font-medium text-slate-600 dark:text-slate-300">Model type</label>
+          <select id="f-model-type" name="model_type" class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="SacAgent" selected>SacAgent</option>
+            <option value="GreedyPolicy">GreedyPolicy</option>
+            <option value="RandomPyPolicy">RandomPyPolicy</option>
+          </select>
+
+          <label for="f-robot-type" class="text-xs font-medium text-slate-600 dark:text-slate-300">Robot type</label>
+          <select id="f-robot-type" name="robot_type" class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="robotaxi" selected>robotaxi</option>
+            <option value="niryo">niryo</option>
+          </select>
+
+          <label for="f-num-iter" class="text-xs font-medium text-slate-600 dark:text-slate-300">Num iterations</label>
+          <input id="f-num-iter" name="num_iterations" type="number" min="0" placeholder="50000"
+                 class="w-full input-base">
+
+          <label for="f-training-steps" class="text-xs font-medium text-slate-600 dark:text-slate-300">Training steps</label>
+          <input id="f-training-steps" name="training_steps" type="number" min="0" placeholder="10000"
+                 class="w-full input-base">
+
+          <label for="f-demo-job-id" class="text-xs font-medium text-slate-600 dark:text-slate-300">Demo job ID</label>
+          <input id="f-demo-job-id" name="demo_job_id" type="text" placeholder="(only for BC_TRAINING_ONLY)"
+                 class="w-full input-base">
+        </form>
+      </div>
+      <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
+        <button data-action="close-modal" class="btn-base btn-secondary">Cancel</button>
+        <button data-action="submit-create" class="btn-base btn-primary">Create job</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cache-busted via ?v=... so each edit to components.js is treated
+       as a new URL by the browser, which prevents iframes inside the
+       GoldenLayout shell from silently serving a stale cached copy
+       (Ctrl+Shift+R on the parent doesn't always force iframe
+       subresources to re-fetch). Bump the version string whenever you
+       change components.js. -->
+  <script src="/components.js?v=20260516-selectcol"></script>
+  <script>
+    (function () {
+      const { TableView, formatters, showToast, confirmDialog } = window.RoboracerUI;
+
+      /* ---------- Table setup --------------------------------- */
+
+      /* ---------- Duration formatting ----------------------- */
+
+      // Compute elapsed milliseconds for a job. Returns null when we
+      // can't compute a meaningful value (no started_at, or started
+      // but never ended and not currently running - i.e. crashed).
+      function durationMsForRow(row) {
+        const started = row.started_at ? new Date(row.started_at).getTime() : null;
+        const ended   = row.ended_at   ? new Date(row.ended_at).getTime()   : null;
+        if (!started) return null;
+        if (ended) return Math.max(0, ended - started);
+        if (row.status === 'IN_PROGRESS') return Math.max(0, Date.now() - started);
+        return null;  // started but not ended, not running -> crashed mid-way
+      }
+
+      // Smart units. Under 1 minute: '47s'. Under 1 hour: '2m 34s'.
+      // Otherwise: '1h 23m'. Always tabular-numerals so the column
+      // doesn't visually bounce as the value ticks.
+      function formatDurationText(ms) {
+        const totalSec = Math.max(0, Math.floor(ms / 1000));
+        if (totalSec < 60)  return `${totalSec}s`;
+        const m = Math.floor(totalSec / 60);
+        const s = totalSec - m * 60;
+        if (m < 60) return `${m}m ${s.toString().padStart(2, '0')}s`;
+        const h = Math.floor(m / 60);
+        const rm = m - h * 60;
+        return `${h}h ${rm.toString().padStart(2, '0')}m`;
+      }
+
+      // Render the cell. For IN_PROGRESS jobs we tag the span with
+      // data-running="true" + data-started-at so a setInterval below
+      // can update its text every second without triggering a full
+      // table re-render (which would also reset selection / scroll).
+      function renderDurationCell(_value, row) {
+        const ms = durationMsForRow(row);
+        if (ms === null) {
+          return '<span class="font-mono tabular-nums text-right text-slate-500 dark:text-slate-400">—</span>';
         }
-    }
+        const isRunning = row.status === 'IN_PROGRESS' && !row.ended_at;
+        const cls = 'duration-cell font-mono tabular-nums text-right ' +
+                    (isRunning
+                      ? 'text-indigo-300 font-medium'
+                      : 'text-slate-200');
+        const dataAttrs = isRunning && row.started_at
+          ? ` data-running="true" data-started-at="${row.started_at}"`
+          : '';
+        return `<span class="${cls}"${dataAttrs}>${formatDurationText(ms)}</span>`;
+      }
 
-    function update_job_status($http, job_id,status){
-        var update_params = {
-            status: status,
-            _id: job_id,
+      // Tick every second to keep IN_PROGRESS durations live without
+      // having to re-fetch the jobs list. We touch only the cells that
+      // are flagged as running, so this is O(num running jobs) per
+      // tick - usually 1-2 cells.
+      setInterval(() => {
+        document.querySelectorAll('.duration-cell[data-running="true"]').forEach((el) => {
+          const startedAt = Date.parse(el.dataset.startedAt);
+          if (!isFinite(startedAt)) return;
+          el.textContent = formatDurationText(Date.now() - startedAt);
+        });
+      }, 1000);
+
+      const tableHost = document.querySelector('[data-role="table"]');
+      const table = new TableView(tableHost, {
+        selectable: true,
+        rowKey: (row) => row._id,
+        pageSize: 25,
+        emptyMessage: 'No jobs yet — create one to start training, evaluation, or demo collection.',
+        columns: [
+          { key: '_id',              label: 'ID',       sortable: true,  filter: true,
+            render: (v) => formatters.shortId(v) },
+          { key: 'job_type',         label: 'Type',     sortable: true,  filter: true,
+            render: (v) => formatters.jobTypeBadge(v) },
+          { key: 'status',           label: 'Status',   sortable: true,  filter: true,
+            render: (v) => formatters.statusBadge(v) },
+          { key: 'percent_complete', label: 'Progress', sortable: true,  filter: false,
+            sortValue: (row) => Number(row.percent_complete) || 0,
+            render: (v) => formatters.percentBar((Number(v) || 0) / 100) },
+          { key: 'started_at',       label: 'Duration', sortable: true,  filter: false,
+            // Sort by computed duration (ms). Null sorts last so
+            // not-yet-started jobs cluster at the end of an asc sort
+            // and at the start of a desc sort - useful either way.
+            sortValue: (row) => durationMsForRow(row),
+            render: renderDurationCell },
+          { key: 'location',         label: 'Location', sortable: true,  filter: true,
+            render: (v) => formatters.truncatePath(v) },
+        ],
+      });
+
+      table.setLoading(true);
+
+      const countEl = document.querySelector('[data-role="job-count"]');
+      function updateCounts(rows) {
+        const total = rows.length;
+        const inProg = rows.filter((r) => r.status === 'IN_PROGRESS').length;
+        const notStarted = rows.filter((r) => r.status === 'NOT_STARTED').length;
+        countEl.textContent = total === 0
+          ? ''
+          : `${total} job${total === 1 ? '' : 's'}` +
+            (inProg ? ` · ${inProg} running` : '') +
+            (notStarted ? ` · ${notStarted} queued` : '');
+      }
+
+      /* ---------- Action buttons ----------------------------- */
+
+      const clearBtn   = document.querySelector('[data-action="clear-selection"]');
+      const restartBtn = document.querySelector('[data-action="restart"]');
+      const doneBtn    = document.querySelector('[data-action="set-done"]');
+      const deleteBtn  = document.querySelector('[data-action="delete"]');
+      const createBtn  = document.querySelector('[data-action="create"]');
+
+      function refreshButtons(selected) {
+        const has = selected.length > 0;
+        clearBtn.disabled   = !has;
+        restartBtn.disabled = !has;
+        doneBtn.disabled    = !has;
+        deleteBtn.disabled  = !has;
+      }
+      table.onSelectionChange(refreshButtons);
+
+      clearBtn.addEventListener('click', () => table.clearSelection());
+
+      restartBtn.addEventListener('click', async () => {
+        const sel = table.getSelectedRows();
+        if (!sel.length) return;
+        await bulkUpdateStatus(sel, 'NOT_STARTED', 'restarted');
+      });
+
+      doneBtn.addEventListener('click', async () => {
+        const sel = table.getSelectedRows();
+        if (!sel.length) return;
+        const ok = await confirmDialog({
+          title: `Mark ${sel.length} job${sel.length === 1 ? '' : 's'} as DONE?`,
+          message: 'This sets the status to DONE without running the job. Useful to retire stuck IN_PROGRESS jobs without restarting the container. The trainer will skip these.',
+          confirmLabel: 'Set to done',
+          confirmVariant: 'primary',
+        });
+        if (!ok) return;
+        await bulkUpdateStatus(sel, 'DONE', 'marked done');
+      });
+
+      deleteBtn.addEventListener('click', async () => {
+        const sel = table.getSelectedRows();
+        if (!sel.length) return;
+        const ok = await confirmDialog({
+          title: `Delete ${sel.length} job${sel.length === 1 ? '' : 's'}?`,
+          message: 'These jobs will be removed from MongoDB. This cannot be undone (model checkpoints they may have written are not deleted).',
+          confirmLabel: 'Delete',
+          confirmVariant: 'danger',
+        });
+        if (!ok) return;
+        await bulkDelete(sel);
+      });
+
+      async function bulkUpdateStatus(rows, status, verbLabel) {
+        const results = await Promise.all(rows.map((r) =>
+          fetch('/update_job_status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ _id: r._id, status }),
+          })
+            .then((r) => r.ok ? null : `HTTP ${r.status}`)
+            .catch((e) => String(e))
+        ));
+        const errors = results.filter((e) => e !== null);
+        if (errors.length === 0) {
+          showToast({ type: 'success', message: `${rows.length} job${rows.length === 1 ? '' : 's'} ${verbLabel}.` });
+        } else {
+          showToast({ type: 'error', message: `${errors.length} of ${rows.length} updates failed: ${errors[0]}` });
         }
-        
-        var postModel = {
-            method: 'post',
-            url: '/update_job_status',
-            dataType: 'json',
-            data: update_params,
-            contentType: "application/json"
-        };
-        
-        $http(postModel)
-            .success(function (jsonData) {
-                console.log(jsonData)
-            })
-            .error(function () { });
-    }
-    function delete_job($http, job_id){
-        var delete_params = {
-            _id: job_id,
+        scheduleImmediatePoll();
+      }
+
+      async function bulkDelete(rows) {
+        const results = await Promise.all(rows.map((r) =>
+          fetch('/delete_job', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ _id: r._id }),
+          })
+            .then((r) => r.ok ? null : `HTTP ${r.status}`)
+            .catch((e) => String(e))
+        ));
+        const errors = results.filter((e) => e !== null);
+        if (errors.length === 0) {
+          showToast({ type: 'success', message: `${rows.length} job${rows.length === 1 ? '' : 's'} deleted.` });
+          table.clearSelection();
+        } else {
+          showToast({ type: 'error', message: `${errors.length} of ${rows.length} deletes failed: ${errors[0]}` });
         }
-        
-        var postModel = {
-            method: 'post',
-            url: '/delete_job',
-            dataType: 'json',
-            data: delete_params,
-            contentType: "application/json"
+        scheduleImmediatePoll();
+      }
+
+      /* ---------- Create job modal --------------------------- */
+
+      const modal     = document.querySelector('[data-role="create-modal"]');
+      const dialogEl  = modal.querySelector('[role="dialog"]');
+      const formEl    = document.getElementById('create-job-form');
+      const submitBtn = modal.querySelector('[data-action="submit-create"]');
+
+      function openModal() {
+        modal.classList.remove('opacity-0', 'pointer-events-none');
+        modal.classList.add('opacity-100', 'pointer-events-auto');
+        dialogEl.classList.remove('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        dialogEl.classList.add('opacity-100', 'translate-y-0', 'scale-100');
+        modal.setAttribute('aria-hidden', 'false');
+        document.getElementById('f-job-type').focus();
+      }
+      function closeModal() {
+        modal.classList.add('opacity-0', 'pointer-events-none');
+        modal.classList.remove('opacity-100', 'pointer-events-auto');
+        dialogEl.classList.add('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        dialogEl.classList.remove('opacity-100', 'translate-y-0', 'scale-100');
+        modal.setAttribute('aria-hidden', 'true');
+      }
+      createBtn.addEventListener('click', openModal);
+      modal.addEventListener('click', (ev) => {
+        if (ev.target === modal) closeModal();
+      });
+      modal.querySelectorAll('[data-action="close-modal"]').forEach((b) =>
+        b.addEventListener('click', closeModal));
+      document.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape' && modal.classList.contains('opacity-100')) closeModal();
+      });
+
+      submitBtn.addEventListener('click', async () => {
+        const fd = new FormData(formEl);
+        const payload = {
+          status: fd.get('status'),
+          job_type: fd.get('job_type'),
+          model_type: fd.get('model_type'),
+          robot_type: fd.get('robot_type'),
+          num_iterations: Number(fd.get('num_iterations') || 0),
+          training_steps: Number(fd.get('training_steps') || 0),
+          demo_job_id: String(fd.get('demo_job_id') || ''),
+          // pass_through_actions is hardcoded false in the trainer.
+          pass_through_actions: false,
         };
-        
-        $http(postModel)
-            .success(function (jsonData) {
-                console.log(jsonData);
-            })
-            .error(function () { });
-    }
-
-app.controller('myController', ['$scope','$http', 'uiGridConstants', 
-    function ($scope, $http, uiGridConstants) {
-
-        $scope.title = "Jobs"
-
-        $scope.selected_jobs = [];
-        drop_down_options =
-            {
-                status: ["NOT_STARTED", "IN_PROGRESS", "DONE"],
-                model_type: ["SacAgent", "GreedyPolicy", "RandomPyPolicy"],
-                job_type: ["TRAIN", "DEMO", "EVAL", "BC_TRAINING_ONLY"],
-                robot_type: ["robotaxi", "niryo"]
-            };
-
-        $scope.add_jobs = function() {
-            console.log("in add jobs");
-            var status_val = document.getElementById("status").value;
-            var robot_type_val = document.getElementById("robot_type").value;
-            var num_iterations_val = document.getElementById("num_iterations").value;
-            var training_steps_val = document.getElementById("training_steps").value;
-            var model_type_val = document.getElementById("model_type").value;
-            var job_type_val = document.getElementById("job_type").value;
-            var demo_job_id_val = document.getElementById("demo_job_id").value;
-            console.log(status_val, robot_type_val, num_iterations_val, training_steps_val, model_type_val, job_type_val,demo_job_id_val)
-            add_job(
-                $http,
-                status_val,
-                robot_type_val,
-                num_iterations_val,
-                model_type_val,
-                job_type_val,
-                training_steps_val,
-                demo_job_id_val
-            );
+        try {
+          const res = await fetch('/add_job', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          showToast({ type: 'success', message: `New ${payload.job_type} job created.` });
+          closeModal();
+          scheduleImmediatePoll();
+        } catch (err) {
+          showToast({ type: 'error', message: `Failed to create job: ${err.message || err}` });
         }
-        //foreach of the drop down options
-        var list_of_object_ids = ["status", "model_type", "job_type", "robot_type"]
-        var addOptions = function () {
-            console.log("length of list of object ids: " + list_of_object_ids.length)
-            for (i=0;i<list_of_object_ids.length;i++) {
-                //get the element by id
-                var id = list_of_object_ids[i];
-                console.log(id)
-                var select = document.getElementById(id);
-                console.log(select)
-                var options = drop_down_options[id];
-                //for each of the options
-                for (var j = 0; j < options.length; j++) {
-                    //create a new option
-                    var option = document.createElement("option");
-                    //set the text of the option
-                    option.text = options[j];
-                    console.log(option.text);
-                    //add the option to the select
-                    select.add(option);
-                }
-                console.log()
-            }
+      });
+
+      /* ---------- Freshness pill ---------------------------- */
+
+      const freshness = new RoboracerUI.FreshnessIndicator(
+        document.querySelector('[data-role="freshness-dot"]'),
+        document.querySelector('[data-role="freshness-text"]'));
+
+      /* ---------- Polling ----------------------------------- */
+
+      let pollHandle = null;
+      let pollInFlight = false;
+
+      async function pollOnce(force) {
+        if (pollInFlight) return;
+        pollInFlight = true;
+        try {
+          const url = `/get_jobs?force=${force ? 'true' : 'false'}`;
+          const res = await fetch(url);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const text = await res.text();
+          // Count NO_CHANGES as success too - the server reached Mongo,
+          // there just was nothing new.
+          freshness.markSuccess();
+          if (text === 'NO_CHANGES') return;
+          const json = JSON.parse(text);
+          if (!Array.isArray(json)) throw new Error('Unexpected response shape');
+          // Sort newest-first (ObjectID first 4 bytes are a timestamp).
+          json.sort((a, b) => String(b._id).localeCompare(String(a._id)));
+          table.setData(json);
+          updateCounts(json);
+        } catch (err) {
+          console.error(err);
+          if (table._rows.length === 0) table.setError(String(err.message || err));
+          else showToast({ type: 'error', message: `Refresh failed: ${err.message || err}` });
+        } finally {
+          pollInFlight = false;
         }
-        addOptions();
+      }
 
-        // SPECIFY FILTERING OPTIONS.
-        $scope.clearAll = function() {
-            $scope.gridApi.selection.clearSelectedRows();
-            $scope.selected_jobs=[];
-        };
-        
-        $scope.selectAll = function() {
-            $scope.gridApi.selection.selectAllRows();
-        };
-        
-        $scope.update_job_status_all = function() {
-            console.log("in update jobs");
-            console.log($scope.selected_jobs);
-            if (!$scope.selected_jobs)
-                return;
-            for(var i=0;i<$scope.selected_jobs.length;i++){
-                update_job_status($http, $scope.selected_jobs[i].entity._id,"DONE");
-            }
-        };
+      function scheduleImmediatePoll() {
+        setTimeout(() => pollOnce(true), 200);
+      }
 
-        $scope.update_job_status_restart = function() {
-            console.log("restart job");
-            console.log($scope.selected_jobs);
-            if (!$scope.selected_jobs)
-                return;
-            for(var i=0;i<$scope.selected_jobs.length;i++){
-                update_job_status($http, $scope.selected_jobs[i].entity._id,"NOT_STARTED");
-            }
-        };
-
-        $scope.delete_jobs = function() {
-            console.log("in update jobs");
-            console.log($scope.selected_jobs);
-            if (!$scope.selected_jobs)
-                return;
-            for(var i=0;i<$scope.selected_jobs.length;i++){
-                delete_job($http, $scope.selected_jobs[i].entity._id);
-            }
-            $http(request)
-                .success(loadGridData)
-                .error(function () { });
-        };
-
-        $scope.create_job = function() {
-            //window.open('job_form.html','Create Job','width=300,height=150');
-            var modal = document.getElementById("myModal");
-            modal.style.display = "block";
-        }
-        
-        $scope.gridOptions = {
-            paginationPageSizes: [20, 50, 100],
-            paginationPageSize: 20,
-            enableFiltering: true
-        };
-        
-        $scope.gridOptions.onRegisterApi = function(gridApi){
-            //set gridApi on scope
-            $scope.gridApi = gridApi;
-            gridApi.selection.on.rowSelectionChanged($scope,function(row){
-                var msg = 'row selected ' + row.isSelected;
-                console.log(msg);
-                console.log(row.entity)
-                if(row.isSelected)
-                    $scope.selected_jobs.push(row);
-                else
-                    for(var i=0;i<$scope.selected_jobs.length;i++)
-                    {
-                        if($scope.selected_jobs[i].entity.location
-                            == row.entity.location)
-                        {
-                            $scope.selected_jobs.splice(i,1)    
-                        }
-                    }
-            });
-        
-            gridApi.selection.on.rowSelectionChangedBatch($scope,function(rows){
-                var msg = 'rows changed ' + rows.length;
-                if(rows[0].isSelected==true)
-                    $scope.selected_jobs = rows;
-                else
-                    $scope.selected_jobs = [];
-
-                console.log(msg);
-                console.log( $scope.selected_jobs);
-            });
-        };
-
-        var request = {
-            method: 'get',
-            url: '/get_jobs?force=false',
-            dataType: 'json',
-            contentType: "application/json"
-        };
-
-        var firstRequest = {
-            method: 'get',
-            url: '/get_jobs?force=true',
-            dataType: 'json',
-            contentType: "application/json"
-        };
-
-        var lastJsonData = null;
-        var loadGridData =  function (jsonData) {
-                console.log("step2")
-                lastJsonData = jsonData;
-                var results = [];
-                for(var i=0;i<jsonData.length; i++){
-                    var model = jsonData[i];
-                    //console.log(model);
-                    var new_model = {};
-                    new_model._id = model["_id"];
-                    new_model.job_type = model["job_type"];
-                    new_model.percent_complete = model["percent_complete"];
-                    new_model.status = model["status"];
-                    //new_model.model_type = model["model_type"];
-                    new_model.location = model["location"];
-                    results.push(new_model) 
-                }
-                //console.log(results)
-                // sort results by _id in alphabetical order
-                results.sort(function(a, b) {
-                    var textA = b._id.toUpperCase();
-                    var textB = a._id.toUpperCase();
-                    return (textA < textB) ? -1 : (textA > textB) ? 1 : 0;
-                });
-
-                $scope.gridOptions.data = results;     // BIND JSON TO THE GRID.   
-        } 
-            
-        $http(firstRequest)
-            .success(function (jsonData){
-                    if(jsonData == 'NO_CHANGES'){
-                        console.log("is NO_CHANGES");
-                        return;
-                    }
-                    loadGridData(jsonData);
-                })
-            .error(function () { });
-        
-        setInterval(function(){
-            $http(request)
-                .success(function (jsonData){
-                    console.log(jsonData);
-                    if(jsonData == 'NO_CHANGES'){
-                        console.log("is NO_CHANGES");
-                        return;
-                    }
-                    loadGridData(jsonData);
-                })
-                .error(function () { });
-        }, 5000);
-    }]);
-
-    var r = document.querySelector(':root');
-    r.style.setProperty('--myCSS_ValueOne', 730 + 'px');
-    console.log(r.style.getPropertyValue('--myCSS_ValueOne'));
-</script>
+      pollOnce(true);
+      pollHandle = setInterval(() => pollOnce(false), 5000);
+      window.addEventListener('beforeunload', () => {
+        clearInterval(pollHandle);
+        freshness.destroy();
+      });
+    })();
+  </script>
+</body>
 </html>

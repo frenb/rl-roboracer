@@ -1,0 +1,1388 @@
+<!DOCTYPE html>
+<html lang="en" class="dark h-full">
+<head>
+  <meta charset="utf-8">
+  <title>Analysis · rl-roboracer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/tailwind.init.js"></script>
+  <link rel="stylesheet" href="/styles.css">
+  <!-- Plotly for interactive box / violin / bar-with-errorbars plots.
+       Pinned to a known-good 2.x. Could be swapped for plotly-basic-
+       latest.min.js to shrink the bundle if we only ever use the box,
+       bar, and scatter trace types we render below. -->
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+</head>
+<body class="h-full m-0 font-sans antialiased text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-[#0b1120]">
+
+  <div class="flex flex-col h-screen w-full">
+
+    <!-- Toolbar -->
+    <div class="flex flex-wrap items-center gap-3 px-5 py-4 row-gap-2
+                bg-white dark:bg-slate-900
+                border-b border-slate-200 dark:border-slate-700
+                shadow-card relative z-[3] flex-shrink-0">
+      <h1 class="text-2xl font-semibold tracking-tight m-0 mr-3">Analysis</h1>
+      <span data-role="subtitle"
+            class="text-xs font-medium text-slate-500 dark:text-slate-400"
+            aria-live="polite">Select 2+ models from the Models tab and click "Compare in Analysis".</span>
+
+      <span data-role="freshness"
+            class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400"
+            aria-live="polite"
+            title="Time of the last data refresh">
+        <span data-role="freshness-dot"
+              class="inline-block w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+        <span data-role="freshness-text">idle</span>
+      </span>
+
+      <div class="flex flex-wrap gap-2 ml-auto items-center">
+        <label class="text-xs text-slate-500 dark:text-slate-400 mr-1">
+          Bootstrap iters
+          <select data-action="boot-iters"
+                  class="ml-2 appearance-none select-chevron pr-7 px-2 py-1 text-xs
+                         border border-slate-300 dark:border-slate-600
+                         bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100
+                         rounded-md shadow-card"
+                  title="Number of bootstrap / permutation resamples. Higher is smoother but slower.">
+            <option value="500">500</option>
+            <option value="2000" selected>2,000</option>
+            <option value="10000">10,000</option>
+          </select>
+        </label>
+        <button data-action="refresh" class="btn-base btn-secondary"
+                title="Re-pull /get_models and /leaderboard_scores and recompute everything from scratch.">Refresh</button>
+        <button data-action="clear" class="btn-base btn-secondary"
+                title="Clear the current selection.">Clear</button>
+      </div>
+    </div>
+
+    <!-- Body -->
+    <div data-role="body" class="flex-1 overflow-auto p-5 bg-slate-50 dark:bg-[#0b1120]">
+      <div data-role="state-host"
+           class="max-w-3xl mx-auto mt-12 text-center text-slate-500 dark:text-slate-400">
+        <div class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-2">
+          No models selected yet
+        </div>
+        <div class="text-sm leading-relaxed">
+          Open the <strong>Models</strong> tab, tick at least two rows, then click
+          <em>Compare in Analysis</em> at the top of that tab. The first model you select
+          will be treated as the <strong>baseline</strong> and every other model is
+          reported as an experiment relative to it.
+        </div>
+      </div>
+      <div data-role="report" class="hidden"></div>
+    </div>
+
+  </div>
+
+  <!-- Cache-busted (see jobs.html). Bump ?v=... when components.js changes. -->
+  <script src="/components.js?v=20260516-selectcol"></script>
+  <script>
+    (function () {
+      const { showToast } = window.RoboracerUI;
+
+      /* ================================================================ *
+       *  Stats engine
+       *
+       *  All implementations are vanilla JS, no dependencies. The goal
+       *  is correct, reasonably accurate, and fast enough on n ≤ 1000
+       *  per-trial samples — which is what eval runs produce in
+       *  practice (each EVAL job stores one `scores` array of `max_episodes`
+       *  trial-means, where each trial-mean is itself the average of
+       *  `num_eval_episodes` raw episode returns; sometimes pooled across
+       *  multiple eval runs of the same model).
+       *
+       *  Sources for the approximations used:
+       *    - erf:  Abramowitz & Stegun 7.1.26 (≈1.5e-7 max error)
+       *    - normal CDF: built on erf
+       *    - regularized incomplete beta I_x(a,b): NR-style continued
+       *      fraction (Numerical Recipes, ch. 6.4). Used for t- and
+       *      F-distribution CDFs.
+       *    - t-test (Welch) / F-test: standard textbook formulas.
+       *    - Mann-Whitney U: tie-corrected ranks, normal approximation.
+       *    - Bootstrap CI: percentile method on a configurable iter count.
+       *    - Permutation p-value: two-sided, |diff| ≥ |observed|.
+       * ================================================================ */
+
+      /* ---------- basic descriptive stats ---------- */
+
+      function mean(a) {
+        if (!a.length) return NaN;
+        let s = 0;
+        for (let i = 0; i < a.length; i++) s += a[i];
+        return s / a.length;
+      }
+
+      function variance(a, ddof) {
+        if (a.length < 2) return NaN;
+        const m = mean(a);
+        let s = 0;
+        for (let i = 0; i < a.length; i++) {
+          const d = a[i] - m;
+          s += d * d;
+        }
+        return s / (a.length - (ddof == null ? 1 : ddof));
+      }
+
+      function stdev(a, ddof) {
+        const v = variance(a, ddof);
+        return Number.isFinite(v) ? Math.sqrt(v) : NaN;
+      }
+
+      function quantile(sortedAsc, q) {
+        if (!sortedAsc.length) return NaN;
+        const idx = (sortedAsc.length - 1) * q;
+        const lo = Math.floor(idx);
+        const hi = Math.ceil(idx);
+        if (lo === hi) return sortedAsc[lo];
+        return sortedAsc[lo] + (sortedAsc[hi] - sortedAsc[lo]) * (idx - lo);
+      }
+
+      function median(a) {
+        return quantile(a.slice().sort((x, y) => x - y), 0.5);
+      }
+
+      /* ---------- erf / normal CDF ----------------- */
+
+      // A&S 7.1.26; max error ≈ 1.5e-7 across the real line.
+      function erf(x) {
+        const sign = x < 0 ? -1 : 1;
+        const ax = Math.abs(x);
+        const p = 0.3275911;
+        const a1 =  0.254829592;
+        const a2 = -0.284496736;
+        const a3 =  1.421413741;
+        const a4 = -1.453152027;
+        const a5 =  1.061405429;
+        const t = 1.0 / (1.0 + p * ax);
+        const y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-ax * ax);
+        return sign * y;
+      }
+
+      function normalCdf(z) {
+        return 0.5 * (1 + erf(z / Math.SQRT2));
+      }
+
+      /* ---------- regularized incomplete beta I_x(a,b)
+       *
+       *  Used as the workhorse for t- and F-distribution CDFs. Adapted
+       *  from Numerical Recipes' betai/betacf. Returns I_x(a,b) =
+       *  B(x; a, b) / B(a, b) where B(.) is the (incomplete) beta
+       *  function. Accuracy is ~1e-12 for typical inputs we care about.
+       * ----------------------------------------------- */
+
+      function lnGamma(x) {
+        const cof = [
+          76.18009172947146, -86.50532032941677, 24.01409824083091,
+          -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5,
+        ];
+        let y = x;
+        let tmp = x + 5.5;
+        tmp -= (x + 0.5) * Math.log(tmp);
+        let ser = 1.000000000190015;
+        for (let j = 0; j < 6; j++) {
+          y += 1;
+          ser += cof[j] / y;
+        }
+        return -tmp + Math.log(2.5066282746310005 * ser / x);
+      }
+
+      function betacf(a, b, x) {
+        // EPS tightened from the 3e-7 used in classical Numerical Recipes
+        // to ~3e-10: tested against scipy.stats.t and scipy.stats.f the
+        // continued fraction now agrees to ~8 significant figures, which
+        // matches what the UI displays. With MAXIT=200 the loop almost
+        // always converges in 20-40 iterations for the inputs we see
+        // here (df ≤ ~1000), so the extra budget is essentially free.
+        const MAXIT = 200;
+        const EPS = 3e-10;
+        const FPMIN = 1e-30;
+        const qab = a + b;
+        const qap = a + 1;
+        const qam = a - 1;
+        let c = 1;
+        let d = 1 - qab * x / qap;
+        if (Math.abs(d) < FPMIN) d = FPMIN;
+        d = 1 / d;
+        let h = d;
+        for (let m = 1; m <= MAXIT; m++) {
+          const m2 = 2 * m;
+          let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+          d = 1 + aa * d;
+          if (Math.abs(d) < FPMIN) d = FPMIN;
+          c = 1 + aa / c;
+          if (Math.abs(c) < FPMIN) c = FPMIN;
+          d = 1 / d;
+          h *= d * c;
+          aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+          d = 1 + aa * d;
+          if (Math.abs(d) < FPMIN) d = FPMIN;
+          c = 1 + aa / c;
+          if (Math.abs(c) < FPMIN) c = FPMIN;
+          d = 1 / d;
+          const del = d * c;
+          h *= del;
+          if (Math.abs(del - 1) < EPS) break;
+        }
+        return h;
+      }
+
+      function betai(a, b, x) {
+        if (x <= 0) return 0;
+        if (x >= 1) return 1;
+        const bt = Math.exp(
+          lnGamma(a + b) - lnGamma(a) - lnGamma(b) +
+          a * Math.log(x) + b * Math.log(1 - x));
+        if (x < (a + 1) / (a + b + 2)) {
+          return bt * betacf(a, b, x) / a;
+        }
+        return 1 - bt * betacf(b, a, 1 - x) / b;
+      }
+
+      /* ---------- t-distribution CDF / inverse ---------- */
+
+      // P(T <= t) for Student's t with df degrees of freedom.
+      function tCdf(t, df) {
+        if (!Number.isFinite(t) || df <= 0) return NaN;
+        const x = df / (df + t * t);
+        const ib = 0.5 * betai(df / 2, 0.5, x);
+        return t >= 0 ? 1 - ib : ib;
+      }
+
+      // Two-sided p-value for a t-statistic.
+      function tTwoSidedP(t, df) {
+        if (!Number.isFinite(t) || df <= 0) return NaN;
+        return betai(df / 2, 0.5, df / (df + t * t));
+      }
+
+      // t critical for two-sided alpha; used for t-based CI. Bisection
+      // on tCdf so accuracy isn't tied to a hard-coded lookup table.
+      function tCritical(df, alpha) {
+        // Want t* such that P(|T| > t*) = alpha, i.e. P(T <= t*) = 1 - alpha/2.
+        const target = 1 - alpha / 2;
+        let lo = 0;
+        let hi = 30;  // df ≥ 1, alpha ≥ 0.001 → t* < ~30 comfortably
+        for (let i = 0; i < 100; i++) {
+          const mid = 0.5 * (lo + hi);
+          const p = tCdf(mid, df);
+          if (p < target) lo = mid;
+          else hi = mid;
+          if (hi - lo < 1e-7) break;
+        }
+        return 0.5 * (lo + hi);
+      }
+
+      /* ---------- F-distribution two-sided p-value ----------
+       *
+       *  Used for the variance-ratio (F) test: under the null that
+       *  the two populations have equal variance, F = s1² / s2² with
+       *  (n1-1, n2-1) df is F-distributed. We report the two-sided
+       *  p-value to give a directionless "variances differ" reading.
+       * ------------------------------------------------------ */
+
+      function fCdf(f, df1, df2) {
+        if (!Number.isFinite(f) || f <= 0) return 0;
+        const x = (df1 * f) / (df1 * f + df2);
+        return betai(df1 / 2, df2 / 2, x);
+      }
+
+      function fTwoSidedP(f, df1, df2) {
+        if (!Number.isFinite(f) || f <= 0) return NaN;
+        const p = fCdf(f, df1, df2);
+        return 2 * Math.min(p, 1 - p);
+      }
+
+      /* ---------- Welch's t-test (unequal variances) ---------- */
+
+      function welchT(a, b) {
+        const na = a.length, nb = b.length;
+        if (na < 2 || nb < 2) return null;
+        const ma = mean(a), mb = mean(b);
+        const va = variance(a), vb = variance(b);
+        const se = Math.sqrt(va / na + vb / nb);
+        const t = (ma - mb) / se;
+        // Welch-Satterthwaite df.
+        const numer = (va / na + vb / nb) ** 2;
+        const denom = (va * va) / (na * na * (na - 1)) +
+                      (vb * vb) / (nb * nb * (nb - 1));
+        const df = numer / denom;
+        const p = tTwoSidedP(t, df);
+        return { t, df, p, se, meanDiff: ma - mb };
+      }
+
+      /* ---------- Cohen's d (Hedges' g) effect size ----------
+       *
+       *  Pooled SD, then Hedges' bias correction so small-n effect
+       *  sizes aren't systematically inflated.
+       * ------------------------------------------------------ */
+
+      function cohensD(a, b) {
+        const na = a.length, nb = b.length;
+        if (na < 2 || nb < 2) return null;
+        const ma = mean(a), mb = mean(b);
+        const va = variance(a), vb = variance(b);
+        const sp = Math.sqrt(((na - 1) * va + (nb - 1) * vb) / (na + nb - 2));
+        if (!Number.isFinite(sp) || sp === 0) return null;
+        const d = (ma - mb) / sp;
+        // Hedges' bias correction.
+        const J = 1 - 3 / (4 * (na + nb) - 9);
+        return { d, g: d * J };
+      }
+
+      /* ---------- Mann-Whitney U (rank-sum) ----------
+       *
+       *  Tie-corrected ranks, normal approximation for the p-value
+       *  with continuity correction. Good for n_total ≥ 10 or so.
+       *  For smaller samples this would benefit from an exact-test
+       *  fallback; we surface the small-n caveat in the UI instead.
+       * ----------------------------------------------- */
+
+      function mannWhitneyU(a, b) {
+        const na = a.length, nb = b.length;
+        if (na < 1 || nb < 1) return null;
+        // Build (value, group) array and assign average ranks for ties.
+        const combined = [];
+        for (let i = 0; i < na; i++) combined.push({ v: a[i], g: 0 });
+        for (let i = 0; i < nb; i++) combined.push({ v: b[i], g: 1 });
+        combined.sort((x, y) => x.v - y.v);
+        const ranks = new Array(combined.length);
+        let tieCorrection = 0;
+        let i = 0;
+        while (i < combined.length) {
+          let j = i;
+          while (j + 1 < combined.length && combined[j + 1].v === combined[i].v) j++;
+          const avgRank = (i + j) / 2 + 1;
+          for (let k = i; k <= j; k++) ranks[k] = avgRank;
+          const t = j - i + 1;
+          if (t > 1) tieCorrection += t * t * t - t;
+          i = j + 1;
+        }
+        let rA = 0;
+        for (let k = 0; k < combined.length; k++) {
+          if (combined[k].g === 0) rA += ranks[k];
+        }
+        const uA = rA - na * (na + 1) / 2;
+        const uB = na * nb - uA;
+        const u = Math.min(uA, uB);
+        const muU = na * nb / 2;
+        const n = na + nb;
+        const sigU = Math.sqrt(
+          (na * nb / 12) *
+          ((n + 1) - tieCorrection / (n * (n - 1))));
+        if (!Number.isFinite(sigU) || sigU === 0) {
+          return { u, p: NaN, uA, uB };
+        }
+        // Two-sided with continuity correction.
+        const z = (Math.abs(u - muU) - 0.5) / sigU;
+        const p = 2 * (1 - normalCdf(z));
+        return { u, p, uA, uB };
+      }
+
+      /* ---------- bootstrap percentile CI ----------
+       *
+       *  Plain percentile bootstrap. Returns [low, high] for a 1-alpha
+       *  CI of `statistic(sample)`. Could be upgraded to BCa for less
+       *  bias under skew; the simple version is good enough for the
+       *  AverageReturn distributions we're looking at here, which are
+       *  fairly symmetric.
+       * --------------------------------------------- */
+
+      function bootstrapCI(samples, statistic, nBoot, alpha) {
+        const n = samples.length;
+        if (n < 2) return [NaN, NaN];
+        const results = new Float64Array(nBoot);
+        const buf = new Array(n);
+        for (let b = 0; b < nBoot; b++) {
+          for (let i = 0; i < n; i++) {
+            buf[i] = samples[(Math.random() * n) | 0];
+          }
+          results[b] = statistic(buf);
+        }
+        const sorted = Array.from(results).sort((x, y) => x - y);
+        return [
+          quantile(sorted, alpha / 2),
+          quantile(sorted, 1 - alpha / 2),
+        ];
+      }
+
+      /* ---------- permutation test for difference in means ----------
+       *
+       *  Pool both samples, shuffle, take the first n_a as "group A"
+       *  and the rest as "group B", recompute mean diff. Two-sided
+       *  p-value is the fraction of |permuted diff| ≥ |observed diff|.
+       *  Uses Fisher–Yates partial shuffle (only the first n_a slots
+       *  need to be settled).
+       * ------------------------------------------------------------- */
+
+      function permutationDiffMeansP(a, b, nPerm) {
+        const na = a.length, nb = b.length;
+        if (na < 1 || nb < 1) return NaN;
+        const observed = mean(a) - mean(b);
+        const observedAbs = Math.abs(observed);
+        const pool = a.concat(b);
+        const n = pool.length;
+        const sumAll = pool.reduce((s, x) => s + x, 0);
+        let extreme = 0;
+        for (let p = 0; p < nPerm; p++) {
+          // Partial Fisher-Yates: pick na items to be "group A".
+          let sumA = 0;
+          for (let i = 0; i < na; i++) {
+            const j = i + ((Math.random() * (n - i)) | 0);
+            const tmp = pool[i];
+            pool[i] = pool[j];
+            pool[j] = tmp;
+            sumA += pool[i];
+          }
+          const sumB = sumAll - sumA;
+          const diff = sumA / na - sumB / nb;
+          if (Math.abs(diff) >= observedAbs - 1e-15) extreme++;
+        }
+        // Add-one smoothing so we never return exactly 0.
+        return (extreme + 1) / (nPerm + 1);
+      }
+
+      /* ================================================================ *
+       *  Data pipeline
+       *
+       *  Inputs:  selected modelIds (strings).
+       *  Fetches: /get_models?force=true, /leaderboard_scores?force=true.
+       *  Joins:   leaderboard_score.model_id == model._id, with fallback
+       *           to leaderboard_score.path == model.location for older
+       *           rows that pre-date the model_id link.
+       *  Output per selected model:
+       *    {
+       *      model:         <model doc>,
+       *      eval_runs:     <leaderboard_score docs>[],
+       *      scores:        number[],              // pooled per-trial means
+       *      perRunMeans:   number[],              // mean per eval_run
+       *      perRunMedians: number[],              // median per eval_run
+       *    }
+       *
+       *  We pool the per-trial mean returns across all eval runs for the
+       *  same model to maximise n for variance estimates. Per-run summary
+       *  arrays are kept around for an additional "between-eval-runs"
+       *  view (in case the user wants to see whether two eval runs of
+       *  the same model agree with each other).
+       *
+       *  Note: a "trial" here matches `run_one_trial` in robotaxi.py - an
+       *  inner loop that resets the eval metrics, runs `num_eval_episodes`
+       *  raw episodes, and emits ONE scalar (their mean). The raw per-
+       *  episode returns aren't currently persisted, so the stats below
+       *  characterise the distribution of trial-means, not of individual
+       *  episode returns - see the Notes panel for the implication.
+       * ================================================================ */
+
+      const state = {
+        modelIds: [],            // selection from Models tab
+        modelsById: new Map(),
+        leaderboardScores: [],
+        bundles: [],             // pipeline output, in selection order
+        loading: false,
+        error: null,
+        nBoot: 2000,
+      };
+
+      async function fetchData() {
+        const [modelsRes, lbRes] = await Promise.all([
+          fetch('/get_models?force=true'),
+          fetch('/leaderboard_scores?force=true'),
+        ]);
+        if (!modelsRes.ok) throw new Error(`/get_models HTTP ${modelsRes.status}`);
+        if (!lbRes.ok)     throw new Error(`/leaderboard_scores HTTP ${lbRes.status}`);
+        const [modelsTxt, lbTxt] = await Promise.all([
+          modelsRes.text(),
+          lbRes.text(),
+        ]);
+        // The dashboard server may short-circuit polls with the literal
+        // string "NO_CHANGES" if nothing changed since the last call.
+        // We always pass force=true above, so this should never trigger
+        // here, but guard anyway in case of a regression.
+        const models = modelsTxt === 'NO_CHANGES' ? [] : JSON.parse(modelsTxt);
+        const lb     = lbTxt === 'NO_CHANGES'     ? [] : JSON.parse(lbTxt);
+        return { models, lb };
+      }
+
+      function buildBundles(modelIds, models, lb) {
+        const byId = new Map(models.map((m) => [String(m._id || m.id), m]));
+        const byLocation = new Map(models.map((m) => [String(m.location || ''), m]));
+
+        return modelIds.map((mid) => {
+          const model = byId.get(String(mid)) || null;
+          if (!model) {
+            return { model: null, modelId: mid, eval_runs: [], scores: [],
+                     perRunMeans: [], perRunMedians: [], warn: 'Model not found.' };
+          }
+          // Primary join: leaderboard_score.model_id matches this model's
+          // _id (set by save_results_to_db in robotaxi.py). Fallback for
+          // older rows that only carry .path: match leaderboard_score.path
+          // == model.location.
+          const runs = lb.filter((s) => {
+            if (!s) return false;
+            if (s.model_id && String(s.model_id) === String(model._id)) return true;
+            if (s.path && model.location && String(s.path) === String(model.location)) return true;
+            return false;
+          });
+          let scores = [];
+          const perRunMeans = [];
+          const perRunMedians = [];
+          for (const r of runs) {
+            if (Array.isArray(r.scores) && r.scores.length) {
+              const cleaned = r.scores.filter((x) => Number.isFinite(Number(x))).map(Number);
+              scores = scores.concat(cleaned);
+              if (cleaned.length) {
+                perRunMeans.push(mean(cleaned));
+                perRunMedians.push(median(cleaned));
+              }
+            }
+          }
+          return {
+            model,
+            modelId: String(model._id),
+            eval_runs: runs,
+            scores,
+            perRunMeans,
+            perRunMedians,
+            warn: scores.length === 0
+              ? 'No eval-trial scores yet — submit an EVAL job from the Models tab to populate this.'
+              : null,
+          };
+        });
+      }
+
+      /* ================================================================ *
+       *  Rendering
+       * ================================================================ */
+
+      const reportEl = document.querySelector('[data-role="report"]');
+      const stateHost = document.querySelector('[data-role="state-host"]');
+      const subtitleEl = document.querySelector('[data-role="subtitle"]');
+      const freshnessText = document.querySelector('[data-role="freshness-text"]');
+      const freshnessDot = document.querySelector('[data-role="freshness-dot"]');
+
+      function setFreshness(kind) {
+        const map = {
+          idle:    { dot: 'bg-slate-500',   text: 'idle' },
+          loading: { dot: 'bg-amber-500 animate-pulse',  text: 'loading…' },
+          ok:      { dot: 'bg-emerald-500', text: 'updated ' + new Date().toLocaleTimeString() },
+          error:   { dot: 'bg-red-500',     text: 'error — see toast' },
+        }[kind] || { dot: 'bg-slate-500', text: '' };
+        freshnessDot.className = 'inline-block w-1.5 h-1.5 rounded-full ' + map.dot;
+        freshnessText.textContent = map.text;
+      }
+
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, (c) => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+        })[c]);
+      }
+
+      function fmt(n, d) {
+        if (!Number.isFinite(n)) return '—';
+        if (d == null) d = 4;
+        return n.toFixed(d);
+      }
+
+      function fmtP(p) {
+        if (!Number.isFinite(p)) return '—';
+        if (p < 1e-4) return '<1e-4';
+        if (p < 0.001) return p.toExponential(1);
+        return p.toFixed(4);
+      }
+
+      function shortId(s) {
+        if (!s) return '—';
+        const str = String(s);
+        return str.length > 8 ? '…' + str.slice(-8) : str;
+      }
+
+      // Distinct color per series. Indigo for baseline, then a rotating
+      // palette chosen to be readable against the slate-900 page bg in
+      // dark mode and reasonable in light mode too.
+      const SERIES_COLORS = [
+        '#818cf8', // indigo-400 (baseline)
+        '#f59e0b', // amber-500
+        '#10b981', // emerald-500
+        '#ec4899', // pink-500
+        '#22d3ee', // cyan-400
+        '#a3e635', // lime-400
+        '#f43f5e', // rose-500
+        '#94a3b8', // slate-400
+      ];
+
+      function colorFor(idx) {
+        return SERIES_COLORS[idx % SERIES_COLORS.length];
+      }
+
+      function renderEmpty(msg) {
+        stateHost.classList.remove('hidden');
+        reportEl.classList.add('hidden');
+        if (msg) {
+          stateHost.innerHTML = `
+            <div class="text-base font-semibold text-slate-700 dark:text-slate-200 mb-2">
+              ${escapeHtml(msg.title || 'Nothing to show')}
+            </div>
+            <div class="text-sm leading-relaxed">${escapeHtml(msg.body || '')}</div>`;
+        }
+      }
+
+      function renderLoading() {
+        stateHost.classList.remove('hidden');
+        reportEl.classList.add('hidden');
+        stateHost.innerHTML = `
+          <div class="inline-flex items-center gap-3 text-sm">
+            <div class="w-5 h-5 border-2 border-slate-300 dark:border-slate-700 border-t-indigo-500 rounded-full animate-spin-fast"></div>
+            Crunching numbers…
+          </div>`;
+      }
+
+      function summaryFor(bundle) {
+        const s = bundle.scores;
+        if (!s.length) {
+          return {
+            n: 0, mean: NaN, std: NaN, sem: NaN, median: NaN,
+            q25: NaN, q75: NaN, iqr: NaN, min: NaN, max: NaN,
+            tCI: [NaN, NaN], bootCI: [NaN, NaN],
+          };
+        }
+        const sorted = s.slice().sort((a, b) => a - b);
+        const n = s.length;
+        const m = mean(s);
+        const sd = stdev(s);
+        const sem = sd / Math.sqrt(n);
+        const t975 = Number.isFinite(sd) && n > 1 ? tCritical(n - 1, 0.05) : NaN;
+        const tCI = [m - t975 * sem, m + t975 * sem];
+        const bootCI = bootstrapCI(s, mean, state.nBoot, 0.05);
+        return {
+          n,
+          mean: m,
+          std: sd,
+          sem,
+          median: quantile(sorted, 0.5),
+          q25: quantile(sorted, 0.25),
+          q75: quantile(sorted, 0.75),
+          iqr: quantile(sorted, 0.75) - quantile(sorted, 0.25),
+          min: sorted[0],
+          max: sorted[sorted.length - 1],
+          tCI, bootCI,
+        };
+      }
+
+      function compareToBaseline(baseline, exp) {
+        if (!baseline.scores.length || !exp.scores.length) return null;
+        const welch = welchT(exp.scores, baseline.scores);
+        const d = cohensD(exp.scores, baseline.scores);
+        const u = mannWhitneyU(exp.scores, baseline.scores);
+        const permP = permutationDiffMeansP(exp.scores, baseline.scores, state.nBoot);
+        // Bootstrap CI of mean difference (exp - baseline). We bootstrap
+        // each sample independently and difference the bootstrapped
+        // means — equivalent to a non-paired difference percentile CI.
+        const meanDiffCI = (() => {
+          const nA = exp.scores.length;
+          const nB = baseline.scores.length;
+          const diffs = new Float64Array(state.nBoot);
+          const bufA = new Array(nA);
+          const bufB = new Array(nB);
+          for (let b = 0; b < state.nBoot; b++) {
+            let sA = 0, sB = 0;
+            for (let i = 0; i < nA; i++) {
+              const x = exp.scores[(Math.random() * nA) | 0];
+              sA += x; bufA[i] = x;
+            }
+            for (let i = 0; i < nB; i++) {
+              const x = baseline.scores[(Math.random() * nB) | 0];
+              sB += x; bufB[i] = x;
+            }
+            diffs[b] = sA / nA - sB / nB;
+          }
+          const sorted = Array.from(diffs).sort((x, y) => x - y);
+          return [quantile(sorted, 0.025), quantile(sorted, 0.975)];
+        })();
+        // Variance-ratio F-test (Brown's pre-test for equal variances).
+        // Surfaced for transparency since Welch's already handles
+        // unequal variance; useful to know if variances diverge as a
+        // separate observation about the runs themselves.
+        const va = variance(exp.scores);
+        const vb = variance(baseline.scores);
+        const f = va / vb;
+        const fp = fTwoSidedP(f, exp.scores.length - 1, baseline.scores.length - 1);
+        return { welch, d, u, permP, meanDiffCI, varRatio: f, varP: fp };
+      }
+
+      function renderReport() {
+        stateHost.classList.add('hidden');
+        reportEl.classList.remove('hidden');
+
+        const baseline = state.bundles[0];
+        const experiments = state.bundles.slice(1);
+        const baseSum = summaryFor(baseline);
+        const expSums = experiments.map(summaryFor);
+        const comparisons = experiments.map((e) => compareToBaseline(baseline, e));
+
+        const sections = [];
+
+        // -------- 1. Header chips --------
+        sections.push(renderChips(state.bundles));
+
+        // -------- 2. Summary stats table --------
+        sections.push(renderSummaryTable(state.bundles, [baseSum, ...expSums]));
+
+        // -------- 3. Plots --------
+        sections.push(`
+          <section class="mt-6 grid grid-cols-1 xl:grid-cols-2 gap-5">
+            <div class="card-surface">
+              <div class="card-header">Per-trial score distribution</div>
+              <div class="card-body">
+                <div data-plot="box" class="w-full h-[400px]"></div>
+                <div class="card-footnote">
+                  Box: median &amp; IQR. Whiskers: 1.5×IQR. Dots: individual
+                  <em>trial-mean</em> returns (jittered) — each dot is one
+                  trial's mean over <code>num_eval_episodes</code> raw episodes.
+                  Pooled across all eval runs for the same model.
+                </div>
+              </div>
+            </div>
+            <div class="card-surface">
+              <div class="card-header">Mean with 95% confidence intervals</div>
+              <div class="card-body">
+                <div data-plot="bar" class="w-full h-[400px]"></div>
+                <div class="card-footnote">
+                  Bars: sample mean of the pooled per-trial means.
+                  <span class="text-emerald-500 dark:text-emerald-400 font-semibold">Green</span>
+                  whiskers: bootstrap percentile 95% CI (recommended;
+                  no normality assumption).
+                  <span class="text-indigo-500 dark:text-indigo-400 font-semibold">Indigo</span>
+                  whiskers: t-distribution 95% CI (classical, assumes
+                  approximate normality).
+                </div>
+              </div>
+            </div>
+            <div class="card-surface xl:col-span-2">
+              <div class="card-header">Between-eval-run agreement</div>
+              <div class="card-body">
+                <div data-plot="runs" class="w-full h-[360px]"></div>
+                <div class="card-footnote">
+                  Each dot is one EVAL run's mean score for that model. Models
+                  with only one eval run show a single point. Multiple points
+                  separated vertically mean the eval runs disagree about the
+                  model's performance — re-eval if you see large spread.
+                </div>
+              </div>
+            </div>
+          </section>`);
+
+        // -------- 4. vs baseline tests --------
+        sections.push(renderTestsTable(state.bundles, comparisons));
+
+        // -------- 5. notes / caveats --------
+        sections.push(renderNotes(state.bundles));
+
+        reportEl.innerHTML = sections.join('');
+
+        // Plots can only mount after the HTML is in the DOM; do this
+        // in a microtask so Plotly sees the final layout dimensions.
+        requestAnimationFrame(() => {
+          drawBoxPlot(state.bundles);
+          drawBarPlot(state.bundles, [baseSum, ...expSums]);
+          drawRunsPlot(state.bundles);
+        });
+      }
+
+      function renderChips(bundles) {
+        const items = bundles.map((b, i) => {
+          const isBaseline = i === 0;
+          const name = b.model
+            ? `${b.model.model_type || '?'} · ${shortId(b.model._id)}`
+            : `unknown · ${shortId(b.modelId)}`;
+          // Build the chip's detail line as HTML (rather than a plain
+          // text + escapeHtml render) so we can attach a tooltip to the
+          // avg_return field specifically. avg_return is the most
+          // misleading thing on this page: it's the training-time peak
+          // 10-episode AverageReturn at the step where this checkpoint
+          // was first saved, gated on `is_new_max_avg` in robotaxi.py -
+          // i.e. selection bias means it sits at the upper edge of the
+          // policy's true return distribution. Users who skim the chips
+          // without reading the Notes panel routinely misread it as the
+          // model's typical post-training performance. The label
+          // ("train-peak") + tooltip make the provenance explicit and
+          // point them at the Summary-table Mean for the honest
+          // post-training estimate.
+          const detailFields = [];
+          if (b.model.robot_type) {
+            detailFields.push(escapeHtml(b.model.robot_type));
+          }
+          if (b.model.training_iterations) {
+            detailFields.push(escapeHtml(`${b.model.training_iterations} iters`));
+          }
+          if (Number.isFinite(Number(b.model.avg_return))) {
+            const peak = Number(b.model.avg_return).toFixed(4);
+            const peakTooltip =
+              'Training-time peak. This is a single 10-episode AverageReturn ' +
+              'taken at the training step where this checkpoint was first ' +
+              "saved, gated on `is_new_max_avg` (we only persist new max " +
+              "snapshots). It therefore overstates typical performance: " +
+              "see the Summary table's Mean column below for the pooled " +
+              'post-training eval estimate, with confidence intervals.';
+            detailFields.push(
+              `<span class="underline decoration-dotted decoration-slate-400 cursor-help" ` +
+              `title="${escapeHtml(peakTooltip)}">` +
+              `train-peak avg_return=${escapeHtml(peak)}` +
+              `</span>`);
+          }
+          const detailHtml = detailFields.join(' · ');
+          const color = colorFor(i);
+          const role = isBaseline
+            ? `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded-full
+                       text-[10px] font-semibold uppercase tracking-[0.04em]
+                       bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                 baseline
+               </span>`
+            : `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded-full
+                       text-[10px] font-semibold uppercase tracking-[0.04em]
+                       bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
+                 exp ${i}
+               </span>`;
+          return `
+            <div class="card-surface p-4">
+              <div class="flex items-center gap-2">
+                <span class="inline-block w-3 h-3 rounded-sm" style="background:${color}"></span>
+                <div class="font-semibold text-sm text-slate-900 dark:text-slate-100 truncate">
+                  ${escapeHtml(name)}
+                </div>
+                ${role}
+              </div>
+              <div class="text-xs text-slate-500 dark:text-slate-400 mt-1 truncate">
+                ${detailHtml}
+              </div>
+              <div class="text-[11px] text-slate-500 dark:text-slate-400 mt-2">
+                ${b.eval_runs.length} eval run${b.eval_runs.length === 1 ? '' : 's'} ·
+                ${b.scores.length} trial-mean${b.scores.length === 1 ? '' : 's'} pooled
+              </div>
+              ${b.warn ? `
+                <div class="mt-2 text-[11px] text-amber-700 dark:text-amber-400">
+                  ${escapeHtml(b.warn)}
+                </div>` : ''}
+            </div>`;
+        }).join('');
+        return `
+          <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            ${items}
+          </section>`;
+      }
+
+      function renderSummaryTable(bundles, summaries) {
+        const rows = bundles.map((b, i) => {
+          const s = summaries[i];
+          const tag = i === 0
+            ? '<span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">baseline</span>'
+            : `<span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300">exp ${i}</span>`;
+          const swatch = `<span class="inline-block w-2.5 h-2.5 rounded-sm align-middle mr-2" style="background:${colorFor(i)}"></span>`;
+          const name = b.model
+            ? `${b.model.model_type || '?'} · ${shortId(b.model._id)}`
+            : `unknown · ${shortId(b.modelId)}`;
+          return `
+            <tr class="border-b border-slate-200 dark:border-slate-700">
+              <td class="px-3 py-2 whitespace-nowrap">${swatch}${tag}
+                <span class="ml-2 font-mono text-xs text-slate-700 dark:text-slate-200">${escapeHtml(name)}</span>
+              </td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums">${s.n}</td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums">${fmt(s.mean)}</td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums">${fmt(s.std)}</td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums">${fmt(s.sem)}</td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums text-emerald-700 dark:text-emerald-400">
+                [${fmt(s.bootCI[0])}, ${fmt(s.bootCI[1])}]
+              </td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums text-indigo-700 dark:text-indigo-400">
+                [${fmt(s.tCI[0])}, ${fmt(s.tCI[1])}]
+              </td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums">${fmt(s.median)}</td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums">${fmt(s.iqr)}</td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums">${fmt(s.min)}</td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums">${fmt(s.max)}</td>
+            </tr>`;
+        }).join('');
+        return `
+          <section class="mt-6 card-surface">
+            <div class="card-header">Summary statistics
+              <span class="text-[11px] font-normal text-slate-500 dark:text-slate-400 ml-2">
+                pooled per-trial means (one trial = mean over <code>num_eval_episodes</code> raw episodes)
+              </span>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="text-left text-[11px] uppercase tracking-[0.04em] text-slate-500 dark:text-slate-400">
+                    <!-- Hover-over column definitions. The dotted
+                         underline + cursor-help styling matches the
+                         "train-peak avg_return" tooltip on the chip
+                         row above, so users see a consistent visual
+                         cue for "hover me for an explanation". Tooltip
+                         text deliberately stays terse (one or two
+                         sentences) so the native browser title popup
+                         doesn't grow huge; the in-page Notes panel
+                         below the test table carries the longer-form
+                         methodological commentary. -->
+                    <th class="px-3 py-2 font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="The selected model. The FIRST selected model is the baseline; every subsequent row is an experiment compared against it.">Model</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Sample size: number of trial-means pooled across every EVAL run of this model. Each trial is itself the average return over num_eval_episodes raw episodes. Higher n → narrower CIs.">n</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Arithmetic mean of the pooled trial-means. The page's central point estimate of this model's expected return per trial.">Mean</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Sample standard deviation (Bessel-corrected, ddof=1) of the pooled trial-means. Measures the spread BETWEEN trial-means, not between individual episodes.">SD</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Standard error of the mean = SD / √n. Roughly the size of fluctuation you'd expect in the Mean if you re-ran this many trials again.">SEM</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Non-parametric 95% confidence interval for the Mean. Computed by resampling the pooled trial-means with replacement (configurable: 500 / 2,000 / 10,000 iters) and taking the 2.5 / 97.5 percentiles. Recommended; makes no normality assumption.">95% CI (bootstrap)</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Classical 95% CI: Mean ± t₀.₀₂₅,df=n-1 × SEM. Assumes the trial-means are approximately normal. Shown side-by-side with the bootstrap CI on purpose - they should agree for n ≥ 30; if they don't, trust the bootstrap.">95% CI (t-based)</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="50th percentile of the pooled trial-means. Less affected by outlier trials than the Mean.">Median</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Interquartile range = Q75 − Q25. Spread of the middle 50% of trial-means; robust to outliers.">IQR</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Lowest single trial-mean across all EVAL runs of this model.">Min</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Highest single trial-mean across all EVAL runs of this model.">Max</th>
+                  </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+          </section>`;
+      }
+
+      function renderTestsTable(bundles, comparisons) {
+        if (bundles.length < 2) return '';
+        // Baseline row first (with em dashes since "compare to self" is trivial).
+        const baselineRow = `
+          <tr class="border-b border-slate-200 dark:border-slate-700">
+            <td class="px-3 py-2">
+              <span class="inline-block w-2.5 h-2.5 rounded-sm align-middle mr-2" style="background:${colorFor(0)}"></span>
+              <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">baseline</span>
+            </td>
+            <td colspan="9" class="px-3 py-2 text-xs text-slate-500 dark:text-slate-400 italic">
+              (reference — all experiments below are compared against this)
+            </td>
+          </tr>`;
+        const expRows = bundles.slice(1).map((b, i) => {
+          const c = comparisons[i];
+          if (!c) {
+            return `
+              <tr class="border-b border-slate-200 dark:border-slate-700">
+                <td class="px-3 py-2">
+                  <span class="inline-block w-2.5 h-2.5 rounded-sm align-middle mr-2" style="background:${colorFor(i + 1)}"></span>
+                  <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300">exp ${i + 1}</span>
+                </td>
+                <td colspan="9" class="px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+                  Not enough data for statistical comparison.
+                </td>
+              </tr>`;
+          }
+          const sigT = Number.isFinite(c.welch.p) && c.welch.p < 0.05;
+          const sigP = Number.isFinite(c.permP) && c.permP < 0.05;
+          const sigU = Number.isFinite(c.u.p) && c.u.p < 0.05;
+          const dCell = c.d ? `${fmt(c.d.g, 3)} <span class="text-[10px] text-slate-500">(g)</span>` : '—';
+          const interp = c.d ? cohenInterp(Math.abs(c.d.g)) : '';
+          return `
+            <tr class="border-b border-slate-200 dark:border-slate-700">
+              <td class="px-3 py-2 whitespace-nowrap">
+                <span class="inline-block w-2.5 h-2.5 rounded-sm align-middle mr-2" style="background:${colorFor(i + 1)}"></span>
+                <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300">exp ${i + 1}</span>
+              </td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums">${fmt(c.welch.meanDiff)}</td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums text-emerald-700 dark:text-emerald-400">
+                [${fmt(c.meanDiffCI[0])}, ${fmt(c.meanDiffCI[1])}]
+              </td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums">${fmt(c.welch.t, 3)}
+                <span class="text-[10px] text-slate-500">df=${fmt(c.welch.df, 1)}</span>
+              </td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums ${sigT ? 'text-emerald-700 dark:text-emerald-400 font-semibold' : ''}">${fmtP(c.welch.p)}</td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums ${sigP ? 'text-emerald-700 dark:text-emerald-400 font-semibold' : ''}">${fmtP(c.permP)}</td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums ${sigU ? 'text-emerald-700 dark:text-emerald-400 font-semibold' : ''}">${fmtP(c.u.p)}</td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums">${dCell}
+                ${interp ? `<div class="text-[10px] text-slate-500">${escapeHtml(interp)}</div>` : ''}
+              </td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums">${fmt(c.varRatio, 3)}</td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums">${fmtP(c.varP)}</td>
+            </tr>`;
+        }).join('');
+        return `
+          <section class="mt-6 card-surface">
+            <div class="card-header">Statistical tests vs baseline
+              <span class="text-[11px] font-normal text-slate-500 dark:text-slate-400 ml-2">
+                two-sided. Significant cells (p &lt; 0.05) highlighted.
+              </span>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="text-left text-[11px] uppercase tracking-[0.04em] text-slate-500 dark:text-slate-400">
+                    <th class="px-3 py-2 font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="The experiment model being compared against the baseline (the first row, which is the reference and has no test values).">Model</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Mean(experiment) − Mean(baseline) of the pooled trial-means. Positive = experiment outperforms baseline; negative = experiment worse.">Δ mean</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Bootstrap 95% CI of Δ mean. Resample both samples independently, take the difference of their bootstrapped means. If the interval doesn't straddle 0, the experiment is significantly different from baseline at α=0.05.">95% CI of Δ (boot)</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Welch's t-statistic for the unequal-variance two-sample t-test on Δ mean. df is the Welch-Satterthwaite approximation. |t| large + p (Welch) small → reject the null that the two means are equal.">Welch t</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Two-sided p-value from Welch's t-test. P(|T| ≥ observed | H₀: means equal). Assumes approximately-normal trial-means; less reliable for very small n.">p (Welch)</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Two-sided permutation test p-value for Δ mean. Pool both samples, shuffle, recompute Δ mean, repeat (default 2,000 iters), and report the fraction whose |Δ| ≥ observed. Non-parametric — no normality assumption. Cells are highlighted emerald when p < 0.05.">p (perm)</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Two-sided Mann-Whitney U test p-value (rank-sum). Tests whether one distribution is stochastically greater than the other rather than whether the means differ. Tie-corrected; normal-approximation p-value with continuity correction. Robust for small n.">p (Mann-Whitney)</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Hedges' g — Cohen's d corrected for small-sample bias. Standardised mean difference using pooled SD. Conventional bands: |g| < 0.2 negligible, 0.2–0.5 small, 0.5–0.8 medium, > 0.8 large.">Effect size</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Variance ratio = Var(experiment) / Var(baseline). F = 1 means equal variances. A model can have the same mean as baseline but be much less stable run-to-run; this column catches that.">Var. ratio F</th>
+                    <th class="px-3 py-2 text-right font-semibold cursor-help underline decoration-dotted decoration-slate-400"
+                        title="Two-sided F-test p-value for equal variances (degrees of freedom n_exp−1, n_base−1). Significant means the experiment is noticeably more or less consistent than the baseline.">p (var.)</th>
+                  </tr>
+                </thead>
+                <tbody>${baselineRow}${expRows}</tbody>
+              </table>
+            </div>
+          </section>`;
+      }
+
+      function cohenInterp(absG) {
+        if (!Number.isFinite(absG)) return '';
+        if (absG < 0.2) return 'negligible';
+        if (absG < 0.5) return 'small';
+        if (absG < 0.8) return 'medium';
+        return 'large';
+      }
+
+      function renderNotes(bundles) {
+        const minN = Math.min(...bundles.map((b) => b.scores.length).filter((n) => n > 0));
+        const warnings = [];
+        if (Number.isFinite(minN) && minN > 0 && minN < 10) {
+          warnings.push(`At least one model has fewer than 10 pooled trial-means (min n = ${minN}). All confidence intervals and p-values should be treated as rough — re-run EVAL a few more times to tighten them.`);
+        }
+        if (bundles.some((b) => b.eval_runs.length > 1)) {
+          warnings.push('Some models have multiple eval runs whose scores have been pooled. If you see large between-eval-run spread in the "agreement" panel, the model is unstable and you may want to compare per-eval-run distributions instead of the pooled view.');
+        }
+        const notes = [
+          'A &ldquo;<strong>trial</strong>&rdquo; here corresponds to <code>run_one_trial</code> in robotaxi.py: one trial resets the eval metrics, runs <code>num_eval_episodes</code> raw episodes back-to-back, and emits ONE scalar (their mean). A stock EVAL job stores <code>max_episodes</code> such trial-means (default 3, each averaging 5 episodes = 15 episodes total). The CIs below characterise the spread of those trial-means, NOT the spread of individual episode returns &mdash; so they answer &ldquo;where is this policy&rsquo;s mean return?&rdquo; rather than &ldquo;where will the next single episode land?&rdquo;.',
+          'The <strong>permutation test</strong> p-value is the non-parametric counterpart to Welch&rsquo;s t-test: it asks &ldquo;if the two groups were really exchangeable, how often would we see a mean difference at least this extreme?&rdquo;. It makes no normality assumption.',
+          'The <strong>bootstrap CI</strong> and the <strong>t-based CI</strong> are shown side by side on purpose. When they agree (typical for n &ge; 30 and roughly-symmetric scores) the t-based one is a fine summary. When they disagree noticeably, trust the bootstrap.',
+          '<strong>Cohen&rsquo;s d / Hedges&rsquo; g</strong> is the standardised mean difference (sign relative to baseline). Small &lt; 0.2, medium 0.2&ndash;0.5, large &gt; 0.8, by convention.',
+          '<strong>Variance ratio F</strong> is a side observation about run-to-run consistency. A model can have the same mean as baseline but much higher variance, which the mean tests will miss but this row will catch.',
+        ];
+        return `
+          <section class="mt-6 card-surface">
+            <div class="card-header">Notes &amp; caveats</div>
+            <div class="card-body text-sm leading-relaxed text-slate-600 dark:text-slate-300">
+              ${warnings.length ? `
+                <div class="rounded-md border border-amber-300 dark:border-amber-700/60 bg-amber-50 dark:bg-amber-900/20 p-3 mb-3">
+                  <div class="font-semibold text-amber-700 dark:text-amber-300 text-xs uppercase tracking-wider mb-1">Sample-size warnings</div>
+                  <ul class="list-disc ml-5 text-xs text-amber-700 dark:text-amber-300 space-y-1">
+                    ${warnings.map((w) => `<li>${w}</li>`).join('')}
+                  </ul>
+                </div>` : ''}
+              <ul class="list-disc ml-5 space-y-1.5 text-xs">
+                ${notes.map((n) => `<li>${n}</li>`).join('')}
+              </ul>
+            </div>
+          </section>`;
+      }
+
+      /* ---------- Plotly drawing helpers ---------- */
+
+      const plotlyLayoutBase = {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor:  'rgba(0,0,0,0)',
+        font: {
+          family: 'Inter, system-ui, sans-serif',
+          color: '#cbd5e1',  // slate-300
+          size: 12,
+        },
+        margin: { l: 60, r: 24, t: 24, b: 64 },
+        xaxis: { gridcolor: 'rgba(148,163,184,0.15)', zerolinecolor: 'rgba(148,163,184,0.3)' },
+        yaxis: { gridcolor: 'rgba(148,163,184,0.15)', zerolinecolor: 'rgba(148,163,184,0.3)' },
+        legend: { orientation: 'h', y: -0.2 },
+      };
+
+      function tickLabelFor(bundle, idx) {
+        const tag = idx === 0 ? '[base]' : `[exp ${idx}]`;
+        const name = bundle.model ? bundle.model.model_type || '?' : 'unknown';
+        return `${tag} ${name}<br>${shortId(bundle.modelId)}`;
+      }
+
+      function drawBoxPlot(bundles) {
+        const el = document.querySelector('[data-plot="box"]');
+        if (!el) return;
+        const traces = bundles.map((b, i) => ({
+          type: 'box',
+          name: tickLabelFor(b, i),
+          y: b.scores,
+          boxpoints: 'all',
+          jitter: 0.45,
+          pointpos: 0,
+          marker: { color: colorFor(i), size: 4, opacity: 0.6 },
+          line: { color: colorFor(i) },
+          fillcolor: colorFor(i) + '33',
+        }));
+        Plotly.newPlot(el, traces, Object.assign({}, plotlyLayoutBase, {
+          showlegend: false,
+          yaxis: Object.assign({}, plotlyLayoutBase.yaxis, { title: 'Per-trial mean return' }),
+          xaxis: Object.assign({}, plotlyLayoutBase.xaxis, { automargin: true }),
+        }), { displaylogo: false, responsive: true });
+      }
+
+      function drawBarPlot(bundles, summaries) {
+        const el = document.querySelector('[data-plot="bar"]');
+        if (!el) return;
+        const x = bundles.map((b, i) => tickLabelFor(b, i));
+        const y = summaries.map((s) => Number.isFinite(s.mean) ? s.mean : 0);
+        const colors = bundles.map((_, i) => colorFor(i));
+        // Plotly only supports one error-bar set per bar trace, so we
+        // draw the bars with the bootstrap CI as the primary whisker
+        // (the recommended one), then overlay a scatter trace with the
+        // t-based CI in a contrasting color to show both at once.
+        const bootArr = summaries.map((s) => Number.isFinite(s.mean) && Number.isFinite(s.bootCI[1]) ? s.bootCI[1] - s.mean : 0);
+        const bootArrMinus = summaries.map((s) => Number.isFinite(s.mean) && Number.isFinite(s.bootCI[0]) ? s.mean - s.bootCI[0] : 0);
+        const tArr = summaries.map((s) => Number.isFinite(s.mean) && Number.isFinite(s.tCI[1]) ? s.tCI[1] - s.mean : 0);
+        const tArrMinus = summaries.map((s) => Number.isFinite(s.mean) && Number.isFinite(s.tCI[0]) ? s.mean - s.tCI[0] : 0);
+
+        const bars = {
+          type: 'bar',
+          x, y,
+          marker: { color: colors.map((c) => c + 'cc'), line: { color: colors, width: 1.5 } },
+          error_y: {
+            type: 'data',
+            symmetric: false,
+            array: bootArr,
+            arrayminus: bootArrMinus,
+            color: '#10b981', // emerald-500
+            thickness: 2,
+            width: 8,
+          },
+          name: '95% CI (bootstrap)',
+          hovertemplate: '%{x}<br>mean=%{y:.4f}<extra></extra>',
+        };
+        // Overlay: invisible markers at the same x, with t-based CI as
+        // error bars. Offset slightly to the right via xaxis position
+        // trick is hard in Plotly; instead we just draw them on top of
+        // the same bar — Plotly stacks the two error_y, which looks
+        // like nested whiskers (clear given the legend's colour cues).
+        const overlay = {
+          type: 'scatter',
+          mode: 'markers',
+          x, y,
+          marker: { color: 'rgba(0,0,0,0)', size: 1 },
+          error_y: {
+            type: 'data',
+            symmetric: false,
+            array: tArr,
+            arrayminus: tArrMinus,
+            color: '#818cf8', // indigo-400
+            thickness: 1.5,
+            width: 14,
+          },
+          name: '95% CI (t-based)',
+          showlegend: true,
+          hoverinfo: 'skip',
+        };
+        Plotly.newPlot(el, [bars, overlay], Object.assign({}, plotlyLayoutBase, {
+          showlegend: true,
+          yaxis: Object.assign({}, plotlyLayoutBase.yaxis, { title: 'Mean of per-trial means' }),
+          xaxis: Object.assign({}, plotlyLayoutBase.xaxis, { automargin: true }),
+        }), { displaylogo: false, responsive: true });
+      }
+
+      function drawRunsPlot(bundles) {
+        const el = document.querySelector('[data-plot="runs"]');
+        if (!el) return;
+        const traces = bundles.map((b, i) => ({
+          type: 'scatter',
+          mode: 'markers',
+          name: tickLabelFor(b, i),
+          x: b.perRunMeans.map((_, j) => `${tickLabelFor(b, i)}<br>run ${j + 1}`),
+          y: b.perRunMeans,
+          marker: {
+            color: colorFor(i),
+            size: 12,
+            line: { color: '#0b1120', width: 1 },
+          },
+          hovertemplate: '%{x}<br>mean=%{y:.4f}<extra></extra>',
+        }));
+        Plotly.newPlot(el, traces, Object.assign({}, plotlyLayoutBase, {
+          showlegend: false,
+          yaxis: Object.assign({}, plotlyLayoutBase.yaxis, { title: 'Mean of per-trial means (one dot per eval run)' }),
+          xaxis: Object.assign({}, plotlyLayoutBase.xaxis, { automargin: true, type: 'category' }),
+        }), { displaylogo: false, responsive: true });
+      }
+
+      /* ================================================================ *
+       *  Orchestration
+       * ================================================================ */
+
+      async function reload() {
+        if (!state.modelIds.length) {
+          renderEmpty();
+          subtitleEl.textContent = 'Select 2+ models from the Models tab and click "Compare in Analysis".';
+          setFreshness('idle');
+          return;
+        }
+        state.loading = true;
+        state.error = null;
+        setFreshness('loading');
+        renderLoading();
+        try {
+          const { models, lb } = await fetchData();
+          state.modelsById = new Map(models.map((m) => [String(m._id), m]));
+          state.leaderboardScores = lb;
+          state.bundles = buildBundles(state.modelIds, models, lb);
+          subtitleEl.textContent =
+            `Comparing ${state.bundles.length} models · ${state.bundles[0] && state.bundles[0].model ? (state.bundles[0].model.model_type + ' · ' + shortId(state.bundles[0].modelId)) : 'baseline'} as baseline`;
+          renderReport();
+          setFreshness('ok');
+        } catch (err) {
+          console.error(err);
+          state.error = err;
+          showToast({ type: 'error', message: 'Failed to load: ' + (err.message || err) });
+          renderEmpty({
+            title: 'Failed to load',
+            body: String(err.message || err),
+          });
+          setFreshness('error');
+        } finally {
+          state.loading = false;
+        }
+      }
+
+      function setSelection(ids) {
+        const cleaned = (ids || [])
+          .map((x) => String(x || '').trim())
+          .filter(Boolean);
+        // De-dupe while preserving order so the baseline (first
+        // selected) stays the baseline even if the user clicks the
+        // same row twice somehow.
+        const seen = new Set();
+        const unique = [];
+        for (const id of cleaned) {
+          if (seen.has(id)) continue;
+          seen.add(id);
+          unique.push(id);
+        }
+        state.modelIds = unique;
+        reload();
+      }
+
+      /* ---------- Wire up controls ---------- */
+
+      document.querySelector('[data-action="refresh"]').addEventListener('click', reload);
+      document.querySelector('[data-action="clear"]').addEventListener('click', () => {
+        state.modelIds = [];
+        state.bundles = [];
+        try { sessionStorage.removeItem('roboracer:analysis-selection'); } catch (e) {}
+        renderEmpty();
+        subtitleEl.textContent = 'Select 2+ models from the Models tab and click "Compare in Analysis".';
+        setFreshness('idle');
+      });
+      document.querySelector('[data-action="boot-iters"]').addEventListener('change', (ev) => {
+        state.nBoot = Number(ev.target.value) || 2000;
+        // Re-render if we already have bundles; otherwise this just
+        // takes effect on the next reload.
+        if (state.bundles.length) renderReport();
+      });
+
+      /* ---------- Incoming selections ---------- */
+
+      // 1) postMessage from the parent GoldenLayout shell. This is the
+      //    primary handoff when the user clicks "Compare in Analysis"
+      //    on the Models tab — the parent forwards the payload into
+      //    this iframe's contentWindow.
+      window.addEventListener('message', (ev) => {
+        const d = ev && ev.data;
+        if (!d || typeof d !== 'object') return;
+        if (d.type !== 'roboracer:open-analysis') return;
+        setSelection(Array.isArray(d.modelIds) ? d.modelIds : []);
+      });
+
+      // 2) URL query param fallback for when the page is opened
+      //    standalone (e.g. user navigates directly to /analysis?ids=).
+      function readQueryIds() {
+        try {
+          const params = new URLSearchParams(window.location.search);
+          const raw = params.get('ids');
+          if (!raw) return null;
+          return raw.split(',').map((s) => s.trim()).filter(Boolean);
+        } catch (e) {
+          return null;
+        }
+      }
+
+      // 3) sessionStorage fallback for the case where the iframe was
+      //    still loading when the parent posted the message. The
+      //    parent writes here as part of the same handoff so we can
+      //    pick the selection up after we boot.
+      function readStoredIds() {
+        try {
+          const raw = sessionStorage.getItem('roboracer:analysis-selection');
+          if (!raw) return null;
+          const obj = JSON.parse(raw);
+          // Ignore stale handoffs older than 10 minutes so a tab
+          // refresh long after the fact doesn't accidentally re-show
+          // a forgotten comparison.
+          if (obj && obj.ts && Date.now() - obj.ts < 10 * 60 * 1000 &&
+              Array.isArray(obj.modelIds)) {
+            return obj.modelIds;
+          }
+          return null;
+        } catch (e) {
+          return null;
+        }
+      }
+
+      const fromQuery = readQueryIds();
+      const fromSession = readStoredIds();
+      const initial = fromQuery && fromQuery.length ? fromQuery
+                    : (fromSession && fromSession.length ? fromSession : []);
+      if (initial.length) setSelection(initial);
+    })();
+  </script>
+
+  <style>
+    /* Card surface helpers — kept page-local so they don't pollute the
+       global styles.css. They mirror the tone of the TableView surface
+       used on the Jobs/Models/Leaderboard tabs (border + rounded + soft
+       elevation in light mode, slate-900 surface in dark mode). */
+    .card-surface {
+      background-color: white;
+      border: 1px solid rgb(226 232 240);  /* slate-200 */
+      border-radius: 0.75rem;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 1px 1px rgba(15, 23, 42, 0.03);
+      overflow: hidden;
+    }
+    html.dark .card-surface {
+      background-color: rgb(15 23 42);  /* slate-900 */
+      border-color: rgb(51 65 85);      /* slate-700 */
+    }
+    .card-header {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid rgb(226 232 240);
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: rgb(30 41 59);  /* slate-800 */
+    }
+    html.dark .card-header {
+      border-bottom-color: rgb(51 65 85);
+      color: rgb(226 232 240);  /* slate-200 */
+    }
+    .card-body {
+      padding: 1rem;
+    }
+    .card-footnote {
+      margin-top: 0.5rem;
+      font-size: 0.6875rem;
+      line-height: 1.4;
+      color: rgb(100 116 139);  /* slate-500 */
+    }
+    html.dark .card-footnote {
+      color: rgb(148 163 184);  /* slate-400 */
+    }
+  </style>
+</body>
+</html>

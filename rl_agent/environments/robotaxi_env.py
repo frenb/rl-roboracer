@@ -1,9 +1,30 @@
+import os
+
 from tf_agents.environments import py_environment
 from tf_agents.trajectories import time_step as ts
 import numpy as np
 import tensorflow as tf
 from scipy.interpolate import interp1d
 from environments.courses import donut_course,simple_course
+
+# Module-level switch for the per-step `ACTION accel=... steer=...` trace
+# emitted by `_do_action` below. Default ON (preserves the diagnostic
+# visibility added in commit 374d8aa). Set the env var
+# ROBOTAXI_LOG_ACTIONS to 0 / false / no / off in the sim-controller
+# container to silence:
+#
+#   docker compose ... exec -e ROBOTAXI_LOG_ACTIONS=0 sim-controller \
+#       bash -c 'cd /python_ws/src && python -u robotaxi.py ...'
+#
+# or persistently in docker-compose.yml's sim-controller `environment:`
+# block. Under multi-env training each actor emits one ACTION line per
+# env step, so this is a major contributor to robotaxi.out volume
+# (~tens of lines per second per actor) once you've already verified
+# per-actor routing is working and don't need the per-step trace
+# anymore.
+_LOG_ACTIONS = os.environ.get("ROBOTAXI_LOG_ACTIONS", "1").lower() not in (
+    "0", "false", "no", "off"
+)
 
 class RobotaxiEnv(py_environment.PyEnvironment):
     def __init__(self, api, course_type='donut'):
@@ -36,6 +57,18 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         dispatches methods declared on the env class itself.
         """
         return self.course.get_metrics()
+
+    def get_timeout_counts(self):
+        """Snapshot the RobotApi's asyncio.TimeoutError counters.
+
+        Exposed on the env (rather than only on the RobotApi) so that
+        ``ParallelPyEnvironment.call('get_timeout_counts')`` can reach
+        it - the multi-env RPC only dispatches methods declared on the
+        env class itself. Returns the per-actor counts; the trainer in
+        robotaxi.py aggregates across actors before writing to
+        TensorBoard.
+        """
+        return self._api.get_timeout_counts()
 
     def configure(self, job_id="", pass_through_actions=False):
         """Apply per-job configuration to this env.
@@ -123,13 +156,17 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         #     [actor-2] ACTION accel=+0.456 steer=+0.789
         #     [actor-3] ACTION accel=+1.999 steer=-1.000
         # making it trivial to confirm visually that the learner is
-        # producing four independently-conditioned actions per step
+        # producing N independently-conditioned actions per step
         # (different cars, different observations, stochastic SAC
         # sampling) rather than broadcasting one action to all actors.
         # `flush=True` belt-and-suspenders against pipe block-buffering
-        # if anyone ever runs without `python -u`.
-        print("ACTION accel={:+.4f} steer={:+.4f}".format(
-            acceleration, steering_angle), flush=True)
+        # if anyone ever runs without `python -u`. Gated on
+        # ROBOTAXI_LOG_ACTIONS (see module top) so this can be silenced
+        # once the per-actor routing is validated and the trace is just
+        # log-volume noise.
+        if _LOG_ACTIONS:
+            print("ACTION accel={:+.4f} steer={:+.4f}".format(
+                acceleration, steering_angle), flush=True)
 
         data = self._api.DoApplyForceBlocking(
             acceleration,

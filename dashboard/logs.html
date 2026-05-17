@@ -1,21 +1,892 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <title>Docker Logs Streaming</title>
-  </head>
-  <body>
-    <pre id="log"></pre>
-    <script>
-      const log = document.getElementById('log');
-      const ws = new WebSocket('ws://localhost:8080');
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Logs · rl-roboracer</title>
+  <style>
+    /* ---------------------------------------------------------------- *
+     * rl-roboracer dashboard — live log viewer
+     *
+     * Self-contained: no Tailwind / no CDN deps beyond the existing
+     * WebSocket to ws://localhost:8080. Dark theme by default,
+     * matching the slate/indigo palette used by the other tabs.
+     * ---------------------------------------------------------------- */
 
-      ws.addEventListener('message', (event) => {
-        log.textContent += event.data;
-        // scroll to bottom of body
-        window.scrollTo(0, document.body.scrollHeight);
+    :root {
+      color-scheme: dark;
+
+      --bg-page:        #0b1120;
+      --bg-toolbar:     #111827;
+      --bg-line-hover:  rgba(99, 102, 241, 0.07);
+      --bg-line-current: rgba(99, 102, 241, 0.18);
+      --bg-input:       #0f172a;
+      --bg-button:      #111827;
+      --bg-button-hover:#1f2937;
+      --bg-button-active:#1e293b;
+
+      --border-subtle:  #1f2937;
+      --border-default: #334155;
+      --border-strong:  #475569;
+
+      --text-primary:   #e2e8f0;
+      --text-secondary: #94a3b8;
+      --text-muted:     #64748b;
+
+      --accent:         #6366f1;
+      --accent-hover:   #818cf8;
+      --accent-soft:    rgba(99, 102, 241, 0.18);
+
+      --status-ok:      #34d399;
+      --status-warn:    #fbbf24;
+      --status-error:   #f87171;
+
+      /* Subtle level tints for matched lines (background-tinted only,
+       * so the line text remains the primary signal). */
+      --tint-error:     rgba(248, 113, 113, 0.10);
+      --tint-warn:      rgba(251, 191, 36, 0.10);
+      --tint-marker:    rgba(99, 102, 241, 0.12);
+
+      --shadow-toolbar: 0 1px 0 rgba(255, 255, 255, 0.04),
+                        0 4px 12px -4px rgba(0, 0, 0, 0.6);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: var(--bg-page);
+      color: var(--text-primary);
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+                   system-ui, "Roboto", "Helvetica Neue", Arial, sans-serif;
+      font-size: 13px;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .page {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      width: 100%;
+    }
+
+    /* ---------- toolbar ----------------------------------------- */
+
+    .toolbar {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 12px;
+      background: var(--bg-toolbar);
+      border-bottom: 1px solid var(--border-subtle);
+      box-shadow: var(--shadow-toolbar);
+      flex-wrap: wrap;
+      row-gap: 8px;
+      position: relative;
+      z-index: 5;
+    }
+
+    .toolbar__group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .toolbar__divider {
+      width: 1px;
+      height: 22px;
+      background: var(--border-subtle);
+    }
+
+    .search-input {
+      width: 280px;
+      max-width: 50vw;
+      padding: 5px 10px 5px 28px;
+      font-family: inherit;
+      font-size: 12px;
+      color: var(--text-primary);
+      background: var(--bg-input);
+      border: 1px solid var(--border-default);
+      border-radius: 6px;
+      transition: border-color 120ms, box-shadow 120ms;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M21 21l-4.35-4.35'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: 8px center;
+    }
+    .search-input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.32);
+    }
+    .search-input::placeholder { color: var(--text-muted); }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-primary);
+      background: var(--bg-button);
+      border: 1px solid var(--border-default);
+      border-radius: 6px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 120ms, border-color 120ms, color 120ms, box-shadow 120ms;
+      white-space: nowrap;
+    }
+    .btn:hover:not(:disabled):not([data-state="on"]) { background: var(--bg-button-hover); border-color: var(--border-strong); }
+    .btn:active:not(:disabled) { background: var(--bg-button-active); }
+    .btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.32); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* When a toggle is "on", show indigo accent. */
+    .btn[data-state="on"] {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: var(--accent-hover);
+    }
+
+    .btn--sm { padding: 4px 8px; font-size: 11px; }
+    .btn--icon { padding: 4px 7px; }
+
+    .match-count {
+      font-variant-numeric: tabular-nums;
+      font-size: 12px;
+      color: var(--text-secondary);
+      min-width: 70px;
+      text-align: right;
+    }
+    .match-count[data-empty="true"] { color: var(--text-muted); }
+    .match-count[data-no-results="true"] { color: var(--status-warn); }
+
+    .stats {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-left: auto;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .stats__item { white-space: nowrap; }
+    .stats__sep { color: var(--border-default); }
+
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--status-warn);
+      box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.18);
+      transition: background 200ms, box-shadow 200ms;
+    }
+    .status-dot[data-status="connected"] {
+      background: var(--status-ok);
+      box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.18);
+    }
+    .status-dot[data-status="disconnected"] {
+      background: var(--status-error);
+      box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.18);
+    }
+
+    /* ---------- log surface ------------------------------------- */
+
+    .log-surface {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      position: relative;
+    }
+
+    .log-truncated-banner {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      padding: 6px 14px;
+      background: rgba(99, 102, 241, 0.08);
+      border-bottom: 1px solid rgba(99, 102, 241, 0.25);
+      color: var(--text-secondary);
+      font-size: 11px;
+      font-style: italic;
+    }
+
+    .log-lines {
+      padding: 8px 0 36px 0;
+      font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas,
+                   "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .line {
+      display: flex;
+      gap: 12px;
+      padding: 0 14px;
+      align-items: baseline;
+    }
+    .line:hover { background: var(--bg-line-hover); }
+
+    /* When wrap mode is OFF, lines overflow horizontally with the
+     * surface scrolling; when ON, lines wrap. The body class controls. */
+    body[data-wrap="off"] .line__content { white-space: pre; }
+    body[data-wrap="on"]  .line__content {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    /* Line numbers toggle: hidden by default, shown when on. */
+    body[data-numbers="off"] .line__num { display: none; }
+    body[data-numbers="on"]  .line__num { display: inline-block; }
+
+    .line__num {
+      flex-shrink: 0;
+      width: 56px;
+      text-align: right;
+      color: var(--text-muted);
+      user-select: none;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .line__content {
+      flex: 1;
+      min-width: 0;
+      color: var(--text-primary);
+    }
+
+    /* Subtle level tints. */
+    .line[data-level="error"]  { background: var(--tint-error); }
+    .line[data-level="warn"]   { background: var(--tint-warn); }
+    .line[data-level="marker"] { background: var(--tint-marker); }
+
+    .line[data-level="error"] .line__content  { color: #fca5a5; }
+    .line[data-level="warn"]  .line__content  { color: #fde68a; }
+    .line[data-level="marker"] .line__content { color: #c7d2fe; }
+
+    /* Search match highlighting */
+    .match {
+      background: rgba(251, 191, 36, 0.30);
+      color: #fef3c7;
+      border-radius: 2px;
+      padding: 0 1px;
+    }
+    .match.match--current {
+      background: rgba(251, 191, 36, 0.65);
+      color: #0b1120;
+      box-shadow: 0 0 0 1px #fbbf24;
+    }
+    .line.has-current-match { background: var(--bg-line-current); }
+
+    /* ---------- "Resume tailing" pill ---------------------------- */
+
+    .resume-pill {
+      position: absolute;
+      bottom: 14px;
+      right: 14px;
+      z-index: 3;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 14px;
+      background: var(--accent);
+      color: white;
+      font-size: 12px;
+      font-weight: 500;
+      border: none;
+      border-radius: 999px;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+      opacity: 0;
+      transform: translateY(8px);
+      pointer-events: none;
+      transition: opacity 200ms, transform 200ms, background 200ms;
+    }
+    .resume-pill.is-visible {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+    .resume-pill:hover { background: var(--accent-hover); }
+    .resume-pill:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.42), 0 4px 14px rgba(0, 0, 0, 0.45);
+    }
+
+    /* ---------- scrollbars (custom dark) ------------------------ */
+
+    ::-webkit-scrollbar { width: 12px; height: 12px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      background-color: rgb(51 65 85);
+      background-clip: content-box;
+      border: 3px solid transparent;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover { background-color: rgb(71 85 105); }
+  </style>
+</head>
+<body data-wrap="off" data-numbers="off">
+  <div class="page">
+
+    <header class="toolbar" role="toolbar" aria-label="Log viewer toolbar">
+      <div class="toolbar__group" role="search">
+        <input id="search-input" class="search-input" type="search"
+               placeholder="Search…  /regex/  (Ctrl+F)"
+               aria-label="Search log content">
+        <button id="prev-match" class="btn btn--icon" title="Previous match (Shift+Enter)" aria-label="Previous match" disabled>↑</button>
+        <button id="next-match" class="btn btn--icon" title="Next match (Enter)"           aria-label="Next match"     disabled>↓</button>
+        <span id="match-count" class="match-count" data-empty="true">no search</span>
+      </div>
+
+      <div class="toolbar__divider"></div>
+
+      <div class="toolbar__group">
+        <button id="follow-toggle" class="btn" data-state="on"
+                title="Auto-scroll to the newest line as data arrives. Click to pause.">
+          <span class="follow-icon">▶</span><span class="follow-label">Tailing</span>
+        </button>
+        <button id="wrap-toggle" class="btn" data-state="off"
+                title="Wrap long lines instead of horizontal scroll">↩ Wrap</button>
+        <button id="numbers-toggle" class="btn" data-state="off"
+                title="Show line numbers"># Lines</button>
+        <button id="clear-btn" class="btn"
+                title="Clear the local log buffer (does not affect the server)">⊘ Clear</button>
+      </div>
+
+      <div class="stats">
+        <span class="stats__item" id="line-count-stat">0 lines</span>
+        <span class="stats__sep">·</span>
+        <span class="stats__item" id="rate-stat">0 lines/s</span>
+        <span class="stats__sep">·</span>
+        <span class="stats__item" id="conn-status-text" data-status="connecting">connecting…</span>
+        <span id="conn-status-dot" class="status-dot" data-status="connecting"></span>
+      </div>
+    </header>
+
+    <div class="log-surface" id="log-surface" tabindex="0">
+      <div class="log-truncated-banner" id="truncated-banner" hidden></div>
+      <div class="log-lines" id="log-lines"></div>
+      <button class="resume-pill" id="resume-pill" aria-label="Resume auto-scroll">
+        ↓  Resume tailing
+        <span id="pending-count" style="opacity:0.85"></span>
+      </button>
+    </div>
+
+  </div>
+
+  <script>
+    /* ---------------------------------------------------------------- *
+     * State
+     * ---------------------------------------------------------------- */
+    const MAX_LINES = 50000;             // ring-buffer cap; older lines drop
+    const RECONNECT_BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
+    const RATE_WINDOW_MS = 5000;
+
+    /** @type {Array<{n: number, text: string, el: HTMLElement, level: string|null}>} */
+    const lines = [];
+    let nextLineNumber = 1;       // user-facing line number (monotonic, doesn't reset on truncate)
+    let totalDropped = 0;         // count of lines dropped from the front
+    let pendingChunk = '';        // partial line buffered between WS messages
+    let pendingFlush = null;      // requestAnimationFrame handle for batched DOM append
+    let pendingNewLines = [];     // lines waiting for next rAF flush
+
+    let isFollowingTail = true;   // auto-scroll to bottom on new data
+    let manuallyPaused = false;   // explicit Pause toggle by user
+    let pendingLinesSinceUserScrolled = 0;  // for the "Resume" pill counter
+
+    /** Search state */
+    let searchTerm = '';
+    let searchRegex = null;       // compiled RegExp or null
+    let matches = [];             // [{lineIdx, start, end}, ...] (lineIdx into `lines`)
+    let currentMatchIdx = -1;     // pointer into `matches`
+
+    /** Rate tracking */
+    const rateBuckets = [];       // { t: timestamp, count: linesAdded }
+
+    /* ---------------------------------------------------------------- *
+     * DOM refs
+     * ---------------------------------------------------------------- */
+    const $surface   = document.getElementById('log-surface');
+    const $linesEl   = document.getElementById('log-lines');
+    const $banner    = document.getElementById('truncated-banner');
+    const $resume    = document.getElementById('resume-pill');
+    const $pendingEl = document.getElementById('pending-count');
+
+    const $searchInput = document.getElementById('search-input');
+    const $prevMatch   = document.getElementById('prev-match');
+    const $nextMatch   = document.getElementById('next-match');
+    const $matchCount  = document.getElementById('match-count');
+
+    const $followToggle  = document.getElementById('follow-toggle');
+    const $wrapToggle    = document.getElementById('wrap-toggle');
+    const $numbersToggle = document.getElementById('numbers-toggle');
+    const $clearBtn      = document.getElementById('clear-btn');
+
+    const $lineCountStat = document.getElementById('line-count-stat');
+    const $rateStat      = document.getElementById('rate-stat');
+    const $connDot       = document.getElementById('conn-status-dot');
+    const $connText      = document.getElementById('conn-status-text');
+
+    /* ---------------------------------------------------------------- *
+     * Line ingestion + DOM rendering
+     * ---------------------------------------------------------------- */
+
+    /** Detect a "level" tag for subtle line tinting. Cheap regex match
+     *  on the line's first ~80 chars. Returns 'error' | 'warn' | 'marker'
+     *  or null. */
+    function detectLevel(text) {
+      const head = text.slice(0, 200);
+      if (/\b(ERROR|Exception|Traceback|FAIL(?:URE|ED)?)\b/.test(head)) return 'error';
+      if (/\b(WARN(?:ING)?)\b/.test(head)) return 'warn';
+      if (/^(EVAL begin|EVAL end|TRAIN begin|TRAIN end|BC pretraining)\b/.test(head)) return 'marker';
+      return null;
+    }
+
+    /** Build the DOM element for a line. Cheaper than innerHTML when
+     *  we don't have an active search; search highlighting re-renders
+     *  the content separately. */
+    function makeLineEl(line) {
+      const el = document.createElement('div');
+      el.className = 'line';
+      if (line.level) el.dataset.level = line.level;
+
+      const num = document.createElement('span');
+      num.className = 'line__num';
+      num.textContent = String(line.n);
+      el.appendChild(num);
+
+      const content = document.createElement('span');
+      content.className = 'line__content';
+      content.textContent = line.text;
+      el.appendChild(content);
+
+      return el;
+    }
+
+    /** Drop oldest lines if we exceed the buffer cap. Updates the
+     *  truncated banner and removes the corresponding DOM nodes. */
+    function trimBuffer() {
+      if (lines.length <= MAX_LINES) return;
+      const drop = lines.length - MAX_LINES;
+      for (let i = 0; i < drop; i++) {
+        const old = lines.shift();
+        if (old.el && old.el.parentNode) old.el.parentNode.removeChild(old.el);
+      }
+      totalDropped += drop;
+      $banner.textContent = `… ${totalDropped.toLocaleString()} earlier line${totalDropped === 1 ? '' : 's'} truncated to keep memory bounded.`;
+      $banner.hidden = false;
+
+      // The dropped matches need to be removed from `matches` and the
+      // current match index adjusted; easiest is to re-run the search.
+      if (searchRegex) runSearch(searchTerm);
+    }
+
+    /** Append queued lines to the DOM in one batch (called from rAF). */
+    function flushPendingLines() {
+      pendingFlush = null;
+      if (pendingNewLines.length === 0) return;
+
+      const frag = document.createDocumentFragment();
+      for (const line of pendingNewLines) {
+        line.el = makeLineEl(line);
+        frag.appendChild(line.el);
+        lines.push(line);
+
+        // If a search is active, find any matches in this new line and
+        // append to `matches` so the count keeps ticking up live.
+        if (searchRegex) appendMatchesForLine(lines.length - 1);
+      }
+      pendingNewLines = [];
+
+      $linesEl.appendChild(frag);
+      trimBuffer();
+
+      if (isFollowingTail && !manuallyPaused) {
+        // Use scrollTop assignment rather than scrollIntoView so we
+        // don't trigger smooth-scroll artefacts on rapid updates.
+        $surface.scrollTop = $surface.scrollHeight;
+      } else {
+        // Track how many lines arrived while the user is away from the
+        // tail; show as a counter in the resume pill.
+        pendingLinesSinceUserScrolled += pendingNewLines.length;
+        // (Note: pendingNewLines was just emptied above, so this records
+        // 0 here. We instead updated the counter inline in the loop below.)
+      }
+      updateStats();
+      updateMatchCount();
+    }
+
+    /** Push a single line of text into the buffer. */
+    function ingestLine(text) {
+      const line = { n: nextLineNumber++, text, el: null, level: detectLevel(text) };
+      pendingNewLines.push(line);
+      if (!isFollowingTail || manuallyPaused) {
+        pendingLinesSinceUserScrolled++;
+        updateResumePill();
+      }
+      if (!pendingFlush) pendingFlush = requestAnimationFrame(flushPendingLines);
+
+      rateBuckets.push({ t: performance.now(), count: 1 });
+    }
+
+    /** Split incoming WS data on \n and ingest. Buffer trailing partial. */
+    function ingestChunk(chunk) {
+      pendingChunk += chunk;
+      const parts = pendingChunk.split('\n');
+      pendingChunk = parts.pop();        // last part may be incomplete
+      for (const part of parts) ingestLine(part);
+    }
+
+    /* ---------------------------------------------------------------- *
+     * Auto-follow / resume pill
+     * ---------------------------------------------------------------- */
+
+    function isAtBottom() {
+      // 12 px slop so a tiny scroll-up doesn't unstick.
+      return $surface.scrollHeight - $surface.scrollTop - $surface.clientHeight < 12;
+    }
+
+    function updateResumePill() {
+      const show = !isFollowingTail || manuallyPaused;
+      if (show && pendingLinesSinceUserScrolled > 0) {
+        $resume.classList.add('is-visible');
+        $pendingEl.textContent = ` (${pendingLinesSinceUserScrolled.toLocaleString()})`;
+      } else {
+        $resume.classList.remove('is-visible');
+        $pendingEl.textContent = '';
+      }
+    }
+
+    $surface.addEventListener('scroll', () => {
+      const atBottom = isAtBottom();
+      // If the user actively scrolled away, drop following. Don't
+      // automatically clear `manuallyPaused` - the explicit toggle in
+      // the toolbar is sticky until the user clicks Resume / Tail.
+      if (!atBottom) {
+        isFollowingTail = false;
+      } else if (!manuallyPaused) {
+        // Reaching the bottom by scrolling re-engages auto-follow,
+        // unless the user has explicitly paused.
+        isFollowingTail = true;
+        pendingLinesSinceUserScrolled = 0;
+      }
+      updateResumePill();
+    });
+
+    $resume.addEventListener('click', () => {
+      manuallyPaused = false;
+      isFollowingTail = true;
+      pendingLinesSinceUserScrolled = 0;
+      $surface.scrollTop = $surface.scrollHeight;
+      setFollowToggleState(true);
+      updateResumePill();
+    });
+
+    function setFollowToggleState(following) {
+      manuallyPaused = !following;
+      $followToggle.dataset.state = following ? 'on' : 'off';
+      $followToggle.querySelector('.follow-icon').textContent = following ? '▶' : '⏸';
+      $followToggle.querySelector('.follow-label').textContent = following ? 'Tailing' : 'Paused';
+      if (following) {
+        isFollowingTail = true;
+        pendingLinesSinceUserScrolled = 0;
+        $surface.scrollTop = $surface.scrollHeight;
+      } else {
+        isFollowingTail = false;
+      }
+      updateResumePill();
+    }
+
+    $followToggle.addEventListener('click', () => {
+      setFollowToggleState($followToggle.dataset.state !== 'on');
+    });
+
+    /* ---------------------------------------------------------------- *
+     * Search
+     * ---------------------------------------------------------------- */
+
+    /** Build a RegExp from the search input. /…/flags syntax is opt-in
+     *  for regex; otherwise we escape and match as literal text. */
+    function buildSearchRegex(term) {
+      if (!term) return null;
+      const m = term.match(/^\/(.+)\/([gimsy]*)$/);
+      try {
+        if (m) {
+          const flags = m[2].includes('g') ? m[2] : m[2] + 'g';
+          return new RegExp(m[1], flags);
+        }
+        const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(escaped, 'gi');
+      } catch (e) {
+        // Bad regex - fall back to no matches.
+        return null;
+      }
+    }
+
+    function appendMatchesForLine(lineIdx) {
+      const line = lines[lineIdx];
+      if (!line || !searchRegex) return;
+      searchRegex.lastIndex = 0;
+      let m;
+      const text = line.text;
+      while ((m = searchRegex.exec(text)) !== null) {
+        matches.push({ lineIdx, start: m.index, end: m.index + m[0].length });
+        // Guard against zero-length matches (e.g. "/(?:)/").
+        if (m.index === searchRegex.lastIndex) searchRegex.lastIndex++;
+      }
+      // Re-render the matched line's content with highlight spans.
+      renderLineContent(lineIdx);
+    }
+
+    function renderLineContent(lineIdx) {
+      const line = lines[lineIdx];
+      if (!line || !line.el) return;
+      const contentEl = line.el.querySelector('.line__content');
+      contentEl.innerHTML = '';
+      if (!searchRegex) {
+        contentEl.textContent = line.text;
+        line.el.classList.remove('has-current-match');
+        return;
+      }
+      const lineMatches = matches.filter(x => x.lineIdx === lineIdx);
+      if (lineMatches.length === 0) {
+        contentEl.textContent = line.text;
+        line.el.classList.remove('has-current-match');
+        return;
+      }
+      let cursor = 0;
+      for (const m of lineMatches) {
+        if (m.start > cursor) {
+          contentEl.appendChild(document.createTextNode(line.text.slice(cursor, m.start)));
+        }
+        const mark = document.createElement('span');
+        mark.className = 'match';
+        mark.textContent = line.text.slice(m.start, m.end);
+        if (currentMatchIdx >= 0 && matches[currentMatchIdx] === m) {
+          mark.classList.add('match--current');
+        }
+        contentEl.appendChild(mark);
+        cursor = m.end;
+      }
+      if (cursor < line.text.length) {
+        contentEl.appendChild(document.createTextNode(line.text.slice(cursor)));
+      }
+      const hasCurrent = currentMatchIdx >= 0 && lineMatches.some(m => m === matches[currentMatchIdx]);
+      line.el.classList.toggle('has-current-match', hasCurrent);
+    }
+
+    function clearAllHighlights() {
+      // Reset every line that previously had a match.
+      const touched = new Set(matches.map(m => m.lineIdx));
+      matches = [];
+      currentMatchIdx = -1;
+      for (const idx of touched) renderLineContent(idx);
+    }
+
+    function runSearch(term) {
+      clearAllHighlights();
+      searchTerm = term || '';
+      searchRegex = buildSearchRegex(searchTerm);
+      if (!searchRegex) {
+        updateMatchCount();
+        return;
+      }
+      for (let i = 0; i < lines.length; i++) appendMatchesForLine(i);
+      if (matches.length > 0) {
+        currentMatchIdx = 0;
+        scrollToCurrentMatch();
+        renderLineContent(matches[0].lineIdx);
+      }
+      updateMatchCount();
+    }
+
+    function jumpMatch(delta) {
+      if (matches.length === 0) return;
+      // Re-render the previous current line to drop the "current" style.
+      const prevIdx = currentMatchIdx;
+      currentMatchIdx = (currentMatchIdx + delta + matches.length) % matches.length;
+      if (prevIdx >= 0) renderLineContent(matches[prevIdx].lineIdx);
+      renderLineContent(matches[currentMatchIdx].lineIdx);
+      scrollToCurrentMatch();
+      updateMatchCount();
+    }
+
+    function scrollToCurrentMatch() {
+      const m = matches[currentMatchIdx];
+      if (!m) return;
+      const line = lines[m.lineIdx];
+      if (!line || !line.el) return;
+      // Pause auto-follow while inspecting matches.
+      isFollowingTail = false;
+      manuallyPaused = true;
+      setFollowToggleState(false);
+      line.el.scrollIntoView({ block: 'center', behavior: 'auto' });
+    }
+
+    function updateMatchCount() {
+      $prevMatch.disabled = matches.length === 0;
+      $nextMatch.disabled = matches.length === 0;
+      if (!searchTerm) {
+        $matchCount.textContent = 'no search';
+        $matchCount.dataset.empty = 'true';
+        $matchCount.dataset.noResults = 'false';
+      } else if (matches.length === 0) {
+        $matchCount.textContent = '0 matches';
+        $matchCount.dataset.empty = 'false';
+        $matchCount.dataset.noResults = 'true';
+      } else {
+        $matchCount.textContent = `${(currentMatchIdx + 1).toLocaleString()} of ${matches.length.toLocaleString()}`;
+        $matchCount.dataset.empty = 'false';
+        $matchCount.dataset.noResults = 'false';
+      }
+    }
+
+    let searchDebounce = null;
+    $searchInput.addEventListener('input', () => {
+      clearTimeout(searchDebounce);
+      searchDebounce = setTimeout(() => runSearch($searchInput.value), 120);
+    });
+
+    $nextMatch.addEventListener('click', () => jumpMatch(+1));
+    $prevMatch.addEventListener('click', () => jumpMatch(-1));
+
+    $searchInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        jumpMatch(ev.shiftKey ? -1 : +1);
+      } else if (ev.key === 'Escape') {
+        $searchInput.value = '';
+        runSearch('');
+      }
+    });
+
+    /* ---------------------------------------------------------------- *
+     * Toggles
+     * ---------------------------------------------------------------- */
+
+    $wrapToggle.addEventListener('click', () => {
+      const on = $wrapToggle.dataset.state !== 'on';
+      $wrapToggle.dataset.state = on ? 'on' : 'off';
+      document.body.dataset.wrap = on ? 'on' : 'off';
+    });
+
+    $numbersToggle.addEventListener('click', () => {
+      const on = $numbersToggle.dataset.state !== 'on';
+      $numbersToggle.dataset.state = on ? 'on' : 'off';
+      document.body.dataset.numbers = on ? 'on' : 'off';
+    });
+
+    $clearBtn.addEventListener('click', () => {
+      lines.length = 0;
+      matches = [];
+      currentMatchIdx = -1;
+      totalDropped = 0;
+      pendingChunk = '';
+      pendingNewLines = [];
+      pendingLinesSinceUserScrolled = 0;
+      $linesEl.innerHTML = '';
+      $banner.hidden = true;
+      updateStats();
+      updateMatchCount();
+      updateResumePill();
+    });
+
+    /* ---------------------------------------------------------------- *
+     * Stats: line count + lines/sec rate
+     * ---------------------------------------------------------------- */
+
+    function updateStats() {
+      $lineCountStat.textContent = `${(lines.length + totalDropped).toLocaleString()} line${(lines.length + totalDropped) === 1 ? '' : 's'}`;
+    }
+
+    function updateRate() {
+      const now = performance.now();
+      while (rateBuckets.length && rateBuckets[0].t < now - RATE_WINDOW_MS) rateBuckets.shift();
+      const total = rateBuckets.reduce((a, b) => a + b.count, 0);
+      const rate = total / (RATE_WINDOW_MS / 1000);
+      const display = rate >= 1 ? rate.toFixed(0) : rate >= 0.1 ? rate.toFixed(1) : '0';
+      $rateStat.textContent = `${display} line${display === '1' ? '' : 's'}/s`;
+    }
+    setInterval(updateRate, 500);
+
+    /* ---------------------------------------------------------------- *
+     * Keyboard: Ctrl+F / "/" focuses search; Esc clears
+     * ---------------------------------------------------------------- */
+
+    document.addEventListener('keydown', (ev) => {
+      const isInputTarget = ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA';
+      if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'f') {
+        ev.preventDefault();
+        $searchInput.focus();
+        $searchInput.select();
+      } else if (ev.key === '/' && !isInputTarget) {
+        ev.preventDefault();
+        $searchInput.focus();
+      } else if (ev.key === 'F3') {
+        ev.preventDefault();
+        jumpMatch(ev.shiftKey ? -1 : +1);
+      }
+    });
+
+    /* ---------------------------------------------------------------- *
+     * WebSocket: connect, ingest, auto-reconnect with backoff
+     * ---------------------------------------------------------------- */
+
+    function setStatus(state, label) {
+      $connDot.dataset.status = state;
+      $connText.dataset.status = state;
+      $connText.textContent = label;
+    }
+
+    let ws = null;
+    let reconnectAttempts = 0;
+    let reconnectTimer = null;
+
+    function connect() {
+      // The dashboard is bound to localhost:80; the WS server is on
+      // localhost:8080. Use the host from the parent window so this
+      // works inside the GoldenLayout iframe even if the iframe was
+      // loaded from a non-localhost address.
+      const wsUrl = `ws://${window.location.hostname}:8080`;
+      setStatus('connecting', 'connecting…');
+      ws = new WebSocket(wsUrl);
+      ws.addEventListener('open', () => {
+        reconnectAttempts = 0;
+        setStatus('connected', 'connected');
       });
-      window.scrollTo(0, document.body.scrollHeight);
-    </script>
-  </body>
+      ws.addEventListener('message', (event) => {
+        ingestChunk(typeof event.data === 'string' ? event.data : '');
+      });
+      ws.addEventListener('close', () => {
+        setStatus('disconnected', 'disconnected');
+        scheduleReconnect();
+      });
+      ws.addEventListener('error', () => {
+        // Followed immediately by a 'close' event; nothing to do here
+        // beyond letting the close handler run.
+      });
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimer) return;
+      const delay = RECONNECT_BACKOFF_MS[Math.min(reconnectAttempts, RECONNECT_BACKOFF_MS.length - 1)];
+      reconnectAttempts++;
+      setStatus('connecting', `reconnecting in ${(delay/1000).toFixed(0)}s…`);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delay);
+    }
+
+    connect();
+    updateStats();
+    updateMatchCount();
+  </script>
+</body>
 </html>

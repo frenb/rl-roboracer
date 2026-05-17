@@ -1,0 +1,719 @@
+/* ---------------------------------------------------------------- *
+ * rl-roboracer dashboard — minimal global styles
+ *
+ * With Tailwind doing the heavy lifting via the Play CDN, this file
+ * is small but covers a few things Tailwind doesn't naturally express:
+ *
+ *   1. Google Fonts import for Inter + JetBrains Mono. Tailwind's
+ *      fontFamily theme (set in tailwind.init.js) references these.
+ *
+ *   2. Custom Webkit scrollbars. Tailwind has no built-in utility for
+ *      `::-webkit-scrollbar*` selectors.
+ *
+ *   3. The `<select>` chevron data-URI. Tailwind has `appearance-none`
+ *      to suppress the native widget, but no built-in chevron art.
+ *      Apply via `class="select-chevron"`.
+ *
+ *   4. Selection color. Tailwind 3 has no `selection:bg-...` for
+ *      bg, only `selection:text-...`, so do it here.
+ *
+ *   5. Pre-baked button & input component classes (`btn-base`,
+ *      `btn-primary`, etc.). With the Play CDN we can't use `@apply`
+ *      so we'd otherwise have to repeat ~10 utility classes per
+ *      button. Plain CSS classes that mirror the Tailwind tokens
+ *      keep the markup terse and consistent across pages.
+ * ---------------------------------------------------------------- */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+::selection {
+  background: rgb(224 231 255);  /* indigo-100 */
+  color: rgb(15 23 42);          /* slate-900 */
+}
+
+html.dark ::selection {
+  background: rgb(49 46 129);  /* indigo-900 */
+  color: rgb(241 245 249);     /* slate-100 */
+}
+
+/* Custom scrollbars: subtle pill-shaped thumb on a transparent track,
+ * sized to feel modern rather than the heavy default OS chrome.
+ * Webkit-only; Firefox falls back gracefully to its default. */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgb(203 213 225);  /* slate-300 */
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(148 163 184);  /* slate-400 */
+  background-clip: content-box;
+}
+html.dark ::-webkit-scrollbar-thumb       { background-color: rgb(51 65 85); }   /* slate-700 */
+html.dark ::-webkit-scrollbar-thumb:hover { background-color: rgb(71 85 105); }  /* slate-600 */
+
+/* Custom select chevron. Pair with `appearance-none` Tailwind utility:
+ *   <select class="appearance-none select-chevron pr-8 ...">
+ * The data-URI uses slate-400 stroke so it reads correctly in both
+ * light and dark themes. */
+.select-chevron {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%2394a3b8' stroke-width='1.6'%3E%3Cpath d='M2.5 4.5L6 8L9.5 4.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+}
+
+/* Backdrop blur for modal overlays. */
+.modal-blur {
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+/* ---------- component classes ----------------------------------- *
+ * These mirror commonly-repeated Tailwind utility sequences. Using
+ * plain CSS instead of @apply because the Play CDN doesn't support
+ * @apply at runtime. Values are chosen to match the Tailwind theme
+ * (slate-50/100/200/300/etc., indigo-500/600/700, focus ring rgb).
+ * ---------------------------------------------------------------- */
+
+.btn-base {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.4rem 1rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.25;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background-color 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  white-space: nowrap;
+  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.04);
+  font-family: inherit;
+}
+.btn-base:disabled,
+.btn-base[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.btn-base:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: none;
+}
+.btn-base:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.32);
+}
+
+.btn-secondary {
+  background: white;
+  color: rgb(15 23 42);
+  border: 1px solid rgb(203 213 225);
+}
+.btn-secondary:hover:not(:disabled) {
+  background: rgb(248 250 252);
+  border-color: rgb(148 163 184);
+}
+
+.btn-primary {
+  background: linear-gradient(180deg, rgb(99 102 241), rgb(79 70 229));
+  color: white;
+  border: 1px solid rgb(79 70 229);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+.btn-primary:hover:not(:disabled) {
+  background: rgb(67 56 202);
+  border-color: rgb(67 56 202);
+}
+.btn-primary:active:not(:disabled) {
+  background: rgb(55 48 163);
+}
+
+.btn-danger {
+  background: rgb(254 226 226);
+  color: rgb(185 28 28);
+  border: 1px solid transparent;
+}
+.btn-danger:hover:not(:disabled) {
+  filter: brightness(0.96);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: rgb(15 23 42);
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+.btn-ghost:hover:not(:disabled) {
+  background: rgb(241 245 249);
+}
+
+/* ----- inputs ----- */
+
+.input-base {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8125rem;
+  font-family: inherit;
+  line-height: 1.25;
+  background: white;
+  color: rgb(15 23 42);
+  border: 1px solid rgb(203 213 225);
+  border-radius: 0.5rem;
+  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.04);
+  transition: border-color 120ms, box-shadow 120ms;
+}
+.input-base::placeholder {
+  color: rgb(148 163 184);
+}
+.input-base:hover {
+  border-color: rgb(148 163 184);
+}
+.input-base:focus {
+  outline: none;
+  border-color: rgb(99 102 241);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.32);
+}
+
+html.dark .btn-base:focus-visible {
+  box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.42);
+}
+html.dark .btn-secondary {
+  background: rgb(15 23 42);
+  color: rgb(241 245 249);
+  border-color: rgb(51 65 85);
+}
+html.dark .btn-secondary:hover:not(:disabled) {
+  background: rgb(30 41 59);
+  border-color: rgb(71 85 105);
+}
+html.dark .btn-primary {
+  background: linear-gradient(180deg, rgb(129 140 248), rgb(99 102 241));
+  border-color: rgb(99 102 241);
+}
+html.dark .btn-primary:hover:not(:disabled) {
+  background: rgb(99 102 241);
+  border-color: rgb(99 102 241);
+}
+html.dark .btn-danger {
+  background: rgb(69 10 10);
+  color: rgb(252 165 165);
+}
+html.dark .btn-ghost { color: rgb(241 245 249); }
+html.dark .btn-ghost:hover:not(:disabled) { background: rgb(30 41 59); }
+
+html.dark .input-base {
+  background: rgb(15 23 42);
+  color: rgb(241 245 249);
+  border-color: rgb(51 65 85);
+}
+html.dark .input-base::placeholder {
+  color: rgb(100 116 139);
+}
+html.dark .input-base:hover {
+  border-color: rgb(71 85 105);
+}
+html.dark .input-base:focus {
+  border-color: rgb(99 102 241);
+  box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.42);
+}
+
+/* ----- preset chips ----------------------------------------------- *
+ * Small two-line toggle buttons used by the Models tab's "Submit
+ * EVAL jobs" modal to surface sensible defaults for the trial count
+ * (3 / 10 / 30 / 50). Designed as a complement to .input-base, not
+ * a replacement: the free-form number input remains the source of
+ * truth, and clicking a chip simply fills it. The .is-active variant
+ * is set in JS whenever the input's current value matches the chip's
+ * data-preset; only one chip can be active at a time.
+ *
+ * Layout: top row is the number (heavy, tabular), bottom row is the
+ * short qualitative label ("quick", "standard", etc.). The two
+ * stack via flex-col so any chip height differences don't break the
+ * row's baseline alignment.
+ * ---------------------------------------------------------------- */
+
+.eval-preset-chip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1rem;
+  /* min-width 3.25rem keeps single-digit chips (n=3) the same visual
+   * width as two-digit ones (n=50) so the row reads as a tidy
+   * 4-cell rail. Tag labels are short (smoke / std / tight / paper)
+   * so the chips fit four-across in the modal's ~280px form column;
+   * any longer tag would force wrapping. */
+  min-width: 3.25rem;
+  padding: 0.35rem 0.6rem;
+  font-family: inherit;
+  background: rgb(241 245 249);            /* slate-100 */
+  color: rgb(30 41 59);                    /* slate-800 */
+  border: 1px solid rgb(226 232 240);      /* slate-200 */
+  border-radius: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background-color 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.eval-preset-chip:hover:not(.is-active) {
+  background: rgb(226 232 240);            /* slate-200 */
+  border-color: rgb(203 213 225);          /* slate-300 */
+}
+.eval-preset-chip:active:not(.is-active) {
+  transform: translateY(1px);
+}
+.eval-preset-chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.32);
+}
+.eval-preset-chip .eval-preset-n {
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.eval-preset-chip .eval-preset-tag {
+  font-size: 0.625rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgb(100 116 139);                 /* slate-500 */
+}
+.eval-preset-chip.is-active {
+  background: linear-gradient(180deg, rgb(99 102 241), rgb(79 70 229));
+  color: white;
+  border-color: rgb(79 70 229);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+.eval-preset-chip.is-active .eval-preset-tag {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+/* Dark-mode variants. The default chip switches to a slate-800
+ * surface (matching the modal's slate-900 dark background), and the
+ * active chip keeps its indigo gradient - the gradient already reads
+ * well against the dark surface so we only re-tune the chrome. */
+html.dark .eval-preset-chip {
+  background: rgb(30 41 59);               /* slate-800 */
+  color: rgb(226 232 240);                 /* slate-200 */
+  border-color: rgb(51 65 85);             /* slate-700 */
+}
+html.dark .eval-preset-chip:hover:not(.is-active) {
+  background: rgb(51 65 85);               /* slate-700 */
+  border-color: rgb(71 85 105);            /* slate-600 */
+}
+html.dark .eval-preset-chip .eval-preset-tag {
+  color: rgb(148 163 184);                 /* slate-400 */
+}
+html.dark .eval-preset-chip:focus-visible {
+  box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.42);
+}
+html.dark .eval-preset-chip.is-active {
+  background: linear-gradient(180deg, rgb(129 140 248), rgb(99 102 241));
+  border-color: rgb(99 102 241);
+}
+
+/* The .row-eval-fresh / .row-eval-recent row-level visual lift used
+ * to live here. Removed: the indigo left border was visually
+ * ambiguous against the selection indicator (also indigo-500 on the
+ * left edge), and the two-tier shading (1h vs 24h) wasn't distinct
+ * enough to read as two tiers without an on-table legend. The dot
+ * prefix in the Last eval column carries the same recency signal in
+ * a more localised, hover-explained form - see renderLastEvalCell
+ * in models.html. */
+
+/* ----- Tabulator theme overrides ---------------------------------- *
+ *
+ * The dashboard's data grids (Jobs / Models / Leaderboard) are now
+ * powered by Tabulator (https://tabulator.info/) via a thin wrapper
+ * called TableView in components.js. Tabulator handles the heavy
+ * lifting (sort, paginate, multi-select, column resize, persistence,
+ * sticky header) and we restyle it here to match the dashboard's
+ * slate / indigo Tailwind palette so it reads as one continuous UI
+ * with the toolbars and chips around it.
+ *
+ * Strategy: we load Tabulator's "simple" theme first (mostly layout
+ * rules, very little visual chrome), then everything below is an
+ * additive override that hits the .tabulator* selectors. Rules are
+ * grouped by light-mode then dark-mode. CSS variables Tabulator
+ * exposes are deliberately not used here - the simple theme doesn't
+ * expose all the surfaces we want to touch, so direct selector
+ * overrides are clearer.
+ *
+ * Selection styling is the one place we deviate from a "pure
+ * Tabulator look": when a row is selected we paint an indigo-tinted
+ * background + a 2px inset indigo border on the left, matching the
+ * exact look the previous TableView shipped (and the look the
+ * recently-evaluated row visual lift was tuned against, so the two
+ * keep harmonising). Selection wins over the recency lift via class
+ * order in the JS wrapper.
+ * ---------------------------------------------------------------- */
+
+/* Outer container - replace the default white card with our slate/
+ * rounded look so the table sits as one unit with the surrounding
+ * tab toolbar + pagination. */
+.tabulator {
+  background-color: white;
+  border: 1px solid rgb(226 232 240);   /* slate-200 */
+  border-radius: 0.75rem;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.05),
+    0 1px 1px rgba(15, 23, 42, 0.03);
+  font-family: inherit;
+  font-size: 0.875rem;                  /* text-sm */
+  color: rgb(15 23 42);                 /* slate-900 */
+  overflow: hidden;                     /* round corners */
+}
+html.dark .tabulator {
+  background-color: rgb(15 23 42);      /* slate-900 */
+  border-color: rgb(51 65 85);          /* slate-700 */
+  color: rgb(241 245 249);              /* slate-100 */
+}
+
+/* Header row - small caps, slate label color, sticky-by-default. */
+.tabulator .tabulator-header {
+  background-color: white;
+  border-bottom: 1px solid rgb(226 232 240);
+  font-weight: 600;
+  font-size: 0.6875rem;                 /* text-[11px] */
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgb(100 116 139);              /* slate-500 */
+}
+html.dark .tabulator .tabulator-header {
+  background-color: rgb(15 23 42);
+  border-bottom-color: rgb(51 65 85);
+  color: rgb(148 163 184);              /* slate-400 */
+}
+.tabulator .tabulator-header .tabulator-col {
+  background-color: transparent;
+  border-right: none;
+  padding: 0.75rem 1rem;
+}
+.tabulator .tabulator-header .tabulator-col .tabulator-col-content {
+  padding: 0;
+}
+.tabulator .tabulator-header .tabulator-col.tabulator-sortable:hover {
+  color: rgb(15 23 42);
+  background-color: rgba(15, 23, 42, 0.02);
+}
+html.dark .tabulator .tabulator-header .tabulator-col.tabulator-sortable:hover {
+  color: rgb(241 245 249);
+  background-color: rgba(255, 255, 255, 0.04);
+}
+/* Sort indicator color - indigo when active, slate-faded otherwise. */
+.tabulator .tabulator-header .tabulator-col .tabulator-col-sorter {
+  color: rgb(148 163 184);
+}
+.tabulator .tabulator-header .tabulator-col[aria-sort="ascending"]  .tabulator-col-sorter,
+.tabulator .tabulator-header .tabulator-col[aria-sort="descending"] .tabulator-col-sorter {
+  color: rgb(99 102 241);               /* indigo-500 */
+}
+html.dark .tabulator .tabulator-header .tabulator-col[aria-sort="ascending"]  .tabulator-col-sorter,
+html.dark .tabulator .tabulator-header .tabulator-col[aria-sort="descending"] .tabulator-col-sorter {
+  color: rgb(129 140 248);              /* indigo-400 */
+}
+
+/* Header-filter row - matches our previous input-base styling so the
+ * filter widgets look like the rest of the dashboard's inputs. */
+.tabulator .tabulator-header-filter input,
+.tabulator .tabulator-header-filter select {
+  width: 100%;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  font-family: inherit;
+  font-weight: 400;
+  background-color: rgb(248 250 252);   /* slate-50 */
+  color: rgb(15 23 42);                 /* slate-900 */
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  text-transform: none;                 /* override header caps */
+  letter-spacing: 0;
+  transition: border-color 120ms, box-shadow 120ms, background-color 120ms;
+}
+.tabulator .tabulator-header-filter input::placeholder {
+  color: rgb(148 163 184);
+}
+.tabulator .tabulator-header-filter input:hover,
+.tabulator .tabulator-header-filter select:hover {
+  border-color: rgb(203 213 225);
+}
+.tabulator .tabulator-header-filter input:focus,
+.tabulator .tabulator-header-filter select:focus {
+  outline: none;
+  background-color: white;
+  border-color: rgb(99 102 241);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.32);
+}
+html.dark .tabulator .tabulator-header-filter input,
+html.dark .tabulator .tabulator-header-filter select {
+  background-color: rgb(30 41 59);      /* slate-800 */
+  color: rgb(241 245 249);
+  border-color: transparent;
+}
+html.dark .tabulator .tabulator-header-filter input::placeholder {
+  color: rgb(100 116 139);
+}
+html.dark .tabulator .tabulator-header-filter input:hover,
+html.dark .tabulator .tabulator-header-filter select:hover {
+  border-color: rgb(71 85 105);
+}
+html.dark .tabulator .tabulator-header-filter input:focus,
+html.dark .tabulator .tabulator-header-filter select:focus {
+  background-color: rgb(15 23 42);
+  border-color: rgb(99 102 241);
+  box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.42);
+}
+
+/* Body rows - uniform background + hover. Zebra striping was tried
+ * and dropped: it competed visually with both selection styling and
+ * (briefly) a row-level recency lift, making the table read as
+ * inconsistent. Flat backgrounds are calmer to scan. The
+ * `tabulator-row-even` selector intentionally inherits the same
+ * background as the base `tabulator-row` so Tabulator's even/odd
+ * tagging has no visual effect. */
+.tabulator .tabulator-row,
+.tabulator .tabulator-row.tabulator-row-even {
+  background-color: white;
+  border-bottom: 1px solid rgb(226 232 240);
+}
+.tabulator .tabulator-row:hover {
+  background-color: rgb(241 245 249);   /* slate-100 */
+}
+html.dark .tabulator .tabulator-row,
+html.dark .tabulator .tabulator-row.tabulator-row-even {
+  background-color: rgb(15 23 42);
+  border-bottom-color: rgb(51 65 85);
+}
+html.dark .tabulator .tabulator-row:hover {
+  background-color: rgb(30 41 59);      /* slate-800 */
+}
+
+/* Selected row - same indigo accent the previous TableView used. The
+ * background is forced via !important because Tabulator paints
+ * selection inline on the row, and we want it to win over zebra
+ * striping and hover. */
+.tabulator .tabulator-row.tabulator-selected {
+  background-color: rgb(238 242 255) !important;  /* indigo-50 */
+  box-shadow: inset 2px 0 0 rgb(99 102 241);      /* indigo-500 strip on the left */
+}
+.tabulator .tabulator-row.tabulator-selected:hover {
+  background-color: rgb(224 231 255) !important;  /* indigo-100 on hover */
+}
+html.dark .tabulator .tabulator-row.tabulator-selected {
+  background-color: rgba(30, 27, 75, 0.55) !important;   /* indigo-950 / 55% */
+  box-shadow: inset 2px 0 0 rgb(129 140 248);
+}
+html.dark .tabulator .tabulator-row.tabulator-selected:hover {
+  background-color: rgba(30, 27, 75, 0.75) !important;
+}
+
+/* Body cells - smaller padding than the default theme so rows feel
+ * dense like before, monospace tabular-numbers preserved when the
+ * formatter applies them. */
+.tabulator .tabulator-cell {
+  padding: 0.75rem 1rem;
+  border-right: none;
+  white-space: nowrap;                  /* let the table scroll horizontally instead of wrapping */
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+/* Selection-checkbox column - the column is fixed at 40 px wide and
+ * hosts a single ~14 px checkbox in both the header (titleFormatter:
+ * rowSelection) and each body row (formatter: rowSelection). The
+ * generic 1 rem horizontal padding above would leave only ~8 px of
+ * usable width, clipping the select-all checkbox in the header.
+ * Reset both padding axes to a small uniform value and let the
+ * checkbox center via Tabulator's hozAlign/headerHozAlign. */
+.tabulator .tabulator-cell.rc-select-col,
+.tabulator .tabulator-header .tabulator-col.rc-select-col {
+  padding: 0.5rem 0.25rem;
+}
+/* Tabulator's titleFormatter renders into .tabulator-col-content;
+ * we already zero its padding in the generic rule, but make extra
+ * sure the inner element is centred and not constrained by the
+ * default header text-align rules. */
+.tabulator .tabulator-header .tabulator-col.rc-select-col .tabulator-col-content,
+.tabulator .tabulator-header .tabulator-col.rc-select-col .tabulator-col-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  overflow: visible;     /* checkbox should never be clipped by the title cell */
+}
+
+/* Pagination footer - replace Tabulator's default with our pill-button
+ * look so it matches the rest of the dashboard's controls. */
+.tabulator .tabulator-footer {
+  background-color: white;
+  border-top: 1px solid rgb(226 232 240);
+  padding: 0.5rem 1rem;
+  font-size: 0.75rem;
+  color: rgb(100 116 139);
+}
+html.dark .tabulator .tabulator-footer {
+  background-color: rgb(15 23 42);
+  border-top-color: rgb(51 65 85);
+  color: rgb(148 163 184);
+}
+.tabulator .tabulator-footer .tabulator-page {
+  margin: 0 2px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  background-color: white;
+  color: rgb(15 23 42);
+  border: 1px solid rgb(203 213 225);
+  border-radius: 0.375rem;
+  transition: background-color 120ms, border-color 120ms;
+}
+.tabulator .tabulator-footer .tabulator-page:hover:not(:disabled) {
+  background-color: rgb(248 250 252);
+  border-color: rgb(148 163 184);
+}
+.tabulator .tabulator-footer .tabulator-page.active {
+  background: linear-gradient(180deg, rgb(99 102 241), rgb(79 70 229));
+  color: white;
+  border-color: rgb(79 70 229);
+}
+.tabulator .tabulator-footer .tabulator-page:disabled {
+  opacity: 0.4;
+}
+html.dark .tabulator .tabulator-footer .tabulator-page {
+  background-color: rgb(15 23 42);
+  color: rgb(241 245 249);
+  border-color: rgb(51 65 85);
+}
+html.dark .tabulator .tabulator-footer .tabulator-page:hover:not(:disabled) {
+  background-color: rgb(30 41 59);
+  border-color: rgb(71 85 105);
+}
+html.dark .tabulator .tabulator-footer .tabulator-page.active {
+  background: linear-gradient(180deg, rgb(129 140 248), rgb(99 102 241));
+  border-color: rgb(99 102 241);
+}
+.tabulator .tabulator-footer .tabulator-page-size {
+  appearance: none;
+  padding: 0.25rem 1.5rem 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  font-family: inherit;
+  background-color: white;
+  color: rgb(15 23 42);
+  border: 1px solid rgb(203 213 225);
+  border-radius: 0.375rem;
+  /* Re-use the chevron data-URI from .select-chevron above so the
+   * page-size dropdown matches every other select on the page. */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%2394a3b8' stroke-width='1.6'%3E%3Cpath d='M2.5 4.5L6 8L9.5 4.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.4rem center;
+}
+html.dark .tabulator .tabulator-footer .tabulator-page-size {
+  background-color: rgb(15 23 42);
+  color: rgb(241 245 249);
+  border-color: rgb(51 65 85);
+}
+
+/* Resize handle - we don't need a custom one anymore; Tabulator
+ * draws its own on the column boundary. The default is invisible
+ * until hover, which matches the look we tried to ship by hand. We
+ * just tweak the hover color to indigo for visual consistency. */
+.tabulator .tabulator-col-resize-handle:hover {
+  background-color: rgba(99, 102, 241, 0.35);
+}
+html.dark .tabulator .tabulator-col-resize-handle:hover {
+  background-color: rgba(129, 140, 248, 0.45);
+}
+
+/* Empty / loading placeholder - keep it readable + centered on the
+ * surface; Tabulator centers by default but uses serif italic which
+ * doesn't match. */
+.tabulator .tabulator-placeholder {
+  padding: 3rem 1.5rem;
+  font-size: 0.875rem;
+  font-style: normal;
+  color: rgb(100 116 139);
+}
+.tabulator .tabulator-placeholder .tabulator-placeholder-contents {
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: rgb(71 85 105);
+}
+html.dark .tabulator .tabulator-placeholder .tabulator-placeholder-contents {
+  color: rgb(203 213 225);
+}
+
+/* Loading / error overlays - set by the TableView wrapper via classes
+ * on the Tabulator container. Both render an absolutely-positioned
+ * scrim with centered content so we don't need to fight Tabulator's
+ * own placeholder mechanism. */
+.tabulator.is-loading,
+.tabulator.has-error {
+  position: relative;
+}
+.tabulator.is-loading::after,
+.tabulator.has-error::after {
+  content: attr(data-overlay);
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(255, 255, 255, 0.7);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: rgb(71 85 105);
+  pointer-events: none;
+  z-index: 10;
+}
+html.dark .tabulator.is-loading::after,
+html.dark .tabulator.has-error::after {
+  background-color: rgba(15, 23, 42, 0.65);
+  color: rgb(203 213 225);
+}
+.tabulator.has-error::after {
+  color: rgb(185 28 28);                /* red-700 */
+}
+html.dark .tabulator.has-error::after {
+  color: rgb(252 165 165);              /* red-300 */
+}
+
+/* Custom numeric-range / date-range header filter widgets - paired
+ * with the headerFilter callbacks in components.js. The wrapper
+ * provides specific class names so we can style the two-input group
+ * compactly inside the narrow filter row. */
+.rc-numeric-range-filter {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+  width: 100%;
+}
+.rc-numeric-range-filter input {
+  width: 50% !important;                /* override Tabulator's input width:100% */
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.rc-date-range-filter {
+  width: 100%;
+}

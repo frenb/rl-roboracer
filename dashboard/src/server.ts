@@ -18,6 +18,12 @@ export const createServer = (config): express.Application => {
   var jobsChanged = true;
   var modelsChanged = true;
   var leaderboardScoresChanged = true;
+  // The env_specs collection holds one document per robot_type
+  // describing the live env's observation / action spec. Populated by
+  // robotaxi.py's publish_env_spec() at every TRAIN / EVAL job start.
+  // Used by the Models tab's "Compat" column to flag rows whose
+  // training-time spec no longer matches the running env.
+  var envSpecsChanged = true;
   var MongoClient = mongoDB.MongoClient;
   var url = process.env.MONGODB_URL || "mongodb://root:example@mongo:27017";
   var dbo;
@@ -39,6 +45,7 @@ export const createServer = (config): express.Application => {
     const jobs = dbo.collection("jobs");
     const models = dbo.collection("models");
     const leaderboardScores = dbo.collection("leaderboard_scores");
+    const envSpecs = dbo.collection("env_specs");
     
     const jobsChangeStream = jobs.watch();
     jobsChangeStream.on('change', (change) => {
@@ -58,6 +65,12 @@ export const createServer = (config): express.Application => {
       leaderboardScoresChanged=true;
     });
 
+    const envSpecsChangeStream = envSpecs.watch();
+    envSpecsChangeStream.on('change', (change) => {
+      console.log('Change detected (env_specs):', change);
+      envSpecsChanged=true;
+    });
+
   });
 
   if (config.logging != "none") {
@@ -74,11 +87,6 @@ export const createServer = (config): express.Application => {
     const lb: string = path.join(__dirname, '/../leaderboard.html');
     res.sendFile(lb);
   });
-  app.get('/job_form', (req, res) => {
-    const lb: string = path.join(__dirname, '/../job_form.html');
-    res.sendFile(lb);
-  });
-
   var needsUpdate = function (req, changed) {
     var force = (req.query.force == 'true');
     console.log(`force: ${force} req.query.force: ${req.query.force} jobsChanged: ${changed}`);
@@ -176,6 +184,16 @@ export const createServer = (config): express.Application => {
     const lb: string = path.join(__dirname, '/../models.html');
     res.sendFile(lb);
   });
+
+  // Side-by-side model comparison view. Reachable both as a standalone
+  // page and as a GoldenLayout tab; the heavy lifting (joining models
+  // with leaderboard_scores, computing stats) is done client-side from
+  // the existing /get_models and /leaderboard_scores endpoints, so no
+  // dedicated data endpoint is needed here.
+  app.get('/analysis', (req, res) => {
+    const lb: string = path.join(__dirname, '/../analysis.html');
+    res.sendFile(lb);
+  });
   app.get('/get_models', (req,res) => {
     if(needsUpdate(req, modelsChanged))
     {
@@ -189,6 +207,28 @@ export const createServer = (config): express.Application => {
       return;
     }
     console.log(`No models retrieved`);
+    res.status(200).send('NO_CHANGES');
+  });
+
+  // env_specs: one document per robot_type, written by
+  // publish_env_spec() in rl_agent/robotaxi.py whenever a TRAIN or
+  // EVAL job starts. The Models tab fetches this alongside
+  // /get_models and /leaderboard_scores so the "Compat" column can
+  // compare each model's stored observation/action spec against the
+  // live env's. Same NO_CHANGES short-circuit as the other read-only
+  // endpoints to keep the dashboard polling cheap.
+  app.get('/get_env_specs', (req,res) => {
+    if(needsUpdate(req, envSpecsChanged))
+    {
+      envSpecsChanged=false;
+      dbo.collection("env_specs").find({}).toArray(function(err, result) {
+        if (err) throw err;
+        console.log(`${result.length} env_specs retrieved`)
+        res.json(result)
+      });
+      return;
+    }
+    console.log(`No env_specs retrieved`);
     res.status(200).send('NO_CHANGES');
   });
  

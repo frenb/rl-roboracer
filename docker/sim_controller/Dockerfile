@@ -31,6 +31,16 @@ RUN pip3 install pymongo
 RUN pip3 install numpy==1.23.1
 RUN pip3 install scipy
 RUN pip install --upgrade pip
+# uvloop: Cython wrapper around libuv that replaces asyncio's pure-
+# Python event loop with a much faster C implementation. The trainer's
+# RobotApi runs every Unity-side step through asyncio (publish
+# sim_command, await apply_force_event, await scene_data_events),
+# typically ~60 round-trips/sec across 2 actors, so the asyncio loop
+# is in the hot path. uvloop.install() is wired up at the top of
+# rl_agent/robotaxi.py and rl_agent/envs.py with a try/except
+# fallback, so if pip ever fails to install it the code degrades
+# gracefully to the stdlib loop instead of crashing.
+RUN pip3 install uvloop
 
 ENV PYTHON_WORKSPACE=/python_ws
 ENV ROS_WORKSPACE=/catkin_ws

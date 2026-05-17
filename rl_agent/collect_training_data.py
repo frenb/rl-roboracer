@@ -383,6 +383,97 @@ def train_agent(root_dir, training_steps=10000):
 
     save_policy(policy, training_steps)
 
+def bc_pretrain_actor_net(
+        actor_net, time_step_spec, action_spec, strategy,
+        trajectory_dataset, training_steps=1000, batch_size=256,
+        learning_rate=3e-5):
+    """BC-supervise ``actor_net``'s weights on expert demonstrations.
+
+    Pure SAC's actor loss is ``-E_s[Q(s, pi(s)) + alpha * H(pi)]`` where
+    ``pi(s)`` is sampled from the policy itself, NOT from the replay
+    buffer's action column. Expert *actions* loaded into the buffer
+    therefore never enter the actor's gradient directly - they only
+    influence the actor indirectly, via the critic absorbing them and
+    shaping ``Q(s, a)`` over many gradient steps. That indirect signal
+    is too slow: pure-SAC-from-random-init takes O(thousands) of
+    iterations to approximate the expert distribution, by which point
+    the buffer has diluted with on-policy data and the expert anchor
+    has been Fifo-evicted.
+
+    This function bridges that gap by running supervised BC gradient
+    steps directly on ``actor_net`` before SAC takes over. Because
+    ``tf_agent.actor_network is actor_net`` (same Python object),
+    weight updates here are immediately visible to the SAC agent. SAC
+    starts with a near-expert policy, evals well from step 0, and the
+    historical "starts at 20-40 goals, drifts down as buffer dilutes"
+    curve is recovered. (For the modern alternative, add a BC loss
+    term to SAC's actor loss instead of running this as a separate
+    phase - see TD3+BC, AWAC.)
+
+    Caller is expected to have already imported the expert demos as a
+    ``tf.data.Dataset`` of unbatched single-step ``Trajectory``
+    objects, the same format that ``robotaxi.main()`` already builds
+    via ``tf.data.Dataset.from_tensor_slices(aligned_trajectories)``.
+
+    Args:
+      actor_net: the same ``ActorDistributionNetwork`` instance that
+        was passed as ``actor_network`` to the SAC agent.
+      time_step_spec, action_spec: as returned by
+        ``spec_utils.get_tensor_specs(env)`` in the caller.
+      strategy: the ``MirroredStrategy`` (or whatever) returned by
+        ``strategy_utils.get_strategy(...)``. The BC agent must be
+        constructed under the same scope so its variables live on the
+        same devices as the SAC agent's.
+      trajectory_dataset: ``tf.data.Dataset`` of single-step
+        ``Trajectory`` objects (no leading batch or time dim per
+        element). Will be ``shuffle().batch(batch_size).repeat()``
+        internally.
+      training_steps: number of BC gradient updates. 1000 matches the
+        historical pre-loop pretraining call before the move to this
+        repo (commit dfef1f8) commented it out.
+      batch_size: rows per BC gradient update. 256 matches SAC's
+        batch_size so the BC and SAC training-time costs are
+        comparable per-step.
+      learning_rate: Adam LR for the BC optimizer. The BC optimizer is
+        separate from SAC's actor optimizer - we only share the
+        underlying network weights, not optimizer slots.
+    """
+    print(f"BC pretraining actor_net for {training_steps} steps "
+          f"(batch_size={batch_size}, lr={learning_rate})...", flush=True)
+
+    with strategy.scope():
+        bc_optimizer = tf.compat.v1.train.AdamOptimizer(
+            learning_rate=learning_rate)
+        bc_agent = behavioral_cloning_agent.BehavioralCloningAgent(
+            time_step_spec=time_step_spec,
+            action_spec=action_spec,
+            cloning_network=actor_net,
+            optimizer=bc_optimizer,
+            num_outer_dims=1)
+        bc_agent.initialize()
+
+    # shuffle().batch().repeat(): each BC step sees a fresh batch
+    # sampled (with replacement across epochs) from the expert demos.
+    # buffer_size=10000 is large enough for good shuffling on the 50k
+    # expert items we typically load while keeping memory bounded.
+    bc_dataset = (trajectory_dataset
+                  .shuffle(buffer_size=10000)
+                  .batch(batch_size)
+                  .prefetch(10)
+                  .repeat())
+    bc_iter = iter(bc_dataset)
+
+    for bc_step in range(training_steps):
+        batch = next(bc_iter)
+        loss_info = bc_agent.train(batch)
+        if bc_step % 100 == 0:
+            print(f"  BC step {bc_step}/{training_steps}: "
+                  f"loss={loss_info.loss.numpy():.4f}", flush=True)
+
+    print(f"BC pretraining done (final loss={loss_info.loss.numpy():.4f}).",
+          flush=True)
+
+
 def train_agent_sampling(
         actor_net, root_dir, training_steps=10000, 
         sampling_fraction=1.0, parsed_dataset=None):

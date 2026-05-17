@@ -20,9 +20,43 @@ Why a daemon thread per env (rather than `asyncio.run`):
     dies with the process, no manual cleanup needed.
 """
 
+# Install uvloop as the asyncio event-loop policy BEFORE the first
+# `asyncio.new_event_loop()` call below in `_start_loop_thread`.
+# Mirrors the install block at the top of robotaxi.py - we need it
+# here too because ParallelPyEnvironment spawns subprocess workers
+# that re-import this module fresh; the parent's loop policy doesn't
+# propagate, so each subprocess must call uvloop.install() itself
+# before its first loop is created.
+#
+# See robotaxi.py for the full rationale (Cython libuv-backed loop,
+# 2-4x speedup on the DoApplyForce hot path, etc.). Linux/macOS only;
+# try/except so a missing uvloop falls back gracefully to the stdlib
+# loop instead of crashing module import.
+try:
+    import uvloop
+    uvloop.install()
+except ImportError:
+    pass
+
 import asyncio
 import sys
 import threading
+
+# Verify uvloop actually took over the asyncio event-loop policy in
+# this subprocess. Each ParallelPyEnvironment worker re-imports this
+# module fresh, so this line fires once per worker - with the
+# _PrefixedStream wrapper installed by _install_actor_prefix below,
+# the messages render as e.g. "[actor-0] event loop policy: ...".
+#
+# Inspects the policy class rather than calling get_event_loop()
+# because modern uvloop's get_event_loop() raises RuntimeError when
+# there is no current loop in the thread. Reading the policy is
+# safe at any time and answers the same question.
+#
+# Remove once the swap is confirmed sticking.
+_policy_t = type(asyncio.get_event_loop_policy())
+print(f"event loop policy: {_policy_t.__module__}.{_policy_t.__name__}", flush=True)
+del _policy_t
 
 from api import RobotApi
 from environments import RobotaxiEnv
