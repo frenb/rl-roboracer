@@ -185,20 +185,57 @@ def read_timeout_counts(env):
     Parallel envs: dispatch to each underlying ProcessPyEnvironment and
     sum.
 
-    The returned dict has the four counter keys
+    The returned dict has the five counter keys
     ('reset_timeouts', 'apply_force_timeouts', 'scene_data_timeouts',
-    'move_timeouts'); the trainer prefixes them with 'timeouts/' when
-    writing to tf.summary so they group together in TensorBoard's UI.
+    'move_timeouts', 'publish_timeouts'); the trainer prefixes them
+    with 'timeouts/' when writing to tf.summary so they group together
+    in TensorBoard's UI.
+
+    publish_timeouts in particular catches the case where the gRPC
+    channel to ros-server goes stale (historically after a long no-
+    traffic window like BC pretraining) and a Publish RPC hits its
+    client-side DEADLINE_EXCEEDED rather than completing. Before that
+    counter existed the failure mode was a silent deadlock; now it
+    surfaces as a tick on the TensorBoard scalar.
     """
     from tf_agents.environments import parallel_py_environment
     keys = ['reset_timeouts', 'apply_force_timeouts',
-            'scene_data_timeouts', 'move_timeouts']
+            'scene_data_timeouts', 'move_timeouts', 'publish_timeouts']
     if isinstance(env, parallel_py_environment.ParallelPyEnvironment):
         promises = [proc_env.call('get_timeout_counts')
                     for proc_env in env._envs]
         per_actor = [promise() for promise in promises]
         return {k: sum(d.get(k, 0) for d in per_actor) for k in keys}
     return env.get_timeout_counts()
+
+
+def read_course_raw_counters(env):
+    """Read the inner course's raw counters from a (possibly batched) env.
+
+    Single env: just delegate to env.get_course_raw_counters().
+    Parallel envs: dispatch to each underlying ProcessPyEnvironment and
+    SUM across actors. Summing (rather than averaging) is correct
+    because raw counters are accumulating tallies (total speed across
+    all steps, total episode count, etc.); the consumer in run_policy
+    snapshots this sum before and after each trial and divides
+    appropriate-numerator-deltas by appropriate-denominator-deltas to
+    get the per-trial average across all actors' contribution.
+
+    Returns a dict with the same keys as ``BaseCourse.RAW_COUNTER_KEYS``.
+    Missing keys default to 0 so a course that doesn't track a
+    particular counter cleanly contributes nothing rather than
+    breaking the aggregation.
+    """
+    from tf_agents.environments import parallel_py_environment
+    keys = ('steps_total', 'num_episodes_total', 'speeds_total',
+            'goals_per_episode_total', 'steering_angle_ratio_total')
+    if isinstance(env, parallel_py_environment.ParallelPyEnvironment):
+        promises = [proc_env.call('get_course_raw_counters')
+                    for proc_env in env._envs]
+        per_actor = [promise() for promise in promises]
+        return {k: float(sum(d.get(k, 0) for d in per_actor)) for k in keys}
+    raw = env.get_course_raw_counters()
+    return {k: float(raw.get(k, 0)) for k in keys}
 
 
 def read_course_metrics(env):
@@ -268,6 +305,79 @@ def configure_env(env, job_id="", pass_through_actions=False):
         env.configure(job_id, pass_through_actions)
 
 
+def install_reward_design_on_env(env, name, code):
+    """Install a reward design on the env (single- or multi-env aware).
+
+    Mirrors configure_env's dispatch pattern: in multi-env training the
+    course instances live inside subprocess envs (ParallelPyEnvironment),
+    so we have to ask each ProcessPyEnvironment to compile and install
+    the design inside its own process via the .call() proxy.
+
+    The user code is a string (not function objects), so it serialises
+    cleanly across the process boundary - each subprocess does its own
+    compile + monkey-patch via RobotaxiEnv.install_reward_design.
+
+    Returns:
+      A dict ``{installed: [fn_names], penalty_reward: float, actors: int}``
+      summarising what was patched. For multi-env training we report the
+      union of installed function names across actors and the actor count;
+      the dict shape matches the single-env case so callers can log
+      uniformly. None is never returned on a successful install - any
+      failure raises RewardDesignError.
+
+    Raises:
+      rl_agent.reward_designs.RewardDesignError if the design fails to
+      compile/load in any sub-env. Caller in do_job catches this and
+      surfaces as job.eval_error.
+    """
+    from tf_agents.environments import parallel_py_environment
+    if isinstance(env, parallel_py_environment.ParallelPyEnvironment):
+        promises = [
+            proc_env.call('install_reward_design', name, code)
+            for proc_env in env._envs
+        ]
+        # Wait for all installs so any RewardDesignError propagates
+        # before training starts (rather than at the first env step
+        # of some actor). We capture each actor's returned dict so the
+        # caller (main()) can log the actual list of patched function
+        # names rather than just "installed=None" (which was a logging
+        # bug that hid whether the install actually took effect).
+        per_actor = []
+        for promise in promises:
+            per_actor.append(promise())
+        installed = sorted({
+            fn
+            for result in per_actor
+            if isinstance(result, dict)
+            for fn in (result.get("installed") or [])
+        })
+        penalty_reward = next(
+            (result.get("penalty_reward") for result in per_actor
+             if isinstance(result, dict) and result.get("penalty_reward") is not None),
+            None)
+        return {
+            "installed": installed,
+            "penalty_reward": penalty_reward,
+            "actors": len(per_actor),
+        }
+    else:
+        result = env.install_reward_design(name, code)
+        # Single-env path returns the raw dict from install_on_course
+        # ({installed, penalty_reward}); wrap with actors=1 to match
+        # the multi-env shape so the caller can render both uniformly.
+        if isinstance(result, dict):
+            return {
+                "installed": list(result.get("installed") or []),
+                "penalty_reward": result.get("penalty_reward"),
+                "actors": 1,
+            }
+        # Defensive fallback in case a future env subclass returns
+        # something else - we still know the install didn't raise, so
+        # we report an unknown-names success rather than masking the
+        # outcome as None.
+        return {"installed": [], "penalty_reward": None, "actors": 1}
+
+
 def main(
     job_id="",
     num_envs=1,
@@ -306,7 +416,23 @@ def main(
     num_eval_episodes_val=10,
     eval_interval_val=5000,
     policy_save_interval_val=50,
-    model_type="SacAgent"):
+    model_type="SacAgent",
+    # ---- Reward-design plumbing -------------------------------------
+    # When the user submits a TRAIN job with a reward_design_id field,
+    # do_job fetches the matching reward_designs document from MongoDB
+    # and passes the relevant pieces through here. ``reward_design`` is
+    # the whole document (dict) so we can stamp id+version+code onto
+    # every saved-model record via add_model() below; ``None`` means
+    # "use the course's default reward formulas" (existing behavior).
+    reward_design=None,
+    # ---- Seed plumbing ----------------------------------------------
+    # Optional RNG seed used for the bit-identical validation
+    # procedure (see rl_agent/reward_designs.py docs). When set, we
+    # seed every RNG we know about (Python's random, numpy, TF) so
+    # paired single-env training runs are reproducible. The env's
+    # subprocess-level seed gets propagated via the standard
+    # tf-agents ParallelPyEnvironment seeding path when num_envs > 1.
+    seed=None):
 
     #tempdir = tempfile.gettempdir()
     tempdir = "/tmp/active/"
@@ -354,6 +480,70 @@ def main(
     # value never took effect. Preserve that here by passing False directly.
     configure_env(env, job_id=job_id, pass_through_actions=False)
     print(f"pass_through_actions: False")
+
+    # Seed every RNG we know about so bit-identical comparison runs are
+    # reproducible when the caller supplies a fixed `seed`. Only runs
+    # for single-env training; multi-env (--num-envs > 1) has its own
+    # subprocess-level seed dispatch which we don't try to coordinate
+    # here. Pass `seed=None` (the default) to keep the historical
+    # nondeterministic behavior.
+    if seed is not None:
+        try:
+            import random
+            random.seed(int(seed))
+            np.random.seed(int(seed))
+            tf.random.set_seed(int(seed))
+            print(f"main: seeded RNGs with seed={seed}", flush=True)
+        except Exception as e:
+            print(f"main: failed to seed RNGs ({e}); continuing without seed",
+                  flush=True)
+
+    # Install the reward design on the env's course (single-env via
+    # direct call; multi-env dispatches through ParallelPyEnvironment).
+    # If this fails we let the exception propagate up to do_job which
+    # records it as job.eval_error and marks the job DONE - no point
+    # training a model whose reward formula didn't even load.
+    if reward_design and reward_design.get("code"):
+        rd_name = reward_design.get("name", "<unnamed>")
+        try:
+            result = install_reward_design_on_env(
+                env, rd_name, reward_design["code"])
+            # Surface the FULL install result so operators can confirm
+            # which scalar reward methods got monkey-patched (and which
+            # were left as course defaults). Empty list = nothing got
+            # patched, which technically counts as success here only
+            # because load_reward_design would have raised if it could
+            # find no functions at all - but we make it visible so the
+            # user can tell at a glance.
+            installed = (result.get("installed") if isinstance(result, dict) else []) or []
+            actors = result.get("actors") if isinstance(result, dict) else 1
+            penalty = result.get("penalty_reward") if isinstance(result, dict) else None
+            if installed:
+                print(
+                    f"main: installed reward design name={rd_name!r} "
+                    f"version={reward_design.get('version')} "
+                    f"installed={installed} "
+                    f"actors={actors} "
+                    f"penalty_reward={penalty}",
+                    flush=True)
+            else:
+                # Loud warning so a no-op install (nothing was patched
+                # despite a design being selected) doesn't pass silently.
+                # This can happen if a future change loosens
+                # load_reward_design to tolerate signature mismatches
+                # by skipping them - operators should still see it here.
+                print(
+                    f"main: WARNING reward design name={rd_name!r} "
+                    f"version={reward_design.get('version')} loaded but "
+                    f"no functions were patched (installed=[], actors={actors}). "
+                    f"The course is still using its default reward formulas. "
+                    f"Check that your design defines reward_standard / "
+                    f"reward_success / reward_failure with the expected signatures.",
+                    flush=True)
+        except Exception as e:
+            print(f"main: reward design {rd_name!r} failed to install: {e}",
+                  flush=True)
+            raise
     # Critic network.
     observation_spec, action_spec, time_step_spec = (
         spec_utils.get_tensor_specs(env))
@@ -709,6 +899,30 @@ def main(
     min_write_step = 0
 
     for _ in range(num_iterations):
+        # Cooperative cancellation. The dashboard's Jobs-tab "Set to
+        # done" button writes status=DONE directly to Mongo without
+        # touching the trainer process; without this check the
+        # trainer would keep training against an officially-completed
+        # job for hours. One sub-millisecond Mongo find_one per
+        # iteration is cheap relative to the ~250ms an iteration
+        # takes; we eat that for crisp UX: clicks become effective
+        # within a single iteration (sub-second under normal load).
+        #
+        # We also handle Ctrl-C / SIGTERM via a separate KeyboardInterrupt
+        # catch in run_jobs_loop, so this branch is specifically for
+        # the "operator changed their mind via the dashboard" case, not
+        # for container shutdown.
+        if _is_job_cancelled(job_id):
+            print(
+                f"main: job {job_id} status changed externally; "
+                f"breaking out of training loop at iter "
+                f"{curr_iteration + 1}/{num_iterations} "
+                f"(train_step={int(train_step.numpy())}). "
+                f"do_job will skip the trailing status update so the "
+                f"externally-set status is preserved.",
+                flush=True)
+            break
+
         def diagnostic_check():
             print("\n--- DIAGNOSTIC CHECK ---")
             # 1. Check if the environment is giving rewards
@@ -849,7 +1063,16 @@ def main(
                     training_iterations,
                     avg_return=metrics["AverageReturn"],
                     observation_spec=observation_spec,
-                    action_spec=action_spec)
+                    action_spec=action_spec,
+                    # Capture which reward design produced this
+                    # checkpoint so the Models tab can label it and
+                    # the Analysis tab can group/compare by design.
+                    # None when training used the course default.
+                    reward_design=reward_design,
+                    # Stamp the training job id so the Models tab can
+                    # link each row back to its TensorBoard run for
+                    # the multi-model TB comparison flow.
+                    job_id=job_id)
                 saved_checkpoint = True
 
             eval_cycle_elapsed = time.time() - eval_cycle_start
@@ -881,7 +1104,43 @@ def main(
     # model_type=get_policy_type_name(tf_agent)
     # training_iterations=num_iterations
     # add_model(save_dir_name, robot_type, model_type, training_iterations)
- 
+
+
+# Internal control-flow exception for cooperative cancellation inside
+# run_policy. Raised by the per-chunk _is_job_cancelled() check inside
+# run_one_trial; caught by the outer trial loop so we can return the
+# partial results collected so far without inventing a special return-
+# tuple shape. Subclasses Exception (not BaseException) so a stray
+# try/except in calling code still catches it - but the only code
+# expected to catch this name is run_policy itself.
+class _EvalCancelled(Exception):
+    pass
+
+
+def _build_eval_result(returns, episode_lengths, avg_speeds,
+                       avg_goals_per_episode, avg_steering_angle_ratios,
+                       partial=False):
+    """Package run_policy's per-trial metric arrays into the dict
+    save_results_to_db consumes.
+
+    Centralised here so the two return paths in run_policy (clean
+    completion + cancellation) construct the dict identically.
+
+    ``partial=True`` is set on the cancellation path; consumers that
+    care about distinguishing complete-eval from cancelled-eval can
+    branch on it (currently save_results_to_db treats both the
+    same - records whatever data we have).
+    """
+    return {
+        "returns": returns,
+        "episode_lengths": episode_lengths,
+        "avg_speeds": avg_speeds,
+        "avg_goals_per_episode": avg_goals_per_episode,
+        "avg_steering_angle_ratios": avg_steering_angle_ratios,
+        "partial": partial,
+    }
+
+
 def run_policy(saved_policy, tf_env, job_id="",
                                   max_episodes=3,
                                   num_eval_episodes=5,
@@ -954,10 +1213,52 @@ def run_policy(saved_policy, tf_env, job_id="",
     debug_print("after eval actor")
     print(eval_actor.metrics)
 
+    # Total episodes across the full EVAL run = trials x episodes/trial.
+    # Used by both the per-chunk progress update below and the
+    # cancellation-check log line.
+    total_episodes_target = max(1, max_episodes * num_eval_episodes)
+
+    def _update_eval_progress(trial_idx, episodes_done_in_trial):
+        """Stamp percent_complete on the job document.
+
+        Mirrors the per-eval-cycle update in main()'s TRAIN loop so the
+        Jobs tab's progress bar updates live for EVAL jobs too (previously
+        EVAL jobs sat at 0% the entire run since nobody wrote
+        percent_complete during the eval loop).
+
+        Computation: each trial contributes a flat
+        ``num_eval_episodes`` slice of the total budget; within the
+        active trial we grow linearly by ``episodes_done_in_trial``.
+        Capped at 100 because the LAST-step transition can push
+        ``episodes_metric`` one episode past the target on the final
+        chunk (we'd otherwise show 101%, which the dashboard's bar
+        renderer clamps anyway but reads oddly in the Mongo doc).
+
+        Best-effort: a Mongo blip during the eval shouldn't take the
+        whole job with it. We log and continue.
+        """
+        if not job_id:
+            return
+        completed = (trial_idx - 1) * num_eval_episodes + episodes_done_in_trial
+        pct = max(0.0, min(100.0, 100.0 * completed / total_episodes_target))
+        try:
+            update_job(job_id, pct, "percent_complete")
+        except Exception as e:  # noqa: BLE001
+            print(f"_update_eval_progress: Mongo update failed: {e}",
+                  flush=True)
+
     def run_one_trial(trial_idx):
         """Step the env in log_interval-sized chunks until
         num_eval_episodes episodes have completed. Returns the final
-        per-trial metric dict.
+        per-trial metric dict + the per-trial COURSE counter delta.
+
+        The course counter delta is computed by snapshotting
+        ``read_course_raw_counters(tf_env)`` BEFORE the trial starts
+        and again at the end. The Analysis tab uses these per-trial
+        deltas to compute reward-design-invariant metrics (goals per
+        episode, average speed, steering-angle ratio) that can be
+        meaningfully compared across models trained with different
+        reward designs - which avg_return cannot.
         """
         # Reset metrics at the start of each trial so AverageReturn /
         # AverageEpisodeLength reflect only this trial's episodes; the
@@ -966,8 +1267,42 @@ def run_policy(saved_policy, tf_env, job_id="",
             m.reset()
         episodes_metric.reset()
 
+        # Snapshot the underlying course counters BEFORE the trial.
+        # The course's metric machinery accumulates raw sums over the
+        # env's lifetime; subtracting the pre-trial snapshot from the
+        # post-trial snapshot gives us the per-trial averages without
+        # needing to mutate course state mid-run. read_course_raw_counters
+        # transparently handles single-env vs ParallelPyEnvironment.
+        try:
+            counters_before = read_course_raw_counters(tf_env)
+        except Exception as e:  # noqa: BLE001
+            # Defensive: if the course doesn't track raw counters
+            # (e.g., a future course without RAW_COUNTER_KEYS) we
+            # gracefully degrade to zero deltas, which the consumer
+            # treats as "metric unavailable".
+            print(f"run_one_trial: counters_before read failed: {e}",
+                  flush=True)
+            counters_before = {}
+
         step = 0
         while int(episodes_metric.result()) < num_eval_episodes:
+            # Cooperative cancellation, same pattern as main()'s TRAIN
+            # loop. Lets the dashboard's "Set to done" button stop a
+            # multi-trial EVAL run within one env-chunk (~2-5s) rather
+            # than waiting potentially minutes for the full trial loop
+            # to drain.
+            if _is_job_cancelled(job_id):
+                print(
+                    f"run_one_trial: job {job_id} status changed externally; "
+                    f"breaking out of trial {trial_idx} at "
+                    f"episode {int(episodes_metric.result())}/"
+                    f"{num_eval_episodes}.",
+                    flush=True)
+                # Surface to the outer loop via a sentinel exception so
+                # the rest of run_policy can stop without inventing a
+                # return-tuple-shape change just for this case.
+                raise _EvalCancelled()
+
             eval_actor.run()
             step += log_interval
             episodes_done = int(episodes_metric.result())
@@ -977,24 +1312,144 @@ def run_policy(saved_policy, tf_env, job_id="",
             print('trial {0}: step = {1}: {2}/{3} episodes, {4}'.format(
                 trial_idx, step, episodes_done, num_eval_episodes, partial),
                 flush=True)
+            # Stamp the latest percent_complete on the job after each
+            # progress print. Cadence matches the print's (one
+            # log_interval ≈ 2-5s under normal load), which is dense
+            # enough for a smooth Jobs-tab bar without churning Mongo.
+            _update_eval_progress(trial_idx, min(episodes_done, num_eval_episodes))
 
-        return {m.name: m.result() for m in eval_metrics_list}
+        # Post-trial counter snapshot. Subtract from pre-trial to get
+        # this trial's contribution. Course counter deltas can be 0
+        # when the course doesn't track that key (SimpleCourse) or
+        # when no time elapsed in that dimension (e.g., episodes that
+        # were too short for the speed accumulator); the consumer
+        # handles those as missing.
+        try:
+            counters_after = read_course_raw_counters(tf_env)
+        except Exception as e:  # noqa: BLE001
+            print(f"run_one_trial: counters_after read failed: {e}",
+                  flush=True)
+            counters_after = {}
+
+        counter_delta = {
+            k: float(counters_after.get(k, 0) - counters_before.get(k, 0))
+            for k in (counters_after.keys() | counters_before.keys())
+        }
+
+        tf_metrics_result = {m.name: m.result() for m in eval_metrics_list}
+        return tf_metrics_result, counter_delta
 
     def log_eval_metrics(trial_idx, metrics):
         eval_results = (', ').join(
             '{} = {:.6f}'.format(name, result) for name, result in metrics.items())
         print('trial {0} final: {1}'.format(trial_idx, eval_results), flush=True)
 
+    # Stamp 0% at the start so the Jobs tab transitions from "no bar"
+    # to "0% bar present" immediately, signalling that the eval kicked
+    # off. Without this the bar stays at whatever ghost value Mongo
+    # had (typically null, rendered as no bar) until the first chunk
+    # completes - which can be 10+ seconds on a slow first-episode
+    # reset.
+    _update_eval_progress(trial_idx=1, episodes_done_in_trial=0)
+
+    # Per-trial arrays. ``returns`` is the legacy (reward-shaped)
+    # AverageReturn array; ``episode_lengths`` / ``avg_speeds`` /
+    # ``avg_goals_per_episode`` / ``avg_steering_angle_ratios`` are
+    # the reward-DESIGN-INVARIANT metrics the Analysis tab uses for
+    # apples-to-apples comparison across models trained with
+    # different reward shapings. Each array has exactly one entry per
+    # completed trial. Parallel indexing - returns[i] and
+    # avg_speeds[i] both refer to trial i+1.
+    returns = []
+    episode_lengths = []
+    avg_speeds = []
+    avg_goals_per_episode_arr = []
+    avg_steering_angle_ratios = []
+
+    def _safe_div(num, den):
+        """Treat 0/0 (no episodes / no steps in this trial) as None.
+
+        Returning None instead of 0 communicates "metric unavailable
+        for this trial" (caller filters None out before computing
+        stats) rather than "metric was zero" (which would skew means
+        toward 0).
+        """
+        if den == 0:
+            return None
+        return float(num) / float(den)
+
     curr_trial=0
-    returns=[]
-    while curr_trial < max_episodes:
-        debug_print("in loop")
-        metrics = run_one_trial(curr_trial + 1)
-        log_eval_metrics(curr_trial + 1, metrics)
-        avg_return = metrics["AverageReturn"]
-        returns.append(avg_return)
-        curr_trial=curr_trial+1
-    return returns
+    try:
+        while curr_trial < max_episodes:
+            debug_print("in loop")
+            metrics, counter_delta = run_one_trial(curr_trial + 1)
+            log_eval_metrics(curr_trial + 1, metrics)
+            # avg_return = the tf-agents AverageReturn metric for this
+            # trial. Legacy field name kept for back-compat.
+            avg_return = metrics["AverageReturn"]
+            returns.append(float(avg_return))
+            # AverageEpisodeLength comes free from tf-agents'
+            # eval_metrics list. Previously we computed and threw it
+            # away; now it's persisted as a reward-invariant signal
+            # of "how long the agent survives" (longer = better for
+            # navigation tasks).
+            ep_len = metrics.get("AverageEpisodeLength")
+            episode_lengths.append(
+                float(ep_len) if ep_len is not None else None)
+            # Course-level unbiased metrics from the counter delta.
+            # avg_speed = total speed / total steps for this trial.
+            # avg_goals_per_episode = total goals / total episodes.
+            # avg_steering_angle_ratio = total ratio / total steps.
+            steps_delta = counter_delta.get('steps_total', 0)
+            episodes_delta = counter_delta.get('num_episodes_total', 0)
+            speeds_delta = counter_delta.get('speeds_total', 0)
+            goals_delta = counter_delta.get('goals_per_episode_total', 0)
+            steering_delta = counter_delta.get('steering_angle_ratio_total', 0)
+            avg_speeds.append(_safe_div(speeds_delta, steps_delta))
+            avg_goals_per_episode_arr.append(
+                _safe_div(goals_delta, episodes_delta))
+            avg_steering_angle_ratios.append(
+                _safe_div(steering_delta, steps_delta))
+            print(
+                f"trial {curr_trial + 1} unbiased: "
+                f"episode_length={episode_lengths[-1]} "
+                f"avg_speed={avg_speeds[-1]} "
+                f"avg_goals_per_episode={avg_goals_per_episode_arr[-1]} "
+                f"avg_steering_angle_ratio={avg_steering_angle_ratios[-1]}",
+                flush=True)
+            curr_trial=curr_trial+1
+            # Snap percent to the trial-boundary exactly. The per-chunk
+            # update inside run_one_trial may have lagged a beat (e.g.,
+            # if the final chunk happened to land right on the episode
+            # count without an extra progress print). Stamping the
+            # boundary here keeps the Jobs tab from showing e.g. 87%
+            # while the eval is actually fully done with trial 3 of 5.
+            _update_eval_progress(
+                trial_idx=curr_trial + 1, episodes_done_in_trial=0)
+    except _EvalCancelled:
+        # Cooperative cancellation. We've already logged the break;
+        # return whatever metrics we collected so far so the calling
+        # code in do_job can still record partial results (or, more
+        # commonly, the cancellation also marked the job DONE/FAILED
+        # and the caller skips writing).
+        return _build_eval_result(
+            returns, episode_lengths, avg_speeds,
+            avg_goals_per_episode_arr, avg_steering_angle_ratios,
+            partial=True)
+
+    # Final snap to 100% on a clean completion so the Jobs tab bar
+    # reaches full width even if the last per-chunk update landed
+    # at 99.something% due to integer rounding.
+    if job_id:
+        try:
+            update_job(job_id, 100.0, "percent_complete")
+        except Exception as e:  # noqa: BLE001
+            print(f"run_policy: final percent_complete update failed: {e}",
+                  flush=True)
+    return _build_eval_result(
+        returns, episode_lengths, avg_speeds,
+        avg_goals_per_episode_arr, avg_steering_angle_ratios,
+        partial=False)
 
 def get_saved_model(policy_type, version=None, path_arg=None):
     if path_arg is not None:
@@ -1344,7 +1799,8 @@ def _extract_savedmodel_specs(saved_policy):
 
 
 def add_model(path, robot_type, model_type, training_iterations, avg_return=None,
-              observation_spec=None, action_spec=None):
+              observation_spec=None, action_spec=None, reward_design=None,
+              job_id=None):
     """Persist a new saved-model record to MongoDB.
 
     Extended with ``observation_spec`` / ``action_spec`` kwargs so the
@@ -1353,6 +1809,24 @@ def add_model(path, robot_type, model_type, training_iterations, avg_return=None
     callers + RandomPyPolicy that doesn't actually have a learned
     spec); the dashboard renders missing specs as "unknown" compat
     rather than failing.
+
+    Also extended with ``reward_design``: the reward_designs document
+    that was active during this model's training, if any. We stamp the
+    design's id, version, name, AND raw code onto the model record so
+    historical models remain reproducible even if the design is later
+    edited or archived. Models trained without a reward design store
+    None in all those fields and render as "— default —" on the
+    Models tab's Reward column.
+
+    And extended with ``job_id``: the ObjectId of the TRAIN job that
+    produced this model. Stored as a string so it's JSON-friendly for
+    the dashboard's /get_models endpoint. The dashboard's
+    Models -> Analysis -> TensorBoard comparison flow uses this to
+    look up the model's TB run directory (``<job_id>/learner/...``
+    under /tmp/active or /tmp/jobsdata) and build a regex filter for
+    TB's run-name search box. Legacy models predating this field have
+    job_id=None and won't be filterable in TB; the new flow degrades
+    gracefully by just leaving those out of the filter pattern.
     """
     # "_id": ObjectID(),
     # model_type: 'SacAgent',
@@ -1362,6 +1836,18 @@ def add_model(path, robot_type, model_type, training_iterations, avg_return=None
     # robot_type: 'niryo'
     ts = time.time()
     iso_date = datetime.datetime.fromtimestamp(ts, None)
+    # Pull the reward-design metadata into top-level fields on the
+    # model record. We deliberately store the code STRING, not a
+    # reference - if the user later edits or deletes the original
+    # design, this record still tells us exactly what reward shaped
+    # the model.
+    if reward_design:
+        rd_id = reward_design.get("_id")
+        rd_version = reward_design.get("version")
+        rd_name = reward_design.get("name")
+        rd_code = reward_design.get("code")
+    else:
+        rd_id = rd_version = rd_name = rd_code = None
     db.models.insert_one(
         {
             "create_date": iso_date,
@@ -1371,35 +1857,101 @@ def add_model(path, robot_type, model_type, training_iterations, avg_return=None
             "training_iterations": training_iterations,
             "notes": "NA",
             "avg_return": float(avg_return) if avg_return is not None else None,
-            # New: spec metadata for compatibility checking at EVAL
-            # time and on the Models tab. _spec_to_dict handles None
-            # cleanly.
+            # Spec metadata for compatibility checking at EVAL time and
+            # on the Models tab. _spec_to_dict handles None cleanly.
             "observation_spec": _spec_to_dict(observation_spec),
             "action_spec": _spec_to_dict(action_spec),
+            # Reward-design provenance. All None when training used the
+            # course's default reward formulas (no design selected).
+            "reward_design_id": rd_id,
+            "reward_design_version": rd_version,
+            "reward_design_name": rd_name,
+            "reward_design_code": rd_code,
+            # Training-job id as a string so the dashboard can map this
+            # model back to its TensorBoard run directory for the
+            # multi-model comparison flow. None for legacy callers; the
+            # dashboard treats those as "not TB-filterable".
+            "job_id": str(job_id) if job_id is not None else None,
         })
 
 def save_results_to_db(path, results):
-    if not results or len(results) == 0:
-        print("Warning: No results to save. Skipping DB insert.")
-        return
+    """Persist an EVAL run's per-trial samples to db.leaderboard_scores.
+
+    ``results`` accepts either:
+      * a legacy list (just AverageReturn per trial), for back-compat
+        with any direct callers that haven't migrated, OR
+      * a dict produced by run_policy / _build_eval_result with the
+        full set of per-trial arrays (AverageReturn + episode length
+        + course-level unbiased metrics: speed, goals_per_episode,
+        steering_angle_ratio).
+
+    The leaderboard_scores schema gains four new parallel arrays
+    alongside the existing ``scores``:
+
+      episode_lengths           - tf-agents AverageEpisodeLength per trial
+      avg_speeds                - course speeds_total / steps_total per trial
+      avg_goals_per_episode     - course goals / episodes per trial
+      avg_steering_angle_ratios - course steering ratio sum / steps per trial
+
+    All four are reward-design INVARIANT, so the Analysis tab can use
+    them to compare models trained with different reward shapings.
+    A ``None`` entry in any of these arrays means "metric unavailable
+    for this trial" (e.g., the course doesn't track that counter, or
+    the trial completed zero episodes); the Analysis tab filters those
+    out before computing means / CIs.
+
+    The aggregate fields (mean_score, median_score, min_score,
+    max_score) are still computed off ``scores`` so existing
+    consumers (Leaderboard tab, /get_leaderboard_scores) keep working.
+    """
+    # Back-compat: accept the legacy list-of-floats shape too.
+    if isinstance(results, dict):
+        returns = results.get("returns") or []
+        episode_lengths = results.get("episode_lengths") or []
+        avg_speeds = results.get("avg_speeds") or []
+        avg_goals = results.get("avg_goals_per_episode") or []
+        avg_steering = results.get("avg_steering_angle_ratios") or []
     else:
-        print("Has results to save.")
+        returns = list(results or [])
+        episode_lengths = []
+        avg_speeds = []
+        avg_goals = []
+        avg_steering = []
+
+    if not returns:
+        print("Warning: No results to save. Skipping DB insert.", flush=True)
+        return
+    print("Has results to save.", flush=True)
     saved_model_object = db.models.find_one({"location": path})
+    if saved_model_object is None:
+        print(f"Warning: no model found at location {path}; skipping leaderboard_scores insert.",
+              flush=True)
+        return
     ts = time.time()
     iso_date = datetime.datetime.fromtimestamp(ts, None)
+    # Aggregate stats are computed off ``returns`` (the legacy
+    # AverageReturn array) for back-compat with the Leaderboard tab.
+    # The reward-invariant per-trial arrays are stored as-is for the
+    # Analysis tab to do its own aggregation.
     db.leaderboard_scores.insert_one(
         {
             "create_date": iso_date,
             "path": saved_model_object["location"],
-            "mean_score": float(np.mean(results)),
+            "mean_score": float(np.mean(returns)),
             "robot_type": saved_model_object["robot_type"],
             "model_type": saved_model_object["model_type"],
             "model_id": saved_model_object["_id"],
-            "median_score": float(np.median(results)),
-            "min_score": float(np.min(results)),
-            "max_score": float(np.max(results)),
-            "scores": np.asarray(results).tolist(),
-            "model_id": saved_model_object["_id"]
+            "median_score": float(np.median(returns)),
+            "min_score": float(np.min(returns)),
+            "max_score": float(np.max(returns)),
+            "scores": np.asarray(returns).tolist(),
+            # Reward-design-invariant per-trial arrays for the Analysis
+            # tab. Each is parallel-indexed with ``scores``. Entries
+            # can be None (= "metric unavailable for this trial").
+            "episode_lengths": list(episode_lengths),
+            "avg_speeds": list(avg_speeds),
+            "avg_goals_per_episode": list(avg_goals),
+            "avg_steering_angle_ratios": list(avg_steering),
         })
 
 def log_reward(job_id, type, score, diff=None, extra_data=None, step_costs=[], position_history=[],stat_array=[]):
@@ -1466,17 +2018,91 @@ def do_job(job, num_envs=1):
         actor_fc_layer_params_y=512 if job.get("nn_size_y") == None else int(job.get("nn_size_y"))
         critic_joint_fc_layer_params_x=512 if job.get("nn_size_x") == None else job.get("nn_size_x")
         critic_joint_fc_layer_params_y=512 if job.get("nn_size_y") == None else job.get("nn_size_y")
+        # Resolve the optional reward design and seed from the job
+        # document. reward_design_id can be either an ObjectID (sent
+        # by the future dashboard Reward-design tab) or the special
+        # string id used for the seeded passthrough design - look up
+        # by _id first, fall back to a stable string id match. None
+        # means "use course defaults" and we pass None down to main()
+        # which short-circuits the install. RewardDesignError raised
+        # inside main() is allowed to propagate; the standard
+        # eval_error capture at the bottom of this branch catches it.
+        reward_design_doc = None
+        rd_id_raw = job.get("reward_design_id")
+        if rd_id_raw:
+            from bson import ObjectId
+            try:
+                # Try ObjectId first - that's the common case for
+                # designs created via the dashboard.
+                reward_design_doc = db.reward_designs.find_one(
+                    {"_id": ObjectId(str(rd_id_raw))})
+            except Exception:
+                reward_design_doc = None
+            if reward_design_doc is None:
+                # Fall back to string match for the seeded passthrough
+                # design (whose _id is the string PASSTHROUGH_DESIGN_ID).
+                reward_design_doc = db.reward_designs.find_one(
+                    {"_id": str(rd_id_raw)})
+            if reward_design_doc and reward_design_doc.get("archived"):
+                # Archived designs still work for backward-compat with
+                # in-flight jobs, but log the fact so a user wondering
+                # "why is my training still using that design?" can
+                # find the answer in robotaxi.out.
+                print(
+                    f"do_job: reward design {rd_id_raw} is archived; "
+                    "using it for this job anyway. Unarchive on the "
+                    "Reward design tab if you want it visible in the "
+                    "new-job dropdown.", flush=True)
+            if reward_design_doc is None:
+                print(
+                    f"do_job: reward_design_id {rd_id_raw!r} not found in "
+                    "reward_designs collection; falling back to course "
+                    "defaults.", flush=True)
+        seed = job.get("seed")
+        try:
+            seed = int(seed) if seed not in (None, "") else None
+        except (TypeError, ValueError):
+            seed = None
         print(job)
         print(f"in do_job pass_through_actions: {pass_through_actions}")
-        main(job_id=job["_id"],
-            num_envs=num_envs,
-            num_iterations_val=num_iterations,
-            pass_through_actions=pass_through_actions,
-            actor_fc_layer_params_x=actor_fc_layer_params_x,
-            actor_fc_layer_params_y=actor_fc_layer_params_y,
-            critic_joint_fc_layer_params_x=critic_joint_fc_layer_params_x,
-            critic_joint_fc_layer_params_y=critic_joint_fc_layer_params_y,
-            eval_interval_val=10)
+        print(
+            f"in do_job reward_design={reward_design_doc.get('name') if reward_design_doc else None!r} "
+            f"version={reward_design_doc.get('version') if reward_design_doc else None} "
+            f"seed={seed}")
+        # Wrap main() in a RewardDesignError catch so a broken
+        # user-supplied reward design surfaces as job.eval_error (like
+        # the EvalSpecMismatchError flow below for EVAL) and the
+        # trainer can pick up the next queued job. Anything else
+        # propagates so real crashes still surface in full detail.
+        #
+        # NOTE on the import path: robotaxi.py runs with CWD set to
+        # /python_ws/src/ inside the sim-controller container (that's
+        # the bind-mount of host's ./rl_agent), so reward_designs.py
+        # is a SIBLING module, not under a `rl_agent` package. The
+        # bare-name `from reward_designs import ...` matches the
+        # existing convention `import collect_training_data` at the
+        # top of this file; `from rl_agent.reward_designs import ...`
+        # raises ModuleNotFoundError because Python doesn't see the
+        # `rl_agent` package from inside it.
+        from reward_designs import RewardDesignError
+        try:
+            main(job_id=job["_id"],
+                num_envs=num_envs,
+                num_iterations_val=num_iterations,
+                pass_through_actions=pass_through_actions,
+                actor_fc_layer_params_x=actor_fc_layer_params_x,
+                actor_fc_layer_params_y=actor_fc_layer_params_y,
+                critic_joint_fc_layer_params_x=critic_joint_fc_layer_params_x,
+                critic_joint_fc_layer_params_y=critic_joint_fc_layer_params_y,
+                eval_interval_val=10,
+                reward_design=reward_design_doc,
+                seed=seed)
+        except RewardDesignError as e:
+            err_msg = str(e)
+            print(
+                f"TRAIN reward design error for job {job['_id']}: {err_msg}",
+                flush=True)
+            update_job(job["_id"], err_msg, "eval_error")
     elif job_type == "EVAL":
         # Dispatch on model_type (a constrained dropdown in the
         # dashboard's job form: SacAgent / GreedyPolicy /
@@ -1547,12 +2173,33 @@ def do_job(job, num_envs=1):
         debug_print(location)
     else:
         return
-    # myquery = { "_id": job["_id"] }
-    # newvalues = { "$set": { "status": "DONE" } }
-    # print(f"updating job {job['_id']}")
-    # db.jobs.update_one(myquery,newvalues)
+    # End-of-job trailer.
+    #
+    # We unconditionally stamp ended_at so the Jobs tab's Duration
+    # column can show the run length.
+    #
+    # The status update is *conditional*: we only set status=DONE
+    # if the job is still IN_PROGRESS. This preserves any externally-
+    # written status (e.g., the dashboard's "Set to done" button
+    # producing a deliberate DONE while we were mid-training, or a
+    # future "Cancel" / "Mark failed" button). Without this guard the
+    # trainer would overwrite that user intent with another DONE
+    # (benign today, but it would clobber non-DONE statuses we add
+    # later).
     update_job(job["_id"], datetime.datetime.now(datetime.timezone.utc), "ended_at")
-    update_job(job["_id"], "DONE")
+    try:
+        current = db.jobs.find_one({"_id": job["_id"]}, {"status": 1})
+    except Exception:  # noqa: BLE001
+        current = None
+    current_status = (current or {}).get("status")
+    if current_status == "IN_PROGRESS":
+        update_job(job["_id"], "DONE")
+    else:
+        print(
+            f"do_job: skipping trailing status=DONE for {job['_id']} "
+            f"(status is already {current_status!r}; preserving external "
+            f"intent).",
+            flush=True)
 
 def move_all_jobs_data(id):
     """Archive every /tmp/active/ entry that isn't the current job's.
@@ -1655,6 +2302,47 @@ def update_job(id, value, field_name="status"):
     myquery = { "_id": id }
     newvalues = { "$set": { field_name: value } }
     db.jobs.update_one(myquery, newvalues)
+
+
+def _is_job_cancelled(job_id):
+    """Has the dashboard (or anything else) externally changed this job's status?
+
+    The trainer calls do_job() and then runs main()'s for-loop for up
+    to ``num_iterations`` iterations. While that's happening the
+    dashboard's "Set to done" button can write status=DONE to Mongo,
+    but the trainer has no awareness of it - it just keeps training
+    against a now-irrelevant job for potentially hours. This helper
+    is the polling-side of cooperative cancellation: the training loop
+    calls it once per iteration; True means "the operator wants out,
+    break the loop and let do_job's trailer stamp ended_at".
+
+    Treats any status OTHER than IN_PROGRESS as a cancellation signal -
+    so DONE, FAILED, NOT_STARTED, or any future status all stop the run.
+    Missing job_id (single-env training without one) is a safety-noop
+    that returns False so we never break a no-job-id run.
+
+    A one-field find_one against the local Mongo container is sub-
+    millisecond; comfortably cheaper than a 250ms env step. We use a
+    projection so we never accidentally drag the whole job document
+    across the wire when all we want is one string field.
+    """
+    if not job_id:
+        return False
+    try:
+        doc = db.jobs.find_one({"_id": job_id}, {"status": 1})
+    except Exception as e:  # noqa: BLE001
+        # Mongo wobble. Don't kill training over a transient lookup
+        # failure - the next iteration's check will pick up the
+        # cancellation when Mongo recovers.
+        print(f"_is_job_cancelled: lookup failed for {job_id}: {e}",
+              flush=True)
+        return False
+    if doc is None:
+        # Job was hard-deleted from Mongo. Treat as a cancellation:
+        # there's nothing for us to update at the end anyway.
+        return True
+    status = doc.get("status")
+    return status not in (None, "", "IN_PROGRESS")
 
 def run_randompolicy(job_id="", num_trials=None, num_eval_episodes=None):
     """Run a uniformly-random-action EVAL job as a baseline benchmark.
@@ -1827,6 +2515,71 @@ def debug_print(text):
     if debug_print_enabled:
         print(text)
 
+def _seed_canonical_reward_designs():
+    """Idempotent upsert of built-in reward designs at sim-controller start.
+
+    Currently seeds exactly one design: the canonical "Course default
+    (passthrough)" which forwards every reward call straight back to
+    the active course's default formula. Used as the validation
+    baseline for the reward-design system (see
+    rl_agent/reward_designs.py docstring) and as a starting template
+    for new shaping experiments.
+
+    The upsert is keyed by a stable string ``_id`` so this runs as a
+    no-op on every container restart after the first. Bumps the
+    ``version`` field whenever the canonical code changes so users
+    can tell which version of the seed they have.
+
+    Best-effort: failure to upsert is logged but doesn't block the
+    trainer (the user can still create reward designs manually via
+    the dashboard).
+    """
+    try:
+        # Bare-name sibling import; see the comment in do_job's TRAIN
+        # branch for why we don't use the `rl_agent.reward_designs`
+        # package path.
+        from reward_designs import (
+            PASSTHROUGH_DESIGN_ID,
+            PASSTHROUGH_DESIGN_NAME,
+            PASSTHROUGH_DESIGN_CODE,
+        )
+        # Bump SEED_VERSION here when the canonical passthrough code
+        # changes so the upsert refreshes the on-disk copy. Users who
+        # manually edited the design will see their edits get replaced
+        # only when this number bumps.
+        SEED_VERSION = 1
+        existing = db.reward_designs.find_one({"_id": PASSTHROUGH_DESIGN_ID})
+        if existing and existing.get("version", 0) >= SEED_VERSION:
+            return  # already current
+        ts = time.time()
+        iso_date = datetime.datetime.fromtimestamp(ts, None)
+        db.reward_designs.update_one(
+            {"_id": PASSTHROUGH_DESIGN_ID},
+            {"$set": {
+                "_id": PASSTHROUGH_DESIGN_ID,
+                "name": PASSTHROUGH_DESIGN_NAME,
+                "description": (
+                    "No-op reward design. Forwards every reward to the active "
+                    "course's default implementation. Use this as a sanity-"
+                    "check baseline when validating the reward-design system "
+                    "itself, and as a clean starting point for new shaping "
+                    "experiments."),
+                "code": PASSTHROUGH_DESIGN_CODE,
+                "version": SEED_VERSION,
+                "author": "system",
+                "archived": False,
+                "created_at": (existing or {}).get("created_at", iso_date),
+                "updated_at": iso_date,
+            }},
+            upsert=True,
+        )
+        print(
+            f"reward_designs: seeded canonical passthrough design "
+            f"({PASSTHROUGH_DESIGN_ID}, v{SEED_VERSION})", flush=True)
+    except Exception as e:
+        print(f"reward_designs: seed upsert failed (continuing): {e}", flush=True)
+
+
 def run_jobs_loop(num_envs=1):
     """Poll MongoDB for jobs and dispatch them indefinitely.
 
@@ -1838,12 +2591,71 @@ def run_jobs_loop(num_envs=1):
     Forwarded to do_job() so the TRAIN job_type can build a parallel
     env. DEMO and EVAL job types are unaffected.
     """
+    # One-shot seed of the canonical reward designs so the
+    # validation procedure works the moment the feature ships, even
+    # on a freshly-initialised MongoDB. Idempotent across restarts.
+    _seed_canonical_reward_designs()
     print(f"Polling for jobs (num_envs={num_envs})...")
     while True:
         jobs = get_jobs()
         for j in jobs:
             print("doing job")
-            do_job(j, num_envs=num_envs)
+            # Outer safety net around do_job. Two graceful-error
+            # codepaths inside do_job already (EvalSpecMismatchError,
+            # RewardDesignError) write a clean ``eval_error`` and let
+            # the job complete with status=DONE. THIS handler is for
+            # everything else - import errors, KeyErrors, OOMs, env
+            # connection failures, tf-agents internal crashes, etc.
+            # Previously any such exception killed run_jobs_loop and
+            # took the whole trainer with it; the container would
+            # restart and immediately re-pick the same job, looping
+            # forever. Now we capture the traceback, stamp it on the
+            # job document as eval_error + status=FAILED, and continue
+            # the poll loop so the queue keeps draining.
+            #
+            # Note we deliberately catch BaseException-minus-the-
+            # exit-signals (so Ctrl+C / SIGTERM still propagate) by
+            # excluding KeyboardInterrupt and SystemExit. That lets
+            # ``docker compose stop`` shut down cleanly.
+            try:
+                do_job(j, num_envs=num_envs)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception as exc:  # noqa: BLE001 - intentional broad catch
+                import traceback as _tb
+                tb_text = _tb.format_exc()
+                # Print the FULL traceback to stdout for the operator
+                # so debugging from container logs is still easy. The
+                # job record only stores a trimmed first line + short
+                # summary - Mongo isn't the right place for full
+                # tracebacks, and the dashboard renders eval_error as
+                # a single line in the Jobs table.
+                print(
+                    f"do_job uncaught exception for job {j.get('_id')}: "
+                    f"{type(exc).__name__}: {exc}\n{tb_text}",
+                    flush=True)
+                # Trim the traceback to its last few frames so the
+                # one-line dashboard rendering stays useful. Operators
+                # who need the full thing have stdout/robotaxi.out.
+                tb_lines = tb_text.strip().splitlines()
+                tail = "\n".join(tb_lines[-6:]) if tb_lines else str(exc)
+                err_summary = f"{type(exc).__name__}: {exc}\n...\n{tail}"
+                try:
+                    update_job(j["_id"], err_summary[:4000], "eval_error")
+                    update_job(
+                        j["_id"],
+                        datetime.datetime.now(datetime.timezone.utc),
+                        "ended_at")
+                    update_job(j["_id"], "FAILED")
+                except Exception as inner:  # noqa: BLE001
+                    # If Mongo itself is the problem we can't record
+                    # anything - just log and continue. The poll loop
+                    # will keep retrying and the job stays NOT_STARTED
+                    # so it gets another shot once Mongo recovers.
+                    print(
+                        f"do_job error-recording also failed for job "
+                        f"{j.get('_id')}: {type(inner).__name__}: {inner}",
+                        flush=True)
         print("sleep")
         time.sleep(5)
 

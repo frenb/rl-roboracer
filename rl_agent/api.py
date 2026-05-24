@@ -2,31 +2,98 @@ import json
 import pprint
 import asyncio
 import time
+import grpc
 from grpc import aio
 
 from virtual_endpoint.proto import ros_service_pb2_grpc
 from virtual_endpoint.proto import ros_service_pb2
 
 class RpcClient:
+    # Client-side per-RPC deadlines. Without these the gRPC stub awaits
+    # the response indefinitely - which historically deadlocked the
+    # trainer after BC pretraining: the long no-traffic window let the
+    # channel go half-open in Docker's NAT/conntrack table, and the
+    # next Publish blocked forever on a TCP write to a dead pipe with
+    # no asyncio.TimeoutError ever firing (because the existing
+    # wait_for() guards in api.py are AROUND the Publish, not on it).
+    #
+    # PUBLISH_TIMEOUT_S: the Publish RPC just ships a small JSON blob
+    # to ros-server's gRPC endpoint on the local Docker network -
+    # normal latency is sub-millisecond, so 3s is generous and any
+    # excess means the channel is wedged.
+    #
+    # CALL_SERVICE_TIMEOUT_S: services like niryo_moveit/PosePlanner
+    # do real work (motion planning) and can legitimately take
+    # multiple seconds, so the deadline is correspondingly larger.
+    PUBLISH_TIMEOUT_S = 3.0
+    CALL_SERVICE_TIMEOUT_S = 10.0
+
     def __init__(self, addr):
-        self.channel = aio.insecure_channel(addr)
+        # gRPC keepalive: ping the peer every 10s when the channel is
+        # idle, expect an ack within 5s. Without these options the
+        # client-side HTTP/2 channel can go half-open during a long
+        # no-traffic window (e.g., the 5000-step BC pretraining
+        # before initial_collect_actor.run()) - and once that
+        # happens, the next Publish silently blocks forever on a TCP
+        # write to a dead pipe. Keepalive forces the channel to
+        # detect the dead peer within ~15s and transparently reconnect
+        # before the next RPC.
+        #
+        # permit_without_calls=1: send keepalive pings even when no
+        # RPCs are in flight (default would only ping with active
+        # streams). Required for our case because BC pretraining has
+        # no in-flight RPCs.
+        #
+        # max_pings_without_data=0: disable gRPC's default cap of 2
+        # consecutive pings without data. With permit_without_calls=1
+        # we WILL send pings without data; without this override the
+        # peer would close the channel after 2 pings, defeating the
+        # purpose.
+        options = [
+            ('grpc.keepalive_time_ms', 10000),
+            ('grpc.keepalive_timeout_ms', 5000),
+            ('grpc.keepalive_permit_without_calls', 1),
+            ('grpc.http2.max_pings_without_data', 0),
+        ]
+        self.channel = aio.insecure_channel(addr, options=options)
         self.stub = ros_service_pb2_grpc.RosNodeStub(self.channel)
 
     async def Subscribe(self, topic, msg_type, on_message):
+        # Subscribe is a server-streaming RPC that runs for the
+        # lifetime of the trainer (the iterator yields messages
+        # forever). NO timeout - that would just kill the stream
+        # prematurely.
         call = self.stub.Subscribe(ros_service_pb2.SubscribeRequest(topic=topic, msg_type=msg_type))
         async for topic_message in call:
             on_message(json.loads(topic_message.data))
 
-    async def Publish(self, topic, msg_type, data):
-        req = ros_service_pb2.PublishRequest(topic=topic, msg_type=msg_type, data=json.dumps(data))
-        await self.stub.Publish(req)
+    async def Publish(self, topic, msg_type, data, timeout=None):
+        """Publish to a ROS topic with a client-side deadline.
 
-    async def Plan(self, plan_request):
+        timeout=None uses PUBLISH_TIMEOUT_S. Pass a float to override
+        for a specific call (e.g., known-large message). Raises
+        grpc.aio.AioRpcError with code DEADLINE_EXCEEDED on timeout;
+        callers in RobotApi catch this and convert to a counter +
+        log + continue (mirrors the asyncio.TimeoutError sites in
+        DoReset/DoApplyForce/DoMove).
+        """
+        req = ros_service_pb2.PublishRequest(topic=topic, msg_type=msg_type, data=json.dumps(data))
+        await self.stub.Publish(
+            req, timeout=self.PUBLISH_TIMEOUT_S if timeout is None else timeout)
+
+    async def Plan(self, plan_request, timeout=None):
+        """Call the niryo_moveit/PosePlanner service.
+
+        timeout=None uses CALL_SERVICE_TIMEOUT_S; the planner is real
+        compute and can take seconds, so the default is larger than
+        Publish's. Override for very-large planning problems.
+        """
         req = ros_service_pb2.ServiceRequest(
             service_name='pose_planner',
             service_type='niryo_moveit/PosePlanner',
             request=json.dumps(plan_request))
-        res = await self.stub.CallService(req)
+        res = await self.stub.CallService(
+            req, timeout=self.CALL_SERVICE_TIMEOUT_S if timeout is None else timeout)
         return json.loads(res.response)
 
 class RobotApi:
@@ -53,17 +120,25 @@ class RobotApi:
         # branch below. Exposed via get_timeout_counts() so the trainer
         # in robotaxi.py can aggregate across all ParallelPyEnvironment
         # workers and write the totals as tf.summary scalars under the
-        # `timeouts/` namespace in TensorBoard. The four buckets map to
-        # the four wait_for() sites in this file:
+        # `timeouts/` namespace in TensorBoard. The five buckets map to
+        # the five timeout-handling sites in this file:
         #   - reset:       DoReset, 4s wait on reset_event
         #   - apply_force: DoApplyForce, first wait on apply_force_event
         #   - scene_data:  DoApplyForce, second wait on scene_data_events[cmd_id]
         #   - move:        DoMove, either of the two wait_for()s in its
         #                  shared try/except (rare in current training)
+        #   - publish:     _do_sim_command / DoMove's grpc Publish RPC
+        #                  itself hits DEADLINE_EXCEEDED. This counter
+        #                  ticking - especially after a long no-traffic
+        #                  window like BC pretraining - means the
+        #                  HTTP/2 channel to ros-server went stale and
+        #                  the keepalive params on the channel are
+        #                  either disabled or insufficient.
         self.reset_timeouts = 0
         self.apply_force_timeouts = 0
         self.scene_data_timeouts = 0
         self.move_timeouts = 0
+        self.publish_timeouts = 0
 
     def get_timeout_counts(self):
         """Snapshot the running tally of asyncio.TimeoutError occurrences.
@@ -79,6 +154,7 @@ class RobotApi:
             'apply_force_timeouts': self.apply_force_timeouts,
             'scene_data_timeouts': self.scene_data_timeouts,
             'move_timeouts': self.move_timeouts,
+            'publish_timeouts': self.publish_timeouts,
         }
 
     def _next_id(self):
@@ -135,8 +211,39 @@ class RobotApi:
     
     
     async def _do_sim_command(self, command):
-        #print(command)
-        await self.rpc_client.Publish('sim_command', 'niryo_moveit/SimCommand', command)
+        # Catch the gRPC deadline from rpc_client.Publish here rather
+        # than letting it propagate out through DoReset / DoApplyForce
+        # and up into ParallelPyEnvironment's _worker. If we let it
+        # propagate the actor subprocess would crash, take its
+        # multiprocessing pipe with it, and the main trainer would
+        # hang in recv() exactly the way today's bug manifests. By
+        # catching here we keep the same "log + counter + continue"
+        # contract as the asyncio.wait_for() blocks below: the next
+        # wait_for(reset_event / apply_force_event / scene_data_events)
+        # will still time out cleanly if the publish never actually
+        # reached Unity, and a transient channel hiccup that resolved
+        # by the time the next RPC fires costs us one warning line.
+        try:
+            await self.rpc_client.Publish(
+                'sim_command', 'niryo_moveit/SimCommand', command)
+        except aio.AioRpcError as e:
+            self.publish_timeouts += 1
+            if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                print(
+                    f'sim_command publish DEADLINE_EXCEEDED after '
+                    f'{RpcClient.PUBLISH_TIMEOUT_S}s; channel may be '
+                    f'stale (gRPC keepalive should reconnect shortly).',
+                    flush=True)
+            else:
+                # UNAVAILABLE on a freshly-killed peer, INTERNAL on a
+                # protocol error, etc. We treat all RPC failures the
+                # same way here - count + log + return. Recovery is
+                # transparent because gRPC reconnects automatically;
+                # the next call has a fresh channel.
+                print(
+                    f'sim_command publish RPC error {e.code()}: '
+                    f'{e.details()}',
+                    flush=True)
 
     def DoResetBlocking(self, num_obstacles=20):
         asyncio.run_coroutine_threadsafe(self.DoReset(num_obstacles), self.loop).result()
@@ -220,8 +327,27 @@ class RobotApi:
         
         self.move_events[cmd_id] = asyncio.Event()
         self.scene_data_events[cmd_id] = asyncio.Event()
-        await self.rpc_client.Publish('move_action/goal', 'niryo_moveit/MoveActionGoal', action)
-        
+        # Same DEADLINE_EXCEEDED handling as _do_sim_command above; see
+        # that method for the full rationale. Catching here keeps DoMove
+        # from raising into _worker (which would crash the actor
+        # subprocess) on a stuck channel; the next wait_for() in the
+        # try block below times out cleanly so the trainer recovers.
+        try:
+            await self.rpc_client.Publish(
+                'move_action/goal', 'niryo_moveit/MoveActionGoal', action)
+        except aio.AioRpcError as e:
+            self.publish_timeouts += 1
+            if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                print(
+                    f'move_action/goal publish DEADLINE_EXCEEDED after '
+                    f'{RpcClient.PUBLISH_TIMEOUT_S}s; channel may be stale.',
+                    flush=True)
+            else:
+                print(
+                    f'move_action/goal publish RPC error {e.code()}: '
+                    f'{e.details()}',
+                    flush=True)
+
         # Wait for command completion & newest scene data including command.
         try:
             await asyncio.wait_for(self.move_events[cmd_id].wait(), timeout)

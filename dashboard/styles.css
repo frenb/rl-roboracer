@@ -717,3 +717,332 @@ html.dark .tabulator.has-error::after {
 .rc-date-range-filter {
   width: 100%;
 }
+
+/* Cross-tab "scroll to + highlight this row" flash. Applied to the
+ * Tabulator row element by TableView.scrollToRowById() after a
+ * cross-tab handoff (e.g., the Models tab's clickable Job ID column
+ * sends the user to the Jobs tab, then scrolls and flashes the
+ * matching job row so the eye lands on it instantly).
+ *
+ * Two-stage gradient: indigo flare on the left edge that fades to
+ * the row's normal background. We deliberately avoid a full-width
+ * fill because that would conflict with Tabulator's row hover
+ * state (which the user might be trying to use immediately after
+ * the scroll). */
+.tabulator-row.rc-row-flash {
+  animation: rc-row-flash-anim 1.8s ease-out forwards;
+}
+@keyframes rc-row-flash-anim {
+  0% {
+    background-color: rgba(99, 102, 241, 0.35);     /* indigo-500 @ 35% */
+    box-shadow: inset 4px 0 0 0 rgb(99 102 241);
+  }
+  60% {
+    background-color: rgba(99, 102, 241, 0.15);
+    box-shadow: inset 4px 0 0 0 rgba(99, 102, 241, 0.6);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 4px 0 0 0 transparent;
+  }
+}
+html.dark .tabulator-row.rc-row-flash {
+  animation: rc-row-flash-anim-dark 1.8s ease-out forwards;
+}
+@keyframes rc-row-flash-anim-dark {
+  0% {
+    background-color: rgba(129, 140, 248, 0.30);    /* indigo-400 @ 30% */
+    box-shadow: inset 4px 0 0 0 rgb(129 140 248);
+  }
+  60% {
+    background-color: rgba(129, 140, 248, 0.15);
+    box-shadow: inset 4px 0 0 0 rgba(129, 140, 248, 0.6);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 4px 0 0 0 transparent;
+  }
+}
+
+/* ---------------------------------------------------------------- *
+ * Reward Design tab
+ *
+ * Two surfaces:
+ *  1. CodeMirror editor in the right-hand pane: re-skinned to live
+ *     inside our slate/indigo theme. CodeMirror 5 doesn't expose
+ *     CSS variables, so the rules below override its rendered DOM
+ *     classes directly.
+ *  2. The list/editor split layout: CSS grid that collapses on
+ *     narrower widths.
+ * ---------------------------------------------------------------- */
+
+.rd-shell {
+  display: grid;
+  grid-template-columns: minmax(280px, 380px) 1fr;
+  gap: 1rem;
+  flex: 1;
+  min-height: 0;
+}
+@media (max-width: 900px) {
+  .rd-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(160px, auto) 1fr;
+  }
+}
+
+.rd-card {
+  background-color: white;
+  border: 1px solid rgb(226 232 240);     /* slate-200 */
+  border-radius: 0.75rem;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;                          /* let inner flex children scroll */
+}
+html.dark .rd-card {
+  background-color: rgb(15 23 42);        /* slate-900 */
+  border-color: rgb(51 65 85);            /* slate-700 */
+}
+
+/* Reward design list rows */
+.rd-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.25rem;
+}
+.rd-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  position: relative;
+  border: 1px solid transparent;
+}
+.rd-list-item:hover {
+  background-color: rgb(241 245 249);     /* slate-100 */
+}
+html.dark .rd-list-item:hover {
+  background-color: rgb(30 41 59);        /* slate-800 */
+}
+.rd-list-item.is-selected {
+  background-color: rgb(238 242 255);     /* indigo-50 */
+  border-color: rgb(199 210 254);         /* indigo-200 */
+}
+html.dark .rd-list-item.is-selected {
+  background-color: rgba(99, 102, 241, 0.18);
+  border-color: rgba(129, 140, 248, 0.5);
+}
+.rd-list-item.is-archived {
+  opacity: 0.55;
+}
+.rd-list-item .rd-name {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: rgb(15 23 42);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+html.dark .rd-list-item .rd-name {
+  color: rgb(241 245 249);
+}
+.rd-list-item .rd-meta {
+  font-size: 0.7rem;
+  color: rgb(100 116 139);                /* slate-500 */
+  font-variant-numeric: tabular-nums;
+}
+html.dark .rd-list-item .rd-meta {
+  color: rgb(148 163 184);                /* slate-400 */
+}
+
+.rd-empty {
+  padding: 2rem 1rem;
+  text-align: center;
+  font-size: 0.8rem;
+  color: rgb(100 116 139);
+}
+
+/* Lint status pill */
+.rd-lint {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 9999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  font-family: inherit;
+}
+.rd-lint.is-ok {
+  background-color: rgb(220 252 231);     /* emerald-100 */
+  color: rgb(4 120 87);                   /* emerald-700 */
+}
+.rd-lint.is-bad {
+  background-color: rgb(254 226 226);     /* red-100 */
+  color: rgb(185 28 28);                  /* red-700 */
+}
+.rd-lint.is-checking {
+  background-color: rgb(226 232 240);
+  color: rgb(71 85 105);
+}
+html.dark .rd-lint.is-ok {
+  background-color: rgba(16, 185, 129, 0.18);
+  color: rgb(110 231 183);
+}
+html.dark .rd-lint.is-bad {
+  background-color: rgba(220, 38, 38, 0.2);
+  color: rgb(252 165 165);
+}
+html.dark .rd-lint.is-checking {
+  background-color: rgb(30 41 59);
+  color: rgb(148 163 184);
+}
+
+/* Inline diff-style lint error message under the editor */
+.rd-lint-detail {
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  background-color: rgb(254 242 242);     /* red-50 */
+  color: rgb(127 29 29);                  /* red-900 */
+  border: 1px solid rgb(254 202 202);     /* red-200 */
+}
+html.dark .rd-lint-detail {
+  background-color: rgba(127, 29, 29, 0.25);
+  color: rgb(252 165 165);
+  border-color: rgba(252, 165, 165, 0.3);
+}
+
+/* Tag pills on the list rows (canonical / archived / unsaved) */
+.rd-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.4rem;
+  border-radius: 0.25rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-family: inherit;
+}
+.rd-tag.is-canonical {
+  background-color: rgb(199 210 254);     /* indigo-200 */
+  color: rgb(67 56 202);                  /* indigo-700 */
+}
+.rd-tag.is-archived {
+  background-color: rgb(226 232 240);
+  color: rgb(71 85 105);
+}
+.rd-tag.is-dirty {
+  background-color: rgb(254 240 138);     /* yellow-200 */
+  color: rgb(133 77 14);                  /* yellow-800 */
+}
+html.dark .rd-tag.is-canonical {
+  background-color: rgba(99, 102, 241, 0.35);
+  color: rgb(199 210 254);
+}
+html.dark .rd-tag.is-archived {
+  background-color: rgb(51 65 85);
+  color: rgb(203 213 225);
+}
+html.dark .rd-tag.is-dirty {
+  background-color: rgba(202, 138, 4, 0.35);
+  color: rgb(254 240 138);
+}
+
+/* CodeMirror retheme. The CDN ships the "default" base; we override
+ * just enough to drop it onto our slate-900 panel without looking
+ * like a webby ‘90s code box. */
+.CodeMirror {
+  height: 100%;
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  background-color: white;
+  color: rgb(15 23 42);
+}
+html.dark .CodeMirror {
+  background-color: rgb(15 23 42);        /* slate-900 */
+  color: rgb(226 232 240);                /* slate-200 */
+}
+.CodeMirror-gutters {
+  background-color: rgb(248 250 252);     /* slate-50 */
+  border-right: 1px solid rgb(226 232 240);
+}
+html.dark .CodeMirror-gutters {
+  background-color: rgb(15 23 42);
+  border-right: 1px solid rgb(30 41 59);
+}
+.CodeMirror-linenumber {
+  color: rgb(148 163 184);
+  font-size: 11px;
+}
+html.dark .CodeMirror-linenumber {
+  color: rgb(71 85 105);
+}
+.CodeMirror-cursor {
+  border-left: 1.5px solid rgb(99 102 241) !important;   /* indigo-500 */
+}
+.CodeMirror-selected {
+  background: rgba(99, 102, 241, 0.18) !important;
+}
+html.dark .CodeMirror-selected {
+  background: rgba(129, 140, 248, 0.28) !important;
+}
+.CodeMirror-activeline-background {
+  background: rgba(99, 102, 241, 0.07);
+}
+html.dark .CodeMirror-activeline-background {
+  background: rgba(129, 140, 248, 0.10);
+}
+
+/* Python syntax tokens. CodeMirror's default keyword green looks
+ * out of place on our slate surface; map onto indigo/amber/emerald
+ * so it reads as the same product. */
+.cm-s-default .cm-keyword,
+html.dark .CodeMirror .cm-keyword       { color: rgb(165 180 252); }   /* indigo-300 */
+.cm-s-default .cm-keyword               { color: rgb(67 56 202); }     /* indigo-700 */
+
+html.dark .CodeMirror .cm-def           { color: rgb(110 231 183); }   /* emerald-300 */
+.cm-s-default .cm-def                   { color: rgb(4 120 87); }      /* emerald-700 */
+
+html.dark .CodeMirror .cm-builtin       { color: rgb(252 211 77); }    /* amber-300 */
+.cm-s-default .cm-builtin               { color: rgb(146 64 14); }     /* amber-800 */
+
+html.dark .CodeMirror .cm-string,
+html.dark .CodeMirror .cm-string-2      { color: rgb(252 165 165); }   /* red-300 */
+.cm-s-default .cm-string,
+.cm-s-default .cm-string-2              { color: rgb(185 28 28); }     /* red-700 */
+
+html.dark .CodeMirror .cm-comment       { color: rgb(100 116 139); font-style: italic; }
+.cm-s-default .cm-comment               { color: rgb(100 116 139); font-style: italic; }
+
+html.dark .CodeMirror .cm-number        { color: rgb(196 181 253); }   /* violet-300 */
+.cm-s-default .cm-number                { color: rgb(91 33 182); }     /* violet-800 */
+
+html.dark .CodeMirror .cm-operator      { color: rgb(203 213 225); }
+.cm-s-default .cm-operator              { color: rgb(51 65 85); }
+
+/* Editor + status wrapper: enable inner flex so CodeMirror's
+ * percentage-height layout collapses cleanly into the right pane. */
+.rd-editor-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.rd-editor-host {
+  flex: 1;
+  min-height: 240px;
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+html.dark .rd-editor-host {
+  border-color: rgb(51 65 85);
+}

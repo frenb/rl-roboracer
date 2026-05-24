@@ -184,10 +184,80 @@
     </div>
   </div>
 
+  <!-- View-reward-design-source modal. Opened by clicking the design
+       name in the Reward design column. Shows the verbatim Python
+       source that was running when this model checkpoint was saved
+       (stamped onto the model document by add_model()), so the user
+       can answer "what reward formula actually produced this model?"
+       even after the design has been edited many times since. The
+       larger max-width vs. the eval modal is because the code block
+       benefits from horizontal space - Python lines often run 80+
+       characters once you factor in the leading 4-space indent. -->
+  <div data-role="rd-source-modal" aria-hidden="true"
+       class="fixed inset-0 z-[100] modal-blur bg-slate-900/40 dark:bg-slate-950/65
+              flex items-center justify-center p-4
+              opacity-0 transition-opacity duration-200 pointer-events-none">
+    <div role="dialog" aria-modal="true" aria-labelledby="rd-source-modal-title"
+         class="w-full max-w-[860px] max-h-[calc(100vh-2rem)]
+                bg-white dark:bg-slate-900
+                border border-slate-200 dark:border-slate-700
+                rounded-2xl shadow-card-lg
+                flex flex-col
+                opacity-0 -translate-y-3 scale-[0.98]
+                transition duration-200">
+      <div class="px-6 py-5 border-b border-slate-200 dark:border-slate-700
+                  flex items-center justify-between gap-3 flex-wrap">
+        <div class="flex items-center gap-2 min-w-0">
+          <h2 id="rd-source-modal-title"
+              class="m-0 text-base font-semibold tracking-tight truncate">
+            <span data-role="rd-source-name">—</span>
+          </h2>
+          <span data-role="rd-source-version"
+                class="inline-flex items-center px-1.5 py-0 rounded text-[10px]
+                       font-semibold text-slate-500 dark:text-slate-400
+                       bg-slate-100 dark:bg-slate-800 font-mono whitespace-nowrap"></span>
+          <span data-role="rd-source-canonical" hidden
+                class="inline-flex items-center px-1.5 py-0 rounded text-[10px]
+                       font-semibold text-indigo-700 dark:text-indigo-300
+                       bg-indigo-100 dark:bg-indigo-900/40 whitespace-nowrap"
+                title="Canonical seeded design - statistically identical to no design.">baseline</span>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <!-- Copy uses navigator.clipboard.writeText, which requires a
+               secure context (https or localhost). The dashboard is served
+               from localhost so this works on every supported deployment.
+               Failure path falls back to the legacy execCommand path so
+               older Edge / mobile browsers still get a working button. -->
+          <button data-action="rd-source-copy"
+                  class="btn-base btn-secondary text-xs">Copy</button>
+          <button data-action="close-rd-source-modal" aria-label="Close"
+                  class="px-2 py-1 text-sm rounded-md hover:bg-slate-100
+                         dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400">×</button>
+        </div>
+      </div>
+      <div class="px-6 py-4 overflow-y-auto flex-1 min-h-0">
+        <p class="text-[11px] text-slate-500 dark:text-slate-400 mb-2 leading-relaxed">
+          This is the exact Python source that was running when this model
+          was saved. Subsequent edits to the design in the Reward Design
+          tab don&rsquo;t change this snapshot; it&rsquo;s frozen on the model
+          document at training time so the model stays reproducible.
+        </p>
+        <pre data-role="rd-source-code"
+             class="font-mono text-[12px] leading-relaxed p-4 rounded-md
+                    bg-slate-100 dark:bg-slate-950
+                    border border-slate-200 dark:border-slate-700
+                    overflow-auto whitespace-pre m-0">—</pre>
+      </div>
+      <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
+        <button data-action="close-rd-source-modal" class="btn-base btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Cache-busted (see comment in jobs.html). Bump ?v=... when you
        edit components.js so the iframe inside GoldenLayout actually
        fetches the new file. -->
-  <script src="/components.js?v=20260516-selectcol"></script>
+  <script src="/components.js?v=20260524-slim"></script>
   <script>
     (function () {
       const { TableView, formatters, showToast } = window.RoboracerUI;
@@ -211,6 +281,18 @@
           { key: '_id',                 label: 'ID',         sortable: true,  filter: true,
             sortValue: (r) => r._id || r.id,
             render: (v, row) => formatters.shortId(v || row.id) },
+          // Job ID: the training-job ObjectId that produced this model.
+          // Stamped onto the model document by add_model() in
+          // rl_agent/robotaxi.py. Legacy models predating that change
+          // store null here. Rendered as a clickable button (when
+          // present) that posts a roboracer:open-job message to the
+          // GoldenLayout shell; the shell activates the Jobs tab and
+          // scrolls/flashes the matching row so the user can verify
+          // which job this model came from (e.g., for cross-referencing
+          // TensorBoard runs in the comparison flow).
+          { key: 'job_id',              label: 'Job ID',     sortable: true,  filter: true,
+            sortValue: (r) => r.job_id || '',
+            render: renderJobIdCell },
           { key: 'create_date',         label: 'Created',    sortable: true,
             // Preset-dropdown filter (Last hour / 24h / 7d / 30d / 90d).
             // The TableView uses this column's sortValue to extract
@@ -250,6 +332,19 @@
             sortValue: (r) => Number(r.training_iterations) || 0,
             render: (v) => formatters.number(v, { decimals: 0 }),
             cellClass: 'text-right' },
+          // Reward design: which user-authored reward function set was
+          // active during this model's training. add_model() stamps
+          // reward_design_name / reward_design_version on the model
+          // doc; legacy models trained before the feature simply have
+          // both fields missing, which renders as an em-dash so they
+          // don't all look like the canonical course default. The
+          // canonical seeded passthrough is just another design here,
+          // so users get to see it explicitly when they pin a baseline
+          // experiment against it.
+          { key: 'reward_design_name', label: 'Reward design', sortable: true,
+            filter: true,
+            sortValue: (r) => r.reward_design_name || '',
+            render: renderRewardDesignCell },
           // -------- eval-history columns ------------------------------
           // Derived client-side from /leaderboard_scores (one row per
           // EVAL job, joined by model_id with fallback path==location).
@@ -313,6 +408,100 @@
                `<span class="text-slate-400 dark:text-slate-500">·</span>` +
                `<span>${trialsLabel}</span>` +
                `${multiBadge}` +
+               `</span>`;
+      }
+
+      function renderJobIdCell(_v, row) {
+        // Models from before the job_id-stamping change (and the
+        // RandomPyPolicy baseline, which has no training job) have
+        // no job_id. Render an em-dash with a hover hint rather than
+        // a clickable button.
+        const jobId = row.job_id;
+        if (!jobId) {
+          return '<span class="text-slate-500 dark:text-slate-400 whitespace-nowrap font-mono" '
+               + 'title="No training-job id recorded. Legacy models from before the field was added show this; '
+               + 'retrain to get a clickable cross-link to the Jobs tab.">—</span>';
+        }
+        const jobIdStr = String(jobId);
+        // Match formatters.shortId's "last 8 chars, monospaced" style so
+        // the Job ID column reads visually similar to the ID column.
+        const tail = jobIdStr.length > 8 ? jobIdStr.slice(-8) : jobIdStr;
+        // Same click-affordance treatment as the reward-design-name
+        // "view source" button: dotted underline that becomes solid
+        // indigo on hover, plain transparent background. The capture-
+        // phase document click listener below catches this and
+        // re-routes via postMessage.
+        return '<button type="button" data-action="open-job" '
+             + 'data-job-id="' + jobIdStr + '" '
+             + 'class="font-mono text-xs whitespace-nowrap '
+             + 'text-slate-200 hover:text-indigo-300 '
+             + 'underline decoration-dotted decoration-slate-500 '
+             + 'hover:decoration-indigo-400 underline-offset-2 '
+             + 'cursor-pointer bg-transparent border-0 p-0 m-0" '
+             + 'title="' + jobIdStr + ' - click to open the Jobs tab and scroll to this job.">'
+             + tail + '</button>';
+      }
+
+      function renderRewardDesignCell(_v, row) {
+        // Three cases:
+        //   - field present  -> show name + small "vN" version pill
+        //   - explicitly null/empty (legacy or "course default" path
+        //                            in do_job) -> em-dash so the user
+        //                            knows it isn't an oversight
+        //   - canonical passthrough (special _id) -> tag it so a
+        //                                            user knows
+        //                                            they're looking
+        //                                            at the baseline
+        const name = row.reward_design_name;
+        if (!name) {
+          return '<span class="text-slate-500 dark:text-slate-400 whitespace-nowrap" ' +
+                 'title="Trained without a reward design - uses the course\'s built-in reward formula.">—</span>';
+        }
+        const ver = row.reward_design_version;
+        const verPill = ver
+          ? ` <span class="inline-flex items-center px-1.5 py-0 rounded text-[10px] font-semibold ` +
+            `text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 font-mono whitespace-nowrap">v${Number(ver)}</span>`
+          : '';
+        const isCanonical = String(row.reward_design_id || '') === 'passthrough-course-default';
+        const baselineTag = isCanonical
+          ? ` <span class="inline-flex items-center px-1.5 py-0 rounded text-[10px] font-semibold ` +
+            `text-indigo-700 dark:text-indigo-300 bg-indigo-100 dark:bg-indigo-900/40 whitespace-nowrap" ` +
+            `title="Canonical seeded design - statistically identical to no design.">baseline</span>`
+          : '';
+        // Escape the name to dodge any HTML special chars users might
+        // include (we don't constrain design names server-side).
+        const safe = String(name).replace(/[&<>"']/g, (c) => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+        })[c]);
+        // Make the name clickable when the model has its source code
+        // stamped (every model produced by the trainer after the reward-
+        // design feature landed has this; pre-feature legacy models
+        // would not, in which case we fall back to a plain span to
+        // avoid a dead-end click). The inline button stops propagation
+        // in the delegated handler below so it doesn't double as a row-
+        // selection toggle.
+        const modelId = row._id == null ? '' : String(row._id);
+        // Render the name as clickable when the row has a reward
+        // design at all. We used to check ``row.reward_design_code``
+        // directly, but that field is now omitted from the /get_models
+        // list-payload (it bloated polls to multi-MB on databases with
+        // thousands of models). The cell now decides on
+        // ``reward_design_id`` and the server's /get_model_source
+        // endpoint is responsible for telling the modal whether the
+        // model genuinely has source recorded - if not, the modal
+        // shows "(no source recorded)".
+        const hasSource = !!row.reward_design_id;
+        const nameNode = hasSource
+          ? `<button type="button" data-action="view-rd-source" data-model-id="${modelId}" ` +
+            `class="truncate max-w-[14ch] text-left text-slate-200 hover:text-indigo-300 ` +
+            `dark:text-slate-200 dark:hover:text-indigo-300 ` +
+            `underline decoration-dotted decoration-slate-500 hover:decoration-indigo-400 ` +
+            `underline-offset-2 cursor-pointer bg-transparent border-0 p-0 m-0 ` +
+            `whitespace-nowrap" ` +
+            `title="View the exact source that produced this model.">${safe}</button>`
+          : `<span class="truncate max-w-[14ch]">${safe}</span>`;
+        return `<span class="inline-flex items-center gap-1 whitespace-nowrap">` +
+               `${nameNode}${verPill}${baselineTag}` +
                `</span>`;
       }
 
@@ -409,21 +598,45 @@
         const sel = table.getSelectedRows();
         if (sel.length < 2) return;
         const modelIds = sel.map((m) => String(m._id || m.id || ''));
+        // The job_id field was added to model documents alongside the
+        // multi-model TensorBoard comparison flow; legacy models
+        // predating that change have job_id=null and are skipped in
+        // the TB-filter regex (the Analysis stats still work for them
+        // since those just need the model record itself).
+        const jobIds = sel
+          .map((m) => (m.job_id == null || m.job_id === '' ? null : String(m.job_id)))
+          .filter((id) => id);
+        const missingJobIds = sel.length - jobIds.length;
         // Hand the selection off to the parent GoldenLayout shell.
         // The shell (see goldenlayout.js) listens for this message,
-        // activates the Analysis tab, and forwards the payload into
-        // the Analysis iframe so it renders the comparison.
+        // activates the Analysis tab, forwards the payload into the
+        // Analysis iframe AND - using `jobIds` below - re-points the
+        // TensorBoard iframe at a regex-filtered URL so the user's
+        // next click on the TensorBoard tab shows just the relevant
+        // runs.
         //
         // If the page happens to be open standalone (no parent shell),
         // we fall back to navigating to /analysis?ids=... so the same
         // flow works without GoldenLayout.
-        const payload = { type: 'roboracer:open-analysis', modelIds: modelIds };
+        const payload = {
+          type: 'roboracer:open-analysis',
+          modelIds: modelIds,
+          jobIds: jobIds,
+        };
         if (window.parent && window.parent !== window) {
           window.parent.postMessage(payload, '*');
+          let toastMsg = `Opening Analysis with ${modelIds.length} models…`;
+          if (missingJobIds > 0) {
+            // Warn the user that the TB filter won't include every
+            // model they selected; the Analysis comparison is still
+            // complete, only the TB run-filter is partial.
+            toastMsg += ` (${missingJobIds} legacy model${missingJobIds === 1 ? '' : 's'} `
+                      + `won't appear in the TensorBoard filter - retrain to add job_id metadata.)`;
+          }
           showToast({
             type: 'info',
-            message: `Opening Analysis with ${modelIds.length} models…`,
-            duration: 1800,
+            message: toastMsg,
+            duration: 2600,
           });
         } else {
           // Standalone (non-GoldenLayout) fallback. Use the static
@@ -580,6 +793,213 @@
           evalSubmitBtn.click();
         }
       });
+
+      // ----- View reward design source modal -----------------------
+      //
+      // Clicking a model row's reward design name opens this modal,
+      // which shows the verbatim Python source that was running when
+      // the model was saved (stamped onto the model document by
+      // rl_agent/robotaxi.py::add_model). Lets the user answer "what
+      // reward formula produced this model?" weeks later without
+      // having to manually trawl Mongo.
+      //
+      // We delegate the click on a capture-phase listener attached to
+      // the table host so we beat Tabulator's row-selection handler,
+      // then stop propagation. Otherwise clicking the design name
+      // would also toggle row selection, which is jarring.
+      const sourceModal      = document.querySelector('[data-role="rd-source-modal"]');
+      const sourceDialogEl   = sourceModal.querySelector('[role="dialog"]');
+      const sourceNameEl     = sourceModal.querySelector('[data-role="rd-source-name"]');
+      const sourceVersionEl  = sourceModal.querySelector('[data-role="rd-source-version"]');
+      const sourceCanonicalEl = sourceModal.querySelector('[data-role="rd-source-canonical"]');
+      const sourceCodeEl     = sourceModal.querySelector('[data-role="rd-source-code"]');
+      const sourceCopyBtn    = sourceModal.querySelector('[data-action="rd-source-copy"]');
+
+      // openSourceModal can be called with:
+      //   * a model record from the modelsCache (legacy path - the
+      //     cached record carries name/version/id but NOT the
+      //     reward_design_code field, because /get_models now omits it
+      //     for performance), OR
+      //   * just a model id string, in which case we render the modal
+      //     in a loading state and lazily fetch the source.
+      //
+      // Either way we issue a /get_model_source/:id fetch so the code
+      // is freshly loaded - this matters because the model record in
+      // modelsCache can be slightly stale relative to Mongo's latest.
+      async function openSourceModal(modelOrId) {
+        const model = (typeof modelOrId === 'object' && modelOrId !== null)
+          ? modelOrId
+          : null;
+        const modelId = model ? String(model._id || model.id || '') : String(modelOrId || '');
+        // Render header from whatever we already know (the cached
+        // model record). Code area shows a placeholder until the
+        // fetch resolves.
+        sourceNameEl.textContent = (model && model.reward_design_name) || '(loading…)';
+        const ver = model && model.reward_design_version;
+        sourceVersionEl.textContent = ver ? `v${Number(ver)}` : '';
+        sourceVersionEl.hidden = !ver;
+        const isCanonical = model && String(model.reward_design_id || '') === 'passthrough-course-default';
+        sourceCanonicalEl.hidden = !isCanonical;
+        sourceCodeEl.textContent = 'Loading source…';
+        sourceCopyBtn.textContent = 'Copy';
+        sourceCopyBtn.disabled = true;
+        // Reveal the modal immediately so the user gets feedback even
+        // on a slow fetch. The code area updates in-place once the
+        // request resolves.
+        sourceModal.classList.remove('opacity-0', 'pointer-events-none');
+        sourceModal.classList.add('opacity-100', 'pointer-events-auto');
+        sourceDialogEl.classList.remove('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        sourceDialogEl.classList.add('opacity-100', 'translate-y-0', 'scale-100');
+        sourceModal.setAttribute('aria-hidden', 'false');
+
+        if (!modelId) {
+          sourceCodeEl.textContent = '(no model id)';
+          return;
+        }
+        // Track the latest open call so a stale fetch (e.g., user
+        // clicked View source on row A, then closed and clicked
+        // row B before A's fetch returned) doesn't overwrite the
+        // newer modal's content with the older response.
+        const fetchToken = (openSourceModal._token = (openSourceModal._token || 0) + 1);
+        try {
+          const res = await fetch('/get_model_source/' + encodeURIComponent(modelId));
+          if (!res.ok) {
+            if (fetchToken !== openSourceModal._token) return;
+            sourceCodeEl.textContent =
+              'Failed to load source: HTTP ' + res.status;
+            return;
+          }
+          const body = await res.json();
+          if (fetchToken !== openSourceModal._token) return;  // stale
+          // Header: prefer the fresh server-returned name / version,
+          // fall back to whatever the cached record had.
+          sourceNameEl.textContent = body.reward_design_name ||
+            (model && model.reward_design_name) || '(unnamed)';
+          const ver2 = body.reward_design_version
+            || (model && model.reward_design_version);
+          sourceVersionEl.textContent = ver2 ? `v${Number(ver2)}` : '';
+          sourceVersionEl.hidden = !ver2;
+          const isCan2 = String(body.reward_design_id ||
+            (model && model.reward_design_id) || '') === 'passthrough-course-default';
+          sourceCanonicalEl.hidden = !isCan2;
+          // textContent (not innerHTML) - user code can contain
+          // arbitrary characters and we don't want to interpret any
+          // of it as HTML.
+          sourceCodeEl.textContent = body.reward_design_code || '(no source recorded)';
+          sourceCopyBtn.disabled = !body.reward_design_code;
+        } catch (err) {
+          if (fetchToken !== openSourceModal._token) return;
+          sourceCodeEl.textContent = 'Failed to load source: ' +
+            String(err && err.message || err);
+        }
+      }
+
+      function closeSourceModal() {
+        sourceModal.classList.add('opacity-0', 'pointer-events-none');
+        sourceModal.classList.remove('opacity-100', 'pointer-events-auto');
+        sourceDialogEl.classList.add('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        sourceDialogEl.classList.remove('opacity-100', 'translate-y-0', 'scale-100');
+        sourceModal.setAttribute('aria-hidden', 'true');
+      }
+
+      sourceModal.addEventListener('click', (ev) => {
+        if (ev.target === sourceModal) closeSourceModal();
+      });
+      sourceModal.querySelectorAll('[data-action="close-rd-source-modal"]').forEach((b) =>
+        b.addEventListener('click', closeSourceModal));
+      document.addEventListener('keydown', (ev) => {
+        if (!sourceModal.classList.contains('opacity-100')) return;
+        if (ev.key === 'Escape') closeSourceModal();
+      });
+
+      sourceCopyBtn.addEventListener('click', async () => {
+        const code = sourceCodeEl.textContent || '';
+        if (!code) return;
+        const restore = () => {
+          setTimeout(() => { sourceCopyBtn.textContent = 'Copy'; }, 1500);
+        };
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(code);
+            sourceCopyBtn.textContent = 'Copied!';
+            restore();
+            return;
+          }
+          // Legacy fallback for browsers without the modern Clipboard
+          // API (older Edge, some mobile / iframe-restricted contexts).
+          const ta = document.createElement('textarea');
+          ta.value = code;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          const ok = document.execCommand('copy');
+          ta.remove();
+          sourceCopyBtn.textContent = ok ? 'Copied!' : 'Copy failed';
+          restore();
+        } catch (err) {
+          sourceCopyBtn.textContent = 'Copy failed';
+          showToast({ type: 'error', message: 'Copy failed: ' + String(err.message || err) });
+          restore();
+        }
+      });
+
+      // Capture-phase delegation so we run BEFORE Tabulator's row click
+      // selection. We attach to the document because tableHost's inner
+      // children get replaced by Tabulator on re-render and we'd
+      // otherwise have to re-bind.
+      //
+      // Two clickable in-cell actions live in this table - the reward-
+      // design-name "view source" button and the Job ID cross-link.
+      // Both are caught here.
+      document.addEventListener('click', (ev) => {
+        if (!ev.target || !ev.target.closest) return;
+
+        // ---- Reward design "View source" -----------------------------
+        const sourceTrigger = ev.target.closest('[data-action="view-rd-source"]');
+        if (sourceTrigger) {
+          ev.stopPropagation();
+          ev.preventDefault();
+          const id = sourceTrigger.dataset.modelId;
+          if (!id) return;
+          // Look up the full record - the cell renderer only sees a row
+          // view, but the raw modelsCache has every field including
+          // reward_design_code (which we deliberately don't put in the
+          // data-* attribute because it can be many KB).
+          const model = modelsCache.find((m) => String(m._id) === String(id));
+          if (!model) {
+            showToast({ type: 'error', message: 'Model record not found in cache; try refreshing.' });
+            return;
+          }
+          openSourceModal(model);
+          return;
+        }
+
+        // ---- Job ID cross-link ---------------------------------------
+        //
+        // Post a roboracer:open-job message to the parent GoldenLayout
+        // shell. The shell catches it (see goldenlayout.js), activates
+        // the Jobs tab, and forwards the message into the Jobs iframe;
+        // the Jobs page then scrolls the Tabulator viewport to the
+        // matching row and flashes it. If the page happens to be
+        // running standalone (no parent shell) we fall back to a
+        // direct navigation to /jobs - the Jobs page still scrolls to
+        // the row when it loads (it reads the ?focus= query param).
+        const jobTrigger = ev.target.closest('[data-action="open-job"]');
+        if (jobTrigger) {
+          ev.stopPropagation();
+          ev.preventDefault();
+          const jobId = jobTrigger.dataset.jobId;
+          if (!jobId) return;
+          const payload = { type: 'roboracer:open-job', jobId: jobId };
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage(payload, '*');
+          } else {
+            window.location.href = '/jobs?focus=' + encodeURIComponent(jobId);
+          }
+          return;
+        }
+      }, true);  // <- capture: true to beat Tabulator's row click handler
 
       addJobsBtn.addEventListener('click', () => {
         const sel = table.getSelectedRows();

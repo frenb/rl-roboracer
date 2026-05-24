@@ -29,20 +29,60 @@ class BaseCourse(ABC):
         """Converts scene data to observation array"""
         pass
     
+    # ------------------------------------------------------------------
+    # Reward methods come in two layers:
+    #
+    #   * Public ``reward_standard`` / ``reward_success`` /
+    #     ``reward_failure`` (abstract here, implemented by concrete
+    #     courses). They own state mutation, logging, and wrapping the
+    #     scalar reward into the right tf-agents ``TimeStep`` (transition
+    #     vs termination).
+    #
+    #   * Scalar ``_compute_standard_reward`` /
+    #     ``_compute_success_reward`` / ``_compute_failure_reward`` -
+    #     pure-math float-returning methods (default to 0 here). The
+    #     public methods call these to get the reward value. This split
+    #     gives the reward-design system in ``rl_agent/reward_designs``
+    #     a clean monkey-patch surface: replacing just the scalar method
+    #     swaps the reward formula while leaving every side effect
+    #     (course-state updates, logging, episode termination) intact.
+    #
+    # Subclasses MUST override the public methods (they're abstract),
+    # SHOULD override the scalar methods if they want a non-zero reward,
+    # and MUST keep the scalar methods side-effect-free so they're safe
+    # to call from user code via ``RewardDesign.defaults.*``.
+    # ------------------------------------------------------------------
+
     @abstractmethod
     def reward_standard(self, data, data_arr, step_costs, job_id):
         """Calculates standard step reward"""
         pass
-    
+
     @abstractmethod
     def reward_success(self, curr_step_cost, job_id, data, data_arr, step_costs, position_history):
         """Calculates reward for successful completion"""
         pass
-    
+
     @abstractmethod
     def reward_failure(self, job_id, step_costs, data, data_arr, position_history):
         """Calculates reward for failure"""
         pass
+
+    # Pure-math scalar reward methods. Default to 0; subclasses override.
+    # Reward designs replace these via runtime monkey-patch (see
+    # rl_agent/reward_designs.install_on_course). Keep these
+    # side-effect-free.
+    def _compute_standard_reward(self, data, data_arr, step_costs):
+        """Scalar reward for a standard (non-terminal) step."""
+        return 0.0
+
+    def _compute_success_reward(self, data, data_arr, step_costs, position_history):
+        """Scalar reward when the episode terminates in success."""
+        return 0.0
+
+    def _compute_failure_reward(self, data, data_arr, step_costs, position_history):
+        """Scalar reward when the episode terminates in failure."""
+        return 0.0
 
     # Names of the public-facing course metrics surfaced to TensorBoard via
     # robotaxi.main(). Concrete courses (DonutCourse) own these as instance
@@ -70,6 +110,43 @@ class BaseCourse(ABC):
         result aggregated across actors in the main process.
         """
         return {k: float(getattr(self, k, 0)) for k in self.METRIC_KEYS}
+
+    # Names of the raw counters that ``get_raw_counters()`` returns.
+    # These are the unaveraged sums + episode counts the course
+    # accumulates over its lifetime. The Analysis tab's reward-design-
+    # invariant comparison machinery (see run_policy in robotaxi.py)
+    # snapshots these before/after each EVAL trial and computes per-
+    # trial averages via deltas - more accurate than re-deriving
+    # per-trial means from running cumulative averages.
+    #
+    # Concrete courses MAY define a subset; missing counters default to
+    # 0 via getattr below. SimpleCourse currently doesn't track any of
+    # these, so it reports zeros and the Analysis tab degrades to just
+    # the avg_return metric for that course.
+    RAW_COUNTER_KEYS = (
+        'steps_total',                # denominator for avg_speed / avg_steering_angle_ratio
+        'num_episodes_total',         # denominator for avg_goals_per_episode
+        'speeds_total',               # numerator for avg_speed
+        'goals_per_episode_total',    # numerator for avg_goals_per_episode
+        'steering_angle_ratio_total', # numerator for avg_steering_angle_ratio
+    )
+
+    def get_raw_counters(self):
+        """Snapshot the cumulative raw counters as a plain dict.
+
+        Sibling of ``get_metrics()``: ``get_metrics()`` returns the
+        running averages, this returns the underlying numerators +
+        denominators. Designed for snapshot-and-delta arithmetic so a
+        caller can compute the per-window average over an arbitrary
+        sub-interval (e.g., one EVAL trial) by reading this before
+        and after.
+
+        Missing counters default to 0 - the courses that don't track
+        a particular counter report zero deltas, which the consumer
+        treats as "data unavailable for this metric on this course"
+        rather than "metric was zero".
+        """
+        return {k: float(getattr(self, k, 0)) for k in self.RAW_COUNTER_KEYS}
 
     def check_if_moving(self, arr):
         """Helper method to check if robot is moving"""

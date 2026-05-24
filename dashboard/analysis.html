@@ -36,6 +36,29 @@
       </span>
 
       <div class="flex flex-wrap gap-2 ml-auto items-center">
+        <!-- Metric switcher. Default = avg_return (legacy comparison
+             metric). The other four are reward-design INVARIANT, so
+             they're the right tools for comparing models trained with
+             different reward shapings. The choice swaps which per-
+             trial array the stats engine + plots operate on; the
+             entire comparison page re-renders without re-fetching
+             data (we cache all metrics per bundle on the initial
+             load). -->
+        <label class="text-xs text-slate-500 dark:text-slate-400 mr-1">
+          Metric
+          <select data-action="metric"
+                  class="ml-2 appearance-none select-chevron pr-7 px-2 py-1 text-xs
+                         border border-slate-300 dark:border-slate-600
+                         bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100
+                         rounded-md shadow-card"
+                  title="Choose which per-trial metric to compare. Avg return is reward-shaping biased; the others are reward-design invariant.">
+            <option value="returns" selected>Avg return (reward-shaped)</option>
+            <option value="episode_lengths">Avg episode length</option>
+            <option value="avg_goals_per_episode">Avg goals per episode</option>
+            <option value="avg_speeds">Avg speed</option>
+            <option value="avg_steering_angle_ratios">Avg steering ratio</option>
+          </select>
+        </label>
         <label class="text-xs text-slate-500 dark:text-slate-400 mr-1">
           Bootstrap iters
           <select data-action="boot-iters"
@@ -76,7 +99,7 @@
   </div>
 
   <!-- Cache-busted (see jobs.html). Bump ?v=... when components.js changes. -->
-  <script src="/components.js?v=20260516-selectcol"></script>
+  <script src="/components.js?v=20260524-slotpick"></script>
   <script>
     (function () {
       const { showToast } = window.RoboracerUI;
@@ -472,6 +495,60 @@
        *  episode returns - see the Notes panel for the implication.
        * ================================================================ */
 
+      // Metric registry. Each entry describes one per-trial array we
+      // pool from leaderboard_scores. The key is the field name in the
+      // leaderboard_scores document; the label/axisTitle/units are used
+      // in tables / plots; "biased" flags reward-design dependence (a
+      // user warning chip is shown when "returns" is selected since it
+      // can't be compared apples-to-apples across different shapings).
+      //
+      // To add a metric in the future:
+      //   1. Trainer side: stamp a parallel array on leaderboard_scores
+      //      via save_results_to_db in robotaxi.py.
+      //   2. Add an entry here.
+      //   3. Add an <option> in the toolbar's <select data-action="metric">.
+      const METRICS = {
+        returns: {
+          label: 'Avg return',
+          axisTitle: 'Per-trial mean return',
+          units: '',
+          biased: true,
+          help: 'tf-agents AverageReturn. Reward-design biased - cannot meaningfully compare models trained with different reward shapings. Use one of the other metrics for that.',
+        },
+        episode_lengths: {
+          label: 'Avg episode length',
+          axisTitle: 'Per-trial mean episode length (env steps)',
+          units: 'steps',
+          biased: false,
+          help: 'tf-agents AverageEpisodeLength. Higher = the agent survives longer before failure/timeout. Reward-design invariant.',
+        },
+        avg_goals_per_episode: {
+          label: 'Avg goals per episode',
+          axisTitle: 'Per-trial mean goals reached per episode',
+          units: 'goals/ep',
+          biased: false,
+          help: 'Course-level: goals reached / episodes within the trial. Reward-design invariant; the most direct task-success measure for the donut course.',
+        },
+        avg_speeds: {
+          label: 'Avg speed',
+          axisTitle: 'Per-trial mean car speed (m/s)',
+          units: 'm/s',
+          biased: false,
+          help: 'Course-level: speeds_total / steps_total within the trial. Reward-design invariant. Note: a higher speed isn\'t inherently better - interpret alongside goals per episode.',
+        },
+        avg_steering_angle_ratios: {
+          label: 'Avg steering ratio',
+          axisTitle: 'Per-trial mean steering angle ratio',
+          units: '',
+          biased: false,
+          help: 'Course-level: steering_angle_ratio_total / steps_total. Lower = smoother driving; high values mean lots of corrective steering.',
+        },
+      };
+
+      function currentMetric() {
+        return METRICS[state.metricKey] || METRICS.returns;
+      }
+
       const state = {
         modelIds: [],            // selection from Models tab
         modelsById: new Map(),
@@ -480,6 +557,10 @@
         loading: false,
         error: null,
         nBoot: 2000,
+        // Active per-trial metric. Drives the renderers and the stats
+        // engine via _refreshBundleScoresForMetric() (called at the
+        // top of renderReport).
+        metricKey: 'returns',
       };
 
       async function fetchData() {
@@ -506,11 +587,28 @@
         const byId = new Map(models.map((m) => [String(m._id || m.id), m]));
         const byLocation = new Map(models.map((m) => [String(m.location || ''), m]));
 
+        // Pool every metric array off each leaderboard_score doc. Each
+        // array is keyed by the same field name the trainer used in
+        // save_results_to_db (see rl_agent/robotaxi.py); we read all
+        // METRICS keys generically so adding a new metric requires no
+        // change here.
+        const metricKeys = Object.keys(METRICS);
+
         return modelIds.map((mid) => {
           const model = byId.get(String(mid)) || null;
           if (!model) {
-            return { model: null, modelId: mid, eval_runs: [], scores: [],
-                     perRunMeans: [], perRunMedians: [], warn: 'Model not found.' };
+            const emptyPool = {};
+            for (const k of metricKeys) emptyPool[k] = [];
+            return {
+              model: null,
+              modelId: mid,
+              eval_runs: [],
+              scores: [],
+              samplesByMetric: emptyPool,
+              perRunMeans: [],
+              perRunMedians: [],
+              warn: 'Model not found.',
+            };
           }
           // Primary join: leaderboard_score.model_id matches this model's
           // _id (set by save_results_to_db in robotaxi.py). Fallback for
@@ -522,31 +620,156 @@
             if (s.path && model.location && String(s.path) === String(model.location)) return true;
             return false;
           });
-          let scores = [];
+
+          // Pool each metric's per-trial array across all eval runs of
+          // this model. `samplesByMetric.returns` is the legacy `scores`
+          // array; the others are reward-design invariant.
+          const samplesByMetric = {};
+          for (const k of metricKeys) samplesByMetric[k] = [];
+
+          // The trainer's old leaderboard_scores schema stored the
+          // returns array under the key `scores`. The newer schema
+          // (post-add_unbiased_metrics) also writes the alias `scores`
+          // but uses `returns` semantically. We accept either source
+          // field for the legacy "returns" metric so historical eval
+          // runs keep working on this tab.
+          const readField = (run, metricKey) => {
+            if (metricKey === 'returns') {
+              // Prefer explicit `returns` if a future schema migrates,
+              // else fall back to the existing `scores` field.
+              return Array.isArray(run.returns) ? run.returns : run.scores;
+            }
+            return run[metricKey];
+          };
+
           const perRunMeans = [];
           const perRunMedians = [];
           for (const r of runs) {
-            if (Array.isArray(r.scores) && r.scores.length) {
-              const cleaned = r.scores.filter((x) => Number.isFinite(Number(x))).map(Number);
-              scores = scores.concat(cleaned);
+            for (const k of metricKeys) {
+              const arr = readField(r, k);
+              if (Array.isArray(arr) && arr.length) {
+                // Filter out non-finite entries: explicit nulls (used
+                // by the trainer to mean "metric unavailable for this
+                // trial") and NaNs / undefineds from corrupted rows.
+                const cleaned = arr
+                  .filter((x) => x !== null && x !== undefined)
+                  .map(Number)
+                  .filter((x) => Number.isFinite(x));
+                if (cleaned.length) {
+                  samplesByMetric[k] = samplesByMetric[k].concat(cleaned);
+                }
+              }
+            }
+            // perRunMeans / perRunMedians historically tracked the
+            // returns array's run-level summary; keep that legacy
+            // semantic by computing off `returns` only. (The Notes
+            // section uses these.)
+            const returnsForThisRun = readField(r, 'returns');
+            if (Array.isArray(returnsForThisRun) && returnsForThisRun.length) {
+              const cleaned = returnsForThisRun
+                .filter((x) => Number.isFinite(Number(x))).map(Number);
               if (cleaned.length) {
                 perRunMeans.push(mean(cleaned));
                 perRunMedians.push(median(cleaned));
               }
             }
           }
+
+          // `scores` is the view that the stats engine and renderers
+          // read. Initial value mirrors the legacy "avg_return"
+          // metric; renderReport() re-binds it to whichever metric
+          // is currently selected before re-running.
+          const scores = samplesByMetric.returns.slice();
+
+          // Warn-out logic considers ANY metric having data, not just
+          // returns, because a user who selects a non-returns metric
+          // shouldn't see "no scores yet" if their eval did produce
+          // (say) avg_goals_per_episode data.
+          const anyData = metricKeys.some((k) => samplesByMetric[k].length > 0);
+
           return {
             model,
             modelId: String(model._id),
             eval_runs: runs,
             scores,
+            samplesByMetric,
             perRunMeans,
             perRunMedians,
-            warn: scores.length === 0
-              ? 'No eval-trial scores yet — submit an EVAL job from the Models tab to populate this.'
-              : null,
+            warn: anyData
+              ? null
+              : 'No eval-trial scores yet — submit an EVAL job from the Models tab to populate this.',
           };
         });
+      }
+
+      // Sort bundles in-place by their model's create_date (ascending,
+      // = oldest first). The first slot is the baseline, so this puts
+      // the oldest checkpoint there - the natural "what's the starting
+      // point we're comparing against?" choice. Bundles whose model
+      // wasn't found, or whose model has no create_date, are pushed
+      // to the end so they don't poison the ordering. Stable sort
+      // (Array.prototype.sort in modern JS) means undated bundles
+      // keep their selection-order tiebreak.
+      function _bundleTimestamp(b) {
+        if (!b || !b.model) return Number.POSITIVE_INFINITY;
+        const t = b.model.create_date;
+        if (!t) return Number.POSITIVE_INFINITY;
+        const parsed = Date.parse(t);
+        return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+      }
+      function sortBundlesByCreateDate(bundles) {
+        bundles.sort((a, b) => _bundleTimestamp(a) - _bundleTimestamp(b));
+      }
+
+      // Swap two slots in state.bundles. Used by the per-slot model
+      // dropdown on each chip in renderChips: the user picks a model
+      // for slot X, that model is currently at slot Y, so we swap
+      // them. The "no slot is ever empty / no model is ever duplicated"
+      // invariant holds automatically because swap is its own inverse.
+      function swapBundleSlots(slotA, slotB) {
+        if (!Number.isInteger(slotA) || !Number.isInteger(slotB)) return;
+        if (slotA === slotB) return;
+        if (slotA < 0 || slotB < 0) return;
+        const n = state.bundles.length;
+        if (slotA >= n || slotB >= n) return;
+        const tmp = state.bundles[slotA];
+        state.bundles[slotA] = state.bundles[slotB];
+        state.bundles[slotB] = tmp;
+        // Refresh the subtitle line if the baseline (slot 0) changed.
+        if (slotA === 0 || slotB === 0) {
+          const head = state.bundles[0];
+          subtitleEl.textContent =
+            `Comparing ${state.bundles.length} models · ${head && head.model ? (head.model.model_type + ' · ' + shortId(head.modelId)) : 'baseline'} as baseline`;
+        }
+        renderReport();
+      }
+
+      // Find the slot index of the bundle whose model id matches.
+      // Returns -1 if not found. Used by the chip dropdown change
+      // handler to translate "user picked model X for slot Y" into
+      // "swap slot Y with the slot where X currently lives".
+      function findSlotByModelId(modelId) {
+        const target = String(modelId || '');
+        for (let i = 0; i < state.bundles.length; i++) {
+          if (String(state.bundles[i].modelId) === target) return i;
+        }
+        return -1;
+      }
+
+      // Re-bind bundle.scores to the array for the currently-selected
+      // metric. Called at the top of renderReport so the entire stats
+      // engine + renderers - which all read bundle.scores - operate on
+      // the right per-trial samples without needing to be parameterized
+      // on metricKey individually.
+      function _refreshBundleScoresForMetric() {
+        const key = state.metricKey;
+        for (const b of state.bundles) {
+          if (b && b.samplesByMetric && Array.isArray(b.samplesByMetric[key])) {
+            b.scores = b.samplesByMetric[key];
+          } else {
+            b.scores = [];
+          }
+        }
       }
 
       /* ================================================================ *
@@ -709,6 +932,12 @@
       }
 
       function renderReport() {
+        // Re-bind bundle.scores to the selected metric's pooled array
+        // BEFORE summarising / comparing. The stats engine reads
+        // bundle.scores directly, so this single hop is enough to make
+        // the entire page reflect the chosen metric.
+        _refreshBundleScoresForMetric();
+
         stateHost.classList.add('hidden');
         reportEl.classList.remove('hidden');
 
@@ -719,6 +948,13 @@
         const comparisons = experiments.map((e) => compareToBaseline(baseline, e));
 
         const sections = [];
+
+        // -------- 0. Metric callout --------
+        // Visible banner so the user knows which metric the rest of the
+        // page is summarising. The biased metric (returns) gets an
+        // amber warning since it isn't comparable across reward
+        // designs - the whole reason this switcher exists.
+        sections.push(renderMetricBanner());
 
         // -------- 1. Header chips --------
         sections.push(renderChips(state.bundles));
@@ -787,6 +1023,42 @@
         });
       }
 
+      function renderMetricBanner() {
+        const m = currentMetric();
+        const biasedNotice = m.biased
+          ? `<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold ` +
+            `text-amber-700 bg-amber-100 dark:text-amber-200 dark:bg-amber-900/40">` +
+            `reward-design biased</span>`
+          : `<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold ` +
+            `text-emerald-700 bg-emerald-100 dark:text-emerald-200 dark:bg-emerald-900/40">` +
+            `reward-design invariant</span>`;
+        const warning = m.biased
+          ? `<div class="mt-1 text-[11px] text-amber-700 dark:text-amber-300 leading-relaxed">
+              Comparing avg_return across models trained with <em>different</em> reward
+              designs isn&rsquo;t meaningful &mdash; the absolute scale and sign depend on
+              the shaping. Switch the Metric selector above to <strong>Avg goals per
+              episode</strong>, <strong>Avg episode length</strong>, or one of the
+              other invariant metrics for an apples-to-apples comparison.
+            </div>`
+          : '';
+        return `
+          <section class="card-surface">
+            <div class="card-header">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="font-semibold">${escapeHtml(m.label)}</span>
+                ${biasedNotice}
+                ${m.units ? `<span class="text-[11px] text-slate-500 dark:text-slate-400 font-mono">(${escapeHtml(m.units)})</span>` : ''}
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                ${escapeHtml(m.help)}
+              </div>
+              ${warning}
+            </div>
+          </section>`;
+      }
+
       function renderChips(bundles) {
         const items = bundles.map((b, i) => {
           const isBaseline = i === 0;
@@ -841,6 +1113,46 @@
                        bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
                  exp ${i}
                </span>`;
+          // Per-slot model dropdown. Lets the user swap any model
+          // into any slot. The dropdown's options are every selected
+          // model in the current comparison; the currently-selected
+          // option is the model at THIS slot. Picking a different
+          // option triggers swapBundleSlots(thisSlot, slotOfPicked),
+          // which is its own inverse so the invariant "no slot is
+          // empty, no model is duplicated" holds automatically.
+          //
+          // Each option is labelled `{model_type} · {shortId} · {date}`
+          // so the user gets chronological context at a glance.
+          // The option for the bundle currently at THIS slot has the
+          // `selected` attribute so the dropdown reflects state.
+          const dropdownOptions = bundles.map((other, j) => {
+            const otherName = other.model
+              ? `${other.model.model_type || '?'} · ${shortId(other.modelId)}`
+              : `unknown · ${shortId(other.modelId)}`;
+            const otherDate = other.model && other.model.create_date
+              ? new Date(other.model.create_date).toLocaleString(undefined, {
+                  month: 'short', day: 'numeric',
+                  hour: '2-digit', minute: '2-digit',
+                })
+              : '';
+            const label = otherDate ? `${otherName} · ${otherDate}` : otherName;
+            const selected = j === i ? ' selected' : '';
+            return `<option value="${escapeHtml(String(other.modelId))}"${selected}>${escapeHtml(label)}</option>`;
+          }).join('');
+          const dropdown = `
+            <select data-action="set-slot"
+                    data-slot-idx="${i}"
+                    class="w-full mt-2 text-xs px-2 py-1.5 rounded-md
+                           appearance-none select-chevron pr-7
+                           bg-white dark:bg-slate-800
+                           text-slate-700 dark:text-slate-200
+                           border border-slate-200 dark:border-slate-700
+                           hover:border-indigo-300 dark:hover:border-indigo-500/60
+                           focus:border-indigo-500 focus:outline-none
+                           transition-colors duration-150"
+                    title="Pick which model fills this slot. Selecting a model that's currently in another slot swaps them, so each model only appears in one slot at a time.">
+              ${dropdownOptions}
+            </select>`;
           return `
             <div class="card-surface p-4">
               <div class="flex items-center gap-2">
@@ -850,7 +1162,8 @@
                 </div>
                 ${role}
               </div>
-              <div class="text-xs text-slate-500 dark:text-slate-400 mt-1 truncate">
+              ${dropdown}
+              <div class="text-xs text-slate-500 dark:text-slate-400 mt-2 truncate">
                 ${detailHtml}
               </div>
               <div class="text-[11px] text-slate-500 dark:text-slate-400 mt-2">
@@ -1125,7 +1438,7 @@
         }));
         Plotly.newPlot(el, traces, Object.assign({}, plotlyLayoutBase, {
           showlegend: false,
-          yaxis: Object.assign({}, plotlyLayoutBase.yaxis, { title: 'Per-trial mean return' }),
+          yaxis: Object.assign({}, plotlyLayoutBase.yaxis, { title: currentMetric().axisTitle }),
           xaxis: Object.assign({}, plotlyLayoutBase.xaxis, { automargin: true }),
         }), { displaylogo: false, responsive: true });
       }
@@ -1186,7 +1499,7 @@
         };
         Plotly.newPlot(el, [bars, overlay], Object.assign({}, plotlyLayoutBase, {
           showlegend: true,
-          yaxis: Object.assign({}, plotlyLayoutBase.yaxis, { title: 'Mean of per-trial means' }),
+          yaxis: Object.assign({}, plotlyLayoutBase.yaxis, { title: 'Mean of per-trial ' + currentMetric().label.toLowerCase() }),
           xaxis: Object.assign({}, plotlyLayoutBase.xaxis, { automargin: true }),
         }), { displaylogo: false, responsive: true });
       }
@@ -1234,6 +1547,22 @@
           state.modelsById = new Map(models.map((m) => [String(m._id), m]));
           state.leaderboardScores = lb;
           state.bundles = buildBundles(state.modelIds, models, lb);
+          // Default ordering: oldest checkpoint as baseline, newest as
+          // the highest-numbered experiment. So for the chip row
+          // [base, exp 1, exp 2, ..., exp N], create_date goes from
+          // oldest -> newest left-to-right. This is the natural
+          // "compare what's-changed-since-the-baseline" framing.
+          //
+          // Bundles whose model record we couldn't resolve, or whose
+          // model has no create_date, get sorted to the end (after
+          // dated bundles) - they can't meaningfully participate in a
+          // chronological ordering. If those are the only bundles
+          // we have, the original selection order survives via the
+          // stable sort.
+          //
+          // The user can override this default via the "Set as
+          // baseline" buttons on each chip in renderChips below.
+          sortBundlesByCreateDate(state.bundles);
           subtitleEl.textContent =
             `Comparing ${state.bundles.length} models · ${state.bundles[0] && state.bundles[0].model ? (state.bundles[0].model.model_type + ' · ' + shortId(state.bundles[0].modelId)) : 'baseline'} as baseline`;
           renderReport();
@@ -1287,6 +1616,45 @@
         // takes effect on the next reload.
         if (state.bundles.length) renderReport();
       });
+
+      // Delegated change handler for the per-slot model dropdowns
+      // rendered by renderChips. We attach to document (rather than
+      // the chips' container) because renderReport() replaces the
+      // inner HTML on every change - including each call to
+      // swapBundleSlots below - and a direct listener would be lost
+      // on re-render.
+      //
+      // Listening to 'change' (not 'click') is intentional: a click
+      // that doesn't actually change the selected option (e.g., user
+      // opens the dropdown and re-picks the already-selected model)
+      // shouldn't trigger a no-op swap that re-renders the page.
+      document.addEventListener('change', (ev) => {
+        const sel = ev.target && ev.target.closest && ev.target.closest('[data-action="set-slot"]');
+        if (!sel) return;
+        const slotIdx = Number(sel.getAttribute('data-slot-idx'));
+        const pickedModelId = String(sel.value || '');
+        if (!Number.isInteger(slotIdx) || !pickedModelId) return;
+        const currentSlot = findSlotByModelId(pickedModelId);
+        if (currentSlot < 0 || currentSlot === slotIdx) return;
+        swapBundleSlots(slotIdx, currentSlot);
+      });
+
+      // Metric switcher: re-render the whole comparison page with the
+      // chosen metric. No re-fetch needed - every metric's per-trial
+      // array is pre-pooled into bundle.samplesByMetric at fetch time;
+      // renderReport rebinds bundle.scores to the right one before
+      // re-running the stats engine + plots.
+      const metricSelectEl = document.querySelector('[data-action="metric"]');
+      if (metricSelectEl) {
+        // Initialize from state so a future ?metric= URL param could
+        // pre-select. Today the default is "returns" everywhere.
+        metricSelectEl.value = state.metricKey;
+        metricSelectEl.addEventListener('change', (ev) => {
+          const next = String(ev.target.value || 'returns');
+          state.metricKey = METRICS[next] ? next : 'returns';
+          if (state.bundles.length) renderReport();
+        });
+      }
 
       /* ---------- Incoming selections ---------- */
 

@@ -128,6 +128,24 @@
           <label for="f-demo-job-id" class="text-xs font-medium text-slate-600 dark:text-slate-300">Demo job ID</label>
           <input id="f-demo-job-id" name="demo_job_id" type="text" placeholder="(only for BC_TRAINING_ONLY)"
                  class="w-full input-base">
+
+          <!-- Reward design selector. Populated from /get_reward_designs
+               on modal open. TRAIN-only - the trainer reads
+               reward_design_id off the job document and looks the
+               doc up at job-pickup time, so EVAL / DEMO / BC jobs
+               simply ignore the field. The first option is "Course
+               default", which omits the field entirely so the trainer
+               takes its non-design code path (identical to legacy
+               jobs). The seeded canonical "Course default
+               (passthrough)" design appears as a real option below
+               that for users who want to anchor an experiment to it
+               explicitly. -->
+          <label for="f-reward-design"
+                 class="text-xs font-medium text-slate-600 dark:text-slate-300">Reward design</label>
+          <select id="f-reward-design" name="reward_design_id"
+                  class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="">Course default (no reward design)</option>
+          </select>
         </form>
       </div>
       <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
@@ -143,7 +161,7 @@
        (Ctrl+Shift+R on the parent doesn't always force iframe
        subresources to re-fetch). Bump the version string whenever you
        change components.js. -->
-  <script src="/components.js?v=20260516-selectcol"></script>
+  <script src="/components.js?v=20260524-jobid"></script>
   <script>
     (function () {
       const { TableView, formatters, showToast, confirmDialog } = window.RoboracerUI;
@@ -355,6 +373,66 @@
         dialogEl.classList.add('opacity-100', 'translate-y-0', 'scale-100');
         modal.setAttribute('aria-hidden', 'false');
         document.getElementById('f-job-type').focus();
+        // Hydrate the reward-design dropdown each time the modal
+        // opens so newly-authored designs show up without a page
+        // reload. We always force=true here: this is a user-initiated
+        // action, and the request is cheap.
+        loadRewardDesignsIntoDropdown().catch((err) => {
+          // Non-fatal - the dropdown just shows the default option.
+          console.warn('reward_designs hydrate failed:', err);
+        });
+      }
+
+      // ---- Reward-design dropdown population --------------------
+      //
+      // /get_reward_designs returns the full collection (including
+      // archived rows). We hide archived from the picker so the user
+      // can only train with currently-active designs, while keeping
+      // archived designs alive for backward-compat with existing
+      // model records that reference them.
+      //
+      // The dropdown's first option is the "no design" choice, which
+      // submits an empty reward_design_id and triggers the trainer's
+      // legacy non-design code path. We preserve that option's value
+      // across re-population by clearing only options that follow it.
+      async function loadRewardDesignsIntoDropdown() {
+        const sel = document.getElementById('f-reward-design');
+        if (!sel) return;
+        let designs = [];
+        try {
+          const res = await fetch('/get_reward_designs?force=true');
+          if (res.ok) {
+            const text = await res.text();
+            if (text && text !== 'NO_CHANGES') {
+              designs = JSON.parse(text) || [];
+            }
+          }
+        } catch (e) {
+          // Network-down or 500. Leave the dropdown as just "course
+          // default" so the user can still submit a job without a
+          // reward design.
+          console.warn('reward_designs fetch failed:', e);
+        }
+        // Wipe everything past the first (placeholder) option.
+        while (sel.options.length > 1) sel.remove(1);
+        const visible = designs
+          .filter((d) => !d.archived)
+          .sort((a, b) => {
+            // Canonical seed at the top (same _id check as on the
+            // Reward Design tab). Then alphabetical.
+            const aCan = String(a._id || '') === 'passthrough-course-default';
+            const bCan = String(b._id || '') === 'passthrough-course-default';
+            if (aCan && !bCan) return -1;
+            if (bCan && !aCan) return 1;
+            return String(a.name || '').localeCompare(String(b.name || ''));
+          });
+        for (const d of visible) {
+          const opt = document.createElement('option');
+          opt.value = String(d._id);
+          const ver = d.version ? ` (v${d.version})` : '';
+          opt.textContent = (d.name || '(unnamed)') + ver;
+          sel.appendChild(opt);
+        }
       }
       function closeModal() {
         modal.classList.add('opacity-0', 'pointer-events-none');
@@ -386,6 +464,28 @@
           // pass_through_actions is hardcoded false in the trainer.
           pass_through_actions: false,
         };
+        // Reward design only applies to TRAIN jobs - the trainer's
+        // EVAL / DEMO / BC branches don't look at this field. We
+        // still stamp it on every job_type if the user picked one,
+        // because the field is harmless on non-TRAIN docs and it
+        // preserves the user's intent if they restart a non-TRAIN
+        // job as TRAIN later. Empty string -> no design -> course
+        // default code path in do_job.
+        const rdId = String(fd.get('reward_design_id') || '');
+        if (rdId) {
+          payload.reward_design_id = rdId;
+          // Stamp a human-friendly name too so the Jobs / Models
+          // tables can render the design without a second fetch.
+          // Read it off the picked <option>'s text - that's already
+          // formatted as "name (vN)".
+          const sel = document.getElementById('f-reward-design');
+          if (sel && sel.selectedIndex >= 0) {
+            const label = sel.options[sel.selectedIndex].textContent || '';
+            // Trim the trailing " (vN)" we appended on hydrate so the
+            // stored value is just the human-friendly design name.
+            payload.reward_design_name = label.replace(/\s*\(v\d+\)\s*$/, '');
+          }
+        }
         try {
           const res = await fetch('/add_job', {
             method: 'POST',
@@ -430,6 +530,11 @@
           json.sort((a, b) => String(b._id).localeCompare(String(a._id)));
           table.setData(json);
           updateCounts(json);
+          // If a pending focus request landed before the first poll
+          // returned data, try to satisfy it now that the table has
+          // rows. drainPendingFocus() is idempotent and a no-op if
+          // nothing's pending.
+          drainPendingFocus();
         } catch (err) {
           console.error(err);
           if (table._rows.length === 0) table.setError(String(err.message || err));
@@ -442,6 +547,74 @@
       function scheduleImmediatePoll() {
         setTimeout(() => pollOnce(true), 200);
       }
+
+      /* ---------- Cross-tab "focus this job" handoff ---------------
+       *
+       * The Models tab's Job ID cells post
+       * {type: 'roboracer:open-job', jobId} to the GoldenLayout parent;
+       * the parent activates this tab and forwards the message into
+       * this iframe. We catch it here and scroll the Tabulator
+       * viewport to the matching row, then flash it via the
+       * scrollToRowById helper in components.js.
+       *
+       * Three independent paths to receive the request, layered for
+       * robustness against boot-order races:
+       *   1. window.message listener (typical path; live navigation).
+       *   2. sessionStorage read on initial boot (covers the case
+       *      where the parent posted before this iframe's listener
+       *      installed; the parent always writes to sessionStorage
+       *      as a side-effect of the open-job route in
+       *      goldenlayout.js).
+       *   3. ?focus= URL parameter (covers the standalone-page
+       *      fallback in models.html when there's no parent shell).
+       *
+       * Because the first poll might not have landed when the request
+       * arrives, we queue the jobId and retry from pollOnce()'s
+       * success path. Once delivered, the queue is cleared so a poll-
+       * driven retry doesn't re-flash a row the user already saw. */
+      let pendingFocusJobId = null;
+      function requestFocusJob(jobId) {
+        if (!jobId) return;
+        const ok = table.scrollToRowById(String(jobId), { highlight: true });
+        if (!ok) {
+          // Data not yet loaded. Stash and let drainPendingFocus()
+          // retry on the next successful poll.
+          pendingFocusJobId = String(jobId);
+        }
+      }
+      function drainPendingFocus() {
+        if (!pendingFocusJobId) return;
+        const id = pendingFocusJobId;
+        const ok = table.scrollToRowById(id, { highlight: true });
+        if (ok) pendingFocusJobId = null;
+      }
+      // Path 1: live postMessage from parent.
+      window.addEventListener('message', (ev) => {
+        const m = ev && ev.data;
+        if (!m || typeof m !== 'object' || m.type !== 'roboracer:open-job') return;
+        requestFocusJob(m.jobId);
+      });
+      // Path 2: sessionStorage on initial load. We consume-and-clear
+      // so a stale entry from a previous session doesn't auto-scroll
+      // every time the user reloads. The timestamp guard discards
+      // entries older than 10s (nothing fresh enough to be a real
+      // handoff would be older than that).
+      try {
+        const raw = sessionStorage.getItem('roboracer:jobs-focus');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          sessionStorage.removeItem('roboracer:jobs-focus');
+          if (parsed && parsed.jobId && (Date.now() - (parsed.ts || 0) < 10000)) {
+            requestFocusJob(parsed.jobId);
+          }
+        }
+      } catch (_e) { /* swallow */ }
+      // Path 3: ?focus= URL param (standalone-page fallback).
+      try {
+        const url = new URL(window.location.href);
+        const focusParam = url.searchParams.get('focus');
+        if (focusParam) requestFocusJob(focusParam);
+      } catch (_e) { /* swallow */ }
 
       pollOnce(true);
       pollHandle = setInterval(() => pollOnce(false), 5000);

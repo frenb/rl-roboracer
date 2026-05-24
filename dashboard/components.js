@@ -75,6 +75,7 @@
         NOT_STARTED: 'neutral',
         IN_PROGRESS: 'info',
         DONE: 'success',
+        FAILED: 'danger',
       })[status] || 'neutral';
       return badge(tone, status || '?');
     },
@@ -835,6 +836,61 @@
       if (!this._tabulator) return;
       try { this._tabulator.deselectRow(); } catch (e) {}
       this._fireSelectionChange();
+    }
+
+    // Scroll the table viewport so the row matching `id` is visible,
+    // and briefly flash it so the user can locate it after a cross-
+    // tab handoff (e.g., Models -> click job_id -> Jobs tab scrolls
+    // to the matching job row).
+    //
+    // The id is matched against this table's rowKey (configured per
+    // table in the consuming page; for Jobs and Models that's
+    // `row._id`). Returns true if the row was found and scrolled to,
+    // false otherwise. Silent failure rather than throwing because
+    // the caller is typically routed via postMessage and the table's
+    // first data load may not have finished yet - the caller should
+    // poll/retry if it needs guaranteed delivery.
+    //
+    // Options:
+    //   highlight: bool (default true) - apply a brief CSS flash to
+    //     the row.
+    //   highlightMs: int (default 1800) - how long the flash lasts.
+    //   position: Tabulator position arg ('top'|'center'|'bottom'
+    //     |'nearest', default 'center').
+    scrollToRowById(id, options) {
+      if (!this._tabulator) return false;
+      const opts = options || {};
+      const position = opts.position || 'center';
+      const highlight = opts.highlight !== false;
+      const highlightMs = Number(opts.highlightMs) || 1800;
+      try {
+        // Tabulator.getRow accepts the row's index (which by default
+        // is the value of the row's `index` field - we configure that
+        // to `_id` for the tabs that need this).
+        const row = this._tabulator.getRow(String(id));
+        if (!row) return false;
+        // scrollToRow(row, position, ifVisible). ifVisible=true means
+        // "skip the scroll if the row is already on-screen" - good
+        // UX (no jitter when the user clicked a job that's already
+        // visible).
+        this._tabulator.scrollToRow(row, position, true);
+        if (highlight) {
+          const el = row.getElement();
+          if (el) {
+            el.classList.add('rc-row-flash');
+            // Force a reflow so the class kicks in even when called
+            // in rapid succession.
+            void el.offsetWidth;
+            setTimeout(() => {
+              el.classList.remove('rc-row-flash');
+            }, highlightMs);
+          }
+        }
+        return true;
+      } catch (e) {
+        console.warn('scrollToRowById failed:', e);
+        return false;
+      }
     }
 
     // Reapply Tabulator-side filters from this wrapper instance, useful

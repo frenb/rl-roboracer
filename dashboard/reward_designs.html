@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en" class="dark h-full">
+<head>
+  <meta charset="utf-8">
+  <title>Reward Design · rl-roboracer</title>
+  <!-- Tailwind first, then config, then base styles. Same boot order
+       as every other dashboard tab. -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/tailwind.init.js"></script>
+
+  <!-- CodeMirror 5 - small, mature, no build step, has a python mode
+       out of the box. We deliberately do NOT use CodeMirror 6 because
+       6 ships ESM-only without a no-build CDN, which would force a
+       bundler into this otherwise script-tag-only dashboard.
+
+       The default theme is restyled in styles.css to match the slate /
+       indigo palette, so we don't need to load any of CodeMirror's own
+       theme stylesheets. -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/selection/active-line.min.js"></script>
+
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="h-full m-0 font-sans antialiased text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-[#0b1120]">
+
+  <div class="flex flex-col h-screen w-full">
+
+    <!-- Toolbar ------------------------------------------------- -->
+    <div class="flex flex-wrap items-center gap-3 px-5 py-4 row-gap-2
+                bg-white dark:bg-slate-900
+                border-b border-slate-200 dark:border-slate-700
+                shadow-card relative z-[3] flex-shrink-0">
+      <h1 class="text-2xl font-semibold tracking-tight m-0 mr-3">Reward Design</h1>
+      <span data-role="design-count"
+            class="text-xs font-medium text-slate-500 dark:text-slate-400"
+            aria-live="polite"></span>
+
+      <span data-role="freshness"
+            class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400"
+            aria-live="polite"
+            title="Time since the last successful poll of /get_reward_designs">
+        <span data-role="freshness-dot"
+              class="inline-block w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+        <span data-role="freshness-text">connecting…</span>
+      </span>
+
+      <div class="flex flex-wrap gap-2 ml-auto">
+        <label class="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 select-none">
+          <input data-role="show-archived" type="checkbox"
+                 class="w-3.5 h-3.5 rounded border-slate-300 dark:border-slate-600
+                        bg-white dark:bg-slate-800 text-indigo-500 focus:ring-1 focus:ring-indigo-400">
+          <span>Show archived</span>
+        </label>
+        <button data-action="new-design" class="btn-base btn-primary">+ New design</button>
+      </div>
+    </div>
+
+    <!-- Body: two-pane layout (list | editor) --------------------- -->
+    <div class="flex-1 overflow-hidden p-4 bg-slate-50 dark:bg-[#0b1120]">
+      <div class="rd-shell h-full">
+
+        <!-- Left pane: design list --------------------------------- -->
+        <aside class="rd-card">
+          <div class="px-3 py-2.5 border-b border-slate-200 dark:border-slate-700
+                      text-xs uppercase tracking-wide font-semibold
+                      text-slate-500 dark:text-slate-400">
+            Designs
+          </div>
+          <div data-role="design-list" class="rd-list">
+            <div class="rd-empty">Loading…</div>
+          </div>
+        </aside>
+
+        <!-- Right pane: editor + metadata + actions ---------------- -->
+        <section class="rd-card">
+          <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-700
+                      flex items-center justify-between gap-3 flex-wrap">
+            <div class="flex flex-col gap-0.5 min-w-0">
+              <span data-role="editor-title"
+                    class="text-sm font-semibold truncate">No design selected</span>
+              <span data-role="editor-meta"
+                    class="text-xs text-slate-500 dark:text-slate-400 font-mono"></span>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center">
+              <span data-role="lint-status" class="rd-lint is-checking" hidden>Lint…</span>
+              <button data-action="lint" class="btn-base btn-secondary text-xs" disabled>Lint</button>
+              <button data-action="archive" class="btn-base btn-secondary text-xs" disabled>Archive</button>
+              <button data-action="unarchive" class="btn-base btn-secondary text-xs" hidden>Unarchive</button>
+              <button data-action="save" class="btn-base btn-primary text-xs" disabled>Save</button>
+            </div>
+          </div>
+
+          <div class="p-4 flex flex-col gap-3 flex-1 min-h-0">
+            <div class="grid grid-cols-[minmax(110px,max-content)_1fr] gap-3 items-center">
+              <label for="rd-name"
+                     class="text-xs font-medium text-slate-600 dark:text-slate-300">Name</label>
+              <input id="rd-name" type="text" maxlength="120"
+                     placeholder="e.g. proximity-bonus-v1"
+                     class="w-full input-base text-sm" disabled>
+              <label for="rd-description"
+                     class="text-xs font-medium text-slate-600 dark:text-slate-300">Description</label>
+              <input id="rd-description" type="text" maxlength="280"
+                     placeholder="One-line summary of what this design changes"
+                     class="w-full input-base text-sm" disabled>
+            </div>
+
+            <div class="rd-editor-wrap">
+              <!-- The actual CodeMirror instance attaches as a child
+                   of this host on boot. We size it via .rd-editor-host
+                   in styles.css so it stretches with the pane. -->
+              <div data-role="editor-host" class="rd-editor-host"></div>
+            </div>
+
+            <!-- Lint error detail. Hidden when ok, shown with the
+                 server's error message otherwise. -->
+            <div data-role="lint-detail" class="rd-lint-detail" hidden></div>
+
+            <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+              Define one or more of
+              <code class="font-mono text-[11px]">reward_standard</code>,
+              <code class="font-mono text-[11px]">reward_success</code>,
+              <code class="font-mono text-[11px]">reward_failure</code>.
+              Each receives <code class="font-mono text-[11px]">data</code>,
+              <code class="font-mono text-[11px]">data_arr</code>,
+              <code class="font-mono text-[11px]">step_costs</code>
+              (plus <code class="font-mono text-[11px]">position_history</code> on success/failure)
+              and the keyword-only helpers
+              <code class="font-mono text-[11px]">defaults</code> +
+              <code class="font-mono text-[11px]">course</code>. Return a float.
+              Sandbox blocks <code class="font-mono text-[11px]">os</code>,
+              <code class="font-mono text-[11px]">sys</code>,
+              file IO, and network.
+            </p>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Bumped to 20260517-rd to bust iframe caches. Whenever this page or
+       components.js changes substantively, bump this string. -->
+  <script src="/components.js?v=20260517-rd"></script>
+  <script>
+    (function () {
+      const { formatters, showToast, confirmDialog, FreshnessIndicator } = window.RoboracerUI;
+
+      // ---- New-design template --------------------------------------
+      // Stub a passthrough design as the "+ New design" starting point
+      // so the user has something that lints + trains the moment they
+      // click Save. Kept in sync with PASSTHROUGH_DESIGN_CODE in
+      // rl_agent/reward_designs.py - copying that here means the user
+      // can diff their experimental design against the canonical one
+      // directly, and we don't have to round-trip to the server to
+      // fetch a starter.
+      const TEMPLATE_CODE = `"""Brief description of what this reward design changes.
+
+Each function returns a float reward for the named situation.
+Missing functions fall through to the underlying course's defaults.
+"""
+
+
+def reward_standard(data, data_arr, step_costs, *, defaults, course):
+    """Per-step reward while the episode is still running."""
+    return defaults.standard(data, data_arr, step_costs)
+
+
+def reward_success(data, data_arr, step_costs, position_history, *,
+                   defaults, course):
+    """Terminal reward when the episode ends in success."""
+    return defaults.success(data, data_arr, step_costs, position_history)
+
+
+def reward_failure(data, data_arr, step_costs, position_history, *,
+                   defaults, course):
+    """Terminal reward when the episode ends in failure."""
+    return defaults.failure(data, data_arr, step_costs, position_history)
+`;
+
+      // ---- DOM handles ----------------------------------------------
+      const listEl       = document.querySelector('[data-role="design-list"]');
+      const countEl      = document.querySelector('[data-role="design-count"]');
+      const titleEl      = document.querySelector('[data-role="editor-title"]');
+      const metaEl       = document.querySelector('[data-role="editor-meta"]');
+      const nameInput    = document.getElementById('rd-name');
+      const descInput    = document.getElementById('rd-description');
+      const editorHost   = document.querySelector('[data-role="editor-host"]');
+      const showArchived = document.querySelector('[data-role="show-archived"]');
+      const lintStatus   = document.querySelector('[data-role="lint-status"]');
+      const lintDetail   = document.querySelector('[data-role="lint-detail"]');
+
+      const btnNew       = document.querySelector('[data-action="new-design"]');
+      const btnSave      = document.querySelector('[data-action="save"]');
+      const btnArchive   = document.querySelector('[data-action="archive"]');
+      const btnUnarchive = document.querySelector('[data-action="unarchive"]');
+      const btnLint      = document.querySelector('[data-action="lint"]');
+
+      // ---- State ----------------------------------------------------
+      // `designs` mirrors the server's reward_designs collection. When
+      // we apply a server payload we use it whole; in-flight edits live
+      // on `editorState` only and don't write back into `designs` until
+      // the save round-trips.
+      let designs = [];
+      // editorState: the form's current dirty contents. When `id` is
+      // null we're authoring a brand-new design (POST /add); otherwise
+      // we're editing an existing one (POST /update).
+      let editorState = makeEmptyEditorState();
+
+      function makeEmptyEditorState() {
+        return {
+          id: null,
+          name: '',
+          description: '',
+          code: '',
+          version: 0,
+          archived: false,
+          originalCode: '',          // for dirty-check
+          originalName: '',
+          originalDescription: '',
+          // True when the user has started a brand-new design and
+          // nothing has been saved yet. Drives the "(unsaved)" tag.
+          isNew: false,
+        };
+      }
+
+      function isDirty() {
+        return editorState.code !== editorState.originalCode
+            || editorState.name !== editorState.originalName
+            || editorState.description !== editorState.originalDescription;
+      }
+
+      // ---- CodeMirror boot ------------------------------------------
+      // We wait for the CodeMirror CDN script + python mode addon to
+      // finish loading; they're tagged `defer` in <head> so the easiest
+      // thing is to wait for DOMContentLoaded then double-check the
+      // global. If it's still missing we poll briefly (the CDN call
+      // can race the parser on slow networks).
+      let editor = null;
+      function bootEditor(cb) {
+        if (window.CodeMirror) { _initCM(); cb(); return; }
+        const t0 = Date.now();
+        const iv = setInterval(() => {
+          if (window.CodeMirror) { clearInterval(iv); _initCM(); cb(); }
+          else if (Date.now() - t0 > 5000) {
+            clearInterval(iv);
+            editorHost.innerHTML =
+              '<div style="padding:1rem;color:#dc2626">Failed to load CodeMirror.</div>';
+            cb();
+          }
+        }, 50);
+      }
+
+      function _initCM() {
+        editor = CodeMirror(editorHost, {
+          mode: 'python',
+          // The Python mode supports two indent variants; 4-space + no
+          // tabs is the standard for the reward-design contract.
+          indentUnit: 4,
+          tabSize: 4,
+          indentWithTabs: false,
+          lineNumbers: true,
+          lineWrapping: false,
+          matchBrackets: true,
+          styleActiveLine: true,
+          // Empty placeholder until the user picks or creates a design.
+          value: '',
+          readOnly: 'nocursor',
+        });
+        editor.on('change', () => {
+          editorState.code = editor.getValue();
+          refreshButtons();
+          // Clear stale lint when the user changes the code so they
+          // don't think the green pill still applies.
+          if (lintStatus && !lintStatus.hidden) hideLint();
+        });
+
+        // GoldenLayout resizes the parent iframe by setting width/
+        // height attributes; the inner page sees that as a window
+        // resize. CodeMirror caches the gutter geometry on init and
+        // doesn't re-measure unless we call refresh(), which would
+        // otherwise leave the cursor offset by a few pixels after
+        // any tab resize. Debounce so dragging the divider doesn't
+        // call refresh() on every animation frame.
+        let resizeTimer = null;
+        window.addEventListener('resize', () => {
+          if (resizeTimer) clearTimeout(resizeTimer);
+          resizeTimer = setTimeout(() => {
+            if (editor) editor.refresh();
+          }, 80);
+        });
+      }
+
+      // ---- Lint state helpers ---------------------------------------
+      function hideLint() {
+        lintStatus.hidden = true;
+        lintDetail.hidden = true;
+      }
+      function showLintOk(funcs) {
+        lintStatus.hidden = false;
+        lintStatus.classList.remove('is-bad', 'is-checking');
+        lintStatus.classList.add('is-ok');
+        lintStatus.textContent = funcs && funcs.length
+          ? `Lint ok · ${funcs.join(', ')}`
+          : 'Lint ok';
+        lintDetail.hidden = true;
+      }
+      function showLintBad(err) {
+        lintStatus.hidden = false;
+        lintStatus.classList.remove('is-ok', 'is-checking');
+        lintStatus.classList.add('is-bad');
+        lintStatus.textContent = 'Lint failed';
+        lintDetail.hidden = false;
+        lintDetail.textContent = err || 'unknown error';
+      }
+      function showLintChecking() {
+        lintStatus.hidden = false;
+        lintStatus.classList.remove('is-ok', 'is-bad');
+        lintStatus.classList.add('is-checking');
+        lintStatus.textContent = 'Linting…';
+      }
+
+      // ---- List rendering -------------------------------------------
+      // Renders the left pane from `designs` + the showArchived toggle.
+      // Cheap to call on every change; the list is small (tens of rows
+      // at most for a single research project).
+      function renderList() {
+        const filtered = designs
+          .filter((d) => showArchived.checked || !d.archived)
+          .slice()
+          .sort((a, b) => {
+            // Pinned canonical seed first, archived last, then by name.
+            if (isCanonical(a) && !isCanonical(b)) return -1;
+            if (isCanonical(b) && !isCanonical(a)) return 1;
+            if (a.archived && !b.archived) return 1;
+            if (b.archived && !a.archived) return -1;
+            return String(a.name || '').localeCompare(String(b.name || ''));
+          });
+
+        countEl.textContent = designs.length === 0
+          ? ''
+          : `${filtered.length} of ${designs.length} design${designs.length === 1 ? '' : 's'}`;
+
+        if (!filtered.length) {
+          listEl.innerHTML =
+            '<div class="rd-empty">No reward designs yet. Click "+ New design" to author one.</div>';
+          return;
+        }
+
+        // The editorState.id MAY be a transient "(unsaved)" sentinel
+        // (null) when authoring a new design. In that case the
+        // currently-selected list row doesn't exist yet; we still want
+        // existing rows to render unselected.
+        const selectedId = editorState.id;
+        const parts = filtered.map((d) => {
+          const isSel = String(d._id) === String(selectedId);
+          const tags = [];
+          if (isCanonical(d)) tags.push('<span class="rd-tag is-canonical">canonical</span>');
+          if (d.archived) tags.push('<span class="rd-tag is-archived">archived</span>');
+          return (
+            '<div class="rd-list-item' +
+              (isSel ? ' is-selected' : '') +
+              (d.archived ? ' is-archived' : '') +
+              '" data-id="' + escapeAttr(d._id) + '">' +
+              '<div class="rd-name">' +
+                '<span class="truncate">' + escapeHtml(d.name || '(unnamed)') + '</span>' +
+                tags.join('') +
+              '</div>' +
+              '<div class="rd-meta">' +
+                'v' + (d.version || 1) +
+                ' · ' + (d.updated_at ? new Date(d.updated_at).toLocaleString() : '—') +
+              '</div>' +
+              '<div class="rd-meta">' +
+                escapeHtml(truncateDescription(d.description, 80)) +
+              '</div>' +
+            '</div>'
+          );
+        });
+
+        // If the editor is currently authoring a brand-new design,
+        // prepend a synthetic "(unsaved)" row so the user sees what
+        // they're editing represented in the list. The row is
+        // selectable but has no _id.
+        if (editorState.isNew) {
+          parts.unshift(
+            '<div class="rd-list-item is-selected" data-id="__new__">' +
+              '<div class="rd-name">' +
+                '<span class="truncate">' +
+                escapeHtml(editorState.name || '(new design)') +
+                '</span>' +
+                '<span class="rd-tag is-dirty">unsaved</span>' +
+              '</div>' +
+              '<div class="rd-meta">new · not yet on server</div>' +
+            '</div>'
+          );
+        }
+
+        listEl.innerHTML = parts.join('');
+      }
+
+      function isCanonical(d) {
+        // The seeded passthrough design uses a string _id, not an
+        // ObjectId. Anything matching that sentinel is the
+        // "canonical / built-in" design.
+        return String(d._id || '') === 'passthrough-course-default';
+      }
+
+      // Click handler delegated to the list so we don't have to rewire
+      // listeners on every renderList() call.
+      listEl.addEventListener('click', (ev) => {
+        const row = ev.target.closest('[data-id]');
+        if (!row) return;
+        const id = row.dataset.id;
+        if (id === '__new__') return;            // already selected; do nothing
+        const design = designs.find((d) => String(d._id) === String(id));
+        if (!design) return;
+        if (isDirty()) {
+          confirmDialog({
+            title: 'Discard unsaved changes?',
+            message: 'You have unsaved edits in the current design.',
+            confirmLabel: 'Discard',
+            confirmVariant: 'danger',
+          }).then((ok) => { if (ok) selectDesign(design); });
+        } else {
+          selectDesign(design);
+        }
+      });
+
+      function selectDesign(d) {
+        editorState = {
+          id: d._id,
+          name: d.name || '',
+          description: d.description || '',
+          code: d.code || '',
+          version: d.version || 1,
+          archived: !!d.archived,
+          originalCode: d.code || '',
+          originalName: d.name || '',
+          originalDescription: d.description || '',
+          isNew: false,
+        };
+        if (editor) {
+          // The canonical seeded design is read-only - users should
+          // copy it before editing rather than mutate the baseline,
+          // because the baseline is what every other model's "vs
+          // course default" comparison is anchored to.
+          const ro = isCanonical(d);
+          editor.setOption('readOnly', ro ? 'nocursor' : false);
+          editor.setValue(editorState.code);
+          // Clear undo history so users can't ctrl-z from the new
+          // design back into the previous design's source.
+          editor.clearHistory();
+        }
+        const isCan = isCanonical(d);
+        nameInput.value = editorState.name;
+        descInput.value = editorState.description;
+        nameInput.disabled = isCan;
+        descInput.disabled = isCan;
+        titleEl.textContent = editorState.name || '(unnamed)';
+        metaEl.textContent = 'v' + editorState.version + (isCan ? ' · read-only canonical' : '');
+        btnArchive.hidden = isCan || editorState.archived;
+        btnUnarchive.hidden = isCan || !editorState.archived;
+        hideLint();
+        refreshButtons();
+        renderList();
+      }
+
+      // ---- Buttons --------------------------------------------------
+      btnNew.addEventListener('click', () => {
+        const enter = () => {
+          editorState = makeEmptyEditorState();
+          editorState.isNew = true;
+          editorState.code = TEMPLATE_CODE;
+          editorState.name = '';
+          editorState.description = '';
+          if (editor) {
+            editor.setOption('readOnly', false);
+            editor.setValue(TEMPLATE_CODE);
+            editor.clearHistory();
+            editor.focus();
+          }
+          nameInput.value = '';
+          descInput.value = '';
+          nameInput.disabled = false;
+          descInput.disabled = false;
+          titleEl.textContent = '(new design)';
+          metaEl.textContent = 'unsaved';
+          btnArchive.hidden = true;
+          btnUnarchive.hidden = true;
+          hideLint();
+          refreshButtons();
+          renderList();
+          // Move focus to the name field; users almost always want to
+          // name the design first, then edit the code.
+          nameInput.focus();
+        };
+        if (isDirty()) {
+          confirmDialog({
+            title: 'Discard unsaved changes?',
+            message: 'Your current edits will be discarded.',
+            confirmLabel: 'Discard',
+            confirmVariant: 'danger',
+          }).then((ok) => { if (ok) enter(); });
+        } else {
+          enter();
+        }
+      });
+
+      nameInput.addEventListener('input', () => {
+        editorState.name = nameInput.value;
+        if (editorState.isNew) titleEl.textContent = nameInput.value || '(new design)';
+        refreshButtons();
+        renderList();
+      });
+      descInput.addEventListener('input', () => {
+        editorState.description = descInput.value;
+        refreshButtons();
+      });
+
+      showArchived.addEventListener('change', renderList);
+
+      btnSave.addEventListener('click', saveCurrent);
+      btnLint.addEventListener('click', () => runLint(false));
+      btnArchive.addEventListener('click', () => setArchived(true));
+      btnUnarchive.addEventListener('click', () => setArchived(false));
+
+      async function runLint(silent) {
+        const code = editorState.code;
+        if (!code.trim()) {
+          showLintBad('code is empty');
+          return false;
+        }
+        if (!silent) showLintChecking();
+        try {
+          const res = await fetch('/lint_reward_design', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code }),
+          });
+          const json = await res.json();
+          if (json.ok) {
+            showLintOk(json.funcs || []);
+            return true;
+          }
+          showLintBad(json.error || 'lint failed');
+          return false;
+        } catch (err) {
+          showLintBad(String(err.message || err));
+          return false;
+        }
+      }
+
+      // Single-flight guard for Save. Without this, a fast double-
+      // click on the Save button (or Enter pressed twice on the form)
+      // ships two /add_reward_design POSTs back-to-back: the second
+      // click fires before pollOnce(true) has flipped editorState
+      // .isNew=false, so both POSTs take the "insert" branch and we
+      // end up with two near-identical rows. The dashboard had no
+      // unique constraint on (name), so Mongo happily accepted both.
+      // Setting saveInFlight=true at the top + disabling the button
+      // collapses the second click into a no-op.
+      let saveInFlight = false;
+      async function saveCurrent() {
+        if (saveInFlight) return;
+        const code = editorState.code;
+        const name = editorState.name.trim();
+        const desc = editorState.description.trim();
+        if (!name) {
+          showToast({ type: 'error', message: 'Name is required.' });
+          nameInput.focus();
+          return;
+        }
+        if (!code.trim()) {
+          showToast({ type: 'error', message: 'Code cannot be empty.' });
+          return;
+        }
+        // When authoring a new design, warn if a non-archived design
+        // with the same name already exists. The server doesn't
+        // enforce name uniqueness (it can't - users SHOULD be able to
+        // re-use a name after archiving the old one), so this catches
+        // the common accidental-double-submit + accidental-typo cases
+        // at the UI layer instead of letting them silently land as
+        // duplicates. Existing-design edits are exempt - renaming an
+        // existing design to match another existing one is rare and
+        // the user can resolve it on the list view.
+        if (editorState.isNew) {
+          const collision = designs.find(
+            (d) => !d.archived && String(d.name || '').toLowerCase() === name.toLowerCase());
+          if (collision) {
+            const ok = await confirmDialog({
+              title: 'A design with this name already exists',
+              message: `"${name}" already exists (version ${collision.version || 1}). ` +
+                       `Saving again will create a duplicate. ` +
+                       `Cancel and pick a different name, or open the existing one to edit it instead.`,
+              confirmLabel: 'Create duplicate anyway',
+              confirmVariant: 'danger',
+            });
+            if (!ok) return;
+          }
+        }
+        // Run lint synchronously before save so the user sees the
+        // structural issue with a clear server-driven message rather
+        // than a vague "design failed to load" surfaced on the next
+        // training job 30 seconds later.
+        const passed = await runLint(false);
+        if (!passed) {
+          showToast({ type: 'error', message: 'Lint failed — see editor for details.' });
+          return;
+        }
+        saveInFlight = true;
+        // Reflect the inflight state on the button: gray it out and
+        // change the label so the user has visual confirmation that
+        // the click registered, even if the server takes a second.
+        const origLabel = btnSave.textContent;
+        btnSave.disabled = true;
+        btnSave.textContent = 'Saving…';
+        try {
+          let res;
+          let assignedId = editorState.id;
+          if (editorState.isNew) {
+            res = await fetch('/add_reward_design', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name, description: desc, code }),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            // Mongo's Node driver returns the inserted ObjectId on the
+            // insertOne result. We prefer that over a name match
+            // because nothing in the schema enforces unique names.
+            try {
+              const body = await res.clone().json();
+              assignedId = body && (body.insertedId || (body.ops && body.ops[0] && body.ops[0]._id)) || null;
+            } catch (_e) { /* swallow - fallback to name match below */ }
+          } else {
+            res = await fetch('/update_reward_design', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ _id: editorState.id, name, description: desc, code }),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          }
+          showToast({ type: 'success', message: `Reward design saved.` });
+          // Force-refresh so we pick up the server-assigned version.
+          await pollOnce(true);
+          // Re-select by id if we have one; fall back to a name match.
+          let fresh = assignedId
+            ? designs.find((d) => String(d._id) === String(assignedId))
+            : null;
+          if (!fresh) fresh = designs.find((d) => d.name === name);
+          if (fresh) selectDesign(fresh);
+        } catch (err) {
+          showToast({ type: 'error', message: `Save failed: ${err.message || err}` });
+        } finally {
+          saveInFlight = false;
+          btnSave.textContent = origLabel;
+          // refreshButtons() resets the disabled flag based on dirty/
+          // selection state - much more accurate than re-enabling
+          // blindly here.
+          refreshButtons();
+        }
+      }
+
+      async function setArchived(archived) {
+        if (!editorState.id) return;
+        const ok = await confirmDialog({
+          title: archived ? 'Archive this design?' : 'Unarchive this design?',
+          message: archived
+            ? 'Archived designs are hidden from the New-Job dropdown. Models already trained with this design keep working; you just stop seeing it as a fresh option.'
+            : 'Bring this design back into the New-Job dropdown.',
+          confirmLabel: archived ? 'Archive' : 'Unarchive',
+          confirmVariant: archived ? 'danger' : 'primary',
+        });
+        if (!ok) return;
+        try {
+          const res = await fetch(archived ? '/archive_reward_design' : '/update_reward_design', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ _id: editorState.id, archived }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          showToast({
+            type: 'success',
+            message: archived ? 'Design archived.' : 'Design unarchived.',
+          });
+          await pollOnce(true);
+          const fresh = designs.find((d) => String(d._id) === String(editorState.id));
+          if (fresh) selectDesign(fresh);
+        } catch (err) {
+          showToast({ type: 'error', message: `Update failed: ${err.message || err}` });
+        }
+      }
+
+      function refreshButtons() {
+        const hasCode = editorState.code && editorState.code.trim();
+        const canSave = (editorState.isNew && hasCode && editorState.name.trim()) ||
+                        (!editorState.isNew && editorState.id && !isCanonical({ _id: editorState.id }) && isDirty());
+        btnSave.disabled    = !canSave;
+        btnLint.disabled    = !hasCode;
+        // Archive only applies to existing, non-canonical designs.
+        const canArchive = !editorState.isNew &&
+                           editorState.id &&
+                           !isCanonical({ _id: editorState.id });
+        btnArchive.disabled   = !canArchive || editorState.archived;
+        btnUnarchive.disabled = !canArchive || !editorState.archived;
+      }
+
+      // ---- Polling ---------------------------------------------------
+      const freshness = new FreshnessIndicator(
+        document.querySelector('[data-role="freshness-dot"]'),
+        document.querySelector('[data-role="freshness-text"]'));
+
+      let pollHandle = null;
+      let pollInFlight = false;
+
+      async function pollOnce(force) {
+        if (pollInFlight) return;
+        pollInFlight = true;
+        try {
+          const url = `/get_reward_designs?force=${force ? 'true' : 'false'}`;
+          const res = await fetch(url);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const text = await res.text();
+          freshness.markSuccess();
+          if (text === 'NO_CHANGES') return;
+          const json = JSON.parse(text);
+          if (!Array.isArray(json)) throw new Error('Unexpected response shape');
+          designs = json;
+          // If the currently-selected design no longer exists (e.g.
+          // hard-deleted in Mongo while we had it open), drop the
+          // editor back to the empty state so the UI doesn't pretend
+          // we're editing something that's gone.
+          if (editorState.id && !designs.some((d) => String(d._id) === String(editorState.id))) {
+            editorState = makeEmptyEditorState();
+            renderEditorEmpty();
+          }
+          renderList();
+        } catch (err) {
+          console.error(err);
+          if (!designs.length) listEl.innerHTML =
+            '<div class="rd-empty" style="color:#dc2626">Error: ' + escapeHtml(String(err.message || err)) + '</div>';
+        } finally {
+          pollInFlight = false;
+        }
+      }
+
+      function renderEditorEmpty() {
+        titleEl.textContent = 'No design selected';
+        metaEl.textContent = '';
+        nameInput.value = '';
+        descInput.value = '';
+        nameInput.disabled = true;
+        descInput.disabled = true;
+        if (editor) {
+          editor.setOption('readOnly', 'nocursor');
+          editor.setValue('');
+        }
+        btnArchive.hidden = false;
+        btnUnarchive.hidden = true;
+        hideLint();
+        refreshButtons();
+      }
+
+      // ---- Helpers ---------------------------------------------------
+      function escapeHtml(s) {
+        return String(s == null ? '' : s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+      function escapeAttr(s) {
+        return String(s == null ? '' : s).replace(/"/g, '&quot;');
+      }
+      function truncateDescription(s, n) {
+        const t = String(s || '');
+        return t.length <= n ? t : t.slice(0, n - 1) + '…';
+      }
+
+      // ---- Boot -----------------------------------------------------
+      bootEditor(() => {
+        // Initial state: empty editor; the list will populate from the
+        // first poll.
+        renderEditorEmpty();
+        pollOnce(true);
+        pollHandle = setInterval(() => pollOnce(false), 5000);
+        window.addEventListener('beforeunload', () => {
+          clearInterval(pollHandle);
+          freshness.destroy();
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
