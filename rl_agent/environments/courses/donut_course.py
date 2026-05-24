@@ -245,34 +245,66 @@ class DonutCourse (BaseCourse):
         ]
         return np.array(arr, dtype=np.float32)
     
+    # Public reward methods. Each one:
+    #   1. Mutates course state (episode flags, counters)
+    #   2. Calls the matching scalar `_compute_*_reward` for the
+    #      reward value (overridable by a reward design, see
+    #      rl_agent/reward_designs.py)
+    #   3. Logs the reward + context
+    #   4. Wraps the scalar into the appropriate tf-agents TimeStep
+    # The split exists so reward designs only need to provide the
+    # scalar math; every side effect above is owned by the course.
+
     def reward_standard(self, data, data_arr, step_costs, job_id):
         self.env._episode_ended = False
         last_step_cost = 0 if len(step_costs) < 2 else step_costs[len(step_costs)-2]
         curr_step_cost = step_costs[len(step_costs)-1]
         diff = abs(curr_step_cost) - abs(last_step_cost)
-        self.steps_since_last_goal+=1
-        reward = 0
-        log_reward(self.env.job_id, "did not fail", float(reward), diff=float(diff), extra_data=data, stat_array=data_arr)
+        self.steps_since_last_goal += 1
+        reward = float(self._compute_standard_reward(data, data_arr, step_costs))
+        log_reward(self.env.job_id, "did not fail", reward, diff=float(diff), extra_data=data, stat_array=data_arr)
         return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
-    
+
     def reward_success(self, curr_step_cost, job_id, data, data_arr, step_costs, position_history):
         self.env._episode_ended = False
-        self.steps_since_last_goal+=1
+        self.steps_since_last_goal += 1
         self.steps_per_goal_arr.append(self.steps_since_last_goal)
-        reward = ((max(1,100-self.steps_since_last_goal) / 100))
+        # Compute reward AFTER incrementing steps_since_last_goal so a
+        # reward design that reads it via the `course` proxy sees the
+        # same value the legacy formula did (which uses the post-
+        # increment count).
+        reward = float(self._compute_success_reward(data, data_arr, step_costs, position_history))
         print("goal reached: " + str(reward))
-        #super().debug_print("*****************XXXXXXXXXXX-inside-XXXXXXXXXXX*****************")
-        log_reward(self.env.job_id, "has succeeded", float(reward), extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
+        log_reward(self.env.job_id, "has succeeded", reward, extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
         self.reset_after_goal_reached()
         return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
-    
+
     def reward_failure(self, job_id, step_costs, data, data_arr, position_history):
         self.env._episode_ended = True
-        reward = 0
-        log_reward(self.env.job_id, "has failed - reward", float(reward),extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
+        reward = float(self._compute_failure_reward(data, data_arr, step_costs, position_history))
+        log_reward(self.env.job_id, "has failed - reward", reward, extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
         self.reset_after_episode()
         term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
         return term_time_step
+
+    # Scalar reward formulas. These are the methods a reward design
+    # monkey-patches when it wants to change the reward function.
+    # Side-effect-free by contract - state mutation lives in the public
+    # methods above. Both arguments and the return type are kept
+    # deliberately simple (scalars + plain dicts/arrays) so user code
+    # never has to know about tf-agents TimeStep types.
+
+    def _compute_standard_reward(self, data, data_arr, step_costs):
+        """DonutCourse default: zero per-step reward."""
+        return 0
+
+    def _compute_success_reward(self, data, data_arr, step_costs, position_history):
+        """DonutCourse default: scaled bonus for reaching a goal quickly."""
+        return (max(1, 100 - self.steps_since_last_goal) / 100)
+
+    def _compute_failure_reward(self, data, data_arr, step_costs, position_history):
+        """DonutCourse default: zero penalty on failure."""
+        return 0
 
     def get_num_obstacles(self):
         return 0

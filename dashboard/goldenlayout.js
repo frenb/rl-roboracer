@@ -11,7 +11,13 @@ var config = {
                       type: 'component',
                       title: 'Tensorboard',
                       componentName: 'iframeComponent',
-                      componentState: { src: 'http://localhost:6006' }
+                      // id: 'tensorboard' registers this iframe in
+                      // iframeRegistry so the open-analysis message
+                      // handler below can re-point it at a regex-
+                      // filtered URL when the user clicks "Compare in
+                      // Analysis" on N selected models. Without an id
+                      // the handler can't find the iframe.
+                      componentState: { src: 'http://localhost:6006', id: 'tensorboard' }
                     },
                 ]
             },
@@ -68,6 +74,17 @@ var config = {
                       // files appear on disk, without needing the server
                       // process to be restarted.
                       componentState: { src: "http://localhost/analysis.html", id: 'analysis' }
+                    },
+                    {
+                      type: 'component',
+                      title: 'Reward Design',
+                      componentName: 'iframeComponent',
+                      // Same ".html" rationale as Analysis: served by
+                      // express.static the moment the file lands on
+                      // disk, so the iframe works without waiting for
+                      // a dashboard image rebuild that registers the
+                      // matching /reward_designs route.
+                      componentState: { src: "http://localhost/reward_designs.html", id: 'reward_designs' }
                     }]
                 }
               ]
@@ -155,9 +172,72 @@ myLayout.init();
 // robust to whichever order things finish booting: the iframe may
 // still be loading its bundle when the message arrives.
 // ---------------------------------------------------------------- *
+// ---------------------------------------------------------------- *
+// Cross-iframe routing: Models tab "Job ID" cross-link
+//
+// When the user clicks a Job ID cell on the Models tab, the page
+// posts {type: 'roboracer:open-job', jobId: '<id>'}. We:
+//   1. Activate the Jobs tab in its GoldenLayout stack.
+//   2. Forward the message into the Jobs iframe so the Jobs page can
+//      scroll its Tabulator viewport to the matching row and flash
+//      it (see jobs.html's window.message listener).
+//
+// Robustness: if the Jobs iframe hasn't finished loading when the
+// message arrives, the page's first-load handler also reads from
+// sessionStorage (same pattern as the open-analysis handoff).
+// ---------------------------------------------------------------- *
 window.addEventListener('message', function (ev) {
   const data = ev && ev.data;
   if (!data || typeof data !== 'object') return;
+  if (data.type === 'roboracer:open-job') {
+    const target = iframeRegistry['jobs'];
+    if (!target) {
+      console.warn('Jobs tab not registered yet; ignoring open-job');
+      return;
+    }
+    // Activate the Jobs tab in its parent stack.
+    try {
+      const item = target.container.parent;
+      if (item && item.parent && typeof item.parent.setActiveContentItem === 'function') {
+        item.parent.setActiveContentItem(item);
+      }
+    } catch (err) {
+      console.error('Failed to activate Jobs tab:', err);
+    }
+    // Persist for first-load lookup. We use a key distinct from the
+    // analysis handoff so the two flows never step on each other.
+    try {
+      sessionStorage.setItem(
+        'roboracer:jobs-focus',
+        JSON.stringify({ jobId: String(data.jobId || ''), ts: Date.now() }));
+    } catch (_e) { /* swallow */ }
+    // Direct postMessage into the Jobs iframe. Same boot-race
+    // double-fire pattern as the analysis handoff: send now AND on
+    // next 'load' to cover the case where the iframe is still
+    // hydrating.
+    try {
+      if (target.iframe && target.iframe.contentWindow) {
+        target.iframe.contentWindow.postMessage(data, '*');
+      }
+    } catch (err) {
+      console.error('Failed to forward open-job to iframe:', err);
+    }
+    try {
+      const ifr = target.iframe;
+      if (ifr && !ifr.__roboracerJobDeferred) {
+        ifr.__roboracerJobDeferred = true;
+        ifr.addEventListener('load', function () {
+          try {
+            if (ifr.contentWindow) ifr.contentWindow.postMessage(data, '*');
+          } catch (_e) { /* swallow */ }
+        }, { once: true });
+      }
+    } catch (_err) {
+      /* swallow */
+    }
+    return;
+  }
+
   if (data.type !== 'roboracer:open-analysis') return;
 
   const target = iframeRegistry['analysis'];
@@ -225,5 +305,110 @@ window.addEventListener('message', function (ev) {
     }
   } catch (err) {
     /* swallow - the sessionStorage fallback still catches us */
+  }
+
+  // ---- TensorBoard handoff -------------------------------------- *
+  //
+  // Two-stage: first we ask the dashboard server to symlink the
+  // selected jobs' archived run directories into TB's on-demand
+  // compare bucket (/tmp/tb_compare); then we re-point the TB iframe
+  // at a regex-filtered URL so its scalars view zooms straight to
+  // those runs.
+  //
+  // Why the bucket: TB only renders runs in the directories it's
+  // scanning. The sim-controller container's TB process scans
+  // /tmp/active (the currently-training job) and /tmp/tb_compare
+  // (initially empty, this endpoint populates it on demand). It does
+  // NOT scan /tmp/jobsdata (where the trainer archives finished
+  // jobs), so by default the unfiltered TB sidebar stays minimal -
+  // just the live job. The compare bucket gives the user temporary
+  // visibility into specific historical jobs without permanently
+  // bloating the sidebar.
+  //
+  // Run name layout after the symlink:
+  //   current/<live_job_id>/{learner,train,eval,metrics}/...
+  //   compare/<archived_job_id>/{learner,train,eval,metrics}/...
+  //
+  // The regex filter matches "<job_id>" anywhere in the run name so
+  // it picks up both the "current/" prefix (if the user is comparing
+  // a model from the currently-training job) and the "compare/"
+  // prefix.
+  //
+  // jobIds is provided by the Models tab. Legacy models without a
+  // job_id are filtered out there, so jobIds[] is always populated
+  // with real job ids (potentially fewer than modelIds.length - see
+  // the warning toast on the Models tab).
+  try {
+    const tbTarget = iframeRegistry['tensorboard'];
+    const rawJobIds = Array.isArray(data.jobIds) ? data.jobIds : [];
+
+    // Fire-and-await the server-side symlink shuffle. We deliberately
+    // chain the iframe reload on its completion so TB doesn't reload
+    // a half-second before the symlinks land (TB's --reload_interval
+    // of 5s would otherwise leave the user staring at "no scalars"
+    // for several seconds). If the POST fails, fall back to setting
+    // the iframe URL anyway so the user at least sees the filtered
+    // view of whatever's already in the bucket.
+    const setBucket = fetch('/set_tb_compare_jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobIds: rawJobIds }),
+    }).then((r) => {
+      if (!r.ok) console.warn('set_tb_compare_jobs HTTP ' + r.status);
+      return r.ok ? r.json() : null;
+    }).catch((e) => {
+      console.warn('set_tb_compare_jobs failed:', e);
+      return null;
+    });
+
+    setBucket.then((bucketResp) => {
+      if (!tbTarget || !tbTarget.iframe) return;
+
+      // Use the SERVER's view of which job_ids actually got linked.
+      // If a job's archived directory wasn't on disk (e.g., the
+      // currently-training job whose data lives in /tmp/active, or
+      // a model whose archive was manually deleted), the server's
+      // `linked` list will be a subset of what the dashboard sent.
+      // We still want to include the originally-requested ids in
+      // the regex so currently-active jobs show up under the
+      // "current/" prefix - they just don't need a symlink.
+      const escaped = rawJobIds
+        .map(String)
+        .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .filter((s) => s.length);
+
+      let nextSrc;
+      if (escaped.length) {
+        const pattern = escaped.join('|');
+        // Cache-bust on _t so re-clicking with the same selection
+        // still forces an iframe reload (otherwise setting src to
+        // an identical URL is a no-op in most browsers).
+        nextSrc =
+          'http://localhost:6006/?regexInput=' +
+          encodeURIComponent(pattern) +
+          '&_t=' + Date.now() +
+          '#scalars';
+      } else {
+        // No filterable job_ids in this selection (every model was
+        // legacy/pre-feature). Drop the filter so the user at least
+        // sees the unfiltered view rather than a broken regex.
+        nextSrc = 'http://localhost:6006/?_t=' + Date.now() + '#scalars';
+      }
+      tbTarget.iframe.src = nextSrc;
+
+      // If the server reported missing job archives, log a
+      // breadcrumb so we can debug "I selected 3 models but only
+      // see 2 in TB" later. Most common reason: one of the models
+      // is from the currently-training job (no archive yet).
+      if (bucketResp && Array.isArray(bucketResp.missing) && bucketResp.missing.length) {
+        console.info(
+          'TensorBoard compare: ' + bucketResp.missing.length +
+          ' selected job(s) had no archived TB data (likely currently-' +
+          'training jobs - they show up under "current/" instead): ' +
+          bucketResp.missing.join(', '));
+      }
+    });
+  } catch (err) {
+    console.error('Failed to re-point Tensorboard iframe:', err);
   }
 });

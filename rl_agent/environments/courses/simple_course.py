@@ -61,34 +61,61 @@ class SimpleCourse (BaseCourse):
         ]
         return np.array(arr, dtype=np.float32)
     
+    # Public reward methods - state mutation + logging + TimeStep
+    # wrapping. The reward value itself is computed by the scalar
+    # _compute_*_reward methods below, which a reward design can
+    # monkey-patch via rl_agent/reward_designs.install_on_course.
+
     def reward_standard(self, data, data_arr, step_costs, job_id):
         self.env._episode_ended = False
         last_step_cost = 0 if len(step_costs) < 2 else step_costs[len(step_costs)-2]
         curr_step_cost = step_costs[len(step_costs)-1]
         diff = abs(curr_step_cost) - abs(last_step_cost)
-        if curr_step_cost == 0:
-            reward = 1
-        elif diff < 0:
-            reward = 1
-        else:
-            reward = -1
-        log_reward(self.env.job_id, "did not fail", float(reward), diff=float(diff), extra_data=data)
+        reward = float(self._compute_standard_reward(data, data_arr, step_costs))
+        log_reward(self.env.job_id, "did not fail", reward, diff=float(diff), extra_data=data)
         return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
-    
+
     def reward_success(self, curr_step_cost, job_id, data, data_arr, step_costs, position_history):
         self.env._episode_ended = True
-        m = interp1d([0,1,5,100],[100,10,1,0.5],fill_value="extrapolate")
-        reward = float(m(curr_step_cost)) 
-        log_reward(self.env.job_id, "has succeeded", float(reward),extra_data=data, step_costs=step_costs, position_history=position_history)
+        reward = float(self._compute_success_reward(data, data_arr, step_costs, position_history))
+        log_reward(self.env.job_id, "has succeeded", reward, extra_data=data, step_costs=step_costs, position_history=position_history)
         term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
         return term_time_step
-    
+
     def reward_failure(self, job_id, step_costs, data, data_arr, position_history):
         self.env._episode_ended = True
-        reward = -1 * np.mean(step_costs) if len(step_costs) > 0 and np.mean(step_costs) > 0  else -1
-        log_reward(self.env.job_id, "has failed", float(reward),extra_data=data, step_costs=step_costs, position_history=position_history)
+        reward = float(self._compute_failure_reward(data, data_arr, step_costs, position_history))
+        log_reward(self.env.job_id, "has failed", reward, extra_data=data, step_costs=step_costs, position_history=position_history)
         term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
         return term_time_step
+
+    # Scalar reward formulas. Pure math; no side effects.
+
+    def _compute_standard_reward(self, data, data_arr, step_costs):
+        """SimpleCourse default: +1 if step cost improved or zero, -1 otherwise."""
+        last_step_cost = 0 if len(step_costs) < 2 else step_costs[len(step_costs)-2]
+        curr_step_cost = step_costs[len(step_costs)-1]
+        diff = abs(curr_step_cost) - abs(last_step_cost)
+        if curr_step_cost == 0:
+            return 1
+        elif diff < 0:
+            return 1
+        else:
+            return -1
+
+    def _compute_success_reward(self, data, data_arr, step_costs, position_history):
+        """SimpleCourse default: success reward interpolated from final-step cost."""
+        # interp1d table maps "current step cost at success" -> reward; smaller
+        # cost = larger reward. Uses the last step_cost as the input.
+        curr_step_cost = step_costs[-1] if step_costs else 0
+        m = interp1d([0, 1, 5, 100], [100, 10, 1, 0.5], fill_value="extrapolate")
+        return float(m(curr_step_cost))
+
+    def _compute_failure_reward(self, data, data_arr, step_costs, position_history):
+        """SimpleCourse default: -mean(step_costs) penalty (floored at -1)."""
+        if len(step_costs) > 0 and np.mean(step_costs) > 0:
+            return -1 * np.mean(step_costs)
+        return -1
     
     def get_num_obstacles(self):
         return 0

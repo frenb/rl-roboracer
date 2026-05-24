@@ -127,7 +127,27 @@ services:
     # instead of per-8KB-block. Python switches from line-buffered to
     # block-buffered automatically when it detects stdout is a pipe
     # (via the `| tee`), and -u overrides that.
-    command: sh -c "(tensorboard --bind_all --logdir /tmp/active --reload_multifile true &1> /tmp/tb.log) && cd /python_ws/src && python -u robotaxi.py 2>&1 | tee robotaxi.out"
+    # Tensorboard watches TWO directories:
+    #   /tmp/active        -> "current/<job_id>/..."   the live job
+    #   /tmp/tb_compare    -> "compare/<job_id>/..."   on-demand bucket
+    #
+    # /tmp/active holds the currently-training job's scalars. Anything
+    # else gets moved out by the trainer's move_all_jobs_data() into
+    # /tmp/jobsdata (untouched here, so TB does NOT clutter its
+    # sidebar with every historical run by default).
+    #
+    # /tmp/tb_compare is initially empty; the dashboard server (see
+    # dashboard/src/server.ts::/set_tb_compare_jobs) symlinks selected
+    # /tmp/jobsdata/<job_id> directories into it when the user clicks
+    # "Compare in Analysis" on the Models tab. So the compare bucket
+    # holds exactly the jobs the user is currently looking at - no
+    # more, no less - and the sidebar stays manageable.
+    #
+    # --reload_interval 5 (down from default 30) so newly-symlinked
+    # archived runs show up in TB within ~5s of the user clicking
+    # Compare, rather than the user staring at "no scalars" for up to
+    # half a minute waiting for TB's next filesystem scan.
+    command: sh -c "(tensorboard --bind_all --logdir_spec=current:/tmp/active,compare:/tmp/tb_compare --reload_multifile true --reload_interval 5 &1> /tmp/tb.log) && cd /python_ws/src && python -u robotaxi.py 2>&1 | tee robotaxi.out"
     # No `links:` block. Compose's legacy links: ["ros-server"] would
     # also auto-add per-link aliases of the form
     #   <linked-container>:<service>-<replica-index>

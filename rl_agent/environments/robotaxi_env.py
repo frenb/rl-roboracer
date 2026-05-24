@@ -58,6 +58,19 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         """
         return self.course.get_metrics()
 
+    def get_course_raw_counters(self):
+        """Snapshot the inner course's raw counters as a plain dict.
+
+        Same dispatch pattern as ``get_course_metrics`` above, but
+        returns the unaveraged numerators + denominators
+        (steps_total, num_episodes_total, speeds_total, ...). The
+        trainer's run_policy uses snapshot-and-delta arithmetic on
+        these to compute per-trial unbiased metrics for the
+        leaderboard_scores collection without needing to mutate
+        course state between trials.
+        """
+        return self.course.get_raw_counters()
+
     def get_timeout_counts(self):
         """Snapshot the RobotApi's asyncio.TimeoutError counters.
 
@@ -79,6 +92,33 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         """
         self.job_id = job_id
         self.pass_through_actions = pass_through_actions
+
+    def install_reward_design(self, name, code):
+        """Compile a reward-design module and patch it onto our course.
+
+        Same dispatch shape as ``configure`` so the caller in robotaxi.py
+        can fire this through ``ParallelPyEnvironment.call`` to install
+        the design into every subprocess env in multi-env training. The
+        compile happens INSIDE the subprocess so we never have to pickle
+        function objects across the process boundary; only the small
+        ``code`` string crosses.
+
+        Raises:
+          rl_agent.reward_designs.RewardDesignError on compile / load
+          failure. Caller (robotaxi.do_job) catches this and surfaces it
+          as job.eval_error so a bad design doesn't crash the trainer.
+        """
+        # Import lazily inside the method so subprocess envs that never
+        # need it don't pay the import cost at construction time.
+        #
+        # Bare-name sibling import: inside the sim-controller container
+        # the trainer runs with CWD=/python_ws/src/ (the bind-mount of
+        # host ./rl_agent), so `reward_designs` is a sibling, not a
+        # `rl_agent.*` package member. See the matching note in
+        # robotaxi.py::do_job for the long version.
+        from reward_designs import load_reward_design, install_on_course
+        funcs = load_reward_design(name, code)
+        return install_on_course(self.course, funcs)
 
     def _reset(self):
         self._episode_ended = False
