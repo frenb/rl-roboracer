@@ -109,9 +109,121 @@ from envs import make_env
 from replay import make_local_replay
 import collect_training_data
 import logging
+import signal
 import sys
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+
+
+# Trainer-wide state visible to the SIGTERM emergency-pause handler.
+# Populated by main() right after the Learner is constructed; reset
+# back to {} when main() exits cleanly. The handler reads this to
+# know which job/Learner/train_step to flush on a Docker/Windows-
+# initiated shutdown.
+#
+# Module-level instead of a closure because signal handlers
+# installed via signal.signal() outlive the main() call frame; we
+# want each successive job pickup to install its own state without
+# leaking the previous job's references.
+_emergency_state = {}
+
+
+def _emergency_pause_handler(signum, frame):
+    """Best-effort graceful pause on SIGTERM (Docker / WSL shutdown).
+
+    Triggered when the container is asked to stop, e.g. by:
+      * `docker compose stop` / `docker compose down`,
+      * Docker Desktop shutting down on Windows Update / host reboot,
+      * `docker stop <container>`.
+
+    Docker sends SIGTERM with a default 10s grace period before
+    SIGKILL. tf-agents' Checkpointer.save() is ~100ms of local-disk
+    I/O so we have ample headroom in the typical case.
+
+    Two writes happen in the handler:
+      1. Learner checkpoint to /tmp/active/<id>/learner/train/checkpoints/.
+         The next trainer pickup of this job will auto-restore it via
+         the Learner constructor (see _detect_resume_for_train_job's
+         crash-recovery branch).
+      2. Mongo: status=PAUSED + paused_at_step=<current train_step>.
+         This is the EXPLICIT-resume signal the dashboard uses.
+         Without it, the recovery would still work via crash-recovery
+         detection - this is just belt-and-suspenders so the operator
+         sees the job clearly as PAUSED in the UI rather than as a
+         stale IN_PROGRESS that "happens to resume".
+
+    Sys.exit(0) at the end so we cooperate with Docker's shutdown
+    sequence; tf-agents' multiprocess actor children will be cleaned
+    up by Python's atexit handlers + the container teardown.
+
+    Exceptions inside the handler are swallowed (we're already on a
+    shutdown path; raising would just turn a graceful pause into a
+    SIGABRT and lose the checkpoint anyway).
+    """
+    state = _emergency_state
+    if not state:
+        # No active job - either the trainer hasn't reached the Learner
+        # construction step yet (still in env setup / BC pretrain), or
+        # we're between jobs. Just exit; nothing to save.
+        print(
+            f"SIGTERM ({signum}): no active job state - exiting cleanly.",
+            flush=True)
+        sys.exit(0)
+    job_id = state.get("job_id")
+    agent_learner = state.get("learner")
+    train_step = state.get("train_step")
+    try:
+        step_val = int(train_step.numpy()) if train_step is not None else -1
+        if agent_learner is not None and step_val >= 0:
+            try:
+                agent_learner._checkpointer.save(step_val)
+                print(
+                    f"SIGTERM ({signum}): saved emergency Learner "
+                    f"checkpoint at train_step={step_val} for job {job_id}.",
+                    flush=True)
+            except Exception as _e:  # noqa: BLE001
+                print(
+                    f"SIGTERM ({signum}): Learner checkpoint save FAILED: "
+                    f"{_e}. Falling back to the most recent automatic "
+                    f"checkpoint (checkpoint_interval=100); the crash-"
+                    f"recovery detector in do_job will still resume.",
+                    flush=True)
+        if job_id is not None:
+            try:
+                update_job(job_id, step_val, "paused_at_step")
+                update_job(job_id, "PAUSED", "status")
+                print(
+                    f"SIGTERM ({signum}): marked job {job_id} PAUSED "
+                    f"(paused_at_step={step_val}). Resume from the "
+                    f"dashboard once the stack is back up.",
+                    flush=True)
+            except Exception as _e:  # noqa: BLE001
+                print(
+                    f"SIGTERM ({signum}): Mongo pause write FAILED: {_e}. "
+                    f"Job will appear IN_PROGRESS but crash-recovery "
+                    f"detection in do_job will still resume on next "
+                    f"trainer pickup.",
+                    flush=True)
+    except Exception as _e:  # noqa: BLE001
+        print(f"SIGTERM ({signum}): emergency handler error: {_e}",
+              flush=True)
+    sys.exit(0)
+
+
+# Install the SIGTERM handler eagerly at module import. SIGINT is
+# left at its default (Python raises KeyboardInterrupt) because the
+# interactive Ctrl-C case is "operator wants out now"; for that we
+# rely on the periodic Learner checkpoints (checkpoint_interval=100)
+# + the crash-recovery detector instead of trying to do extra work
+# during the shutdown.
+try:
+    signal.signal(signal.SIGTERM, _emergency_pause_handler)
+except (ValueError, OSError) as _e:  # noqa: BLE001
+    # Some environments (Windows + non-main thread, embedded
+    # interpreters) refuse signal.signal. We don't want that to be
+    # fatal - the trainer still works, it just won't catch SIGTERM
+    # gracefully. The periodic checkpoint is the real safety net.
+    print(f"robotaxi: could not install SIGTERM handler: {_e}", flush=True)
 
 client = MongoClient('mongo', 
     username='root',
@@ -959,12 +1071,40 @@ def main(
         triggers.StepPerSecondLogTrigger(train_step, interval=1000),
     ]
 
+    # checkpoint_interval bounds the worst-case progress lost to a
+    # hard kill (Docker stop without grace, host OOM, Windows-Update
+    # reboot, etc.). tf-agents' Learner DEFAULTS this to 100_000 train
+    # steps - way bigger than our typical 5_000-iter job, so the
+    # automatic Checkpointer trigger never fires and a crash mid-run
+    # wipes the entire run's progress. We pull it down to 100 so a
+    # crash costs at most ~100 train_steps (a percent or two of
+    # progress) instead of the whole run.
+    #
+    # max_checkpoints_to_keep is left at the default 3, which bounds
+    # disk usage to 3 * ~12 MB = ~36 MB per job. The checkpoint write
+    # is ~100ms so even at interval=100 it's <1% of training wall time.
+    #
+    # The crash-recovery detection in do_job() (see _detect_resume_
+    # for_train_job below) reads these auto-saves; without them that
+    # detection has nothing to restore.
     agent_learner = learner.Learner(
         learner_dir,
         train_step,
         tf_agent,
         experience_dataset_fn,
-        triggers=learning_triggers)
+        triggers=learning_triggers,
+        checkpoint_interval=100)
+
+    # Wire the Learner + train_step + job_id into the module-level
+    # SIGTERM handler so a Docker / WSL shutdown can flush an
+    # emergency checkpoint + mark the job PAUSED. See
+    # _emergency_pause_handler above for the full handshake. Cleared
+    # at end of main() via the try/finally so the next job's pickup
+    # registers fresh state without a stale reference to the
+    # previous job's Learner.
+    _emergency_state["learner"] = agent_learner
+    _emergency_state["train_step"] = train_step
+    _emergency_state["job_id"] = job_id
     
     def get_eval_metrics():
         # Pull the NumberOfEpisodes counter out of the eval_actor's
@@ -2297,23 +2437,35 @@ def get_jobs():
 
 def do_job(job, num_envs=1):
     print(job["job_type"])
+    # Decide resume-vs-fresh BEFORE flipping status to IN_PROGRESS, so
+    # _detect_resume_for_train_job can still see the operator's
+    # original pickup-time status (= the discriminator between
+    # NOT_STARTED + paused_at_step = explicit resume, and IN_PROGRESS
+    # = crash recovery). Once we write IN_PROGRESS to Mongo, that
+    # signal is destroyed.
+    _is_train_resume = (
+        job.get("job_type") == "TRAIN"
+        and _detect_resume_for_train_job(job))
+
     update_job(job["_id"], "IN_PROGRESS")
-    # Resume gating for the percent_complete reset. On a fresh pickup
-    # we zero out percent_complete so a job re-queued after a code edit
-    # doesn't carry stale progress from the previous run. On a RESUME
-    # (paused_at_step is set in Mongo by main()'s pause break path),
-    # we deliberately preserve the prior percent so the Jobs-tab
-    # progress bar picks up where the operator left it - resetting to
-    # 0% during the brief seconds before the training loop's first
-    # update would make the UI look like the resume re-ran from scratch.
-    _is_paused_resume = job.get("paused_at_step") is not None
-    if not _is_paused_resume:
+
+    # Conditional percent_complete reset.
+    #   * Fresh pickup: zero out so a re-queued job doesn't carry stale
+    #     progress from a previous failed run.
+    #   * Resume (either explicit Pause/Resume cycle OR crash recovery
+    #     where the trainer just came back up against an IN_PROGRESS
+    #     job with a Learner checkpoint on disk): preserve the prior
+    #     percent so the Jobs-tab progress bar picks up where the
+    #     operator left it. The training loop's first iteration will
+    #     refresh it from the restored train_step.
+    if not _is_train_resume:
         update_job(job["_id"], 0, "percent_complete")
     else:
         print(
             f"do_job: preserving percent_complete on resume of "
-            f"{job['_id']} (paused_at_step={job.get('paused_at_step')}); "
-            f"first training-loop update will refresh it.",
+            f"{job['_id']} (paused_at_step={job.get('paused_at_step')}, "
+            f"pickup_status={job.get('status')!r}); first training-loop "
+            f"update will refresh it.",
             flush=True)
     # Stamp trainer git provenance on the job at pickup so a job
     # re-picked-up after a code edit (the user marks it NOT_STARTED
@@ -2371,10 +2523,18 @@ def do_job(job, num_envs=1):
         # nested - pause-and-resume cycle alone) or
         # /tmp/jobsdata/<id>/<id>/ (doubly nested - a different job
         # ran between pause and resume).
+        # Resume gating. _is_train_resume was computed up at the top
+        # of do_job (before status was flipped to IN_PROGRESS) and
+        # covers BOTH explicit pause/resume AND crash recovery.
         is_resume = False
-        if job.get("paused_at_step") is not None:
+        if _is_train_resume:
             is_resume = _restore_paused_active_dir(str(job["_id"]))
-            if not is_resume:
+            if not is_resume and job.get("paused_at_step") is not None:
+                # Explicit-resume signal with no restoreable data on
+                # disk. Confusing for the UI (the job will appear
+                # "resumable" but each Resume click will silently fall
+                # through to a fresh start). Clear paused_at_step so
+                # future Restart operations behave as expected.
                 print(
                     f"do_job: job {job['_id']} has paused_at_step="
                     f"{job.get('paused_at_step')} but no Learner "
@@ -2382,11 +2542,6 @@ def do_job(job, num_envs=1):
                     f"start; BC pretrain will run and the previous "
                     f"actor weights are lost.",
                     flush=True)
-                # Stale paused_at_step with no archive on disk is
-                # confusing (the job will appear "resumable" in the UI
-                # but every resume attempt will silently fall through
-                # to a fresh start). Clear it so future Restart
-                # operations behave as the operator expects.
                 try:
                     db.jobs.update_one(
                         {"_id": job["_id"]},
@@ -2394,14 +2549,10 @@ def do_job(job, num_envs=1):
                 except Exception as _e:  # noqa: BLE001
                     print(f"do_job: failed to clear stale paused_at_step: {_e}",
                           flush=True)
-            else:
-                # Consume the resume signal. Once we've successfully
-                # restored the active dir, paused_at_step has done its
-                # job; leaving it set means a later DONE -> Restart
-                # cycle (user clicks Restart on a long-completed job)
-                # would silently retry resume against an archive that
-                # may have been GC'd. We clear it here and let the
-                # next pause cycle write a fresh value.
+            elif is_resume and job.get("paused_at_step") is not None:
+                # Consume the explicit-resume signal. Crash recovery
+                # path doesn't have paused_at_step set, so nothing to
+                # $unset there.
                 try:
                     db.jobs.update_one(
                         {"_id": job["_id"]},
@@ -2702,6 +2853,91 @@ def _learner_checkpoint_dir_exists(root):
                 return True
     except OSError:
         return False
+    return False
+
+
+def _has_learner_checkpoint_for_job(job_id_str):
+    """True if a Learner checkpoint exists ANYWHERE for this job_id.
+
+    Checks the three locations where the trainer might have left a
+    Learner checkpoint:
+      * /tmp/active/<id>/learner/train/checkpoints/   (live - most
+                                                       common case
+                                                       for an
+                                                       in-place
+                                                       crash recovery
+                                                       where no
+                                                       other job has
+                                                       run since the
+                                                       crash)
+      * /tmp/jobsdata/<id>/learner/train/checkpoints/  (singly-nested
+                                                       archive, from
+                                                       move_data's
+                                                       self-cleanup
+                                                       tail)
+      * /tmp/jobsdata/<id>/<id>/learner/train/checkpoints/ (doubly-
+                                                            nested
+                                                            archive,
+                                                            from
+                                                            move_all_jobs_data's
+                                                            outer loop
+                                                            archiving
+                                                            a stale
+                                                            entry)
+
+    Used by _detect_resume_for_train_job to decide if a job that's
+    IN_PROGRESS at trainer startup (= the trainer was hard-killed
+    mid-run; the dashboard never had a chance to set
+    PAUSE_REQUESTED) has restoreable state on disk.
+    """
+    if not job_id_str:
+        return False
+    candidates = [
+        os.path.join("/tmp/active", job_id_str),
+        os.path.join("/tmp/jobsdata", job_id_str),
+        os.path.join("/tmp/jobsdata", job_id_str, job_id_str),
+    ]
+    return any(_learner_checkpoint_dir_exists(c) for c in candidates)
+
+
+def _detect_resume_for_train_job(job):
+    """Decide whether to take the resume code path for a TRAIN job pickup.
+
+    Returns True if EITHER:
+
+      1. EXPLICIT RESUME: job has paused_at_step set in Mongo. Written
+         by main()'s pause-break path when the operator clicks Pause
+         in the dashboard; survives the trainer Ctrl-C and the
+         resume click that flips status back to NOT_STARTED.
+
+      2. CRASH RECOVERY: the job was IN_PROGRESS at trainer pickup
+         (job["status"] is the snapshot from get_jobs() = whatever
+         Mongo had BEFORE do_job's IN_PROGRESS write) AND a Learner
+         checkpoint exists on disk for it. This is the
+         spontaneous-Windows-Update / OOM / SIGKILL case: the
+         trainer was killed mid-run, never wrote paused_at_step,
+         but the Learner's auto-checkpoint trigger may have left
+         restoreable state behind. Without this branch, the next
+         pickup would archive the partial active dir + re-run BC
+         from scratch + lose all training progress.
+
+    A fresh NOT_STARTED job with no paused_at_step returns False
+    (= treat as a brand-new run, BC pretrain + Learner from random
+    init).
+    """
+    if job.get("paused_at_step") is not None:
+        return True
+    if job.get("status") == "IN_PROGRESS":
+        job_id_str = str(job.get("_id"))
+        if _has_learner_checkpoint_for_job(job_id_str):
+            print(
+                f"_detect_resume_for_train_job: CRASH RECOVERY for "
+                f"{job_id_str} - job was IN_PROGRESS at trainer pickup "
+                f"AND a Learner checkpoint exists on disk. Treating as "
+                f"resume; BC pretrain will be skipped and the saved "
+                f"train_step + actor/critic weights will be restored.",
+                flush=True)
+            return True
     return False
 
 
@@ -3399,6 +3635,14 @@ def run_jobs_loop(num_envs=1):
                         f"do_job error-recording also failed for job "
                         f"{j.get('_id')}: {type(inner).__name__}: {inner}",
                         flush=True)
+            finally:
+                # Clear the per-job state visible to the SIGTERM
+                # handler so a late shutdown signal between jobs
+                # doesn't try to flush a stale Learner reference
+                # from the previous run. Next job's pickup will
+                # re-populate it inside main() after constructing
+                # its own Learner.
+                _emergency_state.clear()
         print("sleep")
         time.sleep(5)
 
