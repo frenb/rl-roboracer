@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="en" class="dark h-full">
+<head>
+  <meta charset="utf-8">
+  <title>Experiment Design · rl-roboracer</title>
+  <!-- Same boot order as every other dashboard tab. -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/tailwind.init.js"></script>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="h-full m-0 font-sans antialiased text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-[#0b1120]">
+
+  <div class="flex flex-col h-screen w-full">
+
+    <!-- Toolbar ------------------------------------------------- -->
+    <div class="flex flex-wrap items-center gap-3 px-5 py-4 row-gap-2
+                bg-white dark:bg-slate-900
+                border-b border-slate-200 dark:border-slate-700
+                shadow-card relative z-[3] flex-shrink-0">
+      <h1 class="text-2xl font-semibold tracking-tight m-0 mr-3">Experiment Design</h1>
+      <span data-role="design-count"
+            class="text-xs font-medium text-slate-500 dark:text-slate-400"
+            aria-live="polite"></span>
+
+      <span data-role="freshness"
+            class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400"
+            aria-live="polite"
+            title="Time since the last successful poll of /get_experiment_designs">
+        <span data-role="freshness-dot"
+              class="inline-block w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+        <span data-role="freshness-text">connecting…</span>
+      </span>
+
+      <div class="flex flex-wrap gap-2 ml-auto">
+        <label class="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 select-none">
+          <input data-role="show-archived" type="checkbox"
+                 class="w-3.5 h-3.5 rounded border-slate-300 dark:border-slate-600
+                        bg-white dark:bg-slate-800 text-indigo-500 focus:ring-1 focus:ring-indigo-400">
+          <span>Show archived</span>
+        </label>
+        <button data-action="new-design" class="btn-base btn-primary">+ New design</button>
+      </div>
+    </div>
+
+    <!-- Body: two-pane layout (list | editor) --------------------- -->
+    <div class="flex-1 overflow-hidden p-4 bg-slate-50 dark:bg-[#0b1120]">
+      <div class="rd-shell h-full">
+
+        <!-- Left pane: design list --------------------------------- -->
+        <aside class="rd-card">
+          <div class="px-3 py-2.5 border-b border-slate-200 dark:border-slate-700
+                      text-xs uppercase tracking-wide font-semibold
+                      text-slate-500 dark:text-slate-400">
+            Designs
+          </div>
+          <div data-role="design-list" class="rd-list">
+            <div class="rd-empty">Loading…</div>
+          </div>
+        </aside>
+
+        <!-- Right pane: editor + metadata + actions ---------------- -->
+        <section class="rd-card">
+          <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-700
+                      flex items-center justify-between gap-3 flex-wrap">
+            <div class="flex flex-col gap-0.5 min-w-0">
+              <span data-role="editor-title"
+                    class="text-sm font-semibold truncate">No design selected</span>
+              <span data-role="editor-meta"
+                    class="text-xs text-slate-500 dark:text-slate-400 font-mono"></span>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center">
+              <button data-action="duplicate"
+                      class="btn-base btn-secondary text-xs"
+                      title="Create a new editable design pre-filled with this one's values. Useful for tweaking from the canonical Default without losing it as a reference."
+                      disabled>Duplicate</button>
+              <button data-action="reset-overrides"
+                      class="btn-base btn-secondary text-xs"
+                      title="Clear every field input on this form so the design uses the trainer's built-in defaults. Doesn't save - hit Save afterwards to persist."
+                      disabled>Reset to defaults</button>
+              <button data-action="archive" class="btn-base btn-secondary text-xs" disabled>Archive</button>
+              <button data-action="unarchive" class="btn-base btn-secondary text-xs" hidden>Unarchive</button>
+              <button data-action="save" class="btn-base btn-primary text-xs" disabled>Save</button>
+            </div>
+          </div>
+
+          <div class="p-4 flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto">
+            <div class="grid grid-cols-[minmax(110px,max-content)_1fr] gap-3 items-center">
+              <label for="ed-name"
+                     class="text-xs font-medium text-slate-600 dark:text-slate-300">Name</label>
+              <input id="ed-name" type="text" maxlength="120"
+                     placeholder="e.g. dqfd-protected-demos-20k"
+                     class="w-full input-base text-sm" disabled>
+              <label for="ed-description"
+                     class="text-xs font-medium text-slate-600 dark:text-slate-300">Description</label>
+              <input id="ed-description" type="text" maxlength="280"
+                     placeholder="One-line summary of what this experiment design tests"
+                     class="w-full input-base text-sm" disabled>
+            </div>
+
+            <!-- Surfaces only when the canonical Default is the
+                 selected design. Explains why every field looks
+                 frozen and points to the Duplicate workflow. The
+                 banner is wired up via the [data-role="canonical-
+                 banner"] hook in selectDesign() below. -->
+            <div data-role="canonical-banner" hidden
+                 class="text-[11px] leading-relaxed rounded-lg px-3 py-2
+                        border border-amber-300 dark:border-amber-700
+                        bg-amber-50 dark:bg-amber-900/30
+                        text-amber-800 dark:text-amber-200 flex items-start gap-2">
+              <span class="font-semibold tracking-tight">Read-only baseline.</span>
+              <span>
+                The <strong>Default</strong> design is the trainer&rsquo;s canonical reference set &mdash;
+                seeded automatically at boot and intentionally not editable so jobs stamped
+                with <code class="font-mono text-[11px]">experiment_design_id=experiment-default</code>
+                always trace back to the same numbers. To customise, click
+                <strong>Duplicate</strong> (top-right) for a pre-filled copy you can edit, or
+                <strong>+ New design</strong> for an empty form.
+              </span>
+            </div>
+
+            <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+              Leave an input <strong>empty</strong> to use the trainer&rsquo;s built-in default
+              (shown as placeholder text). Only fields you fill in get stored on the design
+              document &mdash; the rest are inherited from <code class="font-mono text-[11px]">rl_agent/robotaxi.py::main()</code>.
+              Paper references on each section header link to the technique the knob ties to;
+              hover any field label for the docstring.
+            </p>
+
+            <!-- The schema-driven form is rendered into this host on
+                 boot. See _renderForm() below. -->
+            <div data-role="form-host" class="flex flex-col gap-3"></div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Bump cache buster whenever this page or its consumed shared
+       components change. -->
+  <script src="/components.js?v=20260524-duplicate"></script>
+  <script>
+    (function () {
+      const { showToast, confirmDialog, FreshnessIndicator } = window.RoboracerUI;
+
+      // ---- DOM handles -----------------------------------------------
+      const listEl       = document.querySelector('[data-role="design-list"]');
+      const countEl      = document.querySelector('[data-role="design-count"]');
+      const titleEl      = document.querySelector('[data-role="editor-title"]');
+      const metaEl       = document.querySelector('[data-role="editor-meta"]');
+      const nameInput    = document.getElementById('ed-name');
+      const descInput    = document.getElementById('ed-description');
+      const formHost     = document.querySelector('[data-role="form-host"]');
+      const showArchived = document.querySelector('[data-role="show-archived"]');
+      const btnNew       = document.querySelector('[data-action="new-design"]');
+      const btnSave      = document.querySelector('[data-action="save"]');
+      const btnArchive   = document.querySelector('[data-action="archive"]');
+      const btnUnarchive = document.querySelector('[data-action="unarchive"]');
+      const btnReset     = document.querySelector('[data-action="reset-overrides"]');
+      const btnDuplicate = document.querySelector('[data-action="duplicate"]');
+      const canonicalBanner = document.querySelector('[data-role="canonical-banner"]');
+
+      // ---- State -----------------------------------------------------
+      // `schema` is fetched once at boot from /get_experiment_design_schema
+      // - the trainer-side source of truth for which fields exist + their
+      // types/defaults/docs. The form is generated from it.
+      let schema = null;
+      // `designs` mirrors the server's experiment_designs collection.
+      let designs = [];
+      // `editorState`: what the form currently shows. We track a sentinel
+      // value per field that distinguishes "user left this blank, use
+      // trainer default" from "user filled in zero / false / etc."
+      let editorState = makeEmptyEditorState();
+
+      const CANONICAL_DEFAULT_ID = 'experiment-default';
+
+      function makeEmptyEditorState() {
+        return {
+          id: null,
+          name: '',
+          description: '',
+          archived: false,
+          // Map of fieldName -> string (raw input value) OR null
+          // (input cleared - means "use trainer default" in saved doc).
+          // We keep the input string verbatim until save time, then
+          // coerce per schema type.
+          overrides: {},
+          // Snapshot at load-time for dirty-check.
+          originalName: '',
+          originalDescription: '',
+          originalOverrides: {},
+          isNew: false,
+        };
+      }
+
+      function isDirty() {
+        if (editorState.name !== editorState.originalName) return true;
+        if (editorState.description !== editorState.originalDescription) return true;
+        const a = editorState.overrides;
+        const b = editorState.originalOverrides;
+        const keys = new Set(Object.keys(a).concat(Object.keys(b)));
+        for (const k of keys) {
+          if ((a[k] || '') !== (b[k] || '')) return true;
+        }
+        return false;
+      }
+
+      function isCanonical(d) {
+        return String(d && d._id || '') === CANONICAL_DEFAULT_ID;
+      }
+
+      // ---- Schema fetch + form rendering -----------------------------
+
+      async function fetchSchema() {
+        try {
+          const res = await fetch('/get_experiment_design_schema');
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const json = await res.json();
+          schema = Array.isArray(json.fields) ? json.fields : [];
+        } catch (err) {
+          console.error('Failed to load schema:', err);
+          schema = [];
+          showToast({
+            type: 'error',
+            message: 'Could not load /get_experiment_design_schema: ' + (err.message || err),
+          });
+        }
+      }
+
+      function _renderForm() {
+        if (!schema) {
+          formHost.innerHTML = '<div class="rd-empty">Schema loading…</div>';
+          return;
+        }
+        const parts = [];
+        // Group fields by their preceding section label. Walk in order
+        // so the form ordering matches the schema (which itself matches
+        // the trainer's mental model of "BC -> replay -> SAC -> arch").
+        let openSection = false;
+        for (const entry of schema) {
+          if (entry.kind === 'section') {
+            if (openSection) parts.push('</div></details>');
+            // Section IDs derived from the label so the user's
+            // collapse/expand state survives a re-render (browsers
+            // remember <details open> state per element identity).
+            const sectionId = 'ed-sec-' + escapeAttr(entry.label).replace(/[^a-zA-Z0-9_-]/g, '_');
+            parts.push(
+              `<details id="${sectionId}" open class="ed-section">` +
+              `<summary class="ed-section-header">` +
+                `<span class="ed-section-title">${escapeHtml(entry.label)}</span>` +
+                `<span class="ed-section-chev" aria-hidden="true">›</span>` +
+              `</summary>` +
+              `<div class="ed-section-body">`);
+            openSection = true;
+            continue;
+          }
+          if (entry.kind !== 'field') continue;
+          parts.push(_renderFieldRow(entry));
+        }
+        if (openSection) parts.push('</div></details>');
+        formHost.innerHTML = parts.join('');
+        // Wire up input listeners for the freshly-rendered fields.
+        formHost.querySelectorAll('[data-field-name]').forEach((el) => {
+          el.addEventListener('input', _onFieldInput);
+          el.addEventListener('change', _onFieldInput);
+        });
+      }
+
+      function _renderFieldRow(entry) {
+        const name = entry.name;
+        const t = entry.type;
+        const def = entry.default;
+        const ph = (def === null || def === undefined) ? '' : String(def);
+        const isCan = editorState.id === CANONICAL_DEFAULT_ID;
+        const ro = isCan ? ' readonly' : '';
+        // Booleans become checkboxes; everything else a text/number input.
+        // For ints / floats we use type="number" so the browser brings
+        // up the right keyboard on mobile + validates non-numeric input
+        // client-side. step="any" lets floats accept decimals.
+        let inputHtml;
+        if (t === 'bool') {
+          inputHtml = `<input type="checkbox" data-field-name="${escapeAttr(name)}" data-field-type="bool" ${ro}
+                              class="w-4 h-4 rounded border-slate-300 dark:border-slate-600
+                                     bg-white dark:bg-slate-800 text-indigo-500
+                                     focus:ring-1 focus:ring-indigo-400">`;
+        } else {
+          const step = t === 'int' ? '1' : 'any';
+          const numAttrs = ` step="${step}"`;
+          const minAttr = entry.min !== null && entry.min !== undefined ? ` min="${entry.min}"` : '';
+          const maxAttr = entry.max !== null && entry.max !== undefined ? ` max="${entry.max}"` : '';
+          inputHtml = `<input type="number" data-field-name="${escapeAttr(name)}" data-field-type="${escapeAttr(t)}" ${numAttrs}${minAttr}${maxAttr}${ro}
+                              placeholder="default: ${escapeAttr(ph)}"
+                              class="w-full input-base text-sm font-mono ed-field-input">`;
+        }
+        // Paper-ref chip when present, on the field label.
+        const paperChip = entry.paper_ref
+          ? ` <span class="ed-paper-chip" title="arxiv ${escapeAttr(entry.paper_ref)} - hover the field for the rationale.">arxiv:${escapeHtml(entry.paper_ref)}</span>`
+          : '';
+        const range = (entry.min !== null && entry.max !== null && entry.min !== undefined && entry.max !== undefined)
+          ? ` [${entry.min}, ${entry.max}]`
+          : '';
+        return `
+          <div class="ed-field-row" title="${escapeAttr(entry.doc || '')}">
+            <label for="ed-field-${escapeAttr(name)}" class="ed-field-label">
+              <code class="ed-field-name">${escapeHtml(name)}</code>${paperChip}
+              <span class="ed-field-meta">${escapeHtml(t)}${range}</span>
+            </label>
+            <div class="ed-field-input-wrap">
+              ${inputHtml}
+            </div>
+          </div>`;
+      }
+
+      function _onFieldInput(ev) {
+        const el = ev.target;
+        const name = el.getAttribute('data-field-name');
+        if (!name) return;
+        if (el.type === 'checkbox') {
+          editorState.overrides[name] = el.checked ? 'true' : 'false';
+        } else if (el.value === '' || el.value === null) {
+          // Empty input -> "use trainer default" -> remove from overrides.
+          delete editorState.overrides[name];
+        } else {
+          editorState.overrides[name] = el.value;
+        }
+        refreshButtons();
+      }
+
+      function _populateFormFromState() {
+        formHost.querySelectorAll('[data-field-name]').forEach((el) => {
+          const name = el.getAttribute('data-field-name');
+          const val = editorState.overrides[name];
+          if (el.type === 'checkbox') {
+            el.checked = (val === 'true' || val === true);
+          } else {
+            // Empty -> show placeholder default.
+            el.value = (val === undefined || val === null) ? '' : String(val);
+          }
+        });
+      }
+
+      function _formInputsDisabled(disabled) {
+        nameInput.disabled = disabled;
+        descInput.disabled = disabled;
+        formHost.querySelectorAll('[data-field-name]').forEach((el) => {
+          // Canonical Default's inputs are readonly (not disabled) so
+          // values still show; freshly-loaded states disable until the
+          // user picks something.
+          el.disabled = disabled;
+        });
+      }
+
+      // ---- List rendering --------------------------------------------
+
+      function renderList() {
+        const filtered = designs
+          .filter((d) => showArchived.checked || !d.archived)
+          .slice()
+          .sort((a, b) => {
+            if (isCanonical(a) && !isCanonical(b)) return -1;
+            if (isCanonical(b) && !isCanonical(a)) return 1;
+            if (a.archived && !b.archived) return 1;
+            if (b.archived && !a.archived) return -1;
+            return String(a.name || '').localeCompare(String(b.name || ''));
+          });
+
+        countEl.textContent = designs.length === 0
+          ? ''
+          : `${filtered.length} of ${designs.length} design${designs.length === 1 ? '' : 's'}`;
+
+        if (!filtered.length) {
+          listEl.innerHTML = '<div class="rd-empty">No experiment designs yet. Click "+ New design" to author one.</div>';
+          return;
+        }
+
+        const selectedId = editorState.id;
+        const parts = filtered.map((d) => {
+          const isSel = String(d._id) === String(selectedId);
+          const tags = [];
+          if (isCanonical(d)) tags.push('<span class="rd-tag is-canonical">canonical</span>');
+          if (d.archived) tags.push('<span class="rd-tag is-archived">archived</span>');
+          // Brief override summary: how many fields the design sets.
+          const overrideCount = _countOverrides(d);
+          const overrideText = overrideCount === 0 ? 'no overrides' : `${overrideCount} override${overrideCount === 1 ? '' : 's'}`;
+          return (
+            '<div class="rd-list-item' +
+              (isSel ? ' is-selected' : '') +
+              (d.archived ? ' is-archived' : '') +
+              '" data-id="' + escapeAttr(d._id) + '">' +
+              '<div class="rd-name">' +
+                '<span class="truncate">' + escapeHtml(d.name || '(unnamed)') + '</span>' +
+                tags.join('') +
+              '</div>' +
+              '<div class="rd-meta">' +
+                'v' + (d.version || 1) +
+                ' · ' + (d.updated_at ? new Date(d.updated_at).toLocaleString() : '—') +
+                ' · ' + escapeHtml(overrideText) +
+              '</div>' +
+              '<div class="rd-meta">' +
+                escapeHtml(truncateDescription(d.description, 80)) +
+              '</div>' +
+            '</div>'
+          );
+        });
+
+        if (editorState.isNew) {
+          parts.unshift(
+            '<div class="rd-list-item is-selected" data-id="__new__">' +
+              '<div class="rd-name">' +
+                '<span class="truncate">' +
+                escapeHtml(editorState.name || '(new design)') +
+                '</span>' +
+                '<span class="rd-tag is-dirty">unsaved</span>' +
+              '</div>' +
+              '<div class="rd-meta">new · not yet on server</div>' +
+            '</div>'
+          );
+        }
+
+        listEl.innerHTML = parts.join('');
+      }
+
+      function _countOverrides(d) {
+        if (!schema) return 0;
+        let n = 0;
+        for (const entry of schema) {
+          if (entry.kind !== 'field') continue;
+          if (d[entry.name] !== undefined && d[entry.name] !== null) n++;
+        }
+        return n;
+      }
+
+      listEl.addEventListener('click', (ev) => {
+        const row = ev.target.closest('[data-id]');
+        if (!row) return;
+        const id = row.dataset.id;
+        if (id === '__new__') return;
+        const design = designs.find((d) => String(d._id) === String(id));
+        if (!design) return;
+        if (isDirty()) {
+          confirmDialog({
+            title: 'Discard unsaved changes?',
+            message: 'You have unsaved edits in the current design.',
+            confirmLabel: 'Discard',
+            confirmVariant: 'danger',
+          }).then((ok) => { if (ok) selectDesign(design); });
+        } else {
+          selectDesign(design);
+        }
+      });
+
+      function selectDesign(d) {
+        editorState = {
+          id: d._id,
+          name: d.name || '',
+          description: d.description || '',
+          archived: !!d.archived,
+          overrides: {},
+          originalName: d.name || '',
+          originalDescription: d.description || '',
+          originalOverrides: {},
+          isNew: false,
+        };
+        // Spread the doc's top-level field values into the override map
+        // (and the snapshot) so the form pre-fills. The schema's field
+        // keys are the source of truth for which top-level keys are
+        // fields vs metadata.
+        for (const entry of schema || []) {
+          if (entry.kind !== 'field') continue;
+          const v = d[entry.name];
+          if (v !== undefined && v !== null) {
+            editorState.overrides[entry.name] = String(v);
+            editorState.originalOverrides[entry.name] = String(v);
+          }
+        }
+        nameInput.value = editorState.name;
+        descInput.value = editorState.description;
+        titleEl.textContent = editorState.name || '(unnamed)';
+        const isCan = isCanonical(d);
+        metaEl.textContent = 'v' + (d.version || 1) + (isCan ? ' · read-only canonical' : '');
+        btnArchive.hidden = isCan || editorState.archived;
+        btnUnarchive.hidden = isCan || !editorState.archived;
+        if (canonicalBanner) canonicalBanner.hidden = !isCan;
+        _renderForm();          // re-render with current ro/rw state
+        _populateFormFromState();
+        _formInputsDisabled(isCan);
+        refreshButtons();
+        renderList();
+      }
+
+      // ---- "Duplicate" button ----------------------------------------
+      //
+      // Take whatever's currently displayed in the editor (canonical
+      // Default, an existing custom design, or even an unsaved new one)
+      // and switch into "+ New design" mode with every field pre-filled
+      // from the current overrides. The user can then tweak and Save,
+      // ending up with a fresh editable design.
+      //
+      // This is the primary workflow for "I want to experiment from
+      // the Default's values" - clicking the Default in the list shows
+      // its read-only values, then Duplicate spins up an editable copy.
+      btnDuplicate.addEventListener('click', () => {
+        const enter = () => {
+          const srcName = editorState.name || '(unnamed)';
+          const srcDesc = editorState.description || '';
+          // Copy the current overrides into a fresh editor state. We
+          // pivot through originalOverrides=={} so the dirty-check
+          // immediately registers the new design as having pending
+          // changes (otherwise hitting Save right away would no-op).
+          const copiedOverrides = { ...editorState.overrides };
+          editorState = makeEmptyEditorState();
+          editorState.isNew = true;
+          editorState.name = '(copy of) ' + srcName;
+          editorState.description = srcDesc;
+          editorState.overrides = copiedOverrides;
+          nameInput.value = editorState.name;
+          descInput.value = editorState.description;
+          titleEl.textContent = editorState.name;
+          metaEl.textContent = 'unsaved';
+          btnArchive.hidden = true;
+          btnUnarchive.hidden = true;
+          if (canonicalBanner) canonicalBanner.hidden = true;
+          _renderForm();
+          _populateFormFromState();
+          _formInputsDisabled(false);
+          refreshButtons();
+          renderList();
+          // Focus the name input + select all so the user can
+          // immediately overwrite the "(copy of) ..." default name.
+          nameInput.focus();
+          nameInput.select();
+        };
+        if (isDirty()) {
+          confirmDialog({
+            title: 'Discard unsaved changes first?',
+            message: 'You have unsaved edits in the current design. Duplicate will discard them and start a new design from the values currently shown on the form.',
+            confirmLabel: 'Duplicate',
+            confirmVariant: 'danger',
+          }).then((ok) => { if (ok) enter(); });
+        } else {
+          enter();
+        }
+      });
+
+      // ---- "+ New design" button -------------------------------------
+      btnNew.addEventListener('click', () => {
+        const enter = () => {
+          editorState = makeEmptyEditorState();
+          editorState.isNew = true;
+          nameInput.value = '';
+          descInput.value = '';
+          titleEl.textContent = '(new design)';
+          metaEl.textContent = 'unsaved';
+          btnArchive.hidden = true;
+          btnUnarchive.hidden = true;
+          if (canonicalBanner) canonicalBanner.hidden = true;
+          _renderForm();
+          _populateFormFromState();
+          _formInputsDisabled(false);
+          refreshButtons();
+          renderList();
+          nameInput.focus();
+        };
+        if (isDirty()) {
+          confirmDialog({
+            title: 'Discard unsaved changes?',
+            message: 'Your current edits will be discarded.',
+            confirmLabel: 'Discard',
+            confirmVariant: 'danger',
+          }).then((ok) => { if (ok) enter(); });
+        } else {
+          enter();
+        }
+      });
+
+      // ---- "Reset to defaults" button --------------------------------
+      btnReset.addEventListener('click', () => {
+        if (isCanonical({ _id: editorState.id })) return;
+        editorState.overrides = {};
+        _populateFormFromState();
+        refreshButtons();
+      });
+
+      nameInput.addEventListener('input', () => {
+        editorState.name = nameInput.value;
+        if (editorState.isNew) titleEl.textContent = nameInput.value || '(new design)';
+        refreshButtons();
+        renderList();
+      });
+      descInput.addEventListener('input', () => {
+        editorState.description = descInput.value;
+        refreshButtons();
+      });
+
+      showArchived.addEventListener('change', renderList);
+
+      btnSave.addEventListener('click', saveCurrent);
+      btnArchive.addEventListener('click', () => setArchived(true));
+      btnUnarchive.addEventListener('click', () => setArchived(false));
+
+      // ---- Save ------------------------------------------------------
+      let saveInFlight = false;
+      async function saveCurrent() {
+        if (saveInFlight) return;
+        const name = editorState.name.trim();
+        const desc = editorState.description.trim();
+        if (!name) {
+          showToast({ type: 'error', message: 'Name is required.' });
+          nameInput.focus();
+          return;
+        }
+        // Name-collision warning on new-design path.
+        if (editorState.isNew) {
+          const collision = designs.find(
+            (d) => !d.archived && String(d.name || '').toLowerCase() === name.toLowerCase());
+          if (collision) {
+            const ok = await confirmDialog({
+              title: 'A design with this name already exists',
+              message: `"${name}" already exists (version ${collision.version || 1}). ` +
+                       `Saving again will create a duplicate. ` +
+                       `Cancel and pick a different name, or open the existing one to edit it instead.`,
+              confirmLabel: 'Create duplicate anyway',
+              confirmVariant: 'danger',
+            });
+            if (!ok) return;
+          }
+        }
+        // Coerce the overrides per schema type. Empty -> omit.
+        const payload = { name, description: desc };
+        for (const entry of schema || []) {
+          if (entry.kind !== 'field') continue;
+          const raw = editorState.overrides[entry.name];
+          if (raw === undefined || raw === null || raw === '') continue;
+          let val;
+          try {
+            if (entry.type === 'int') {
+              const n = Number(raw);
+              if (!Number.isFinite(n)) continue;
+              val = Math.trunc(n);
+            } else if (entry.type === 'float') {
+              const n = Number(raw);
+              if (!Number.isFinite(n)) continue;
+              val = n;
+            } else if (entry.type === 'bool') {
+              val = (raw === 'true' || raw === true);
+            } else {
+              val = raw;
+            }
+          } catch (_e) {
+            continue;
+          }
+          payload[entry.name] = val;
+        }
+        saveInFlight = true;
+        const origLabel = btnSave.textContent;
+        btnSave.disabled = true;
+        btnSave.textContent = 'Saving…';
+        try {
+          let res;
+          let assignedId = editorState.id;
+          if (editorState.isNew) {
+            res = await fetch('/add_experiment_design', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            try {
+              const body = await res.clone().json();
+              assignedId = body && (body.insertedId || (body.ops && body.ops[0] && body.ops[0]._id)) || null;
+            } catch (_e) { /* swallow */ }
+          } else {
+            payload._id = editorState.id;
+            res = await fetch('/update_experiment_design', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          }
+          showToast({ type: 'success', message: 'Experiment design saved.' });
+          await pollOnce(true);
+          let fresh = assignedId
+            ? designs.find((d) => String(d._id) === String(assignedId))
+            : null;
+          if (!fresh) fresh = designs.find((d) => d.name === name);
+          if (fresh) selectDesign(fresh);
+        } catch (err) {
+          showToast({ type: 'error', message: `Save failed: ${err.message || err}` });
+        } finally {
+          saveInFlight = false;
+          btnSave.textContent = origLabel;
+          refreshButtons();
+        }
+      }
+
+      async function setArchived(archived) {
+        if (!editorState.id) return;
+        const ok = await confirmDialog({
+          title: archived ? 'Archive this design?' : 'Unarchive this design?',
+          message: archived
+            ? 'Archived designs are hidden from the New-Job dropdown. Models trained with this design keep working; the design just stops appearing as a fresh option.'
+            : 'Bring this design back into the New-Job dropdown.',
+          confirmLabel: archived ? 'Archive' : 'Unarchive',
+          confirmVariant: archived ? 'danger' : 'primary',
+        });
+        if (!ok) return;
+        try {
+          const res = await fetch(archived ? '/archive_experiment_design' : '/update_experiment_design', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ _id: editorState.id, archived }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          showToast({ type: 'success', message: archived ? 'Design archived.' : 'Design unarchived.' });
+          await pollOnce(true);
+          const fresh = designs.find((d) => String(d._id) === String(editorState.id));
+          if (fresh) selectDesign(fresh);
+        } catch (err) {
+          showToast({ type: 'error', message: `Update failed: ${err.message || err}` });
+        }
+      }
+
+      function refreshButtons() {
+        const isCan = isCanonical({ _id: editorState.id });
+        const overrideCount = Object.keys(editorState.overrides).length;
+        const canSave = !isCan && (
+          (editorState.isNew && editorState.name.trim())
+          || (editorState.id && isDirty())
+        );
+        btnSave.disabled = !canSave;
+        const canArchive = !editorState.isNew && editorState.id && !isCan;
+        btnArchive.disabled   = !canArchive || editorState.archived;
+        btnUnarchive.disabled = !canArchive || !editorState.archived;
+        btnReset.disabled = isCan || overrideCount === 0;
+        // Duplicate is meaningful whenever there's SOMETHING in the
+        // editor to clone from - any saved design (canonical or not)
+        // OR an unsaved new design with non-empty overrides. Disabled
+        // only on the boot/empty editor state.
+        const hasSomethingToCopy = !!editorState.id || overrideCount > 0;
+        btnDuplicate.disabled = !hasSomethingToCopy;
+      }
+
+      // ---- Polling ---------------------------------------------------
+      const freshness = new FreshnessIndicator(
+        document.querySelector('[data-role="freshness-dot"]'),
+        document.querySelector('[data-role="freshness-text"]'));
+
+      let pollHandle = null;
+      let pollInFlight = false;
+
+      async function pollOnce(force) {
+        if (pollInFlight) return;
+        pollInFlight = true;
+        try {
+          const url = `/get_experiment_designs?force=${force ? 'true' : 'false'}`;
+          const res = await fetch(url);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const text = await res.text();
+          freshness.markSuccess();
+          if (text === 'NO_CHANGES') return;
+          const json = JSON.parse(text);
+          if (!Array.isArray(json)) throw new Error('Unexpected response shape');
+          designs = json;
+          if (editorState.id && !designs.some((d) => String(d._id) === String(editorState.id))) {
+            editorState = makeEmptyEditorState();
+            renderEditorEmpty();
+          }
+          renderList();
+        } catch (err) {
+          console.error(err);
+          if (!designs.length) listEl.innerHTML =
+            '<div class="rd-empty" style="color:#dc2626">Error: ' + escapeHtml(String(err.message || err)) + '</div>';
+        } finally {
+          pollInFlight = false;
+        }
+      }
+
+      function renderEditorEmpty() {
+        titleEl.textContent = 'No design selected';
+        metaEl.textContent = '';
+        nameInput.value = '';
+        descInput.value = '';
+        _renderForm();
+        _populateFormFromState();
+        _formInputsDisabled(true);
+        btnArchive.hidden = false;
+        btnUnarchive.hidden = true;
+        if (canonicalBanner) canonicalBanner.hidden = true;
+        refreshButtons();
+      }
+
+      // ---- Helpers ---------------------------------------------------
+      function escapeHtml(s) {
+        return String(s == null ? '' : s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+      function escapeAttr(s) {
+        return String(s == null ? '' : s).replace(/"/g, '&quot;');
+      }
+      function truncateDescription(s, n) {
+        const t = String(s || '');
+        return t.length <= n ? t : t.slice(0, n - 1) + '…';
+      }
+
+      // ---- Boot ------------------------------------------------------
+      (async () => {
+        await fetchSchema();
+        renderEditorEmpty();
+        await pollOnce(true);
+        pollHandle = setInterval(() => pollOnce(false), 5000);
+        window.addEventListener('beforeunload', () => {
+          clearInterval(pollHandle);
+          freshness.destroy();
+        });
+      })();
+    })();
+  </script>
+</body>
+</html>

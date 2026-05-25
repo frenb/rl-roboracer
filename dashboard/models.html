@@ -254,10 +254,85 @@
     </div>
   </div>
 
+  <!-- View-experiment-design-config modal. Opened by clicking the
+       experiment design name in the Experiment design column on a
+       model row. Shows the currently-stored field overrides of that
+       experiment design (fetched from /get_experiment_designs by id)
+       alongside the trainer's built-in defaults so the user can see
+       at a glance what differs from baseline.
+
+       Unlike the reward-design modal which shows the per-model
+       snapshot, this modal shows the CURRENT design state - the
+       model record only stores id/name/version (not the full field
+       dict), so if the design has been edited since training the
+       displayed overrides may differ from what the trainer actually
+       used. The header notes that explicitly. -->
+  <div data-role="ed-config-modal" aria-hidden="true"
+       class="fixed inset-0 z-[100] modal-blur bg-slate-900/40 dark:bg-slate-950/65
+              flex items-center justify-center p-4
+              opacity-0 transition-opacity duration-200 pointer-events-none">
+    <div role="dialog" aria-modal="true" aria-labelledby="ed-config-modal-title"
+         class="w-full max-w-[640px] max-h-[calc(100vh-2rem)]
+                bg-white dark:bg-slate-900
+                border border-slate-200 dark:border-slate-700
+                rounded-2xl shadow-card-lg
+                flex flex-col
+                opacity-0 -translate-y-3 scale-[0.98]
+                transition duration-200">
+      <div class="px-6 py-5 border-b border-slate-200 dark:border-slate-700
+                  flex items-center justify-between gap-3 flex-wrap">
+        <div class="flex items-center gap-2 min-w-0">
+          <h2 id="ed-config-modal-title" class="m-0 text-base font-semibold tracking-tight truncate">
+            <span data-role="ed-config-name">—</span>
+          </h2>
+          <span data-role="ed-config-version"
+                class="inline-flex items-center px-1.5 py-0 rounded text-[10px]
+                       font-semibold text-slate-500 dark:text-slate-400
+                       bg-slate-100 dark:bg-slate-800 font-mono whitespace-nowrap"></span>
+          <span data-role="ed-config-canonical" hidden
+                class="inline-flex items-center px-1.5 py-0 rounded text-[10px]
+                       font-semibold text-indigo-700 dark:text-indigo-300
+                       bg-indigo-100 dark:bg-indigo-900/40 whitespace-nowrap"
+                title="Canonical seeded experiment design.">baseline</span>
+        </div>
+        <button data-action="close-ed-config-modal" aria-label="Close"
+                class="px-2 py-1 text-sm rounded-md hover:bg-slate-100
+                       dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400">×</button>
+      </div>
+      <div class="px-6 py-4 overflow-y-auto flex-1 min-h-0">
+        <p class="text-[11px] text-slate-500 dark:text-slate-400 mb-2 leading-relaxed">
+          The fields below are the design&rsquo;s <strong>current state</strong>.
+          The model record stores only the design id + name + version, not
+          the field-set, so if the design has been edited since training
+          these overrides may differ from what the trainer used. The
+          model&rsquo;s stamped version is shown in the row&rsquo;s
+          <code class="font-mono text-[11px]">vN</code> pill.
+        </p>
+        <table data-role="ed-config-table"
+               class="w-full text-xs font-mono border-collapse">
+          <thead class="text-left text-slate-500 dark:text-slate-400">
+            <tr>
+              <th class="py-1.5 pr-3 font-semibold">Field</th>
+              <th class="py-1.5 pr-3 font-semibold">Override</th>
+              <th class="py-1.5 font-semibold">Default</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <div data-role="ed-config-loading"
+             class="text-xs text-slate-500 dark:text-slate-400 py-4 text-center"
+             hidden>Loading…</div>
+      </div>
+      <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
+        <button data-action="close-ed-config-modal" class="btn-base btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Cache-busted (see comment in jobs.html). Bump ?v=... when you
        edit components.js so the iframe inside GoldenLayout actually
        fetches the new file. -->
-  <script src="/components.js?v=20260524-slim"></script>
+  <script src="/components.js?v=20260524-pauseresume"></script>
   <script>
     (function () {
       const { TableView, formatters, showToast } = window.RoboracerUI;
@@ -344,7 +419,21 @@
           { key: 'reward_design_name', label: 'Reward design', sortable: true,
             filter: true,
             sortValue: (r) => r.reward_design_name || '',
-            render: renderRewardDesignCell },
+            // Re-uses the shared formatter that produces a clickable
+            // button. The local renderRewardDesignCell wrapper below
+            // exists only to delegate to that formatter - kept in place
+            // so the file's structure mirrors the older code that
+            // hand-rolled the cell.
+            render: (_v, row) => formatters.rewardDesignBadge(row) },
+          // Experiment design: training-loop hyperparameters (BC pretrain,
+          // replay capacity, SAC learning rates, network sizes). Stamped
+          // on the model doc by add_model() alongside the reward design
+          // provenance. Click the design name to view the field
+          // overrides via the same modal pattern as the reward source.
+          { key: 'experiment_design_name', label: 'Experiment design', sortable: true,
+            filter: true,
+            sortValue: (r) => r.experiment_design_name || '',
+            render: (_v, row) => formatters.experimentDesignBadge(row) },
           // -------- eval-history columns ------------------------------
           // Derived client-side from /leaderboard_scores (one row per
           // EVAL job, joined by model_id with fallback path==location).
@@ -902,6 +991,152 @@
         sourceModal.setAttribute('aria-hidden', 'true');
       }
 
+      // ---- Experiment design "view config" modal -------------------
+      //
+      // Fetches /get_experiment_designs + /get_experiment_design_schema
+      // (cached after first call), filters the designs collection to
+      // the clicked design's id, and renders the field overrides as a
+      // 3-column table: field name | override value | trainer default.
+      // The schema is needed to know which keys on the design doc are
+      // actual fields vs metadata (created_at, version, archived, ...).
+      const expConfigModal      = document.querySelector('[data-role="ed-config-modal"]');
+      const expConfigDialogEl   = expConfigModal.querySelector('[role="dialog"]');
+      const expConfigNameEl     = expConfigModal.querySelector('[data-role="ed-config-name"]');
+      const expConfigVersionEl  = expConfigModal.querySelector('[data-role="ed-config-version"]');
+      const expConfigCanonicalEl = expConfigModal.querySelector('[data-role="ed-config-canonical"]');
+      const expConfigTableBody  = expConfigModal.querySelector('[data-role="ed-config-table"] tbody');
+      const expConfigLoadingEl  = expConfigModal.querySelector('[data-role="ed-config-loading"]');
+
+      // Two caches the modal needs. Both are populated lazily on first
+      // open, with a small TTL so edits-via-the-Experiment-Design-tab
+      // propagate eventually (no polling - this is rare-click data).
+      let _expDesignsCache = null;
+      let _expDesignsCacheTs = 0;
+      let _expSchemaCache = null;
+      const _EXP_CACHE_TTL_MS = 30000;
+
+      async function _fetchExpDesignsCached() {
+        if (_expDesignsCache && (Date.now() - _expDesignsCacheTs < _EXP_CACHE_TTL_MS)) {
+          return _expDesignsCache;
+        }
+        const res = await fetch('/get_experiment_designs?force=true');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const txt = await res.text();
+        if (txt === 'NO_CHANGES') return _expDesignsCache || [];
+        _expDesignsCache = JSON.parse(txt) || [];
+        _expDesignsCacheTs = Date.now();
+        return _expDesignsCache;
+      }
+      async function _fetchExpSchemaCached() {
+        if (_expSchemaCache) return _expSchemaCache;
+        const res = await fetch('/get_experiment_design_schema');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const j = await res.json();
+        _expSchemaCache = Array.isArray(j.fields) ? j.fields : [];
+        return _expSchemaCache;
+      }
+
+      async function openExperimentDesignModal(designId) {
+        // Reveal modal immediately in a loading state.
+        expConfigNameEl.textContent = '(loading…)';
+        expConfigVersionEl.textContent = '';
+        expConfigVersionEl.hidden = true;
+        expConfigCanonicalEl.hidden = true;
+        expConfigTableBody.innerHTML = '';
+        expConfigLoadingEl.hidden = false;
+        expConfigModal.classList.remove('opacity-0', 'pointer-events-none');
+        expConfigModal.classList.add('opacity-100', 'pointer-events-auto');
+        expConfigDialogEl.classList.remove('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        expConfigDialogEl.classList.add('opacity-100', 'translate-y-0', 'scale-100');
+        expConfigModal.setAttribute('aria-hidden', 'false');
+
+        const fetchToken = (openExperimentDesignModal._token = (openExperimentDesignModal._token || 0) + 1);
+        try {
+          const [designs, schema] = await Promise.all([
+            _fetchExpDesignsCached(),
+            _fetchExpSchemaCached(),
+          ]);
+          if (fetchToken !== openExperimentDesignModal._token) return;
+          const design = designs.find((d) => String(d._id) === String(designId));
+          if (!design) {
+            expConfigLoadingEl.hidden = false;
+            expConfigLoadingEl.textContent = 'Design not found (id: ' + String(designId) + ')';
+            return;
+          }
+          expConfigNameEl.textContent = design.name || '(unnamed)';
+          if (design.version) {
+            expConfigVersionEl.textContent = 'v' + Number(design.version);
+            expConfigVersionEl.hidden = false;
+          }
+          expConfigCanonicalEl.hidden =
+            String(design._id || '') !== 'experiment-default';
+          // Build the rows. Show ALL fields from the schema in order;
+          // each row shows the design's override (if set) vs the
+          // schema default. Unset rows render the override cell as
+          // em-dash so the user can see "this knob uses the default".
+          const rows = [];
+          let lastSection = '';
+          for (const entry of schema) {
+            if (entry.kind === 'section') {
+              if (entry.label && entry.label !== lastSection) {
+                lastSection = entry.label;
+                rows.push(
+                  '<tr><td colspan="3" class="pt-3 pb-1 text-[10px] uppercase ' +
+                  'tracking-wide font-semibold text-slate-500 dark:text-slate-400">' +
+                  escapeHtmlLocal(entry.label) + '</td></tr>');
+              }
+              continue;
+            }
+            if (entry.kind !== 'field') continue;
+            const name = entry.name;
+            const overrideVal = design[name];
+            const hasOverride = overrideVal !== undefined && overrideVal !== null;
+            const defText = String(entry.default == null ? '' : entry.default);
+            const ovText = hasOverride
+              ? '<span class="text-indigo-600 dark:text-indigo-300 font-semibold">' +
+                escapeHtmlLocal(String(overrideVal)) + '</span>'
+              : '<span class="text-slate-400 dark:text-slate-500">—</span>';
+            rows.push(
+              '<tr class="border-t border-slate-100 dark:border-slate-800">' +
+              '<td class="py-1.5 pr-3 text-slate-700 dark:text-slate-300">' + escapeHtmlLocal(name) + '</td>' +
+              '<td class="py-1.5 pr-3">' + ovText + '</td>' +
+              '<td class="py-1.5 text-slate-500 dark:text-slate-400">' + escapeHtmlLocal(defText) + '</td>' +
+              '</tr>');
+          }
+          if (fetchToken !== openExperimentDesignModal._token) return;
+          expConfigTableBody.innerHTML = rows.join('');
+          expConfigLoadingEl.hidden = true;
+        } catch (err) {
+          if (fetchToken !== openExperimentDesignModal._token) return;
+          expConfigLoadingEl.hidden = false;
+          expConfigLoadingEl.textContent = 'Failed to load: ' + String(err.message || err);
+        }
+      }
+
+      function closeExperimentDesignModal() {
+        expConfigModal.classList.add('opacity-0', 'pointer-events-none');
+        expConfigModal.classList.remove('opacity-100', 'pointer-events-auto');
+        expConfigDialogEl.classList.add('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        expConfigDialogEl.classList.remove('opacity-100', 'translate-y-0', 'scale-100');
+        expConfigModal.setAttribute('aria-hidden', 'true');
+      }
+
+      expConfigModal.addEventListener('click', (ev) => {
+        if (ev.target === expConfigModal) closeExperimentDesignModal();
+      });
+      expConfigModal.querySelectorAll('[data-action="close-ed-config-modal"]').forEach((b) =>
+        b.addEventListener('click', closeExperimentDesignModal));
+      document.addEventListener('keydown', (ev) => {
+        if (!expConfigModal.classList.contains('opacity-100')) return;
+        if (ev.key === 'Escape') closeExperimentDesignModal();
+      });
+
+      function escapeHtmlLocal(s) {
+        return String(s == null ? '' : s)
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+
       sourceModal.addEventListener('click', (ev) => {
         if (ev.target === sourceModal) closeSourceModal();
       });
@@ -956,22 +1191,49 @@
         if (!ev.target || !ev.target.closest) return;
 
         // ---- Reward design "View source" -----------------------------
-        const sourceTrigger = ev.target.closest('[data-action="view-rd-source"]');
+        // Two action names are accepted for back-compat:
+        //   * "view-rd-source"  (legacy, from the row-renderer in this
+        //     file before we adopted the shared formatters)
+        //   * "view-reward-design"  (current, emitted by
+        //     formatters.rewardDesignBadge in components.js)
+        // Both carry data-model-id; both end up at openSourceModal
+        // which prefers the model-scoped /get_model_source/:id fetch
+        // (returns the snapshot code from add_model time, not the
+        // possibly-edited current design).
+        const sourceTrigger = ev.target.closest(
+          '[data-action="view-rd-source"], [data-action="view-reward-design"]');
         if (sourceTrigger) {
           ev.stopPropagation();
           ev.preventDefault();
           const id = sourceTrigger.dataset.modelId;
           if (!id) return;
           // Look up the full record - the cell renderer only sees a row
-          // view, but the raw modelsCache has every field including
-          // reward_design_code (which we deliberately don't put in the
-          // data-* attribute because it can be many KB).
+          // view, but the raw modelsCache has every field. We don't
+          // need reward_design_code on the row here (the modal fetches
+          // it via /get_model_source/:id), so the slim /get_models
+          // payload is fine.
           const model = modelsCache.find((m) => String(m._id) === String(id));
           if (!model) {
             showToast({ type: 'error', message: 'Model record not found in cache; try refreshing.' });
             return;
           }
           openSourceModal(model);
+          return;
+        }
+
+        // ---- Experiment design "View config" -------------------------
+        // Click the experiment_design name to view its field overrides.
+        // Unlike reward designs we don't have a per-model snapshot of
+        // the field-set (we only stamped id+name+version on the model
+        // doc, not the full fields), so this modal fetches the CURRENT
+        // state of the design from /get_experiment_designs.
+        const expTrigger = ev.target.closest('[data-action="view-experiment-design"]');
+        if (expTrigger) {
+          ev.stopPropagation();
+          ev.preventDefault();
+          const designId = expTrigger.dataset.experimentDesignId;
+          if (!designId) return;
+          openExperimentDesignModal(designId);
           return;
         }
 

@@ -120,6 +120,18 @@ services:
       - type: bind
         source: ../tmp
         target: /tmp
+      # Read-only mount of the repo's .git so the trainer can stamp
+      # git_sha + git_branch on every model + job document. Without
+      # this the container can't see ancestral .git (only ./rl_agent
+      # is mounted at /python_ws/src, and .git lives in the host's
+      # repo root one level up). The provenance lets the future
+      # multiverse / research-agent tooling answer "which code
+      # version produced this model?" cleanly without timestamp
+      # inference. read_only because the trainer never writes to it.
+      - type: bind
+        source: ./.git
+        target: /git_meta
+        read_only: true
     ports:
       - "6006:6006"
     # `python -u` forces unbuffered stdout so the dashboard's live log

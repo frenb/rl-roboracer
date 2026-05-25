@@ -52,6 +52,12 @@
         <button data-action="restart" disabled
                 class="btn-base btn-secondary"
                 title="Set selected jobs back to NOT_STARTED so the trainer picks them up again">Restart</button>
+        <button data-action="pause" disabled
+                class="btn-base btn-secondary"
+                title="Ask the trainer to save a checkpoint and pause selected IN_PROGRESS jobs">Pause</button>
+        <button data-action="resume" disabled
+                class="btn-base btn-secondary"
+                title="Resume selected PAUSED jobs from their saved Learner checkpoint">Resume</button>
         <button data-action="set-done" disabled
                 class="btn-base btn-secondary"
                 title="Mark selected jobs as DONE without running them">Set to done</button>
@@ -146,11 +152,143 @@
                   class="w-full input-base appearance-none select-chevron pr-8">
             <option value="">Course default (no reward design)</option>
           </select>
+
+          <!-- Experiment design selector. Parallel to reward design but
+               for training-loop hyperparameters (BC pretrain, replay
+               capacity, optimizer learning rates, network sizes).
+               Populated from /get_experiment_designs on modal open;
+               first option is "Trainer defaults" which omits the field
+               so do_job uses main()'s hardcoded values (identical to
+               legacy jobs). The seeded canonical "Default" design
+               appears below for users who want to pin an explicit
+               reference config. -->
+          <label for="f-experiment-design"
+                 class="text-xs font-medium text-slate-600 dark:text-slate-300">Experiment design</label>
+          <select id="f-experiment-design" name="experiment_design_id"
+                  class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="">Trainer defaults (no experiment design)</option>
+          </select>
         </form>
       </div>
       <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
         <button data-action="close-modal" class="btn-base btn-secondary">Cancel</button>
         <button data-action="submit-create" class="btn-base btn-primary">Create job</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- View-reward-design-source modal. Opened by clicking the reward
+       design name in the Reward design column. Fetches the CURRENT
+       state of the design from /get_reward_designs (jobs don't carry
+       the code snapshot - only the model record does, post-training).
+       The header notes that the trainer may have loaded a different
+       version at job pickup time if the design has since been edited;
+       robotaxi.out's "installed reward design version=N" line is the
+       authoritative answer. -->
+  <div data-role="rd-source-modal" aria-hidden="true"
+       class="fixed inset-0 z-[100] modal-blur bg-slate-900/40 dark:bg-slate-950/65
+              flex items-center justify-center p-4
+              opacity-0 transition-opacity duration-200 pointer-events-none">
+    <div role="dialog" aria-modal="true" aria-labelledby="rd-source-modal-title"
+         class="w-full max-w-[860px] max-h-[calc(100vh-2rem)]
+                bg-white dark:bg-slate-900
+                border border-slate-200 dark:border-slate-700
+                rounded-2xl shadow-card-lg
+                flex flex-col
+                opacity-0 -translate-y-3 scale-[0.98]
+                transition duration-200">
+      <div class="px-6 py-5 border-b border-slate-200 dark:border-slate-700
+                  flex items-center justify-between gap-3 flex-wrap">
+        <div class="flex items-center gap-2 min-w-0">
+          <h2 id="rd-source-modal-title"
+              class="m-0 text-base font-semibold tracking-tight truncate">
+            <span data-role="rd-source-name">—</span>
+          </h2>
+          <span data-role="rd-source-version"
+                class="inline-flex items-center px-1.5 py-0 rounded text-[10px]
+                       font-semibold text-slate-500 dark:text-slate-400
+                       bg-slate-100 dark:bg-slate-800 font-mono whitespace-nowrap"></span>
+        </div>
+        <button data-action="close-rd-source-modal" aria-label="Close"
+                class="px-2 py-1 text-sm rounded-md hover:bg-slate-100
+                       dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400">×</button>
+      </div>
+      <div class="px-6 py-4 overflow-y-auto flex-1 min-h-0">
+        <p class="text-[11px] text-slate-500 dark:text-slate-400 mb-2 leading-relaxed">
+          Showing the design&rsquo;s <strong>current state</strong> from
+          <code class="font-mono text-[11px]">/get_reward_designs</code>.
+          The trainer captures the code at job pickup, so if the design has
+          been edited since this job was queued the trainer is using a
+          different version. Check
+          <code class="font-mono text-[11px]">robotaxi.out</code> for
+          <code class="font-mono text-[11px]">installed reward design name=… version=N</code>.
+        </p>
+        <pre data-role="rd-source-code"
+             class="font-mono text-[12px] leading-relaxed p-4 rounded-md
+                    bg-slate-100 dark:bg-slate-950
+                    border border-slate-200 dark:border-slate-700
+                    overflow-auto whitespace-pre m-0">Loading…</pre>
+      </div>
+      <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
+        <button data-action="close-rd-source-modal" class="btn-base btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- View-experiment-design-config modal. Same shape as the one on
+       the Models tab. Click the experiment_design name in the column
+       to view its field overrides. -->
+  <div data-role="ed-config-modal" aria-hidden="true"
+       class="fixed inset-0 z-[100] modal-blur bg-slate-900/40 dark:bg-slate-950/65
+              flex items-center justify-center p-4
+              opacity-0 transition-opacity duration-200 pointer-events-none">
+    <div role="dialog" aria-modal="true" aria-labelledby="ed-config-modal-title"
+         class="w-full max-w-[640px] max-h-[calc(100vh-2rem)]
+                bg-white dark:bg-slate-900
+                border border-slate-200 dark:border-slate-700
+                rounded-2xl shadow-card-lg
+                flex flex-col
+                opacity-0 -translate-y-3 scale-[0.98]
+                transition duration-200">
+      <div class="px-6 py-5 border-b border-slate-200 dark:border-slate-700
+                  flex items-center justify-between gap-3 flex-wrap">
+        <div class="flex items-center gap-2 min-w-0">
+          <h2 id="ed-config-modal-title" class="m-0 text-base font-semibold tracking-tight truncate">
+            <span data-role="ed-config-name">—</span>
+          </h2>
+          <span data-role="ed-config-version"
+                class="inline-flex items-center px-1.5 py-0 rounded text-[10px]
+                       font-semibold text-slate-500 dark:text-slate-400
+                       bg-slate-100 dark:bg-slate-800 font-mono whitespace-nowrap"></span>
+        </div>
+        <button data-action="close-ed-config-modal" aria-label="Close"
+                class="px-2 py-1 text-sm rounded-md hover:bg-slate-100
+                       dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400">×</button>
+      </div>
+      <div class="px-6 py-4 overflow-y-auto flex-1 min-h-0">
+        <p class="text-[11px] text-slate-500 dark:text-slate-400 mb-2 leading-relaxed">
+          Field overrides from
+          <code class="font-mono text-[11px]">/get_experiment_designs</code>.
+          Same caveat as the reward source: the design may have been
+          edited since this job was queued.
+        </p>
+        <table data-role="ed-config-table"
+               class="w-full text-xs font-mono border-collapse">
+          <thead class="text-left text-slate-500 dark:text-slate-400">
+            <tr>
+              <th class="py-1.5 pr-3 font-semibold">Field</th>
+              <th class="py-1.5 pr-3 font-semibold">Override</th>
+              <th class="py-1.5 font-semibold">Default</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <div data-role="ed-config-loading"
+             class="text-xs text-slate-500 dark:text-slate-400 py-4 text-center"
+             hidden>Loading…</div>
+      </div>
+      <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
+        <button data-action="close-ed-config-modal" class="btn-base btn-secondary">Close</button>
       </div>
     </div>
   </div>
@@ -161,7 +299,7 @@
        (Ctrl+Shift+R on the parent doesn't always force iframe
        subresources to re-fetch). Bump the version string whenever you
        change components.js. -->
-  <script src="/components.js?v=20260524-jobid"></script>
+  <script src="/components.js?v=20260524-pauseresume"></script>
   <script>
     (function () {
       const { TableView, formatters, showToast, confirmDialog } = window.RoboracerUI;
@@ -239,6 +377,21 @@
             render: (v) => formatters.shortId(v) },
           { key: 'job_type',         label: 'Type',     sortable: true,  filter: true,
             render: (v) => formatters.jobTypeBadge(v) },
+          // Reward / Experiment design columns. Both names are stamped
+          // on the job document at submit time by jobs.html's submit
+          // handler. Click the name to view the design's content via
+          // its own modal (reward = Python source from
+          // /get_reward_designs; experiment = field overrides table
+          // from /get_experiment_designs).
+          //
+          // Jobs submitted before the design-stamping feature have null
+          // values for both; the formatters render those as em-dash.
+          { key: 'reward_design_name', label: 'Reward design', sortable: true, filter: true,
+            sortValue: (r) => r.reward_design_name || '',
+            render: (_v, row) => formatters.rewardDesignBadge(row) },
+          { key: 'experiment_design_name', label: 'Experiment design', sortable: true, filter: true,
+            sortValue: (r) => r.experiment_design_name || '',
+            render: (_v, row) => formatters.experimentDesignBadge(row) },
           { key: 'status',           label: 'Status',   sortable: true,  filter: true,
             render: (v) => formatters.statusBadge(v) },
           { key: 'percent_complete', label: 'Progress', sortable: true,  filter: false,
@@ -273,6 +426,8 @@
 
       const clearBtn   = document.querySelector('[data-action="clear-selection"]');
       const restartBtn = document.querySelector('[data-action="restart"]');
+      const pauseBtn   = document.querySelector('[data-action="pause"]');
+      const resumeBtn  = document.querySelector('[data-action="resume"]');
       const doneBtn    = document.querySelector('[data-action="set-done"]');
       const deleteBtn  = document.querySelector('[data-action="delete"]');
       const createBtn  = document.querySelector('[data-action="create"]');
@@ -283,6 +438,15 @@
         restartBtn.disabled = !has;
         doneBtn.disabled    = !has;
         deleteBtn.disabled  = !has;
+        // Pause is only meaningful for IN_PROGRESS rows; Resume only
+        // for PAUSED rows. We could enable the buttons whenever there
+        // is *any* selection and just no-op on mismatch, but greying
+        // them out when the selection has no eligible rows is clearer
+        // (less surprise on click).
+        const hasInProg = selected.some(r => r && r.status === 'IN_PROGRESS');
+        const hasPaused = selected.some(r => r && r.status === 'PAUSED');
+        pauseBtn.disabled  = !hasInProg;
+        resumeBtn.disabled = !hasPaused;
       }
       table.onSelectionChange(refreshButtons);
 
@@ -292,6 +456,37 @@
         const sel = table.getSelectedRows();
         if (!sel.length) return;
         await bulkUpdateStatus(sel, 'NOT_STARTED', 'restarted');
+      });
+
+      pauseBtn.addEventListener('click', async () => {
+        // Only IN_PROGRESS rows are eligible. Anything else (DONE,
+        // NOT_STARTED, FAILED, already-PAUSED) is silently filtered
+        // out so a mixed selection still does the right thing on the
+        // pausable subset rather than the user having to manually
+        // un-select non-running rows.
+        const sel = table.getSelectedRows().filter(r => r.status === 'IN_PROGRESS');
+        if (!sel.length) {
+          showToast({ type: 'info', message: 'No IN_PROGRESS jobs selected to pause.' });
+          return;
+        }
+        // PAUSE_REQUESTED is the cooperative signal: the trainer
+        // polls it once per training iteration, then saves a
+        // checkpoint and flips status -> PAUSED itself. Effective
+        // within ~1 iteration (~250ms-1s).
+        await bulkUpdateStatus(sel, 'PAUSE_REQUESTED', 'pause requested');
+      });
+
+      resumeBtn.addEventListener('click', async () => {
+        const sel = table.getSelectedRows().filter(r => r.status === 'PAUSED');
+        if (!sel.length) {
+          showToast({ type: 'info', message: 'No PAUSED jobs selected to resume.' });
+          return;
+        }
+        // Resume = put the job back in the trainer's NOT_STARTED
+        // queue. do_job detects the existing learner checkpoint and
+        // skips BC pretrain so the saved actor weights aren't
+        // clobbered.
+        await bulkUpdateStatus(sel, 'NOT_STARTED', 'resume requested');
       });
 
       doneBtn.addEventListener('click', async () => {
@@ -373,14 +568,61 @@
         dialogEl.classList.add('opacity-100', 'translate-y-0', 'scale-100');
         modal.setAttribute('aria-hidden', 'false');
         document.getElementById('f-job-type').focus();
-        // Hydrate the reward-design dropdown each time the modal
-        // opens so newly-authored designs show up without a page
-        // reload. We always force=true here: this is a user-initiated
-        // action, and the request is cheap.
+        // Hydrate the reward-design + experiment-design dropdowns
+        // each time the modal opens so newly-authored designs show
+        // up without a page reload. We always force=true on both:
+        // user-initiated actions, both calls are cheap.
         loadRewardDesignsIntoDropdown().catch((err) => {
           // Non-fatal - the dropdown just shows the default option.
           console.warn('reward_designs hydrate failed:', err);
         });
+        loadExperimentDesignsIntoDropdown().catch((err) => {
+          console.warn('experiment_designs hydrate failed:', err);
+        });
+      }
+
+      // ---- Experiment-design dropdown population ---------------- *
+      //
+      // Sibling of loadRewardDesignsIntoDropdown below. The schema is
+      // generic so the same code shape can populate either dropdown -
+      // we factor that out to share the canonical-seed-sort + archived-
+      // filter logic.
+      async function loadExperimentDesignsIntoDropdown() {
+        const sel = document.getElementById('f-experiment-design');
+        if (!sel) return;
+        let designs = [];
+        try {
+          const res = await fetch('/get_experiment_designs?force=true');
+          if (res.ok) {
+            const text = await res.text();
+            if (text && text !== 'NO_CHANGES') {
+              designs = JSON.parse(text) || [];
+            }
+          }
+        } catch (e) {
+          console.warn('experiment_designs fetch failed:', e);
+        }
+        // Wipe everything past the first (placeholder) option.
+        while (sel.options.length > 1) sel.remove(1);
+        const visible = designs
+          .filter((d) => !d.archived)
+          .sort((a, b) => {
+            // Canonical "Default" pinned to the top (matches the seed
+            // _id from rl_agent/experiment_designs.DEFAULT_DESIGN_ID).
+            // Then alphabetical by name.
+            const aCan = String(a._id || '') === 'experiment-default';
+            const bCan = String(b._id || '') === 'experiment-default';
+            if (aCan && !bCan) return -1;
+            if (bCan && !aCan) return 1;
+            return String(a.name || '').localeCompare(String(b.name || ''));
+          });
+        for (const d of visible) {
+          const opt = document.createElement('option');
+          opt.value = String(d._id);
+          const ver = d.version ? ` (v${d.version})` : '';
+          opt.textContent = (d.name || '(unnamed)') + ver;
+          sel.appendChild(opt);
+        }
       }
 
       // ---- Reward-design dropdown population --------------------
@@ -486,6 +728,20 @@
             payload.reward_design_name = label.replace(/\s*\(v\d+\)\s*$/, '');
           }
         }
+        // Same handling for experiment_design_id. Only TRAIN jobs
+        // actually use it (do_job's EVAL/DEMO branches ignore the
+        // field), but we stamp on every job_type for the same
+        // "intent preservation if restarted as TRAIN" rationale as
+        // reward_design.
+        const edId = String(fd.get('experiment_design_id') || '');
+        if (edId) {
+          payload.experiment_design_id = edId;
+          const sel2 = document.getElementById('f-experiment-design');
+          if (sel2 && sel2.selectedIndex >= 0) {
+            const label = sel2.options[sel2.selectedIndex].textContent || '';
+            payload.experiment_design_name = label.replace(/\s*\(v\d+\)\s*$/, '');
+          }
+        }
         try {
           const res = await fetch('/add_job', {
             method: 'POST',
@@ -506,6 +762,215 @@
       const freshness = new RoboracerUI.FreshnessIndicator(
         document.querySelector('[data-role="freshness-dot"]'),
         document.querySelector('[data-role="freshness-text"]'));
+
+      /* ---------- Reward / Experiment design view modals -----
+       *
+       * Click the design name in either column to view its
+       * content. Reward design modal shows the Python source as a
+       * <pre>; experiment design modal shows the field overrides
+       * as a 3-column table. Both fetch from their respective
+       * /get_*_designs collections (cached with a 30s TTL).
+       *
+       * Per-job models snapshot the reward design's code on the
+       * model document but JOBS only carry the id+name. So this
+       * modal explicitly shows "current state" not "snapshot at
+       * pickup" - the header notes that.
+       * ----------------------------------------------------- */
+      const rdModal      = document.querySelector('[data-role="rd-source-modal"]');
+      const rdDialogEl   = rdModal.querySelector('[role="dialog"]');
+      const rdNameEl     = rdModal.querySelector('[data-role="rd-source-name"]');
+      const rdVersionEl  = rdModal.querySelector('[data-role="rd-source-version"]');
+      const rdCodeEl     = rdModal.querySelector('[data-role="rd-source-code"]');
+
+      const edModal      = document.querySelector('[data-role="ed-config-modal"]');
+      const edDialogEl   = edModal.querySelector('[role="dialog"]');
+      const edNameEl     = edModal.querySelector('[data-role="ed-config-name"]');
+      const edVersionEl  = edModal.querySelector('[data-role="ed-config-version"]');
+      const edTableBody  = edModal.querySelector('[data-role="ed-config-table"] tbody');
+      const edLoadingEl  = edModal.querySelector('[data-role="ed-config-loading"]');
+
+      let _rdCache = null, _rdCacheTs = 0;
+      let _edCache = null, _edCacheTs = 0;
+      let _edSchemaCache = null;
+      const _DESIGN_CACHE_TTL_MS = 30000;
+
+      async function _fetchRewardDesignsCached() {
+        if (_rdCache && (Date.now() - _rdCacheTs < _DESIGN_CACHE_TTL_MS)) return _rdCache;
+        const res = await fetch('/get_reward_designs?force=true');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const t = await res.text();
+        if (t === 'NO_CHANGES') return _rdCache || [];
+        _rdCache = JSON.parse(t) || [];
+        _rdCacheTs = Date.now();
+        return _rdCache;
+      }
+      async function _fetchExperimentDesignsCached() {
+        if (_edCache && (Date.now() - _edCacheTs < _DESIGN_CACHE_TTL_MS)) return _edCache;
+        const res = await fetch('/get_experiment_designs?force=true');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const t = await res.text();
+        if (t === 'NO_CHANGES') return _edCache || [];
+        _edCache = JSON.parse(t) || [];
+        _edCacheTs = Date.now();
+        return _edCache;
+      }
+      async function _fetchExpDesignSchemaCached() {
+        if (_edSchemaCache) return _edSchemaCache;
+        const res = await fetch('/get_experiment_design_schema');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const j = await res.json();
+        _edSchemaCache = Array.isArray(j.fields) ? j.fields : [];
+        return _edSchemaCache;
+      }
+
+      function _openModal(modal, dialogEl) {
+        modal.classList.remove('opacity-0', 'pointer-events-none');
+        modal.classList.add('opacity-100', 'pointer-events-auto');
+        dialogEl.classList.remove('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        dialogEl.classList.add('opacity-100', 'translate-y-0', 'scale-100');
+        modal.setAttribute('aria-hidden', 'false');
+      }
+      function _closeModal(modal, dialogEl) {
+        modal.classList.add('opacity-0', 'pointer-events-none');
+        modal.classList.remove('opacity-100', 'pointer-events-auto');
+        dialogEl.classList.add('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        dialogEl.classList.remove('opacity-100', 'translate-y-0', 'scale-100');
+        modal.setAttribute('aria-hidden', 'true');
+      }
+      function _escapeHtml(s) {
+        return String(s == null ? '' : s)
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+
+      async function openRewardDesignModal(designId) {
+        rdNameEl.textContent = '(loading…)';
+        rdVersionEl.textContent = '';
+        rdVersionEl.hidden = true;
+        rdCodeEl.textContent = 'Loading…';
+        _openModal(rdModal, rdDialogEl);
+        const tok = (openRewardDesignModal._tok = (openRewardDesignModal._tok || 0) + 1);
+        try {
+          const designs = await _fetchRewardDesignsCached();
+          if (tok !== openRewardDesignModal._tok) return;
+          const d = designs.find((x) => String(x._id) === String(designId));
+          if (!d) {
+            rdCodeEl.textContent = 'Design not found (id: ' + String(designId) + ')';
+            return;
+          }
+          rdNameEl.textContent = d.name || '(unnamed)';
+          if (d.version) {
+            rdVersionEl.textContent = 'v' + Number(d.version);
+            rdVersionEl.hidden = false;
+          }
+          rdCodeEl.textContent = d.code || '(no source recorded)';
+        } catch (err) {
+          if (tok !== openRewardDesignModal._tok) return;
+          rdCodeEl.textContent = 'Failed to load: ' + String(err.message || err);
+        }
+      }
+
+      async function openExperimentDesignModal(designId) {
+        edNameEl.textContent = '(loading…)';
+        edVersionEl.textContent = '';
+        edVersionEl.hidden = true;
+        edTableBody.innerHTML = '';
+        edLoadingEl.hidden = false;
+        edLoadingEl.textContent = 'Loading…';
+        _openModal(edModal, edDialogEl);
+        const tok = (openExperimentDesignModal._tok = (openExperimentDesignModal._tok || 0) + 1);
+        try {
+          const [designs, schema] = await Promise.all([
+            _fetchExperimentDesignsCached(),
+            _fetchExpDesignSchemaCached(),
+          ]);
+          if (tok !== openExperimentDesignModal._tok) return;
+          const d = designs.find((x) => String(x._id) === String(designId));
+          if (!d) {
+            edLoadingEl.textContent = 'Design not found (id: ' + String(designId) + ')';
+            return;
+          }
+          edNameEl.textContent = d.name || '(unnamed)';
+          if (d.version) {
+            edVersionEl.textContent = 'v' + Number(d.version);
+            edVersionEl.hidden = false;
+          }
+          const rows = [];
+          let lastSection = '';
+          for (const entry of schema) {
+            if (entry.kind === 'section') {
+              if (entry.label && entry.label !== lastSection) {
+                lastSection = entry.label;
+                rows.push(
+                  '<tr><td colspan="3" class="pt-3 pb-1 text-[10px] uppercase ' +
+                  'tracking-wide font-semibold text-slate-500 dark:text-slate-400">' +
+                  _escapeHtml(entry.label) + '</td></tr>');
+              }
+              continue;
+            }
+            if (entry.kind !== 'field') continue;
+            const name = entry.name;
+            const val = d[name];
+            const has = val !== undefined && val !== null;
+            const def = String(entry.default == null ? '' : entry.default);
+            const ov = has
+              ? '<span class="text-indigo-600 dark:text-indigo-300 font-semibold">' +
+                _escapeHtml(String(val)) + '</span>'
+              : '<span class="text-slate-400 dark:text-slate-500">—</span>';
+            rows.push(
+              '<tr class="border-t border-slate-100 dark:border-slate-800">' +
+              '<td class="py-1.5 pr-3 text-slate-700 dark:text-slate-300">' + _escapeHtml(name) + '</td>' +
+              '<td class="py-1.5 pr-3">' + ov + '</td>' +
+              '<td class="py-1.5 text-slate-500 dark:text-slate-400">' + _escapeHtml(def) + '</td>' +
+              '</tr>');
+          }
+          if (tok !== openExperimentDesignModal._tok) return;
+          edTableBody.innerHTML = rows.join('');
+          edLoadingEl.hidden = true;
+        } catch (err) {
+          if (tok !== openExperimentDesignModal._tok) return;
+          edLoadingEl.textContent = 'Failed to load: ' + String(err.message || err);
+        }
+      }
+
+      // Modal close wiring.
+      rdModal.addEventListener('click', (ev) => {
+        if (ev.target === rdModal) _closeModal(rdModal, rdDialogEl);
+      });
+      edModal.addEventListener('click', (ev) => {
+        if (ev.target === edModal) _closeModal(edModal, edDialogEl);
+      });
+      rdModal.querySelectorAll('[data-action="close-rd-source-modal"]').forEach((b) =>
+        b.addEventListener('click', () => _closeModal(rdModal, rdDialogEl)));
+      edModal.querySelectorAll('[data-action="close-ed-config-modal"]').forEach((b) =>
+        b.addEventListener('click', () => _closeModal(edModal, edDialogEl)));
+      document.addEventListener('keydown', (ev) => {
+        if (ev.key !== 'Escape') return;
+        if (rdModal.classList.contains('opacity-100')) _closeModal(rdModal, rdDialogEl);
+        if (edModal.classList.contains('opacity-100')) _closeModal(edModal, edDialogEl);
+      });
+
+      // Delegated click handler for the row-cell design buttons.
+      // Uses capture-phase to beat Tabulator's row-selection click.
+      document.addEventListener('click', (ev) => {
+        if (!ev.target || !ev.target.closest) return;
+        const rdBtn = ev.target.closest('[data-action="view-reward-design"]');
+        if (rdBtn) {
+          ev.stopPropagation();
+          ev.preventDefault();
+          const id = rdBtn.dataset.rewardDesignId;
+          if (id) openRewardDesignModal(id);
+          return;
+        }
+        const edBtn = ev.target.closest('[data-action="view-experiment-design"]');
+        if (edBtn) {
+          ev.stopPropagation();
+          ev.preventDefault();
+          const id = edBtn.dataset.experimentDesignId;
+          if (id) openExperimentDesignModal(id);
+          return;
+        }
+      }, true);
 
       /* ---------- Polling ----------------------------------- */
 

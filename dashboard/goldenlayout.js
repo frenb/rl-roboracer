@@ -1,25 +1,129 @@
+// TB inside sim-controller runs with
+//   --logdir_spec=current:/tmp/active,compare:/tmp/tb_compare
+// (see docker-compose.yml + compose/scale.yml). That gives TB TWO
+// "experiments":
+//   * current/<job_id>/...   <- the live job (trainer writes here)
+//   * compare/<job_id>/...   <- on-demand symlinks populated by the
+//                              /set_tb_compare_jobs endpoint when
+//                              the operator clicks Compare in the
+//                              Models tab.
+//
+// We surface those as TWO TensorBoard tabs that each see only their
+// own experiment, by pre-loading a TB regexInput that scopes the
+// run-list to one prefix:
+//
+//   "Tensorboard (current)" - regexInput=^current/   - dedicated to
+//      the one currently-training job. Live, never has more than one
+//      job because move_all_jobs_data() archives any prior job out
+//      of /tmp/active/ at TRAIN pickup.
+//
+//   "Tensorboard (Analysis)" - regexInput=^compare/  - reserved for
+//      cross-job comparisons. Re-pointed on every Models -> Analysis
+//      click to ^compare/(<id1>|<id2>|...) so it shows only the
+//      selected jobs.
+//
+// Why TB's regex (vs e.g. two TB processes): one TB process, one
+// port, one container layer. Sidebar UX is identical to a "filtered"
+// view that the user could also produce by hand. Survives reloads.
+const TB_BASE = 'http://localhost:6006';
+const TB_CURRENT_FILTER = '^current/';
+const TB_COMPARE_FILTER_ALL = '^compare/';
+function tbUrl(runFilter) {
+  // Pin to the Time Series plugin (#timeseries) instead of the
+  // legacy Scalars plugin (#scalars). Time Series is TB's modern
+  // unified dashboard and what the operator wants as the default
+  // landing - it has the better small-multiple layout for comparing
+  // multiple runs and supports the same regex filter we want to use.
+  //
+  // Param name is `runFilter` (not `regexInput`). TensorBoard
+  // renamed it in
+  //   https://github.com/tensorflow/tensorboard/pull/5412
+  // when adding URL persistence for Time Series; the legacy
+  // `regexInput` survives only on the Scalars plugin and is silently
+  // ignored by Time Series. Using the wrong name was why the filter
+  // appeared to not apply on 2026-05-25 - the URL had
+  // ?regexInput=^current/ but the run-list sidebar showed every
+  // experiment.
+  //
+  // The _t cache-bust is what makes setting src to the same logical
+  // URL twice (e.g. re-clicking Compare with the same selection)
+  // still force an iframe reload. Browsers no-op a same-src write.
+  return TB_BASE + '/?runFilter=' + encodeURIComponent(runFilter)
+    + '&_t=' + Date.now() + '#timeseries';
+}
+
 var config = {
+    // Original two-column shape:
+    //   * Left column: a single STACK with both Tensorboard tabs
+    //     (current + Analysis). The left half of the screen is
+    //     dedicated to TB; clicking a tab header switches which
+    //     view fills it.
+    //   * Right column: sim controller logs (top) + a stack of all
+    //     the data / config tabs (Jobs, Models, Leaderboard,
+    //     Analysis, Reward Design, Experiment Design).
+    //
+    // Why a stack on the left (not two separately-mounted iframes
+    // stacked vertically): the user wants to see one TB view at a
+    // time using the full left half, with tab navigation between
+    // them. The Analysis iframe still gets re-pointed by the
+    // open-analysis handler whether it's the active tab or not -
+    // when the user manually switches to the "Tensorboard (Analysis)"
+    // tab after a Compare click, the filtered view is already
+    // there.
     content: [
         {
           type: 'row',
           content: [
             {
-                type: 'column',
-                content: [
-                   
+              type: 'column',
+              content: [
+                {
+                  type: 'stack',
+                  // Default-active = current view, since live-
+                  // monitoring is the primary use case when the
+                  // dashboard opens.
+                  activeItemIndex: 0,
+                  content: [
+                    // Tensorboard (current): pinned to TB's "current"
+                    // experiment (= /tmp/active feed). NEVER re-pointed
+                    // by the open-analysis handler, so live-training
+                    // monitoring survives any Compare click. The
+                    // regexInput=^current/ ensures the run sidebar
+                    // ONLY ever lists the currently-training job's
+                    // runs (eval / train / learner/train / metrics) -
+                    // never any archived "compare/..." entries even
+                    // if the operator has just clicked Compare.
                     {
                       type: 'component',
-                      title: 'Tensorboard',
+                      title: 'Tensorboard (current)',
                       componentName: 'iframeComponent',
-                      // id: 'tensorboard' registers this iframe in
-                      // iframeRegistry so the open-analysis message
-                      // handler below can re-point it at a regex-
-                      // filtered URL when the user clicks "Compare in
-                      // Analysis" on N selected models. Without an id
-                      // the handler can't find the iframe.
-                      componentState: { src: 'http://localhost:6006', id: 'tensorboard' }
+                      componentState: {
+                        src: tbUrl(TB_CURRENT_FILTER),
+                        id: 'tensorboard'
+                      }
                     },
-                ]
+                    // Tensorboard (Analysis): id='tensorboard_compare'
+                    // (kept for back-compat with the postMessage
+                    // routing in goldenlayout's message handler).
+                    // The open-analysis handler re-points THIS
+                    // iframe's src to '?regexInput=^compare/(id|id|...)
+                    // &#scalars' on Compare. Switch to this tab to
+                    // see the filtered runs after clicking Analysis
+                    // on the Models tab. Default filter is '^compare/'
+                    // so before any Compare click it shows the bucket
+                    // contents (usually empty after a fresh boot).
+                    {
+                      type: 'component',
+                      title: 'Tensorboard (Analysis)',
+                      componentName: 'iframeComponent',
+                      componentState: {
+                        src: tbUrl(TB_COMPARE_FILTER_ALL),
+                        id: 'tensorboard_compare'
+                      }
+                    }
+                  ]
+                }
+              ]
             },
             {
               type: 'column',
@@ -85,10 +189,21 @@ var config = {
                       // a dashboard image rebuild that registers the
                       // matching /reward_designs route.
                       componentState: { src: "http://localhost/reward_designs.html", id: 'reward_designs' }
-                    }]
+                    },
+                    {
+                      type: 'component',
+                      title: 'Experiment Design',
+                      componentName: 'iframeComponent',
+                      // Schema-driven form for training-loop config:
+                      // BC pretrain, replay capacity, optimizer LRs,
+                      // network sizes, demo-protected buffer knobs.
+                      // Same ".html" rationale as siblings above.
+                      componentState: { src: "http://localhost/experiment_designs.html", id: 'experiment_designs' }
+                    }
+                  ]
                 }
               ]
-              }
+            }
           ]
         }
     ]
@@ -339,7 +454,13 @@ window.addEventListener('message', function (ev) {
   // with real job ids (potentially fewer than modelIds.length - see
   // the warning toast on the Models tab).
   try {
-    const tbTarget = iframeRegistry['tensorboard'];
+    // Target the dedicated 'tensorboard_compare' pane so the training
+    // pane (id='tensorboard') stays pinned at the unfiltered view.
+    // Fall back to the legacy 'tensorboard' iframe for back-compat if
+    // the layout config doesn't define the compare pane (e.g., a user
+    // running with an older saved goldenlayout state).
+    const tbTarget = iframeRegistry['tensorboard_compare']
+      || iframeRegistry['tensorboard'];
     const rawJobIds = Array.isArray(data.jobIds) ? data.jobIds : [];
 
     // Fire-and-await the server-side symlink shuffle. We deliberately
@@ -369,9 +490,16 @@ window.addEventListener('message', function (ev) {
       // currently-training job whose data lives in /tmp/active, or
       // a model whose archive was manually deleted), the server's
       // `linked` list will be a subset of what the dashboard sent.
-      // We still want to include the originally-requested ids in
-      // the regex so currently-active jobs show up under the
-      // "current/" prefix - they just don't need a symlink.
+      //
+      // We anchor the regex to ^compare/ so the Analysis tab ONLY
+      // shows the symlink-bucket entries for the selected jobs, not
+      // accidentally any currently-training job that happens to
+      // share a job_id substring. The currently-training job is
+      // visible in the dedicated "Tensorboard (current)" tab; mixing
+      // it into the Analysis tab would smear two distinct UI
+      // intentions together. (If a selected model is the
+      // currently-training one, the symlink endpoint reports it in
+      // `missing` and we log a hint below.)
       const escaped = rawJobIds
         .map(String)
         .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
@@ -379,20 +507,29 @@ window.addEventListener('message', function (ev) {
 
       let nextSrc;
       if (escaped.length) {
-        const pattern = escaped.join('|');
-        // Cache-bust on _t so re-clicking with the same selection
-        // still forces an iframe reload (otherwise setting src to
-        // an identical URL is a no-op in most browsers).
-        nextSrc =
-          'http://localhost:6006/?regexInput=' +
-          encodeURIComponent(pattern) +
-          '&_t=' + Date.now() +
-          '#scalars';
+        // ^(current|compare)/(id1|id2|...) - matches any run path
+        // starting with either experiment prefix whose next path
+        // segment contains one of the requested job_ids. We allow
+        // BOTH prefixes so the Analysis tab mirrors the dashboard's
+        // Analysis tab semantics: a selected model whose parent job
+        // is still IN_PROGRESS shows up too (it lives under
+        // current/<id>/ not compare/<id>/ because there's no
+        // archive yet). Currently-training jobs that AREN'T in the
+        // selection don't match because their id isn't in the
+        // alternation.
+        //
+        // We don't anchor the closing slash because TB's run paths
+        // nest further (eval / learner/train / metrics / train) and
+        // we want ALL of those subruns shown.
+        const pattern = '^(current|compare)/(' + escaped.join('|') + ')';
+        nextSrc = tbUrl(pattern);
       } else {
         // No filterable job_ids in this selection (every model was
-        // legacy/pre-feature). Drop the filter so the user at least
-        // sees the unfiltered view rather than a broken regex.
-        nextSrc = 'http://localhost:6006/?_t=' + Date.now() + '#scalars';
+        // legacy/pre-feature). Drop down to the default "^compare/"
+        // filter so the user at least sees the bucket contents
+        // (likely empty for this selection) rather than the full
+        // current+compare experiment soup.
+        nextSrc = tbUrl(TB_COMPARE_FILTER_ALL);
       }
       tbTarget.iframe.src = nextSrc;
 

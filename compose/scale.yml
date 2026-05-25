@@ -112,6 +112,26 @@ services:
   # the base command also wrote. Without `tee`, the file stays stale
   # and the dashboard log view shows old data.
   sim-controller:
+    # IMPORTANT: keep this in sync with docker-compose.yml's
+    # sim-controller command for the tensorboard part. When this
+    # overlay is active, Compose merges the two files and `command:`
+    # is a *replace* (not a merge), so anything the base file does
+    # that we don't echo here is lost - including the --logdir_spec
+    # that wires up the on-demand /tmp/tb_compare bucket.
+    #
+    # The dashboard's "Compare in Analysis" feature relies on the
+    # `compare:` experiment being part of TB's logdir_spec; if this
+    # command falls back to a plain --logdir /tmp/active the Compare
+    # tab silently shows only the currently-training job. (We hit
+    # that bug 2026-05-24; see also docker-compose.yml::sim-controller
+    # for the long-form explanation.)
+    #
+    # Difference from the base command: the base one ALSO chains
+    # `python robotaxi.py` after TB; this overlay intentionally drops
+    # that so the container just hosts TB and the user invokes the
+    # trainer via `docker compose ... exec sim-controller ...` with
+    # an explicit --num-envs flag.
     command: >-
-      sh -c "tensorboard --bind_all --logdir /tmp/active
-      --reload_multifile true 2>&1 | tee /tmp/tb.log"
+      sh -c "tensorboard --bind_all
+      --logdir_spec=current:/tmp/active,compare:/tmp/tb_compare
+      --reload_multifile true --reload_interval 5 2>&1 | tee /tmp/tb.log"
