@@ -29,15 +29,40 @@ class RpcClient:
     CALL_SERVICE_TIMEOUT_S = 10.0
 
     def __init__(self, addr):
-        # gRPC keepalive: ping the peer every 10s when the channel is
-        # idle, expect an ack within 5s. Without these options the
-        # client-side HTTP/2 channel can go half-open during a long
-        # no-traffic window (e.g., the 5000-step BC pretraining
-        # before initial_collect_actor.run()) - and once that
-        # happens, the next Publish silently blocks forever on a TCP
-        # write to a dead pipe. Keepalive forces the channel to
-        # detect the dead peer within ~15s and transparently reconnect
-        # before the next RPC.
+        # gRPC keepalive: ping the peer every 600s (10 min) when the
+        # channel is idle, expect an ack within 30s. Without these
+        # options the client-side HTTP/2 channel can go half-open
+        # during a long no-traffic window (e.g., the 5000-step BC
+        # pretraining before initial_collect_actor.run()) - and once
+        # that happens, the next Publish silently blocks forever on a
+        # TCP write to a dead pipe. Keepalive forces the channel to
+        # detect the dead peer within ~10-11 min and transparently
+        # reconnect before the next RPC.
+        #
+        # WHY 600s AND NOT SOMETHING TIGHTER (e.g., 60s)?
+        # ----------------------------------------------
+        # The interval MUST cooperate with the SERVER's
+        # `grpc.http2.min_ping_interval_without_data_ms`. gRPC's
+        # DEFAULT server min is 300_000 (5 min) and the server counts
+        # any earlier ping as a "strike"; after `max_ping_strikes`
+        # (default 2) the server kills the channel with GOAWAY
+        # ENHANCE_YOUR_CALM / "too many pings". We hit this on
+        # 2026-05-25 with the previous 10_000ms value - every actor
+        # Subscribe stream died after ~30s.
+        #
+        # We DO ship a server-side fix (see
+        # docker/ros_server/ROS/src/virtual_endpoint/src/virtual_endpoint/virtual.py
+        # which sets server min=10s + max_strikes=0), but that
+        # requires a ros-server IMAGE REBUILD to take effect since
+        # virtual.py is COPYed into the image at build time, not
+        # bind-mounted. Until the operator rebuilds, the server is
+        # still at the gRPC default of 5 min.
+        #
+        # 600s is safely above the default 5 min minimum (so works
+        # with stock ros-server) AND works with our tuned server
+        # (which tolerates any rate). When the rebuild lands, this
+        # value can be tightened to 60s for faster dead-channel
+        # detection - but doing so is optional.
         #
         # permit_without_calls=1: send keepalive pings even when no
         # RPCs are in flight (default would only ping with active
@@ -50,8 +75,8 @@ class RpcClient:
         # peer would close the channel after 2 pings, defeating the
         # purpose.
         options = [
-            ('grpc.keepalive_time_ms', 10000),
-            ('grpc.keepalive_timeout_ms', 5000),
+            ('grpc.keepalive_time_ms', 600000),
+            ('grpc.keepalive_timeout_ms', 30000),
             ('grpc.keepalive_permit_without_calls', 1),
             ('grpc.http2.max_pings_without_data', 0),
         ]
