@@ -1046,3 +1046,135 @@ html.dark .CodeMirror .cm-operator      { color: rgb(203 213 225); }
 html.dark .rd-editor-host {
   border-color: rgb(51 65 85);
 }
+
+/* ---------------------------------------------------------------- *
+ * Experiment Design tab (schema-driven form)
+ *
+ * Re-uses .rd-shell, .rd-card, .rd-list-item etc. from the Reward
+ * Design tab. The form-specific bits below are:
+ *   .ed-section        - collapsible details/summary group
+ *   .ed-field-row      - one schema field's label + input row
+ *   .ed-field-label    - field name + paper-ref chip + type hint
+ *   .ed-paper-chip     - small arxiv:NNNN.NNNNN pill
+ * ---------------------------------------------------------------- */
+
+.ed-section {
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.5rem;
+  background-color: white;
+}
+html.dark .ed-section {
+  border-color: rgb(51 65 85);
+  background-color: rgb(15 23 42);
+}
+
+.ed-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  list-style: none;                    /* hide native disclosure triangle */
+  user-select: none;
+}
+.ed-section-header::-webkit-details-marker {
+  display: none;
+}
+.ed-section-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgb(71 85 105);               /* slate-600 */
+}
+html.dark .ed-section-title {
+  color: rgb(203 213 225);             /* slate-300 */
+}
+.ed-section-chev {
+  display: inline-block;
+  font-size: 1rem;
+  color: rgb(148 163 184);
+  transform: rotate(90deg);
+  transition: transform 0.15s ease-out;
+}
+details:not([open]) > .ed-section-header .ed-section-chev {
+  transform: rotate(0deg);
+}
+
+.ed-section-body {
+  padding: 0.25rem 0.75rem 0.75rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px solid rgb(226 232 240);
+}
+html.dark .ed-section-body {
+  border-top-color: rgb(30 41 59);
+}
+
+.ed-field-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 320px) 1fr;
+  gap: 0.75rem;
+  align-items: center;
+}
+@media (max-width: 720px) {
+  .ed-field-row {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+  }
+}
+
+.ed-field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  cursor: help;                        /* signals the hover tooltip */
+}
+.ed-field-name {
+  font-size: 0.75rem;
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+  color: rgb(15 23 42);
+  word-break: break-all;
+}
+html.dark .ed-field-name {
+  color: rgb(241 245 249);
+}
+.ed-field-meta {
+  font-size: 0.65rem;
+  color: rgb(100 116 139);
+  font-family: 'JetBrains Mono', monospace;
+}
+html.dark .ed-field-meta {
+  color: rgb(148 163 184);
+}
+.ed-paper-chip {
+  display: inline-block;
+  margin-left: 0.25rem;
+  padding: 0 0.35rem;
+  border-radius: 0.25rem;
+  font-size: 0.6rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 500;
+  background-color: rgb(238 242 255);  /* indigo-50 */
+  color: rgb(67 56 202);               /* indigo-700 */
+  vertical-align: middle;
+}
+html.dark .ed-paper-chip {
+  background-color: rgba(99, 102, 241, 0.20);
+  color: rgb(199 210 254);
+}
+
+.ed-field-input {
+  /* Inputs already get input-base styling from Tailwind; this hook is
+   * just here for future style tweaks specific to schema-driven inputs
+   * (e.g., a leading "default:" affix). Kept empty to avoid coupling
+   * to specific Tailwind utility class names. */
+}
+
+.ed-field-input-wrap {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}

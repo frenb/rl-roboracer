@@ -29,6 +29,12 @@ export const createServer = (config): express.Application => {
   // human-friendly name + Python source code + version. Selected
   // per-job via the New-Job form's "Reward design" dropdown.
   var rewardDesignsChanged = true;
+  // Sibling of rewardDesignsChanged: the experiment_designs collection
+  // holds user-authored training-loop configs (SAC hyperparameters,
+  // BC pretrain steps, replay capacity, network sizes). Selected per-
+  // job via the New-Job form's "Experiment design" dropdown alongside
+  // the existing Reward design dropdown.
+  var experimentDesignsChanged = true;
   var MongoClient = mongoDB.MongoClient;
   var url = process.env.MONGODB_URL || "mongodb://root:example@mongo:27017";
   var dbo;
@@ -81,6 +87,13 @@ export const createServer = (config): express.Application => {
     rewardDesignsChangeStream.on('change', (change) => {
       console.log('Change detected (reward_designs):', change);
       rewardDesignsChanged=true;
+    });
+
+    const experimentDesigns = dbo.collection("experiment_designs");
+    const experimentDesignsChangeStream = experimentDesigns.watch();
+    experimentDesignsChangeStream.on('change', (change) => {
+      console.log('Change detected (experiment_designs):', change);
+      experimentDesignsChanged=true;
     });
 
   });
@@ -213,6 +226,16 @@ export const createServer = (config): express.Application => {
   // .html file directly to side-step any rebuild-lag on this route.
   app.get('/reward_designs', (req, res) => {
     const f: string = path.join(__dirname, '/../reward_designs.html');
+    res.sendFile(f);
+  });
+
+  // Experiment Design tab. Sibling of /reward_designs above. The
+  // iframe in goldenlayout requests the .html file directly so the
+  // tab works the moment the static file lands on disk, without
+  // needing the dashboard container to be rebuilt to pick up this
+  // route.
+  app.get('/experiment_designs', (req, res) => {
+    const f: string = path.join(__dirname, '/../experiment_designs.html');
     res.sendFile(f);
   });
   app.get('/get_models', (req,res) => {
@@ -445,6 +468,201 @@ export const createServer = (config): express.Application => {
       });
   });
 
+  // ---- experiment_designs CRUD + schema -------------------------- *
+  //
+  // The structured-config sibling of reward_designs. Each document is
+  // a named bundle of training-loop hyperparameters (SAC learning
+  // rates, BC pretrain steps, replay capacity, network sizes, ...).
+  // Selected per-job via the New-Job form's "Experiment design"
+  // dropdown alongside the existing Reward design dropdown. The
+  // trainer (rl_agent/robotaxi.py::do_job) overlays the doc's fields
+  // onto main()'s kwargs via experiment_designs.apply_to_main_kwargs.
+  //
+  // Endpoint set parallels /get_reward_designs etc. + adds a schema
+  // discovery endpoint at /get_experiment_design_schema so the
+  // dashboard form (and the future research-planning agent) can
+  // introspect what fields exist without reading trainer source.
+  //
+  // IMPORTANT: the EXPERIMENT_DESIGN_SCHEMA constant below MUST be
+  // kept in sync with rl_agent/experiment_designs.py::SCHEMA. The
+  // Python module is the source of truth for what the trainer
+  // honours; this JS mirror exists because the dashboard container
+  // doesn't run Python and we don't want a docker-exec dependency.
+  // When you add a field there, add it here too.
+  const EXPERIMENT_DESIGN_SCHEMA: any[] = [
+    { kind: 'section', label: 'Reinforcement learning loop' },
+    { kind: 'field', name: 'num_iterations',              type: 'int',   default: 50000,  min: 1,      max: 10000000, doc: 'Total SAC training iterations after BC pretrain. Each iter = one collect step + one gradient update.', paper_ref: null, kwarg: 'num_iterations_val' },
+    { kind: 'field', name: 'initial_collect_steps',       type: 'int',   default: 500,    min: 0,      max: 100000,   doc: 'Pre-RL random-policy collection steps to seed the replay buffer with diverse experience.',         paper_ref: null, kwarg: 'initial_collect_steps_val' },
+    { kind: 'field', name: 'collect_steps_per_iteration', type: 'int',   default: 1,      min: 1,      max: 100,      doc: 'Env steps collected per training iteration (between gradient updates).',                            paper_ref: null, kwarg: 'collect_steps_per_iteration_val' },
+    { kind: 'field', name: 'eval_interval',               type: 'int',   default: 5000,   min: 1,      max: 100000,   doc: 'How often (in train_steps) to pause training and run an in-loop eval cycle.',                       paper_ref: null, kwarg: 'eval_interval_val' },
+    { kind: 'field', name: 'num_eval_episodes',           type: 'int',   default: 10,     min: 1,      max: 500,      doc: 'Eval episodes per in-loop eval cycle.',                                                              paper_ref: null, kwarg: 'num_eval_episodes_val' },
+    { kind: 'field', name: 'log_interval',                type: 'int',   default: 5000,   min: 100,    max: 100000,   doc: 'TensorBoard scalar write cadence (in train_steps).',                                                 paper_ref: null, kwarg: 'log_interval_val' },
+    { kind: 'field', name: 'policy_save_interval',        type: 'int',   default: 50,     min: 1,      max: 10000,    doc: 'How often (in train_steps) the PolicySavedModelTrigger writes a checkpoint.',                       paper_ref: null, kwarg: 'policy_save_interval_val' },
+    { kind: 'section', label: 'Behavior cloning pretrain' },
+    { kind: 'field', name: 'bc_pretrain_steps',           type: 'int',   default: 5000,   min: 0,      max: 1000000,  doc: 'BC gradient steps run on the actor before SAC starts. Set 0 to skip and run pure SAC.',             paper_ref: null, kwarg: 'bc_pretrain_steps_val' },
+    { kind: 'section', label: 'Replay buffer' },
+    { kind: 'field', name: 'replay_buffer_capacity',      type: 'int',   default: 75000,  min: 1000,   max: 10000000, doc: 'Max samples held in the online Reverb table (RL collection). Over capacity, FIFO eviction.',         paper_ref: null,       kwarg: 'replay_buffer_capacity_val' },
+    { kind: 'field', name: 'batch_size',                  type: 'int',   default: 256,    min: 1,      max: 16384,    doc: 'SAC gradient-update batch size, also used by the BC pretrain phase.',                                paper_ref: null,       kwarg: 'batch_size_val' },
+    { kind: 'field', name: 'demo_prefill_count',          type: 'int',   default: 50000,  min: 0,      max: 10000000, doc: 'Expert-demonstration steps to prefill the buffer with at job start. 0 = no demo prefill (pure SAC from random init).', paper_ref: '1707.08817', kwarg: 'demo_prefill_count_val' },
+    { kind: 'field', name: 'demo_min_keep',               type: 'int',   default: 0,      min: 0,      max: 10000000, doc: 'Demo samples PROTECTED from FIFO eviction. 0 = single-table mode (demos pre-fill the online buffer and get FIFO-displaced by RL data over time, current default). >0 = two-table mode where this many demo samples live in a separate Reverb table that never gets new writes, so they stay forever.', paper_ref: '1704.03732', kwarg: 'demo_min_keep_val' },
+    { kind: 'field', name: 'demo_sample_ratio',           type: 'float', default: 0.0,    min: 0.0,    max: 1.0,      doc: 'Two-table mode only (demo_min_keep > 0): fraction of each training batch drawn from the demo table vs the online table. 0.0 = pure online sampling (demos kept but never sampled). 1.0 = pure demo sampling. Typical 0.1-0.3 for DDPGfD-style demo over-sampling.', paper_ref: '1707.08817', kwarg: 'demo_sample_ratio_val' },
+    { kind: 'section', label: 'SAC optimizer' },
+    { kind: 'field', name: 'actor_learning_rate',         type: 'float', default: 3e-5,   min: 1e-7,   max: 1.0,      doc: 'Adam learning rate for the actor network.',                                                          paper_ref: null, kwarg: 'actor_learning_rate_val' },
+    { kind: 'field', name: 'critic_learning_rate',        type: 'float', default: 3e-5,   min: 1e-7,   max: 1.0,      doc: 'Adam learning rate for the critic (twin Q-network).',                                                paper_ref: null, kwarg: 'critic_learning_rate_val' },
+    { kind: 'field', name: 'alpha_learning_rate',         type: 'float', default: 3e-5,   min: 1e-7,   max: 1.0,      doc: 'Adam learning rate for the temperature parameter (entropy coefficient).',                            paper_ref: null, kwarg: 'alpha_learning_rate_val' },
+    { kind: 'field', name: 'target_update_tau',           type: 'float', default: 0.005,  min: 0.0,    max: 1.0,      doc: 'Polyak averaging factor for the target critic. Typical SAC value 0.005.',                            paper_ref: null, kwarg: 'target_update_tau_val' },
+    { kind: 'field', name: 'target_update_period',        type: 'int',   default: 1,      min: 1,      max: 10000,    doc: 'Update the target critic every N train_steps (Polyak averaging cadence).',                          paper_ref: null, kwarg: 'target_update_period_val' },
+    { kind: 'field', name: 'gamma',                       type: 'float', default: 0.99,   min: 0.0,    max: 1.0,      doc: 'Discount factor for future rewards in the Bellman target.',                                          paper_ref: null, kwarg: 'gamma_val' },
+    { kind: 'field', name: 'reward_scale_factor',         type: 'float', default: 1.0,    min: 0.0,    max: 1000.0,   doc: 'Multiplier applied to environment rewards before they enter the Q-target. SAC is sensitive to this.', paper_ref: null, kwarg: 'reward_scale_factor_val' },
+    { kind: 'section', label: 'Network architecture' },
+    { kind: 'field', name: 'actor_fc_layers_x',           type: 'int',   default: 512,    min: 1,      max: 8192,     doc: 'First-layer width of the actor MLP.',                                                                paper_ref: null, kwarg: 'actor_fc_layer_params_x' },
+    { kind: 'field', name: 'actor_fc_layers_y',           type: 'int',   default: 512,    min: 1,      max: 8192,     doc: 'Second-layer width of the actor MLP.',                                                               paper_ref: null, kwarg: 'actor_fc_layer_params_y' },
+    { kind: 'field', name: 'critic_fc_layers_x',          type: 'int',   default: 512,    min: 1,      max: 8192,     doc: 'First-layer width of the critic joint MLP (after obs+action concatenation).',                       paper_ref: null, kwarg: 'critic_joint_fc_layer_params_x' },
+    { kind: 'field', name: 'critic_fc_layers_y',          type: 'int',   default: 512,    min: 1,      max: 8192,     doc: 'Second-layer width of the critic joint MLP.',                                                        paper_ref: null, kwarg: 'critic_joint_fc_layer_params_y' },
+  ];
+
+  app.get('/get_experiment_design_schema', (req, res) => {
+    // Self-describing schema for the experiment_designs collection.
+    // Returns the field list in form-render order. Consumers (the
+    // New-Job form, the future Experiment Design tab UI, the
+    // research-planning agent) use this to build inputs / validate
+    // submissions without reading trainer source.
+    res.json({ fields: EXPERIMENT_DESIGN_SCHEMA });
+  });
+
+  app.get('/get_experiment_designs', (req, res) => {
+    if (needsUpdate(req, experimentDesignsChanged)) {
+      experimentDesignsChanged = false;
+      dbo.collection("experiment_designs").find({}).toArray(function(err, result) {
+        if (err) throw err;
+        console.log(`${result.length} experiment_designs retrieved`);
+        res.json(result);
+      });
+      return;
+    }
+    console.log(`No experiment_designs retrieved`);
+    res.status(200).send('NO_CHANGES');
+  });
+
+  app.post('/add_experiment_design', (req, res) => {
+    // Body shape: { name, description, ...field_overrides, author?, archived? }
+    // Field overrides are spread directly onto the doc so any key
+    // present in the schema becomes a top-level field on the
+    // experiment_designs document. We do NOT validate field types
+    // here - the trainer's apply_to_main_kwargs() does soft
+    // coercion + clamping with logging, which is the right place
+    // for that since it has access to the SCHEMA min/max.
+    const body = req.body || {};
+    if (!body.name) {
+      res.status(400).json({ error: "name is required" });
+      return;
+    }
+    const now = new Date();
+    const doc: any = {
+      name: String(body.name),
+      description: String(body.description || ''),
+      author: String(body.author || ''),
+      archived: !!body.archived,
+      version: 1,
+      created_at: now,
+      updated_at: now,
+    };
+    // Allow callers to omit the field-override block entirely (= all
+    // nulls = trainer defaults), or pass them as a flat top-level
+    // spread. We accept both shapes for ergonomics.
+    const fieldOverrides = body.fields && typeof body.fields === 'object'
+      ? body.fields
+      : body;
+    for (const entry of EXPERIMENT_DESIGN_SCHEMA) {
+      if (entry.kind !== 'field') continue;
+      const name = entry.name;
+      if (fieldOverrides[name] !== undefined) doc[name] = fieldOverrides[name];
+    }
+    dbo.collection("experiment_designs").insertOne(doc, function(err, result) {
+      if (err) {
+        console.error('add_experiment_design failed:', err);
+        res.status(500).json({ error: String(err.message || err) });
+        return;
+      }
+      console.log('experiment_design inserted', result.insertedId);
+      res.json(result);
+    });
+  });
+
+  app.post('/update_experiment_design', (req, res) => {
+    // Body shape: { _id, name?, description?, archived?, ...field_overrides }
+    // Edits bump version + updated_at. Same accept-either-shape on
+    // field overrides as /add_experiment_design.
+    const body = req.body || {};
+    if (!body._id) {
+      res.status(400).json({ error: "_id is required" });
+      return;
+    }
+    let idFilter;
+    try {
+      idFilter = { "_id": ObjectID(body._id) };
+    } catch (e) {
+      idFilter = { "_id": String(body._id) };  // canonical "Default" uses string _id
+    }
+    const update: any = {
+      "$set": { updated_at: new Date() },
+      "$inc": { version: 1 },
+    };
+    if (body.name        !== undefined) update["$set"].name        = String(body.name);
+    if (body.description !== undefined) update["$set"].description = String(body.description);
+    if (body.archived    !== undefined) update["$set"].archived    = !!body.archived;
+    const fieldOverrides = body.fields && typeof body.fields === 'object'
+      ? body.fields
+      : body;
+    for (const entry of EXPERIMENT_DESIGN_SCHEMA) {
+      if (entry.kind !== 'field') continue;
+      const name = entry.name;
+      if (fieldOverrides[name] !== undefined) update["$set"][name] = fieldOverrides[name];
+    }
+    dbo.collection("experiment_designs").updateOne(
+      idFilter, update, { upsert: false },
+      function(err, result) {
+        if (err) {
+          console.error('update_experiment_design failed:', err);
+          res.status(500).json({ error: String(err.message || err) });
+          return;
+        }
+        console.log('experiment_design updated', body._id, result);
+        res.json(result);
+      });
+  });
+
+  app.post('/archive_experiment_design', (req, res) => {
+    // Soft-delete. Same rationale as /archive_reward_design: archived
+    // designs stay in the collection for backward-compat with model
+    // documents that reference them; they just don't appear in the
+    // New-job dropdown by default.
+    const body = req.body || {};
+    if (!body._id) {
+      res.status(400).json({ error: "_id is required" });
+      return;
+    }
+    let idFilter;
+    try {
+      idFilter = { "_id": ObjectID(body._id) };
+    } catch (e) {
+      idFilter = { "_id": String(body._id) };
+    }
+    dbo.collection("experiment_designs").updateOne(
+      idFilter,
+      { "$set": { archived: true, updated_at: new Date() } },
+      { upsert: false },
+      function(err, result) {
+        if (err) {
+          console.error('archive_experiment_design failed:', err);
+          res.status(500).json({ error: String(err.message || err) });
+          return;
+        }
+        console.log('experiment_design archived', body._id);
+        res.json(result);
+      });
+  });
+
   app.post('/lint_reward_design', (req, res) => {
     // Cheap structural lint of a candidate reward-design code string.
     //
@@ -595,9 +813,26 @@ export const createServer = (config): express.Application => {
     const linked: string[] = [];
     const missing: string[] = [];
     for (const id of jobIds) {
-      const src = path.join(ARCHIVED_ROOT, id);
-      const dst = path.join(COMPARE_ROOT, id);
-      if (!fs.existsSync(src)) {
+      // move_all_jobs_data() in rl_agent/robotaxi.py archives
+      // /tmp/active/<id>/{eval,train,learner,metrics}/ AS
+      // /tmp/jobsdata/<id>/<id>/{eval,train,learner,metrics}/ -
+      // doubly nested - because the function groups everything for
+      // a job under its own subdir of /tmp/jobsdata/<id>/.
+      //
+      // We want TB run names to look like "compare/<id>/eval"
+      // (parallel to "current/<id>/eval" for the live job), not
+      // "compare/<id>/<id>/eval". So if the inner doubled-up dir
+      // exists, symlink to THAT; otherwise fall back to the outer
+      // dir (covers any legacy single-nested archives + a future
+      // refactor of move_all_jobs_data that flattens the layout).
+      const outerSrc = path.join(ARCHIVED_ROOT, id);
+      const innerSrc = path.join(outerSrc, id);
+      let src: string;
+      if (fs.existsSync(innerSrc) && fs.statSync(innerSrc).isDirectory()) {
+        src = innerSrc;
+      } else if (fs.existsSync(outerSrc) && fs.statSync(outerSrc).isDirectory()) {
+        src = outerSrc;
+      } else {
         // Could be a model whose job was never archived (e.g., the
         // currently-training job - its data is in /tmp/active, not
         // /tmp/jobsdata, so the regex filter on the TB iframe URL
@@ -605,6 +840,7 @@ export const createServer = (config): express.Application => {
         missing.push(id);
         continue;
       }
+      const dst = path.join(COMPARE_ROOT, id);
       try {
         // Type 'dir' makes Windows happy if this ever runs on a
         // Windows container; on Linux it's ignored. fs.symlinkSync

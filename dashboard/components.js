@@ -11,6 +11,10 @@
  *   formatters.jobTypeBadge(type)         -> badge HTML for TRAIN/DEMO/EVAL/BC_...
  *   formatters.modelTypeBadge(type)       -> badge HTML for SacAgent/GreedyPolicy/RandomPyPolicy
  *   formatters.robotTypeBadge(type)       -> badge HTML for robotaxi/niryo
+ *   formatters.rewardDesignBadge(row)     -> design name + vN pill, clickable
+ *                                            (data-action="view-reward-design")
+ *   formatters.experimentDesignBadge(row) -> design name + vN pill, clickable
+ *                                            (data-action="view-experiment-design")
  *   formatters.percentBar(fraction0to1)   -> progress bar HTML
  *   formatters.relativeTime(date)         -> "5m ago", "2 days ago"
  *   formatters.shortId(objectId)          -> last 8 chars of ObjectId, mono-spaced
@@ -48,7 +52,7 @@
   // DevTools console which build of components.js is actually running.
   // Bump alongside the ?v=... query string in jobs/models/leaderboard/
   // analysis HTML when shipping a change to this file.
-  console.log('[RoboracerUI] components.js v20260516-selectcol loaded');
+  console.log('[RoboracerUI] components.js v20260524-pauseresume loaded');
 
   /* ---------- formatters ---------------------------------------- */
 
@@ -71,11 +75,20 @@
 
   const formatters = {
     statusBadge(status) {
+      // PAUSE_REQUESTED is the transient "trainer hasn't yet seen the
+      // pause request" state: the dashboard has written the flag but
+      // the training loop's next poll (sub-second) hasn't observed
+      // it yet. Show it as amber so the operator sees an action is
+      // pending. PAUSED is the steady state once the trainer has
+      // checkpointed and stopped - also amber, distinct from
+      // DONE/success and NOT_STARTED/neutral.
       const tone = ({
         NOT_STARTED: 'neutral',
         IN_PROGRESS: 'info',
         DONE: 'success',
         FAILED: 'danger',
+        PAUSED: 'warning',
+        PAUSE_REQUESTED: 'warning',
       })[status] || 'neutral';
       return badge(tone, status || '?');
     },
@@ -101,6 +114,123 @@
 
     robotTypeBadge(type) {
       return badge('neutral', type || '?');
+    },
+
+    // Reward / Experiment design "name + vN pill + click-to-view"
+    // cells. Used by the Jobs and Models tabs to render a clickable
+    // design indicator on each row. The button carries data-action
+    // (so the consuming tab can delegate clicks to its own modal)
+    // plus all the metadata the modal needs to fetch the underlying
+    // doc.
+    //
+    // Three rendering cases per cell:
+    //   1. name present + design_id present  -> clickable button
+    //   2. name present + design_id missing  -> plain truncated text
+    //      (defensive: shouldn't happen in practice since both fields
+    //      are stamped together at job submit / model save).
+    //   3. name absent                       -> em-dash with tooltip
+    //      ("trained without a <kind> design").
+    //
+    // The version pill is rendered only when `version` is set (model
+    // documents stamp it; job documents do not, so jobs render
+    // without).
+    //
+    // Helper used internally by both wrappers below.
+    _designBadgeHtml(opts) {
+      const kind = opts.kind;                  // 'reward' | 'experiment'
+      const name = opts.name;
+      const designId = opts.designId;
+      const version = opts.version;
+      const isCanonical = opts.isCanonical;
+      const action = opts.action;              // data-action value
+      const idAttrName = opts.idAttrName;      // data-* attribute name
+
+      if (!name) {
+        const emptyTip = kind === 'reward'
+          ? 'No reward design selected - uses the course\'s built-in reward formula.'
+          : 'No experiment design selected - uses the trainer\'s built-in hyperparameter defaults.';
+        return '<span class="text-slate-500 dark:text-slate-400 whitespace-nowrap" ' +
+               'title="' + emptyTip.replace(/"/g, '&quot;') + '">—</span>';
+      }
+
+      // HTML-escape only the user-controlled bits (name + designId);
+      // everything else is constant text from this file.
+      const safeName = String(name).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      })[c]);
+
+      const verPill = version
+        ? ' <span class="inline-flex items-center px-1.5 py-0 rounded text-[10px] ' +
+          'font-semibold text-slate-500 dark:text-slate-400 ' +
+          'bg-slate-100 dark:bg-slate-800 font-mono whitespace-nowrap">v' + Number(version) + '</span>'
+        : '';
+      const canonicalTag = isCanonical
+        ? ' <span class="inline-flex items-center px-1.5 py-0 rounded text-[10px] ' +
+          'font-semibold text-indigo-700 dark:text-indigo-300 ' +
+          'bg-indigo-100 dark:bg-indigo-900/40 whitespace-nowrap" ' +
+          'title="Canonical seeded ' + kind + ' design.">baseline</span>'
+        : '';
+      const safeDesignId = String(designId == null ? '' : designId).replace(/"/g, '&quot;');
+      if (!designId) {
+        // Case 2: name without id - non-clickable.
+        return '<span class="inline-flex items-center gap-1 whitespace-nowrap">' +
+               '<span class="truncate max-w-[14ch]">' + safeName + '</span>' +
+               verPill + canonicalTag + '</span>';
+      }
+      // model-id-aware: when the row has a `_id` (i.e. it's a Model
+      // row, not a Job row), we emit data-model-id too so the Models
+      // tab's click handler can prefer the model-scoped fetch (which
+      // returns the snapshot code from add_model time, not the
+      // possibly-edited current state). The Jobs tab's handler ignores
+      // data-model-id and uses data-<kind>-design-id alone.
+      const modelIdAttr = opts.modelId
+        ? ' data-model-id="' + String(opts.modelId).replace(/"/g, '&quot;') + '"'
+        : '';
+      return '<span class="inline-flex items-center gap-1 whitespace-nowrap">' +
+        '<button type="button" data-action="' + action + '" ' +
+                'data-' + idAttrName + '="' + safeDesignId + '"' + modelIdAttr + ' ' +
+                'class="truncate max-w-[14ch] text-left ' +
+                       'text-slate-200 hover:text-indigo-300 ' +
+                       'dark:text-slate-200 dark:hover:text-indigo-300 ' +
+                       'underline decoration-dotted decoration-slate-500 ' +
+                       'hover:decoration-indigo-400 underline-offset-2 ' +
+                       'cursor-pointer bg-transparent border-0 p-0 m-0 ' +
+                       'whitespace-nowrap" ' +
+                'title="Click to view this ' + kind + ' design\'s ' +
+                       (kind === 'reward' ? 'source code.' : 'field overrides.') + '">' +
+                       safeName + '</button>' +
+        verPill + canonicalTag + '</span>';
+    },
+
+    rewardDesignBadge(row) {
+      // Models stamp reward_design_id + name + version + code;
+      // jobs stamp id + name only. Both shapes flow through here.
+      // Row's `_id` is forwarded as opts.modelId when present so the
+      // emitted button carries data-model-id for the Models-tab
+      // handler's model-scoped fetch path.
+      return formatters._designBadgeHtml({
+        kind: 'reward',
+        name: row.reward_design_name,
+        designId: row.reward_design_id,
+        version: row.reward_design_version,           // undefined on jobs
+        isCanonical: String(row.reward_design_id || '') === 'passthrough-course-default',
+        action: 'view-reward-design',
+        idAttrName: 'reward-design-id',
+        modelId: row._id || row.id,                   // present on Model rows; absent on Job rows
+      });
+    },
+
+    experimentDesignBadge(row) {
+      return formatters._designBadgeHtml({
+        kind: 'experiment',
+        name: row.experiment_design_name,
+        designId: row.experiment_design_id,
+        version: row.experiment_design_version,       // undefined on jobs
+        isCanonical: String(row.experiment_design_id || '') === 'experiment-default',
+        action: 'view-experiment-design',
+        idAttrName: 'experiment-design-id',
+        modelId: row._id || row.id,
+      });
     },
 
     percentBar(fraction) {
