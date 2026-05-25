@@ -22,7 +22,22 @@ import reverb
 from tf_agents.replay_buffers import reverb_replay_buffer
 from tf_agents.replay_buffers import reverb_utils
 
-TABLE_NAME = 'uniform_table'
+# Online table: receives writes from both the actor.Actor collect step
+# AND, in single-table mode (demo_capacity == 0), the offline expert-
+# demo prefill at job start. FIFO-evicts when full.
+ONLINE_TABLE_NAME = 'uniform_table'
+# Demo table: only used in two-table mode (demo_capacity > 0). Receives
+# writes ONLY from the offline expert-demo prefill at job start. After
+# prefill the table is never written to again, so its FIFO eviction
+# never fires - the demos stay forever. Sampled alongside the online
+# table during training via tf.data.Dataset.sample_from_datasets with
+# the user-configured demo_sample_ratio.
+DEMO_TABLE_NAME = 'demo_table'
+
+# Back-compat alias. Older imports of TABLE_NAME from this module
+# (none in-tree, but defensive) continue to resolve to the online
+# table's name.
+TABLE_NAME = ONLINE_TABLE_NAME
 
 
 class _FanoutTrajectoryObserver:
@@ -78,77 +93,169 @@ class _FanoutTrajectoryObserver:
 
 
 def make_local_replay(collect_data_spec, capacity, sample_batch_size,
-                      sequence_length=2, stride_length=1, num_envs=1):
+                      sequence_length=2, stride_length=1, num_envs=1,
+                      demo_capacity=0, demo_sample_ratio=0.0):
     """Build an in-process Reverb table + server + buffer + dataset + observer(s).
+
+    Two operating modes, selected by ``demo_capacity``:
+
+    **Single-table mode** (``demo_capacity == 0``, default for back-compat):
+      One Reverb table receives both the offline expert-demo prefill
+      and the runtime RL collect writes. Demos eventually FIFO-evict
+      as collection accumulates. Equivalent to the trainer's behavior
+      before the demo-protected buffer feature.
+
+    **Two-table mode** (``demo_capacity > 0``):
+      Two Reverb tables live in the same server:
+        - online table: ``capacity`` items, FIFO eviction. Only the
+          actor.Actor collect step writes to it.
+        - demo table:   ``demo_capacity`` items, FIFO eviction. Only
+          the offline expert-demo prefill writes to it. Since it gets
+          no writes after init, its FIFO never fires - the demos stay
+          forever.
+      The training ``dataset`` returned is a tf.data
+      ``sample_from_datasets`` mix of (demo_ds, online_ds) weighted by
+      ``demo_sample_ratio`` so each training batch draws
+      ``demo_sample_ratio``% of its rows from demos.
 
     Args:
       collect_data_spec: from ``tf_agent.collect_data_spec``. This is the
         per-actor (unbatched) spec; the same spec is used regardless of
         ``num_envs`` because per-env writers each see unbatched rows.
-      capacity: max number of items in the table (``replay_buffer_capacity``).
+      capacity: max items in the online table.
       sample_batch_size: training batch size for ``as_dataset``.
       sequence_length: number of consecutive timesteps per item. SAC uses 2.
       stride_length: how far to advance between trajectory writes.
-      num_envs: number of parallel collection envs feeding this buffer.
-        Default 1 (single-actor). When >1, the collect observer returned
-        is a fan-out that splits batched trajectories across N independent
-        per-env writers (see ``_FanoutTrajectoryObserver`` above).
+      num_envs: number of parallel collection envs feeding the online
+        table. Default 1 (single-actor). When >1, the collect observer
+        returned is a fan-out that splits batched trajectories across
+        N independent per-env writers (see ``_FanoutTrajectoryObserver``
+        above).
+      demo_capacity: 0 to keep single-table mode. >0 to add a protected
+        demo table of this capacity. The demo table never FIFO-evicts
+        in practice because no writes hit it after init.
+      demo_sample_ratio: in two-table mode, fraction of each batch
+        sampled from the demo table (the rest comes from the online
+        table). Ignored in single-table mode. Clamped to [0, 1].
 
     Returns:
-      ``(server, replay, dataset, collect_observer, expert_observer)``.
+      ``(server, replay, dataset, collect_observer, expert_observer,
+         demo_replay, demo_observer)``.
 
+      - ``replay`` is the online ReverbReplayBuffer (always present).
+      - ``dataset`` is the training-side prefetched dataset; in two-
+        table mode it's the mixed dataset, in single-table mode it's
+        the plain online dataset.
       - ``collect_observer`` is what gets passed to ``actor.Actor`` in
-        the ``observers=[...]`` list. It accepts whatever shape the env
-        produces (unbatched for single-env, batched for parallel-env).
-      - ``expert_observer`` always accepts a plain unbatched
-        ``Trajectory`` and is what offline-data ingestion loops should
-        use (e.g. loading recorded expert demonstrations directly into
-        the table without going through any env).
-
-      In single-env mode the two observers are the same instance. In
-      multi-env mode they are distinct writers into the same shared
-      table - so closing both via ``server.stop()`` is sufficient, but
-      callers that explicitly close should close both.
+        the ``observers=[...]`` list - always writes to the online
+        table.
+      - ``expert_observer`` is for ingesting offline expert demos into
+        the ONLINE table (used in single-table mode).
+      - ``demo_replay`` / ``demo_observer`` are None in single-table
+        mode. In two-table mode they wrap the demo table. The trainer
+        feeds expert demos through ``demo_observer`` when it exists,
+        falling back to ``expert_observer`` (single-table mode).
 
       Caller is responsible for keeping ``server`` alive until training
       ends.
     """
-    table = reverb.Table(
-        TABLE_NAME,
+    online_table = reverb.Table(
+        ONLINE_TABLE_NAME,
         max_size=capacity,
         sampler=reverb.selectors.Uniform(),
         remover=reverb.selectors.Fifo(),
         rate_limiter=reverb.rate_limiters.MinSize(1))
 
-    server = reverb.Server([table])
+    tables = [online_table]
 
-    replay = reverb_replay_buffer.ReverbReplayBuffer(
+    # Two-table mode: add the demo-protected table to the same server.
+    # The Reverb server can host multiple tables; the trainer
+    # references them by name from independent ReverbReplayBuffer
+    # wrappers below.
+    if demo_capacity > 0:
+        demo_table = reverb.Table(
+            DEMO_TABLE_NAME,
+            max_size=demo_capacity,
+            sampler=reverb.selectors.Uniform(),
+            # FIFO eviction is set the same way as the online table so
+            # demo_capacity acts as a hard upper bound even in pathological
+            # cases (e.g., the trainer mistakenly writes to the demo table
+            # after prefill). In normal use no writes hit the demo table
+            # after init, so FIFO never fires.
+            remover=reverb.selectors.Fifo(),
+            rate_limiter=reverb.rate_limiters.MinSize(1))
+        tables.append(demo_table)
+
+    server = reverb.Server(tables)
+
+    online_replay = reverb_replay_buffer.ReverbReplayBuffer(
         collect_data_spec,
         sequence_length=sequence_length,
-        table_name=TABLE_NAME,
+        table_name=ONLINE_TABLE_NAME,
         local_server=server)
 
-    dataset = replay.as_dataset(
+    online_dataset = online_replay.as_dataset(
         sample_batch_size=sample_batch_size,
         num_steps=sequence_length).prefetch(50)
 
+    # Build the demo half + the mixed dataset only when two-table mode
+    # is active. Avoids paying any of the tf.data composition cost in
+    # the back-compat path.
+    demo_replay = None
+    demo_observer = None
+    if demo_capacity > 0:
+        demo_replay = reverb_replay_buffer.ReverbReplayBuffer(
+            collect_data_spec,
+            sequence_length=sequence_length,
+            table_name=DEMO_TABLE_NAME,
+            local_server=server)
+        demo_dataset = demo_replay.as_dataset(
+            sample_batch_size=sample_batch_size,
+            num_steps=sequence_length).prefetch(50)
+
+        # Clamp ratio defensively. 0.0 -> only the online stream
+        # contributes (demo table kept but unused, useful for ablations);
+        # 1.0 -> only demos. Mixing weight=0 datasets can confuse
+        # sample_from_datasets in some TF versions, so we collapse to a
+        # single-stream dataset at the edges.
+        r = max(0.0, min(1.0, float(demo_sample_ratio)))
+        if r <= 0.0:
+            dataset = online_dataset
+        elif r >= 1.0:
+            dataset = demo_dataset
+        else:
+            dataset = tf.data.Dataset.sample_from_datasets(
+                [demo_dataset, online_dataset],
+                weights=[r, 1.0 - r],
+                seed=None,
+                stop_on_empty_dataset=False)
+
+        demo_observer = reverb_utils.ReverbAddTrajectoryObserver(
+            demo_replay.py_client,
+            DEMO_TABLE_NAME,
+            sequence_length=sequence_length,
+            stride_length=stride_length)
+    else:
+        dataset = online_dataset
+
     expert_observer = reverb_utils.ReverbAddTrajectoryObserver(
-        replay.py_client,
-        TABLE_NAME,
+        online_replay.py_client,
+        ONLINE_TABLE_NAME,
         sequence_length=sequence_length,
         stride_length=stride_length)
 
     if num_envs <= 1:
         # Single-env mode: actor produces unbatched trajectories, so the
         # plain reverb observer can be reused for both collection and
-        # expert-demo ingestion.
+        # (single-table-mode) expert-demo ingestion.
         collect_observer = expert_observer
     else:
         collect_observer = _FanoutTrajectoryObserver(
-            replay.py_client,
-            TABLE_NAME,
+            online_replay.py_client,
+            ONLINE_TABLE_NAME,
             num_envs=num_envs,
             sequence_length=sequence_length,
             stride_length=stride_length)
 
-    return server, replay, dataset, collect_observer, expert_observer
+    return (server, online_replay, dataset, collect_observer,
+            expert_observer, demo_replay, demo_observer)

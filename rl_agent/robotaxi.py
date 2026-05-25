@@ -121,6 +121,63 @@ client = MongoClient('mongo',
 database_name = os.environ['DATABASE_NAME']
 db = client.robotaxi
 
+
+# ---- Git provenance ------------------------------------------------ *
+#
+# Read the trainer's git_sha + git_branch ONCE at module import time
+# and cache. Stamped onto every model document (via add_model) and
+# every job document (via do_job at pickup) so the future multiverse
+# / research-agent tooling can answer "which code version produced
+# this result?" without timestamp inference.
+#
+# We parse .git/HEAD directly (rather than shelling out to `git`)
+# because the sim-controller image isn't guaranteed to have the git
+# binary, and the parse is trivial. /git_meta is the read-only bind
+# mount of the host's ./.git declared in docker-compose.yml.
+#
+# Failures are silently swallowed -> _GIT_SHA / _GIT_BRANCH stay None.
+# Records inserted in that state are flagged "no git provenance" by
+# the dashboard's Models tab; not a fatal condition.
+def _read_git_provenance(git_dir="/git_meta"):
+    try:
+        head_path = os.path.join(git_dir, "HEAD")
+        with open(head_path, "r") as f:
+            head = f.read().strip()
+        if head.startswith("ref: "):
+            ref = head[len("ref: "):]
+            branch = ref.rsplit("/", 1)[-1]
+            ref_path = os.path.join(git_dir, ref)
+            try:
+                with open(ref_path, "r") as f:
+                    sha = f.read().strip()
+            except FileNotFoundError:
+                # Branch ref might live in packed-refs instead of a
+                # loose file (common on freshly-cloned repos). Walk
+                # packed-refs for the matching line.
+                sha = None
+                packed = os.path.join(git_dir, "packed-refs")
+                try:
+                    with open(packed, "r") as f:
+                        for line in f:
+                            if line.startswith("#") or "^" in line:
+                                continue
+                            parts = line.strip().split(" ", 1)
+                            if len(parts) == 2 and parts[1] == ref:
+                                sha = parts[0]
+                                break
+                except FileNotFoundError:
+                    pass
+            return sha, branch
+        # Detached HEAD - raw SHA.
+        return head, None
+    except Exception as e:
+        print(f"_read_git_provenance: failed ({e}); records will carry no git_sha/branch.",
+              flush=True)
+        return None, None
+
+_GIT_SHA, _GIT_BRANCH = _read_git_provenance()
+print(f"trainer git provenance: sha={_GIT_SHA} branch={_GIT_BRANCH}", flush=True)
+
 def get_save_dir_root(policy):
     policy_type = get_policy_type_name(policy)
     saved_models_dir = os.getenv('SAVED_MODELS_DIR')
@@ -408,6 +465,24 @@ def main(
     target_update_period_val=1,
     gamma_val=0.99,
     reward_scale_factor_val=1.0,
+    # ---- BC/RL replay-buffer composition ----------------------------
+    # Controls the demo-prefill + demo-protection feature for BC+RL
+    # research. All three default to back-compat values:
+    #
+    #   demo_prefill_count_val=50000 matches the trainer's previous
+    #     hardcoded prefill cap (the 50k items_added break in the
+    #     for-loop below).
+    #   demo_min_keep_val=0 -> single-table mode: demos go into the
+    #     ONLINE buffer alongside RL data and FIFO-displace over time,
+    #     identical to the trainer's pre-Tier2 behavior.
+    #   demo_sample_ratio_val=0.0 -> irrelevant in single-table mode.
+    #
+    # Set demo_min_keep_val > 0 from an experiment_design to switch on
+    # the protected two-table mode. See replay.py::make_local_replay
+    # for the algorithmic specifics + DQfD/DDPGfD paper references.
+    demo_prefill_count_val=50000,
+    demo_min_keep_val=0,
+    demo_sample_ratio_val=0.0,
     actor_fc_layer_params_x=512,
     actor_fc_layer_params_y=512,
     critic_joint_fc_layer_params_x=512,
@@ -425,6 +500,35 @@ def main(
     # every saved-model record via add_model() below; ``None`` means
     # "use the course's default reward formulas" (existing behavior).
     reward_design=None,
+    # ---- Resume plumbing --------------------------------------------
+    # do_job sets this to True when it detects an existing Learner
+    # checkpoint dir for the job, meaning the job was previously paused
+    # via the dashboard (status PAUSE_REQUESTED -> PAUSED -> resume by
+    # setting NOT_STARTED). On resume:
+    #   * skip BC pretrain (actor weights are restored from the
+    #     checkpoint, no point re-training the actor on demos and
+    #     overwriting that work),
+    #   * still run demo prefill + initial_collect_actor since the
+    #     Reverb buffer wasn't persisted (cheap, ~5-10s),
+    #   * the Learner's tf.train.Checkpoint auto-restores actor +
+    #     critic + target_critic + optimizers + train_step on
+    #     construction, so the training loop picks up from the
+    #     saved train_step without any extra wiring here.
+    # False on fresh starts (existing behaviour bit-identical).
+    is_resume_val=False,
+    # ---- Experiment-design plumbing ---------------------------------
+    # Parallel to reward_design above: the experiment_designs document
+    # the trainer-loop hyperparameters came from. do_job applies the
+    # doc's fields onto our kwargs BEFORE the call here (via
+    # experiment_designs.apply_to_main_kwargs), so by the time main()
+    # is invoked, num_iterations_val / actor_learning_rate_val / etc.
+    # already carry the design's values. We still pass the doc through
+    # so add_model can stamp experiment_design_id + name + version on
+    # every checkpoint, giving each model record full provenance over
+    # which (reward_design, experiment_design) pair produced it. None
+    # means "trainer defaults" - the same effect as the canonical
+    # "Default" seeded design.
+    experiment_design=None,
     # ---- Seed plumbing ----------------------------------------------
     # Optional RNG seed used for the bit-identical validation
     # procedure (see rl_agent/reward_designs.py docs). When set, we
@@ -450,6 +554,12 @@ def main(
     target_update_period = target_update_period_val # @param {type:"number"}
     gamma = gamma_val # @param {type:"number"}
     reward_scale_factor = reward_scale_factor_val # @param {type:"number"}
+    # BC/RL replay composition (Tier 2). Defaults preserve the trainer's
+    # pre-Tier2 single-table behavior; see the kwarg comments in main()'s
+    # signature for the full rationale.
+    demo_prefill_count = int(demo_prefill_count_val) if demo_prefill_count_val is not None else 50000
+    demo_min_keep = int(demo_min_keep_val) if demo_min_keep_val is not None else 0
+    demo_sample_ratio = float(demo_sample_ratio_val) if demo_sample_ratio_val is not None else 0.0
     actor_fc_layer_params = (actor_fc_layer_params_x, actor_fc_layer_params_y)
     critic_joint_fc_layer_params = (critic_joint_fc_layer_params_x, critic_joint_fc_layer_params_y)
     log_interval = log_interval_val # @param {type:"integer"}
@@ -648,15 +758,36 @@ def main(
     # what the offline expert-demo loop below feeds directly. In
     # single-env mode the two are the same instance.
     (reverb_server, reverb_replay, dataset,
-     rb_observer, expert_observer) = make_local_replay(
+     rb_observer, expert_observer,
+     demo_replay, demo_observer) = make_local_replay(
         tf_agent.collect_data_spec,
         capacity=replay_buffer_capacity,
         sample_batch_size=batch_size,
         sequence_length=2,
         stride_length=1,
-        num_envs=num_envs)
+        num_envs=num_envs,
+        # Two-table demo-protected mode kicks in when demo_min_keep > 0.
+        # Otherwise demo_capacity=0 keeps the original single-table
+        # behavior bit-identical (demo prefill into the online table).
+        demo_capacity=demo_min_keep,
+        demo_sample_ratio=demo_sample_ratio)
     table_name = 'uniform_table'
     experience_dataset_fn = lambda: dataset
+    # Log the resolved buffer composition so robotaxi.out makes the
+    # active mode explicit even when the experiment_design overlay
+    # changed defaults silently.
+    if demo_min_keep > 0:
+        print(
+            f"main: replay buffer = TWO TABLES "
+            f"(online cap={replay_buffer_capacity}, "
+            f"demo cap={demo_min_keep}, "
+            f"sample_ratio_from_demo={demo_sample_ratio:.3f}, "
+            f"prefill_count={demo_prefill_count})", flush=True)
+    else:
+        print(
+            f"main: replay buffer = SINGLE TABLE "
+            f"(cap={replay_buffer_capacity}, demo prefill={demo_prefill_count}, "
+            f"demos will FIFO-evict as RL data accumulates)", flush=True)
     
     # Policies
     tf_eval_policy = tf_agent.policy
@@ -676,19 +807,79 @@ def main(
     # and must go through the always-unbatched expert_observer; in
     # multi-env mode rb_observer is a fan-out that would slice into
     # leaves expecting a leading parallel-env batch dim.
-    print("Loading expert demonstrations into Reverb...")
-    items_added = 0
-    for unbatched_traj in trajectory_dataset:
-        expert_observer(unbatched_traj)
-        items_added += 1
-        if items_added >=50000:
-            break
-        if items_added % 10000 == 0:
-            print(f"Batch trajectory {items_added} added")
-            
-    print(f"Successfully loaded {items_added} expert steps into Reverb.")
+    # Pick which observer the prefill loop feeds:
+    #   * Two-table mode (demo_min_keep > 0): demos go into the
+    #     dedicated demo table via demo_observer; the online table
+    #     stays empty so the first RL collect_actor.run() finds it
+    #     ready (Reverb's MinSize(1) rate-limiter is satisfied by the
+    #     initial collect actor, not by prefill).
+    #   * Single-table mode (demo_min_keep == 0): demos go into the
+    #     ONLINE table via expert_observer - identical to the trainer's
+    #     pre-Tier2 path.
+    # The prefill cap is the experiment-design-controlled
+    # demo_prefill_count (previously hardcoded 50000).
+    if demo_observer is not None:
+        prefill_target = demo_observer
+        prefill_label = "DEMO table (protected)"
+    else:
+        prefill_target = expert_observer
+        prefill_label = "ONLINE table (single-table mode)"
+    # Resume optimisation. The demo Reverb tables are populated for
+    # two reasons:
+    #   * to feed BC pretrain (`bc_pretrain_actor_net`), and
+    #   * to feed SAC's training dataset when demo_sample_ratio > 0
+    #     (the DDPGfD-style demo over-sampling mode added in Tier 2).
+    #
+    # On RESUME, BC pretrain is skipped (the saved actor checkpoint
+    # already contains its output). If demo_sample_ratio is also 0
+    # (the default for the seeded canonical experiment design),
+    # demos are never sampled during SAC either - so the prefill is
+    # pure wasted disk I/O, typically 5-30s depending on demo size.
+    # Skip it in that case so resume comes up quickly.
+    #
+    # The opposite case (resume + demo_sample_ratio > 0) DOES need
+    # the prefill to repopulate the demo table that wasn't serialised
+    # at pause (Option A: buffer state is not preserved across the
+    # pause/resume boundary). Without it, SAC's mixed sampler would
+    # underflow at every gradient step.
+    skip_demo_prefill = (
+        is_resume_val
+        and demo_prefill_count > 0
+        and demo_sample_ratio <= 0.0
+    )
+    if skip_demo_prefill:
+        print(
+            f"RESUME: skipping demo prefill into {prefill_label}. "
+            f"BC pretrain is skipped + demo_sample_ratio={demo_sample_ratio} "
+            f"means demos are unused during SAC training; saves the "
+            f"trajectory-load wall time.",
+            flush=True)
+        items_added = 0
+    else:
+        print(f"Loading expert demonstrations into Reverb -> {prefill_label} (cap={demo_prefill_count})...")
+        items_added = 0
+        if demo_prefill_count > 0:
+            for unbatched_traj in trajectory_dataset:
+                prefill_target(unbatched_traj)
+                items_added += 1
+                if items_added >= demo_prefill_count:
+                    break
+                if items_added % 10000 == 0:
+                    print(f"Batch trajectory {items_added} added")
+
+        print(f"Successfully loaded {items_added} expert steps into Reverb ({prefill_label}).")
 
     print_replay_buffer_size(reverb_replay,table_name,replay_buffer_capacity)
+    # If we're in two-table mode, also log the demo table's size so
+    # robotaxi.out shows the actual loaded count for both tables.
+    if demo_replay is not None:
+        try:
+            demo_size = demo_replay.py_client.server_info()[
+                'demo_table'].current_size
+            print(f"Demo table: {demo_size}/{demo_min_keep} samples loaded.",
+                  flush=True)
+        except Exception as e:
+            print(f"Could not read demo table size: {e}", flush=True)
 
     # BC pretrain actor_net on the expert demos before SAC takes over.
     # See collect_training_data.bc_pretrain_actor_net for the full
@@ -698,7 +889,13 @@ def main(
     # never imitates the expert before on-policy data dilutes the
     # buffer. tf_agent.actor_network is the same Python object as
     # actor_net, so weight updates here are visible to SAC.
-    if bc_pretrain_steps_val > 0:
+    #
+    # SKIPPED on resume: the actor weights already came back from the
+    # Learner checkpoint constructed above (tf-agents' Learner auto-
+    # restores from learner_dir/train/checkpoint on init). BC-
+    # pretraining on top would overwrite that with another round of
+    # imitation, wasting the saved policy progress.
+    if bc_pretrain_steps_val > 0 and not is_resume_val:
         collect_training_data.bc_pretrain_actor_net(
             actor_net=actor_net,
             time_step_spec=time_step_spec,
@@ -707,6 +904,20 @@ def main(
             trajectory_dataset=trajectory_dataset,
             training_steps=bc_pretrain_steps_val,
             batch_size=batch_size)
+    elif is_resume_val:
+        # NOTE: we deliberately don't print int(train_step.numpy()) here:
+        # the Learner that restores train_step from the checkpoint isn't
+        # constructed until ~30 lines below this point. Reading the
+        # counter here would always say 0 (its initial value), which
+        # gave the misleading impression on 2026-05-25 that the restore
+        # itself had failed. The restored value is printed after the
+        # Learner constructor instead - search for "RESUME - preserving
+        # restored train_step" below.
+        print(
+            f"main: RESUME - skipping BC pretrain (Learner checkpoint "
+            f"will be auto-restored when the Learner is constructed "
+            f"shortly).",
+            flush=True)
 
     initial_collect_actor = actor.Actor(
         env,
@@ -886,8 +1097,32 @@ def main(
 
     log_eval_metrics(0, metrics)
 
-    # Reset the train step
-    tf_agent.train_step_counter.assign(0)
+    # Reset the train step.
+    #
+    # Pre-resume rationale: after BC pretrain, the agent's
+    # train_step counter may have been incremented by the inner BC
+    # optimizer loop; we zero it out so training metrics in
+    # TensorBoard start cleanly from 0 (= "first SAC training step")
+    # rather than from "first SAC step + N_BC_steps".
+    #
+    # SKIPPED on resume: when we're resuming a paused job, the
+    # Learner's auto-restore (inside its constructor a few dozen
+    # lines above) just loaded the saved train_step value back into
+    # this counter. Resetting to 0 here would silently throw away
+    # that restore - the training loop's first per-iteration write
+    # of `percent_complete = step / num_iterations * 100` would then
+    # report 0%, undoing both the saved progress and the
+    # percent_complete-preservation logic in do_job(). (We observed
+    # this on 2026-05-25: pause at step 800 -> resume -> progress
+    # bar pops back to 0 because the Learner restored to 800, then
+    # this line wiped it back to 0.)
+    if not is_resume_val:
+        tf_agent.train_step_counter.assign(0)
+    else:
+        print(
+            f"main: RESUME - preserving restored train_step="
+            f"{int(train_step.numpy())} (skipping post-BC reset).",
+            flush=True)
 
     # Evaluate the agent's policy once before training.
     avg_return = get_eval_metrics()["AverageReturn"]
@@ -899,20 +1134,68 @@ def main(
     min_write_step = 0
 
     for _ in range(num_iterations):
-        # Cooperative cancellation. The dashboard's Jobs-tab "Set to
-        # done" button writes status=DONE directly to Mongo without
-        # touching the trainer process; without this check the
-        # trainer would keep training against an officially-completed
-        # job for hours. One sub-millisecond Mongo find_one per
-        # iteration is cheap relative to the ~250ms an iteration
-        # takes; we eat that for crisp UX: clicks become effective
-        # within a single iteration (sub-second under normal load).
+        # Cooperative lifecycle check. The dashboard's Jobs-tab Pause
+        # button writes status=PAUSE_REQUESTED; Set-to-done / Delete
+        # write DONE / NOT_STARTED / etc. Without this poll the
+        # trainer would keep training against a now-stale job. One
+        # sub-millisecond Mongo find_one per iteration vs ~250ms env
+        # step, so the check is cheap and the UX is crisp - the
+        # operator's click becomes effective within a single iteration.
         #
-        # We also handle Ctrl-C / SIGTERM via a separate KeyboardInterrupt
+        # Ctrl-C / SIGTERM is handled by a separate KeyboardInterrupt
         # catch in run_jobs_loop, so this branch is specifically for
-        # the "operator changed their mind via the dashboard" case, not
-        # for container shutdown.
-        if _is_job_cancelled(job_id):
+        # dashboard-initiated lifecycle changes.
+        _lifecycle = _get_job_lifecycle_state(job_id)
+        if _lifecycle == 'pause':
+            # Save the Learner checkpoint (actor + critic + target_critic
+            # + optimizers + train_step counter) so a later resume can
+            # pick up from this exact training state. tf-agents'
+            # Learner constructs a Checkpointer at init that auto-
+            # restores from the same dir on the next instantiation,
+            # so we just call .save(...) here and the resume side is
+            # transparent.
+            #
+            # The Reverb replay buffer is NOT serialised here -
+            # restoring it would add another 10+ MB and isn't needed
+            # for policy continuity. On resume, the buffer is empty
+            # and gets re-filled by the demo prefill + initial_collect
+            # path. SAC's actor + critic weights are what matters for
+            # policy quality; an empty buffer just costs ~5 seconds of
+            # warmup on resume.
+            try:
+                _ckpt_step = int(train_step.numpy())
+                agent_learner._checkpointer.save(_ckpt_step)
+            except Exception as _e:  # noqa: BLE001
+                # If the checkpoint write fails (disk full, weird
+                # tf-agents version mismatch on _checkpointer access)
+                # we still want to record the pause attempt rather than
+                # silently keep training. Surface the error on the job
+                # so the operator sees it, then mark PAUSED anyway -
+                # the job won't actually resume from a checkpoint but
+                # at least it's stopped.
+                print(
+                    f"main: pause checkpoint save FAILED for job {job_id}: {_e}. "
+                    f"Marking PAUSED anyway; resume will start from scratch.",
+                    flush=True)
+                try:
+                    update_job(job_id,
+                               f"pause checkpoint save failed: {_e}"[:4000],
+                               "eval_error")
+                except Exception:
+                    pass
+            print(
+                f"main: job {job_id} pause requested; saved Learner "
+                f"checkpoint at train_step={int(train_step.numpy())}, "
+                f"iter={curr_iteration + 1}/{num_iterations}. Marking "
+                f"status=PAUSED; resume by setting status=NOT_STARTED.",
+                flush=True)
+            try:
+                update_job(job_id, int(train_step.numpy()), "paused_at_step")
+                update_job(job_id, "PAUSED", "status")
+            except Exception as _e:  # noqa: BLE001
+                print(f"main: pause status write failed: {_e}", flush=True)
+            break
+        if _lifecycle == 'cancel':
             print(
                 f"main: job {job_id} status changed externally; "
                 f"breaking out of training loop at iter "
@@ -1069,6 +1352,10 @@ def main(
                     # the Analysis tab can group/compare by design.
                     # None when training used the course default.
                     reward_design=reward_design,
+                    # Capture which experiment design (training-loop
+                    # hyperparameters) produced this checkpoint. None
+                    # means the trainer's hardcoded defaults were used.
+                    experiment_design=experiment_design,
                     # Stamp the training job id so the Models tab can
                     # link each row back to its TensorBoard run for
                     # the multi-model TB comparison flow.
@@ -1800,7 +2087,7 @@ def _extract_savedmodel_specs(saved_policy):
 
 def add_model(path, robot_type, model_type, training_iterations, avg_return=None,
               observation_spec=None, action_spec=None, reward_design=None,
-              job_id=None):
+              job_id=None, experiment_design=None):
     """Persist a new saved-model record to MongoDB.
 
     Extended with ``observation_spec`` / ``action_spec`` kwargs so the
@@ -1848,6 +2135,19 @@ def add_model(path, robot_type, model_type, training_iterations, avg_return=None
         rd_code = reward_design.get("code")
     else:
         rd_id = rd_version = rd_name = rd_code = None
+    # Experiment-design provenance. Unlike reward designs we don't
+    # store the full fields dict on the model (it's redundant with
+    # the experiment_designs collection, and re-storing every knob on
+    # every checkpoint bloats /get_models). Storing _id + name +
+    # version is enough to look up the exact design doc the trainer
+    # used, even if the design has since been edited (each save bumps
+    # version, so version=N identifies a frozen field-set).
+    if experiment_design:
+        ed_id = experiment_design.get("_id")
+        ed_version = experiment_design.get("version")
+        ed_name = experiment_design.get("name")
+    else:
+        ed_id = ed_version = ed_name = None
     db.models.insert_one(
         {
             "create_date": iso_date,
@@ -1867,11 +2167,25 @@ def add_model(path, robot_type, model_type, training_iterations, avg_return=None
             "reward_design_version": rd_version,
             "reward_design_name": rd_name,
             "reward_design_code": rd_code,
+            # Experiment-design provenance. _id + name + version is
+            # enough to look up the frozen field-set on the
+            # experiment_designs collection; we deliberately don't
+            # store the field dict here to keep /get_models slim.
+            "experiment_design_id": str(ed_id) if ed_id is not None else None,
+            "experiment_design_version": ed_version,
+            "experiment_design_name": ed_name,
             # Training-job id as a string so the dashboard can map this
             # model back to its TensorBoard run directory for the
             # multi-model comparison flow. None for legacy callers; the
             # dashboard treats those as "not TB-filterable".
             "job_id": str(job_id) if job_id is not None else None,
+            # Trainer git provenance (see _read_git_provenance above).
+            # Lets the future multiverse tooling identify which code
+            # version produced this checkpoint. Both fields may be
+            # None on a misconfigured container (missing /git_meta
+            # mount) - dashboard renders that as "no git provenance".
+            "git_sha": _GIT_SHA,
+            "git_branch": _GIT_BRANCH,
         })
 
 def save_results_to_db(path, results):
@@ -1984,7 +2298,30 @@ def get_jobs():
 def do_job(job, num_envs=1):
     print(job["job_type"])
     update_job(job["_id"], "IN_PROGRESS")
-    update_job(job["_id"], 0, "percent_complete")
+    # Resume gating for the percent_complete reset. On a fresh pickup
+    # we zero out percent_complete so a job re-queued after a code edit
+    # doesn't carry stale progress from the previous run. On a RESUME
+    # (paused_at_step is set in Mongo by main()'s pause break path),
+    # we deliberately preserve the prior percent so the Jobs-tab
+    # progress bar picks up where the operator left it - resetting to
+    # 0% during the brief seconds before the training loop's first
+    # update would make the UI look like the resume re-ran from scratch.
+    _is_paused_resume = job.get("paused_at_step") is not None
+    if not _is_paused_resume:
+        update_job(job["_id"], 0, "percent_complete")
+    else:
+        print(
+            f"do_job: preserving percent_complete on resume of "
+            f"{job['_id']} (paused_at_step={job.get('paused_at_step')}); "
+            f"first training-loop update will refresh it.",
+            flush=True)
+    # Stamp trainer git provenance on the job at pickup so a job
+    # re-picked-up after a code edit (the user marks it NOT_STARTED
+    # again, or the trainer crash-restarts an IN_PROGRESS job) carries
+    # the SHA of whichever trainer process is actually running it now,
+    # not the SHA from when the job was originally queued.
+    update_job(job["_id"], _GIT_SHA, "trainer_git_sha")
+    update_job(job["_id"], _GIT_BRANCH, "trainer_git_branch")
     # Wall-clock duration tracking. We stamp `started_at` here (right
     # after the IN_PROGRESS transition) and `ended_at` immediately
     # before the DONE transition at the bottom of this function. Stored
@@ -1994,7 +2331,15 @@ def do_job(job, num_envs=1):
     # render a Duration column that ticks live for IN_PROGRESS jobs.
     # Jobs that crash mid-run leave `started_at` set but no `ended_at`
     # - the dashboard recognises that case and shows '—' for duration.
-    update_job(job["_id"], datetime.datetime.now(datetime.timezone.utc), "started_at")
+    # Resume note: when a job is paused-then-resumed it returns here
+    # with started_at already populated from the original run. Keep
+    # the original started_at so the Jobs-tab duration shows total
+    # elapsed wall-clock since the job was first picked up (which is
+    # the most natural meaning for the operator). A future "active
+    # training time" metric could subtract the PAUSED windows, but
+    # for now we keep it simple.
+    if not job.get("started_at"):
+        update_job(job["_id"], datetime.datetime.now(datetime.timezone.utc), "started_at")
     #Move all data for jobs with _id = job["_id"] from /tmp to /jobsdata
     job_type = job["job_type"]
     
@@ -2011,7 +2356,64 @@ def do_job(job, num_envs=1):
         collect_training_data.train_agent(root_dir, int(job["training_steps"]))
         print("after collect_expert_demos")
     elif job_type == "TRAIN":
-        move_all_jobs_data(job["_id"]) 
+        # Resume detection MUST run before move_all_jobs_data, because
+        # move_all_jobs_data's trailing self-cleanup (move_data) would
+        # archive THIS job's eval/metrics/train/learner subdirs out of
+        # /tmp/active/<id>/ otherwise - taking the Learner checkpoint
+        # we're about to read with them.
+        #
+        # The authoritative resume signal is the job document's
+        # paused_at_step (written by main()'s pause break path). If
+        # it's set, we know the trainer previously saved a Learner
+        # checkpoint for this job; _restore_paused_active_dir handles
+        # putting it back where main() expects it, regardless of
+        # whether the archive sits at /tmp/jobsdata/<id>/ (singly
+        # nested - pause-and-resume cycle alone) or
+        # /tmp/jobsdata/<id>/<id>/ (doubly nested - a different job
+        # ran between pause and resume).
+        is_resume = False
+        if job.get("paused_at_step") is not None:
+            is_resume = _restore_paused_active_dir(str(job["_id"]))
+            if not is_resume:
+                print(
+                    f"do_job: job {job['_id']} has paused_at_step="
+                    f"{job.get('paused_at_step')} but no Learner "
+                    f"checkpoint could be restored. Treating as fresh "
+                    f"start; BC pretrain will run and the previous "
+                    f"actor weights are lost.",
+                    flush=True)
+                # Stale paused_at_step with no archive on disk is
+                # confusing (the job will appear "resumable" in the UI
+                # but every resume attempt will silently fall through
+                # to a fresh start). Clear it so future Restart
+                # operations behave as the operator expects.
+                try:
+                    db.jobs.update_one(
+                        {"_id": job["_id"]},
+                        {"$unset": {"paused_at_step": ""}})
+                except Exception as _e:  # noqa: BLE001
+                    print(f"do_job: failed to clear stale paused_at_step: {_e}",
+                          flush=True)
+            else:
+                # Consume the resume signal. Once we've successfully
+                # restored the active dir, paused_at_step has done its
+                # job; leaving it set means a later DONE -> Restart
+                # cycle (user clicks Restart on a long-completed job)
+                # would silently retry resume against an archive that
+                # may have been GC'd. We clear it here and let the
+                # next pause cycle write a fresh value.
+                try:
+                    db.jobs.update_one(
+                        {"_id": job["_id"]},
+                        {"$unset": {"paused_at_step": ""}})
+                except Exception as _e:  # noqa: BLE001
+                    print(f"do_job: failed to clear paused_at_step on resume: {_e}",
+                          flush=True)
+        # Skip the self-cleanup tail of move_all_jobs_data on resume
+        # so the data we just restored isn't immediately archived back
+        # out. The outer-loop pass that archives OTHER jobs' dirs out
+        # of /tmp/active/ still runs - we always want to clean those.
+        move_all_jobs_data(job["_id"], skip_current_cleanup=is_resume)
         num_iterations=job["num_iterations"] if job["num_iterations"] != "" else 50000
         pass_through_actions=job["pass_through_actions"] if job["pass_through_actions"] != "" else False,
         actor_fc_layer_params_x=512 if job.get("nn_size_x") == None else int(job.get("nn_size_x"))
@@ -2063,11 +2465,45 @@ def do_job(job, num_envs=1):
             seed = int(seed) if seed not in (None, "") else None
         except (TypeError, ValueError):
             seed = None
+
+        # Resolve the optional experiment_design_id off the job doc.
+        # Same pattern as reward_design_id resolution above:
+        #   - try ObjectId match first (dashboard-created designs),
+        #   - fall back to string match (seeded canonical "Default"
+        #     which uses experiment_designs.DEFAULT_DESIGN_ID).
+        # Missing / unknown / archived all fall through to "trainer
+        # defaults" without aborting the job.
+        experiment_design_doc = None
+        ed_id_raw = job.get("experiment_design_id")
+        if ed_id_raw:
+            from bson import ObjectId
+            try:
+                experiment_design_doc = db.experiment_designs.find_one(
+                    {"_id": ObjectId(str(ed_id_raw))})
+            except Exception:
+                experiment_design_doc = None
+            if experiment_design_doc is None:
+                experiment_design_doc = db.experiment_designs.find_one(
+                    {"_id": str(ed_id_raw)})
+            if experiment_design_doc and experiment_design_doc.get("archived"):
+                print(
+                    f"do_job: experiment design {ed_id_raw} is archived; "
+                    "using it for this job anyway. Unarchive on the "
+                    "Experiment design tab if you want it visible in the "
+                    "new-job dropdown.", flush=True)
+            if experiment_design_doc is None:
+                print(
+                    f"do_job: experiment_design_id {ed_id_raw!r} not found in "
+                    "experiment_designs collection; falling back to trainer "
+                    "hardcoded defaults.", flush=True)
+
         print(job)
         print(f"in do_job pass_through_actions: {pass_through_actions}")
         print(
             f"in do_job reward_design={reward_design_doc.get('name') if reward_design_doc else None!r} "
             f"version={reward_design_doc.get('version') if reward_design_doc else None} "
+            f"experiment_design={experiment_design_doc.get('name') if experiment_design_doc else None!r} "
+            f"version={experiment_design_doc.get('version') if experiment_design_doc else None} "
             f"seed={seed}")
         # Wrap main() in a RewardDesignError catch so a broken
         # user-supplied reward design surfaces as job.eval_error (like
@@ -2085,18 +2521,50 @@ def do_job(job, num_envs=1):
         # raises ModuleNotFoundError because Python doesn't see the
         # `rl_agent` package from inside it.
         from reward_designs import RewardDesignError
+        # Build the base kwargs from legacy job-doc fields, then let
+        # the experiment_design (if any) overlay its values on top.
+        # Order matters: anything explicitly stamped on the job
+        # document via the dashboard New-job form (num_iterations,
+        # nn_size_x/y) wins for legacy compatibility; the
+        # experiment_design fills in everything ELSE (learning rates,
+        # gamma, replay capacity, etc.) that the legacy form never
+        # exposed.
+        #
+        # To honour that precedence, do_job's legacy values go into
+        # base_kwargs BEFORE the overlay; apply_to_main_kwargs writes
+        # over ANY key the design specifies. If users want the
+        # design's num_iterations to win, just leave job.num_iterations
+        # blank / submit a fresh job that doesn't override it.
+        # NOTE: is_resume was decided above (before move_all_jobs_data)
+        # so we could pass skip_current_cleanup=is_resume into that call.
+        # We just thread the same flag into main() here.
+
+        base_kwargs = dict(
+            job_id=job["_id"],
+            num_envs=num_envs,
+            num_iterations_val=num_iterations,
+            pass_through_actions=pass_through_actions,
+            actor_fc_layer_params_x=actor_fc_layer_params_x,
+            actor_fc_layer_params_y=actor_fc_layer_params_y,
+            critic_joint_fc_layer_params_x=critic_joint_fc_layer_params_x,
+            critic_joint_fc_layer_params_y=critic_joint_fc_layer_params_y,
+            eval_interval_val=10,
+            reward_design=reward_design_doc,
+            experiment_design=experiment_design_doc,
+            seed=seed,
+            is_resume_val=is_resume,
+        )
+        if is_resume:
+            print(
+                f"do_job: RESUMING job {job['_id']} - found existing "
+                f"Learner checkpoint. Skipping BC pretrain; SAC will "
+                f"continue from the saved train_step.",
+                flush=True)
+        # Bare-name sibling import; see reward_designs import note above.
+        from experiment_designs import apply_to_main_kwargs as _apply_ed
+        main_kwargs = _apply_ed(experiment_design_doc, base_kwargs)
         try:
-            main(job_id=job["_id"],
-                num_envs=num_envs,
-                num_iterations_val=num_iterations,
-                pass_through_actions=pass_through_actions,
-                actor_fc_layer_params_x=actor_fc_layer_params_x,
-                actor_fc_layer_params_y=actor_fc_layer_params_y,
-                critic_joint_fc_layer_params_x=critic_joint_fc_layer_params_x,
-                critic_joint_fc_layer_params_y=critic_joint_fc_layer_params_y,
-                eval_interval_val=10,
-                reward_design=reward_design_doc,
-                seed=seed)
+            main(**main_kwargs)
         except RewardDesignError as e:
             err_msg = str(e)
             print(
@@ -2186,22 +2654,194 @@ def do_job(job, num_envs=1):
     # trainer would overwrite that user intent with another DONE
     # (benign today, but it would clobber non-DONE statuses we add
     # later).
-    update_job(job["_id"], datetime.datetime.now(datetime.timezone.utc), "ended_at")
     try:
         current = db.jobs.find_one({"_id": job["_id"]}, {"status": 1})
     except Exception:  # noqa: BLE001
         current = None
     current_status = (current or {}).get("status")
-    if current_status == "IN_PROGRESS":
-        update_job(job["_id"], "DONE")
-    else:
+    # PAUSED is intentionally NOT terminal - the job is expected to
+    # resume later and we don't want a misleading duration in the Jobs
+    # tab or an ended_at timestamp that suggests the run is over. Skip
+    # both the ended_at stamp and the DONE flip in that case.
+    if current_status == "PAUSED":
         print(
-            f"do_job: skipping trailing status=DONE for {job['_id']} "
-            f"(status is already {current_status!r}; preserving external "
-            f"intent).",
+            f"do_job: job {job['_id']} is PAUSED; skipping trailing "
+            f"ended_at + status writes so a future resume can reuse the "
+            f"original started_at and the duration UI keeps making sense.",
             flush=True)
+    else:
+        update_job(job["_id"], datetime.datetime.now(datetime.timezone.utc), "ended_at")
+        if current_status == "IN_PROGRESS":
+            update_job(job["_id"], "DONE")
+        else:
+            print(
+                f"do_job: skipping trailing status=DONE for {job['_id']} "
+                f"(status is already {current_status!r}; preserving external "
+                f"intent).",
+                flush=True)
 
-def move_all_jobs_data(id):
+def _learner_checkpoint_dir_exists(root):
+    """True iff ``root`` contains the tf-agents Learner Checkpointer dir.
+
+    tf-agents' ``common.Checkpointer`` writes to
+    ``<learner_root>/train/checkpoints/`` (NOTE: the subdir is
+    ``checkpoints`` PLURAL, with TF checkpoint v2 files like
+    ``ckpt-N.index`` and ``ckpt-N.data-*`` inside). We treat the
+    existence of that directory as the canonical "Learner has been
+    checkpointed at least once" signal. The directory existence alone
+    isn't quite enough - tf-agents creates it during Learner __init__
+    even before any save - so we also peek inside for at least one
+    ``ckpt-*`` file. Cheap and unambiguous.
+    """
+    ckpt_dir = os.path.join(root, "learner", "train", "checkpoints")
+    if not os.path.isdir(ckpt_dir):
+        return False
+    try:
+        for name in os.listdir(ckpt_dir):
+            if name.startswith("ckpt-") or name == "checkpoint":
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _restore_paused_active_dir(job_id_str):
+    """Move a paused job's archived training data back into /tmp/active/.
+
+    Called from do_job's TRAIN branch when the job document carries
+    ``paused_at_step`` (the trainer-side signal that this job was
+    previously paused via the dashboard's Pause button and is now
+    being picked up for resume).
+
+    Two archive layouts to handle:
+
+      * Singly-nested - ``/tmp/jobsdata/<id>/{eval,learner,metrics,train}/``.
+        Produced by ``move_all_jobs_data``'s tail-call to ``move_data``
+        when THIS job's previous attempt put its subdirs into
+        /tmp/active/<id>/* and a later pickup wanted to "clean up
+        leftovers". This is the case for pause-and-immediately-resume:
+        the trainer's pause break exits main(), do_job's trailer
+        leaves the active dir alone (PAUSED skip), then on the next
+        pickup move_all_jobs_data archives the active subdirs
+        SINGLY-nested under /tmp/jobsdata/<id>/. (This is the case
+        the operator hit on 2026-05-24.)
+
+      * Doubly-nested - ``/tmp/jobsdata/<id>/<id>/...``. Produced by
+        ``move_all_jobs_data``'s outer loop when a DIFFERENT job
+        ran between pause and resume - that job's
+        move_all_jobs_data sweeps /tmp/active/<paused_id>/ out as
+        a non-current entry into /tmp/jobsdata/<paused_id>/<paused_id>/.
+
+    The function:
+      1. Returns True with no work if the Learner checkpoint is
+         already in /tmp/active/<id>/learner/train/checkpoints/
+         (could happen if the user clicks Resume so fast that no
+         move_all_jobs_data has run between the two pickups - rare
+         but possible).
+      2. Otherwise tries inner-then-outer archive locations. The
+         FIRST one that contains a Learner checkpoint wins; we
+         move its contents into /tmp/active/<id>/, replacing any
+         conflicts (e.g., a freshly-created empty metrics/ from a
+         pre-restore attempt).
+      3. Returns True if a restore actually happened, False if no
+         archive was found.
+
+    /tmp is bind-mounted so moves are cheap intra-filesystem renames.
+    """
+    if not job_id_str:
+        return False
+    active_dest = os.path.join("/tmp/active", job_id_str)
+    # Case 1: already live. Happens when the user clicks Pause then
+    # Resume before any other job pickup intervenes (so the archive
+    # cycle never fired).
+    if _learner_checkpoint_dir_exists(active_dest):
+        print(
+            f"_restore_paused_active_dir: /tmp/active/{job_id_str}/ "
+            f"already holds a Learner checkpoint; no restore needed.",
+            flush=True)
+        return True
+
+    archived_outer = os.path.join("/tmp/jobsdata", job_id_str)
+    archived_inner = os.path.join(archived_outer, job_id_str)
+
+    # Pick which archive layout actually has the checkpoint. Doubly-
+    # nested only happens after a third-party job intervened; check
+    # both. Order is "doubly first" so we don't accidentally pick the
+    # outer wrapper that contains the inner dir (the outer DOES exist
+    # in the doubly-nested case, but holds only the inner subdir, not
+    # the real Learner data).
+    candidates = []
+    if _learner_checkpoint_dir_exists(archived_inner):
+        candidates.append(archived_inner)
+    if _learner_checkpoint_dir_exists(archived_outer):
+        candidates.append(archived_outer)
+    if not candidates:
+        print(
+            f"_restore_paused_active_dir: no Learner checkpoint found "
+            f"for {job_id_str} (looked in {archived_inner}/ and "
+            f"{archived_outer}/). Treating as fresh start; BC pretrain "
+            f"will run.",
+            flush=True)
+        return False
+
+    src = candidates[0]
+    try:
+        os.makedirs(active_dest, exist_ok=True)
+        # Merge src into active_dest: for each top-level entry in src,
+        # replace the matching entry in dest. We can't simply
+        # shutil.move(src, active_dest) because shutil.move puts src
+        # INSIDE dest when dest already exists as a directory (which it
+        # often does - either because a fresh metrics/ got created
+        # earlier in this do_job pickup, or because case-1 left an
+        # empty active dir).
+        moved = []
+        for entry in os.listdir(src):
+            src_entry = os.path.join(src, entry)
+            dst_entry = os.path.join(active_dest, entry)
+            if os.path.exists(dst_entry):
+                if os.path.isdir(dst_entry) and not os.path.islink(dst_entry):
+                    shutil.rmtree(dst_entry)
+                else:
+                    os.remove(dst_entry)
+            shutil.move(src_entry, dst_entry)
+            moved.append(entry)
+
+        # Clean up the (now empty) archive wrapper(s).
+        try:
+            if os.path.isdir(src) and not os.listdir(src):
+                os.rmdir(src)
+        except OSError:
+            pass
+        # If we restored from the inner dir of a doubly-nested layout,
+        # also try to remove the outer wrapper if it's empty.
+        if src == archived_inner:
+            try:
+                if os.path.isdir(archived_outer) and not os.listdir(archived_outer):
+                    os.rmdir(archived_outer)
+            except OSError:
+                pass
+
+        print(
+            f"_restore_paused_active_dir: restored {len(moved)} entries "
+            f"{moved} from {src}/ -> {active_dest}/ for resume.",
+            flush=True)
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(
+            f"_restore_paused_active_dir: failed to restore "
+            f"{src} -> {active_dest}: {e}. Falling back to fresh start.",
+            flush=True)
+        return False
+
+
+# Back-compat name for the older detector. New code should call
+# _restore_paused_active_dir directly with the paused_at_step signal
+# from the job doc instead of doing pure-filesystem inspection.
+def _detect_and_restore_resume_state(job_id_str):
+    return _restore_paused_active_dir(job_id_str)
+
+
+def move_all_jobs_data(id, skip_current_cleanup=False):
     """Archive every /tmp/active/ entry that isn't the current job's.
 
     Background: TensorBoard runs with ``--logdir /tmp/active`` (see
@@ -2268,7 +2908,21 @@ def move_all_jobs_data(id):
     # /tmp/active/<id>/train from a crash would be merged with the new
     # run's summaries and TensorBoard would show two overlapping
     # learning curves under the same Run name.
-    move_data(id, folders=["eval", "metrics", "train", "learner"])
+    #
+    # SKIPPED on resume: when a paused job is being picked back up,
+    # _restore_paused_active_dir() has just populated /tmp/active/<id>/
+    # with the saved Learner checkpoint + summary dirs. Running this
+    # cleanup would immediately archive the restored data right back
+    # out, defeating the resume. The caller (do_job) sets
+    # skip_current_cleanup=True in that case.
+    if skip_current_cleanup:
+        print(
+            f"move_all_jobs_data: skipping self-cleanup of "
+            f"/tmp/active/{id}/* (resume path; restored data must "
+            f"survive into main()).",
+            flush=True)
+    else:
+        move_data(id, folders=["eval", "metrics", "train", "learner"])
 
 def move_data(job_id, folders=[""]):
     #Move all data for jobs with _id = job["_id"] from /tmp to /jobsdata
@@ -2304,45 +2958,60 @@ def update_job(id, value, field_name="status"):
     db.jobs.update_one(myquery, newvalues)
 
 
-def _is_job_cancelled(job_id):
-    """Has the dashboard (or anything else) externally changed this job's status?
+def _get_job_lifecycle_state(job_id):
+    """Has the dashboard externally changed this job's status?
 
-    The trainer calls do_job() and then runs main()'s for-loop for up
-    to ``num_iterations`` iterations. While that's happening the
-    dashboard's "Set to done" button can write status=DONE to Mongo,
-    but the trainer has no awareness of it - it just keeps training
-    against a now-irrelevant job for potentially hours. This helper
-    is the polling-side of cooperative cancellation: the training loop
-    calls it once per iteration; True means "the operator wants out,
-    break the loop and let do_job's trailer stamp ended_at".
+    Polled by the training loop once per iteration. Returns one of:
 
-    Treats any status OTHER than IN_PROGRESS as a cancellation signal -
-    so DONE, FAILED, NOT_STARTED, or any future status all stop the run.
-    Missing job_id (single-env training without one) is a safety-noop
-    that returns False so we never break a no-job-id run.
+      'cancel'  - status changed to anything-other-than IN_PROGRESS or
+                  PAUSE_REQUESTED, OR job was hard-deleted from Mongo.
+                  Trainer should break out of the training loop
+                  IMMEDIATELY without saving a checkpoint. do_job's
+                  trailer preserves whatever status the operator set.
+      'pause'   - status changed to PAUSE_REQUESTED. Trainer should
+                  save a Learner checkpoint, set status=PAUSED on the
+                  job, then break. The job is resumable by setting
+                  status back to NOT_STARTED later.
+      'continue'- status is still IN_PROGRESS (or the job lookup hit
+                  a transient error). Training should proceed.
+
+    A missing job_id (single-env training without one queued via
+    Mongo) is a safety-noop returning 'continue' so we never break a
+    no-job-id run.
 
     A one-field find_one against the local Mongo container is sub-
-    millisecond; comfortably cheaper than a 250ms env step. We use a
-    projection so we never accidentally drag the whole job document
-    across the wire when all we want is one string field.
+    millisecond; comfortably cheaper than a 250ms env step. We
+    project to just `status` so we never drag the whole job document
+    across the wire.
     """
     if not job_id:
-        return False
+        return 'continue'
     try:
         doc = db.jobs.find_one({"_id": job_id}, {"status": 1})
     except Exception as e:  # noqa: BLE001
         # Mongo wobble. Don't kill training over a transient lookup
-        # failure - the next iteration's check will pick up the
-        # cancellation when Mongo recovers.
-        print(f"_is_job_cancelled: lookup failed for {job_id}: {e}",
+        # failure - next iteration's check picks up the lifecycle
+        # change once Mongo recovers.
+        print(f"_get_job_lifecycle_state: lookup failed for {job_id}: {e}",
               flush=True)
-        return False
+        return 'continue'
     if doc is None:
-        # Job was hard-deleted from Mongo. Treat as a cancellation:
-        # there's nothing for us to update at the end anyway.
-        return True
+        # Job was hard-deleted from Mongo. Treat as a cancellation -
+        # nothing for us to update at the end anyway.
+        return 'cancel'
     status = doc.get("status")
-    return status not in (None, "", "IN_PROGRESS")
+    if status == 'PAUSE_REQUESTED':
+        return 'pause'
+    if status in (None, "", "IN_PROGRESS"):
+        return 'continue'
+    return 'cancel'
+
+
+# Back-compat alias for any caller that still uses the previous bool
+# API. New code should use _get_job_lifecycle_state directly so the
+# distinction between 'cancel' and 'pause' is preserved.
+def _is_job_cancelled(job_id):
+    return _get_job_lifecycle_state(job_id) == 'cancel'
 
 def run_randompolicy(job_id="", num_trials=None, num_eval_episodes=None):
     """Run a uniformly-random-action EVAL job as a baseline benchmark.
@@ -2580,6 +3249,77 @@ def _seed_canonical_reward_designs():
         print(f"reward_designs: seed upsert failed (continuing): {e}", flush=True)
 
 
+def _seed_canonical_experiment_design():
+    """Idempotent upsert of the canonical "Default" experiment design.
+
+    Sibling of _seed_canonical_reward_designs above. The Default
+    captures the trainer's current hardcoded hyperparameters as a
+    Mongo document so:
+
+      - the New-job form's Experiment design dropdown always has at
+        least one option,
+      - every other design can be diffed against a stable reference,
+      - the future research-planning agent has a control config to
+        compare new candidates against.
+
+    Keyed by a stable string ``_id`` so re-runs are no-ops once
+    seeded. Bumps the version field when SEED_VERSION below bumps,
+    so a future change to the trainer's defaults can propagate
+    through cleanly.
+
+    Best-effort: failure to upsert is logged but doesn't block the
+    trainer (operator can still create designs manually via the
+    dashboard).
+    """
+    try:
+        # Bare-name sibling import; see the comment in do_job's TRAIN
+        # branch for why we don't use the `rl_agent.experiment_designs`
+        # package path.
+        from experiment_designs import (
+            DEFAULT_DESIGN_ID,
+            DEFAULT_DESIGN_NAME,
+            DEFAULT_DESIGN_DESCRIPTION,
+            default_design_fields,
+        )
+        # Bump this when SCHEMA defaults change in a meaningful way
+        # (e.g., we tune the canonical actor_learning_rate down). The
+        # upsert below uses the bump to refresh the on-disk copy;
+        # otherwise it's a no-op so users' edits to Default are
+        # preserved across restarts.
+        SEED_VERSION = 1
+        existing = db.experiment_designs.find_one({"_id": DEFAULT_DESIGN_ID})
+        if existing and existing.get("version", 0) >= SEED_VERSION:
+            return  # already current
+        ts = time.time()
+        iso_date = datetime.datetime.fromtimestamp(ts, None)
+        fields = default_design_fields()
+        db.experiment_designs.update_one(
+            {"_id": DEFAULT_DESIGN_ID},
+            {"$set": {
+                "_id": DEFAULT_DESIGN_ID,
+                "name": DEFAULT_DESIGN_NAME,
+                "description": DEFAULT_DESIGN_DESCRIPTION,
+                "version": SEED_VERSION,
+                "author": "system",
+                "archived": False,
+                "created_at": (existing or {}).get("created_at", iso_date),
+                "updated_at": iso_date,
+                # Spread the canonical field-set so the doc directly
+                # mirrors what the New-job form's dropdown sees.
+                # Editing Default is allowed but discouraged - the
+                # description string above tells users to clone for
+                # variants instead.
+                **fields,
+            }},
+            upsert=True,
+        )
+        print(
+            f"experiment_designs: seeded canonical Default design "
+            f"({DEFAULT_DESIGN_ID}, v{SEED_VERSION})", flush=True)
+    except Exception as e:
+        print(f"experiment_designs: seed upsert failed (continuing): {e}", flush=True)
+
+
 def run_jobs_loop(num_envs=1):
     """Poll MongoDB for jobs and dispatch them indefinitely.
 
@@ -2591,10 +3331,13 @@ def run_jobs_loop(num_envs=1):
     Forwarded to do_job() so the TRAIN job_type can build a parallel
     env. DEMO and EVAL job types are unaffected.
     """
-    # One-shot seed of the canonical reward designs so the
-    # validation procedure works the moment the feature ships, even
-    # on a freshly-initialised MongoDB. Idempotent across restarts.
+    # One-shot seed of the canonical reward + experiment designs so
+    # the dashboard's New-job form always has at least one option in
+    # each dropdown, and so the research-planning agent has stable
+    # control references to compare against. Both upserts are
+    # idempotent across container restarts.
     _seed_canonical_reward_designs()
+    _seed_canonical_experiment_design()
     print(f"Polling for jobs (num_envs={num_envs})...")
     while True:
         jobs = get_jobs()
