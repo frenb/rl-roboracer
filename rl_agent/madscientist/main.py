@@ -2,17 +2,20 @@
 
 Runs the active workers in a single process when MADSCIENTIST_ENABLED=true:
 
-  Phase 1A (live)    : judge_loop       - LLM-scores pending proposals
-  Phase 1E (live)    : outcome_loop     - tallies completed TRAIN jobs
-                                          into proposal.results
-  Phase 1B (pending) : researcher_loop  - auto-generates proposals
-  Phase 1C (pending) : orchestrator_loop - spawns Cursor SDK agents
-                                           on approved proposals
+  Phase 1A (live)      : judge_loop       - LLM-scores pending proposals
+  Phase 1E (live)      : outcome_loop     - tallies completed TRAIN jobs
+                                            into proposal.results
+  Phase 1C-MVP (live)  : orchestrate_loop - seeds derived designs +
+                                            queues TRAIN jobs on
+                                            approved proposals (no
+                                            Cursor SDK yet)
+  Phase 1B (pending)   : researcher_loop  - auto-generates proposals
+  Phase 1C-Full (pending) : Cursor SDK code-writing agent for
+                            proposals that need new SCHEMA fields
 
-The two live loops have different cadences (Judge polls every 30s,
-Outcome ingester every 5 min) and don't share state, so we run them
-in separate threads. SIGTERM/SIGINT set _should_exit; both loops
-check it between cycles and drain cleanly within their poll interval.
+All loops run as daemon threads. Each polls _should_exit between
+cycles for graceful drain on SIGTERM/SIGINT. Daemon=True so a
+sibling-thread crash never pins the process open.
 
 Boot sequence:
   1. Install signal handlers (graceful exit).
@@ -42,6 +45,7 @@ from pymongo import MongoClient
 
 from . import constants
 from . import judge
+from . import orchestrator
 from . import outcome_ingester
 
 
@@ -115,13 +119,20 @@ def main():
     outcome_poll = int(os.environ.get(
         "OUTCOME_POLL_INTERVAL_SECONDS",
         constants.DEFAULT_OUTCOME_POLL_INTERVAL_SECONDS))
+    orchestrator_poll = int(os.environ.get(
+        "ORCHESTRATOR_POLL_INTERVAL_SECONDS", "30"))
+    max_jobs_per_proposal = int(os.environ.get(
+        "MAX_JOBS_PER_PROPOSAL",
+        orchestrator.DEFAULT_MAX_JOBS_PER_PROPOSAL))
 
     print(
-        f"madscientist: Phase 1A+1E workers starting. "
+        f"madscientist: Phase 1A+1C-MVP+1E workers starting. "
         f"max_proposals_per_day={max_proposals_per_day}, "
         f"budget_usd_per_month={budget_usd_per_month}, "
         f"judge_poll_seconds={judge_poll}, "
-        f"outcome_poll_seconds={outcome_poll}.",
+        f"outcome_poll_seconds={outcome_poll}, "
+        f"orchestrator_poll_seconds={orchestrator_poll}, "
+        f"max_jobs_per_proposal={max_jobs_per_proposal}.",
         flush=True)
 
     try:
@@ -137,10 +148,10 @@ def main():
               flush=True)
         sys.exit(2)
 
-    # Spawn the two loops as daemon threads. Each polls
+    # Spawn the three loops as daemon threads. Each polls
     # _should_exit between cycles for graceful SIGTERM/SIGINT drain.
     # Daemon=True so a sibling-thread crash doesn't pin the process
-    # open after the other thread exits.
+    # open after the other threads exit.
     judge_thread = threading.Thread(
         target=judge.judge_loop,
         kwargs={
@@ -150,6 +161,17 @@ def main():
             "should_stop_fn": lambda: _should_exit,
         },
         name="judge-loop",
+        daemon=True,
+    )
+    orchestrator_thread = threading.Thread(
+        target=orchestrator.orchestrate_loop,
+        kwargs={
+            "db": db,
+            "poll_interval_seconds": orchestrator_poll,
+            "max_jobs": max_jobs_per_proposal,
+            "should_stop_fn": lambda: _should_exit,
+        },
+        name="orchestrator-loop",
         daemon=True,
     )
     outcome_thread = threading.Thread(
@@ -163,26 +185,29 @@ def main():
         daemon=True,
     )
     judge_thread.start()
+    orchestrator_thread.start()
     outcome_thread.start()
 
     # Block the main thread until either:
-    #   (a) a worker thread exits (which usually means it hit an
+    #   (a) any worker thread exits (which usually means it hit an
     #       unrecoverable error - graceful exit goes through
     #       _should_exit + a sub-poll-interval drain),
     #   (b) we get SIGTERM/SIGINT and _should_exit becomes True.
     # We tick at 1s so SIGTERM responsiveness is sub-second even
     # though the worker loops sleep for tens of seconds.
+    worker_threads = [
+        ("judge", judge_thread),
+        ("orchestrator", orchestrator_thread),
+        ("outcome", outcome_thread),
+    ]
     while not _should_exit:
-        if not judge_thread.is_alive():
+        died = next(
+            ((name, t) for name, t in worker_threads if not t.is_alive()),
+            None)
+        if died is not None:
             print(
-                "madscientist: judge thread exited unexpectedly; "
-                "signalling other workers to drain.",
-                flush=True)
-            break
-        if not outcome_thread.is_alive():
-            print(
-                "madscientist: outcome thread exited unexpectedly; "
-                "signalling other workers to drain.",
+                f"madscientist: {died[0]} thread exited unexpectedly; "
+                f"signalling other workers to drain.",
                 flush=True)
             break
         time.sleep(1)
@@ -190,9 +215,9 @@ def main():
     # Worker loops each call should_stop_fn(). We wait up to their
     # max poll interval + a small buffer for graceful drain. Threads
     # are daemons so if drain hangs we still exit on process exit.
-    drain_deadline = max(judge_poll, outcome_poll) + 5
-    judge_thread.join(timeout=drain_deadline)
-    outcome_thread.join(timeout=drain_deadline)
+    drain_deadline = max(judge_poll, outcome_poll, orchestrator_poll) + 5
+    for _name, t in worker_threads:
+        t.join(timeout=drain_deadline)
     print("madscientist: exited cleanly.", flush=True)
 
 
