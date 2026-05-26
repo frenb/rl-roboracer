@@ -686,6 +686,54 @@ def main(
     # main).
     avg_return_arr = []
     max_avg_return = 0.0
+    # Resume-aware seeding of max_avg_return. The is_new_max_avg gate
+    # below only saves a new Model record when the eval's
+    # AverageReturn beats this high-water mark. Initializing to 0.0
+    # on every main() entry would mean that the FIRST eval after a
+    # pause/resume (or after a crash recovery) always saves a model
+    # record, even if its avg_return is lower than the historical
+    # best from a previous resume slice. The result: dozens of
+    # "false best" model rows per job (we saw 20 for job
+    # 6a13c4946a957f1c5552cd47 on 2026-05-25, only one of which was
+    # actually globally best).
+    #
+    # Fix: when this is a resume, query Mongo for the existing
+    # models linked to this job_id and seed max_avg_return to the
+    # actual historical best. New saves below will then only fire
+    # on a true new global best, regardless of how many resume
+    # slices the run was broken into.
+    if is_resume_val and job_id is not None:
+        try:
+            historical_max = 0.0
+            for prev_model in db.models.find(
+                    {"job_id": str(job_id)},
+                    {"avg_return": 1, "_id": 0}):
+                v = prev_model.get("avg_return")
+                if v is None:
+                    continue
+                try:
+                    v = float(v)
+                except (TypeError, ValueError):
+                    continue
+                if v > historical_max:
+                    historical_max = v
+            if historical_max > 0.0:
+                max_avg_return = historical_max
+                print(
+                    f"main: RESUME - seeding max_avg_return from "
+                    f"existing models for job {job_id}: "
+                    f"max_avg_return={max_avg_return:.4f}. Subsequent "
+                    f"model checkpoints will only be saved on a TRUE "
+                    f"new global best (not a per-slice local best).",
+                    flush=True)
+            else:
+                print(
+                    f"main: RESUME - no historical models found for "
+                    f"job {job_id}; max_avg_return stays at 0.0.",
+                    flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"main: RESUME - failed to seed max_avg_return: {_e}",
+                  flush=True)
     print(f"Job arguments = num_envs: {num_envs}, num_iterations: {num_iterations}, nn_size_x: {actor_fc_layer_params_x}, nn_size_x: {actor_fc_layer_params_y}")
     learner_dir = os.path.join(tempdir, str(job_id),"learner")
     saved_model_dir = os.path.join(learner_dir, learner.POLICY_SAVED_MODEL_DIR)
@@ -2227,7 +2275,7 @@ def _extract_savedmodel_specs(saved_policy):
 
 def add_model(path, robot_type, model_type, training_iterations, avg_return=None,
               observation_spec=None, action_spec=None, reward_design=None,
-              job_id=None, experiment_design=None):
+              job_id=None, experiment_design=None, is_global_best=True):
     """Persist a new saved-model record to MongoDB.
 
     Extended with ``observation_spec`` / ``action_spec`` kwargs so the
@@ -2288,6 +2336,29 @@ def add_model(path, robot_type, model_type, training_iterations, avg_return=None
         ed_name = experiment_design.get("name")
     else:
         ed_id = ed_version = ed_name = None
+
+    # Maintain the "exactly one model per job_id has is_global_best=True"
+    # invariant. When the caller is saving a new global best (the
+    # default + only case the trainer currently emits), demote every
+    # prior is_global_best=True record for the same job to False before
+    # inserting this one. Models predating this field have it absent;
+    # they stay absent (the dashboard treats absent as "unknown"). A
+    # one-shot backfill script can mark historical records all at once
+    # if the operator wants the field populated retroactively.
+    if is_global_best and job_id is not None:
+        try:
+            res = db.models.update_many(
+                {"job_id": str(job_id), "is_global_best": True},
+                {"$set": {"is_global_best": False}})
+            if res.modified_count:
+                print(
+                    f"add_model: demoted {res.modified_count} prior "
+                    f"is_global_best=True record(s) for job {job_id}.",
+                    flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"add_model: failed to demote previous best: {_e}",
+                  flush=True)
+
     db.models.insert_one(
         {
             "create_date": iso_date,
@@ -2326,6 +2397,15 @@ def add_model(path, robot_type, model_type, training_iterations, avg_return=None
             # mount) - dashboard renders that as "no git provenance".
             "git_sha": _GIT_SHA,
             "git_branch": _GIT_BRANCH,
+            # Whether this record was the global-best avg_return for
+            # its job AT TIME OF INSERT. With the resume-aware
+            # max_avg_return seeding in main(), every saved model IS
+            # a new global best - so this is True by default. The
+            # invariant "at most one model per job has
+            # is_global_best=True" is maintained by the demote query
+            # above. Field is absent on records pre-2026-05-25
+            # (run backfill_global_best.py to populate them).
+            "is_global_best": bool(is_global_best),
         })
 
 def save_results_to_db(path, results):
