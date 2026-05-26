@@ -1,21 +1,23 @@
-"""MadScientist agent main entry point - Phase 0 stub.
+"""MadScientist agent main entry point - Phase 1A.
 
-Phase 0 (this commit): logs "MadScientist stub running" once per minute
-and exits cleanly on SIGTERM. No research, no proposals, no orchestration.
-The point is to make `docker compose up madscientist` succeed end-to-end
-so we know the container builds, Mongo seeding works, and the dashboard
-tab can be wired in parallel.
+This module runs the **Judge** worker loop when
+MADSCIENTIST_ENABLED=true. Phase 1B will add the Researcher loop
+(probably in a sibling thread or separate process) and Phase 1C the
+Orchestrator. For now: one worker, one loop, one purpose.
 
-Phase 1 (next commit): replaces this stub with the real researcher loop
-that consumes constants.DEFAULT_RESEARCH_CYCLE_INTERVAL_SECONDS, drafts
-proposals, hands off to Judge + email + orchestrator.
+Boot sequence:
+  1. Install SIGTERM/SIGINT handlers (graceful exit).
+  2. Read env config (MADSCIENTIST_ENABLED, MAX_PROPOSALS_PER_DAY,
+     BUDGET_USD_PER_MONTH, etc.).
+  3. If disabled, exit immediately (entrypoint.sh's gate should
+     normally short-circuit before we get here; this is defensive).
+  4. Open Mongo + Anthropic clients.
+  5. Enter judge_loop, which polls db.proposals for pending_judge
+     and processes one per cycle.
 
-To enable / disable the worker independently of the container:
-    MADSCIENTIST_ENABLED=true   -> run main() loop (this file)
-    MADSCIENTIST_ENABLED=false  -> entrypoint.sh exec's `sleep infinity`
-                                   so the container exists but is idle.
-The default (no env var set) is FALSE - safer to start; the operator
-explicitly opts in once they're ready.
+The Anthropic client is constructed here (NOT in judge.py) so the
+key never needs to be read in any other module - simpler to audit
+the secret surface area.
 """
 from __future__ import annotations
 
@@ -25,34 +27,68 @@ import signal
 import sys
 import time
 
+from pymongo import MongoClient
+
 from . import constants
+from . import judge
 
 
 _should_exit = False
 
 
-def _on_sigterm(signum, frame):
-    """Graceful shutdown: set a flag the main loop polls."""
+def _on_signal(signum, frame):
+    """Graceful shutdown for SIGTERM + SIGINT.
+
+    The judge_loop polls _should_exit via the should_stop_fn callback
+    once per cycle, so the worker drains its current iteration
+    cleanly before exiting. Docker's default 10s grace is plenty.
+    """
     global _should_exit
     print(
-        f"madscientist: received signal {signum}; exiting on next tick.",
+        f"madscientist: received signal {signum}; will exit after "
+        f"current judge cycle completes.",
         flush=True)
     _should_exit = True
 
 
-def main():
-    """Phase 0 stub loop. Replace in Phase 1 with the researcher cycle."""
-    signal.signal(signal.SIGTERM, _on_sigterm)
-    signal.signal(signal.SIGINT, _on_sigterm)
+def _open_mongo():
+    url = os.environ.get(
+        "MONGO_URL", "mongodb://root:example@mongo:27017/")
+    client = MongoClient(url, serverSelectionTimeoutMS=10000)
+    client.admin.command("ping")
+    return client.robotaxi
 
-    enabled = os.environ.get("MADSCIENTIST_ENABLED", "false").lower() == "true"
+
+def _open_anthropic():
+    """Lazy import + construct Anthropic client.
+
+    Raises if ANTHROPIC_API_KEY is missing - the worker shouldn't be
+    enabled without one. The Phase 1B Researcher will share this
+    client (single key, two workers).
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY is required when MADSCIENTIST_ENABLED=true. "
+            "Set it in your .env (see .env.example) and restart the "
+            "madscientist container.")
+    # Lazy import so the module loads cleanly in environments without
+    # the anthropic package (e.g., AST-checking on the dev host).
+    from anthropic import Anthropic  # type: ignore
+    return Anthropic(api_key=api_key)
+
+
+def main():
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
+
+    enabled = os.environ.get(
+        "MADSCIENTIST_ENABLED", "false").lower() == "true"
     if not enabled:
-        # entrypoint.sh should have exec'd `sleep infinity` instead of
-        # calling main() in this case, but defensive double-check.
         print(
-            "madscientist: MADSCIENTIST_ENABLED is not 'true'; "
-            "exiting immediately. Set the env var on the container to "
-            "enable the worker loop.",
+            "madscientist: MADSCIENTIST_ENABLED is not 'true'; exiting. "
+            "Set the env var + 'docker compose restart madscientist' "
+            "to enable the worker.",
             flush=True)
         sys.exit(0)
 
@@ -62,25 +98,38 @@ def main():
     budget_usd_per_month = float(os.environ.get(
         "BUDGET_USD_PER_MONTH",
         constants.DEFAULT_BUDGET_USD_PER_MONTH))
+    poll_interval = int(os.environ.get(
+        "JUDGE_POLL_INTERVAL_SECONDS", "30"))
 
     print(
-        f"madscientist: Phase 0 stub running. "
+        f"madscientist: Phase 1A worker starting. "
         f"max_proposals_per_day={max_proposals_per_day}, "
-        f"budget_usd_per_month={budget_usd_per_month}. "
-        f"Phase 1 will replace this with the real researcher loop.",
+        f"budget_usd_per_month={budget_usd_per_month}, "
+        f"poll_interval_seconds={poll_interval}.",
         flush=True)
 
-    # 60s heartbeat so docker stats / container logs show we're alive.
-    tick = 0
-    while not _should_exit:
-        tick += 1
-        if tick % 60 == 0:
-            now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-            print(
-                f"madscientist: heartbeat tick={tick} at {now} "
-                f"(Phase 1 worker not yet implemented).",
-                flush=True)
-        time.sleep(1)
+    try:
+        db = _open_mongo()
+    except Exception as e:  # noqa: BLE001
+        print(f"madscientist: failed to open Mongo: {e}", flush=True)
+        sys.exit(2)
+
+    try:
+        anthropic_client = _open_anthropic()
+    except Exception as e:  # noqa: BLE001
+        print(f"madscientist: failed to construct Anthropic client: {e}",
+              flush=True)
+        sys.exit(2)
+
+    # Hand off to the judge loop. It polls + processes one proposal
+    # per cycle and checks should_stop_fn between cycles for graceful
+    # exit on SIGTERM/SIGINT.
+    judge.judge_loop(
+        db,
+        anthropic_client,
+        poll_interval_seconds=poll_interval,
+        should_stop_fn=lambda: _should_exit,
+    )
 
     print("madscientist: exited cleanly.", flush=True)
 
