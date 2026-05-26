@@ -79,13 +79,21 @@ def build_synthetic_proposal() -> Proposal:
                 arxiv_id="1709.10089",
                 title="Learning Complex Dexterous Manipulation with Deep RL and Demonstrations",
                 authors=["Aravind Rajeswaran", "Vikash Kumar", "Abhishek Gupta"],
-                section_refs=["Eq. 4 - DAPG aux loss"],
+                section_refs=["Eq. 4", "Section 3.2"],
+                supporting_evidence=(
+                    "Eq. 4 defines the DAPG auxiliary BC loss term that "
+                    "augments the policy-gradient update; lambda controls "
+                    "its weight relative to the RL signal."),
                 url="https://arxiv.org/abs/1709.10089",
             ),
             PaperReference(
                 arxiv_id="1709.10087",
                 title="Overcoming Exploration in RL with Demonstrations",
-                section_refs=["Section 4.3 - Q-filter"],
+                section_refs=["Section 4.3"],
+                supporting_evidence=(
+                    "Section 4.3 introduces the Q-filter mechanism that "
+                    "selectively applies the BC loss only when the demo "
+                    "action's Q-value exceeds the policy action's Q-value."),
             ),
         ],
         hypothesis=(

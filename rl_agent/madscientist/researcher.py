@@ -339,6 +339,26 @@ The proposal will be reviewed by a Judge agent against a rubric. Your output mus
   3. Produce a STRUCTURED primary_parsed criterion so the outcome ingester
      can evaluate mechanically (without parsing natural language).
 
+CITING PAPERS (required for paper-backed proposals):
+  Every entry in `source_papers` must include BOTH:
+    1. `section_refs`: concrete locators inside the paper. A human
+       reviewer must be able to flip to the right page from the locator.
+       GOOD: ["Section 4.2", "Eq. 12", "Theorem 3", "Algorithm 1",
+              "Fig. 5", "§3.1", "Page 7", "Appendix B"]
+       BAD:  ["Langevin-type diffusion variance analysis",
+              "Bellman recursion dependence",
+              "the variance bound"]
+       (BAD entries describe content but don't tell the reader WHERE.)
+    2. `supporting_evidence`: 1-3 sentence excerpt or paraphrase of the
+       cited passage explaining WHY this paper supports your specific
+       hypothesis. Aim for >=40 chars.
+       GOOD: "Eq. 12 bounds the policy-gradient variance as O(1/sqrt(B))
+              in the batch size B, predicting >=2x noise reduction for
+              our 256->1024 batch increase."
+       BAD:  "supports our hypothesis"
+       BAD:  "discusses batch sizes"
+  Pre-rubric check H rejects any paper missing either field.
+
 PROJECT SCOPE:
   * Prefer tuning EXISTING experiment_designs SCHEMA knobs - that's the
     fast path (orchestrator queues training immediately after approval).
@@ -363,7 +383,12 @@ no leading text). It must match this schema:
   "motivation": "1-2 paragraphs: why this paper, why this codebase, why now",
   "code_changes_summary": "what changes go into experiment_design_fields (or proposed_schema_extensions if you need a new knob)",
   "source_papers": [
-    {"arxiv_id": "...", "title": "...", "section_refs": ["..."]}
+    {
+      "arxiv_id": "...",
+      "title": "...",
+      "section_refs": ["Section 4.2", "Eq. 12"],
+      "supporting_evidence": "1-3 sentence quote or paraphrase of the cited passage explaining WHY this paper supports your hypothesis."
+    }
   ],
   "experiment_arms": [
     {"name": "base", "description": "...", "experiment_design_id": "experiment-default"},

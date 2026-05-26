@@ -55,13 +55,32 @@ from . import constants
 
 
 class PaperReference(BaseModel):
-    """A cited paper attached to a proposal or research note."""
+    """A cited paper attached to a proposal or research note.
+
+    The Researcher is required (via pre-rubric check H) to populate BOTH
+    `section_refs` with concrete locators (e.g., 'Section 4.2', 'Eq. 12',
+    'Theorem 3', 'Algorithm 1', 'Fig. 5', '§3.1', 'Page 7') AND
+    `supporting_evidence` with a 1-3 sentence excerpt or paraphrase of
+    the specific passage that supports this proposal's hypothesis. This
+    lets the human reviewer jump straight to the relevant page in the
+    paper instead of skim-reading the abstract.
+    """
     arxiv_id: str = Field(..., description="e.g., '1709.10089' or '2104.06129v2'")
     title: str = ""
     authors: List[str] = Field(default_factory=list)
     section_refs: List[str] = Field(
         default_factory=list,
-        description="Specific sections/equations referenced. e.g., 'Eq. 4 - DAPG aux loss'")
+        description="Concrete locators within the paper. e.g., "
+                    "'Section 4.2', 'Eq. 12', 'Theorem 3', 'Algorithm 1', "
+                    "'Fig. 5', '§3.1', 'Page 7'. Pre-rubric check H "
+                    "requires at least one entry containing a digit or "
+                    "an explicit anchor word.")
+    supporting_evidence: str = Field(
+        default="",
+        description="1-3 sentence excerpt or paraphrase of the cited "
+                    "passage explaining WHY this paper supports the "
+                    "current proposal's hypothesis. Required (>=40 "
+                    "chars) by pre-rubric check H.")
     url: Optional[str] = None
 
 

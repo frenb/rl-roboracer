@@ -95,6 +95,8 @@ Note on arxiv IDs: the format is YYMM.NNNNN. So 2605.NNNNN means submitted in Ma
 
 Score each of the 8 axes 0-5 per the level anchors in the rubric. Mechanically follow the anchors - do not improvise scoring categories.
 
+Note on `paper_faithfulness`: pre-rubric check H has already verified each source paper has a CONCRETE section_refs entry (with a digit or anchor word like 'Section', 'Eq.', 'Theorem', 'Algorithm', 'Fig.', 'Table') AND a non-empty supporting_evidence excerpt. When scoring paper_faithfulness, weight the QUALITY of those refs: does the cited section ACTUALLY support the hypothesis? Is supporting_evidence specific and verifiable, or just hand-wavy? Score <=2 when the paper-to-hypothesis connection is tenuous regardless of how concrete the locators look.
+
 If an axis is genuinely N/A (e.g., a pure-codebase proposal has no source papers, so paper_faithfulness=N/A), add its key to axes_skipped instead of giving it a score.
 
 Be terse in strengths/concerns/suggested_revisions - 1 sentence per item.
