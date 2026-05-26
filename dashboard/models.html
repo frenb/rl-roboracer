@@ -332,7 +332,7 @@
   <!-- Cache-busted (see comment in jobs.html). Bump ?v=... when you
        edit components.js so the iframe inside GoldenLayout actually
        fetches the new file. -->
-  <script src="/components.js?v=20260524-pauseresume"></script>
+  <script src="/components.js?v=20260525-tblabels"></script>
   <script>
     (function () {
       const { TableView, formatters, showToast } = window.RoboracerUI;
@@ -696,6 +696,25 @@
           .map((m) => (m.job_id == null || m.job_id === '' ? null : String(m.job_id)))
           .filter((id) => id);
         const missingJobIds = sel.length - jobIds.length;
+        // Pass per-job metadata (job_id + model.create_date) so the
+        // GoldenLayout shell can sort by create_date ascending and
+        // assign deterministic slot labels (base, exp1, exp2, ...)
+        // matching what the Analysis tab will compute independently
+        // from buildBundles. The TB Analysis tab's symlink-bucket
+        // names then carry the slot label, so each TB run name
+        // reads as "compare/base_<short>/eval" instead of an opaque
+        // ObjectId substring - the operator can map TB runs to
+        // Analysis-tab columns at a glance.
+        //
+        // Models with no job_id (legacy / pre-feature) are excluded
+        // from jobMeta too; they won't show up in the TB filter
+        // either way.
+        const jobMeta = sel
+          .filter((m) => m.job_id != null && m.job_id !== '')
+          .map((m) => ({
+            jobId: String(m.job_id),
+            createDate: m.create_date || null,
+          }));
         // Hand the selection off to the parent GoldenLayout shell.
         // The shell (see goldenlayout.js) listens for this message,
         // activates the Analysis tab, forwards the payload into the
@@ -711,6 +730,7 @@
           type: 'roboracer:open-analysis',
           modelIds: modelIds,
           jobIds: jobIds,
+          jobMeta: jobMeta,
         };
         if (window.parent && window.parent !== window) {
           window.parent.postMessage(payload, '*');

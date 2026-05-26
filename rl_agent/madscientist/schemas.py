@@ -1,0 +1,314 @@
+"""Pydantic schemas for the MadScientist Mongo collections.
+
+These are the source of truth for what shapes the workers write + the
+dashboard reads. We use Pydantic v2 (not bare dicts) so:
+
+  * Field names + types are documented in one place.
+  * Workers fail loudly on malformed documents rather than silently
+    propagating bad data through the lifecycle.
+  * The dashboard server can borrow these schemas later (Pydantic ->
+    JSON Schema export) to validate the chat-reply parser's output.
+
+Three collections defined here, mirroring constants.COLL_*:
+
+  * Proposal              -> db.proposals
+  * ResearchNote          -> db.research_notes
+  * JudgeRubricVersion    -> db.judge_rubric_history
+
+Plus a handful of nested types used as fields of the above.
+
+All `*_at` timestamps are stored as timezone-aware UTC datetimes so
+pymongo round-trips them as BSON Dates and the dashboard's `new Date(...)`
+parses them as ISO-8601 with a Z suffix.
+"""
+from __future__ import annotations
+
+import datetime
+from typing import Any, Dict, List, Literal, Optional, Union
+
+try:
+    from pydantic import BaseModel, ConfigDict, Field
+except ImportError:  # pragma: no cover - pydantic only available in container
+    # Fall-through stub so the module is importable in environments that
+    # don't have pydantic installed (e.g., the bare host running the
+    # trainer's tests). The runtime container HAS pydantic via the
+    # madscientist requirements.txt.
+    class BaseModel:  # type: ignore
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+        def model_dump(self, *args, **kwargs):
+            return self.__dict__
+
+    class ConfigDict(dict):  # type: ignore
+        pass
+
+    def Field(default=None, **kwargs):  # type: ignore  # noqa: N802
+        return default
+
+
+from . import constants
+
+
+# ---- Nested types --------------------------------------------------------
+
+
+class PaperReference(BaseModel):
+    """A cited paper attached to a proposal or research note."""
+    arxiv_id: str = Field(..., description="e.g., '1709.10089' or '2104.06129v2'")
+    title: str = ""
+    authors: List[str] = Field(default_factory=list)
+    section_refs: List[str] = Field(
+        default_factory=list,
+        description="Specific sections/equations referenced. e.g., 'Eq. 4 - DAPG aux loss'")
+    url: Optional[str] = None
+
+
+class ExperimentArm(BaseModel):
+    """One arm of an experimental comparison.
+
+    The `fields` dict overlays onto a base experiment_design / reward_design
+    referenced by `experiment_design_id` / `reward_design_id` - mirrors how
+    apply_to_main_kwargs() works in rl_agent/experiment_designs.py.
+    """
+    name: str = Field(..., description="Slot label - 'base', 'exp1', 'exp2', etc.")
+    description: str = ""
+    # Either reference an existing design + delta, or specify all fields inline.
+    experiment_design_id: Optional[str] = None
+    experiment_design_fields: Dict[str, Any] = Field(default_factory=dict)
+    reward_design_id: Optional[str] = None
+    reward_design_fields: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SuccessCriteria(BaseModel):
+    """How we'll judge whether the hypothesis was supported.
+
+    `primary` is the single-number test the outcome ingester scores against.
+    `secondary` lists supporting checks. Both are free-form strings the
+    Judge can sanity-check at review time.
+    """
+    primary: str = Field(
+        ...,
+        description="A measurable statement, e.g. 'avg_return(exp2) - avg_return(base) >= 10%'")
+    secondary: List[str] = Field(default_factory=list)
+
+
+class JudgeReview(BaseModel):
+    """Output of the Judge worker. Populated when Judge transitions a
+    proposal from pending_judge to pending_user.
+    """
+    overall: Literal[
+        "strong_accept", "accept", "weak_accept", "weak_reject", "reject"
+    ]
+    scores: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Axis name -> 0-5 score per the rubric. Keys defined by the "
+                    "active rubric version; see judge_rubric_history.")
+    strengths: List[str] = Field(default_factory=list)
+    concerns: List[str] = Field(default_factory=list)
+    suggested_revisions: List[str] = Field(default_factory=list)
+    judged_at: datetime.datetime
+    rubric_version: int = Field(..., description="Which judge_rubric_history.version was applied")
+    judge_model: str = Field(..., description="Model identifier - e.g., 'claude-opus-4-7'")
+    judge_token_count: Optional[int] = None
+    judge_cost_usd: Optional[float] = None
+
+
+class UserDecision(BaseModel):
+    """The user's reply (parsed from email or dashboard click)."""
+    at: datetime.datetime
+    by: str = Field(default=constants.AGENT_USER)
+    action: Literal["approve", "approve_with_revisions", "reject", "defer"]
+    note: str = ""
+    revision_applied: bool = Field(
+        default=False,
+        description="True if action=approve_with_revisions AND the orchestrator "
+                    "actually folded the Judge's suggested_revisions into the spec.")
+    source: Literal["email", "dashboard", "api", "manual"] = "email"
+
+
+class CostBreakdown(BaseModel):
+    """Total API spend attributed to this proposal across its lifecycle.
+
+    Tracked separately so the dashboard's budget gauge can attribute
+    spend to the right worker.
+    """
+    madscientist_usd: float = 0.0
+    judge_usd: float = 0.0
+    cursor_usd: float = 0.0
+    other_usd: float = 0.0
+
+    @property
+    def total_usd(self) -> float:
+        return (self.madscientist_usd + self.judge_usd
+                + self.cursor_usd + self.other_usd)
+
+
+class PerArmResult(BaseModel):
+    """Per-arm summary statistic in the outcome record."""
+    name: str
+    n_trials: int = 0
+    mean: Optional[float] = None
+    ci_low_95: Optional[float] = None
+    ci_high_95: Optional[float] = None
+    median: Optional[float] = None
+    stddev: Optional[float] = None
+
+
+class OutcomeResult(BaseModel):
+    """Populated by outcome_ingester when all TRAIN jobs for the proposal
+    reach status DONE.
+    """
+    primary_criterion_met: Optional[bool] = None
+    primary_delta: Optional[float] = None
+    primary_p_value: Optional[float] = None
+    per_arm: List[PerArmResult] = Field(default_factory=list)
+    verdict: Literal["supported", "rejected", "inconclusive"] = "inconclusive"
+    notes: str = ""
+    computed_at: datetime.datetime
+    n_jobs_succeeded: int = 0
+    n_jobs_failed: int = 0
+
+
+class AuditEvent(BaseModel):
+    """One row in proposal.audit_events. Appended by every state transition.
+
+    `by_agent` should be one of constants.AGENT_* identifiers. `detail`
+    is freeform JSON-serializable structure (mostly used for logging
+    error messages + diffs).
+    """
+    at: datetime.datetime
+    by_agent: str
+    event: str = Field(..., description="Short verb - 'drafted', 'judged', 'approved', etc.")
+    detail: Dict[str, Any] = Field(default_factory=dict)
+
+
+# ---- Top-level documents -------------------------------------------------
+
+
+class Proposal(BaseModel):
+    """One row in db.proposals.
+
+    Long lifecycle, many states. Fields are listed in roughly the order
+    they get populated (metadata -> scientific content -> judge -> user
+    decision -> implementation -> training -> outcome).
+    """
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+
+    # ---- Metadata --------------------------------------------------------
+    title: str
+    status: Literal[
+        "pending_judge", "pending_user", "approved", "rejected", "deferred",
+        "implementing", "pr_open", "training", "done", "failed", "cancelled"
+    ] = "pending_judge"
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+
+    # ---- Provenance ------------------------------------------------------
+    # git_sha + branch the MadScientist worker saw at draft time. The
+    # implementation may bump main between proposal and PR; this stamp
+    # makes the proposal reproducible.
+    git_sha_at_proposal: Optional[str] = None
+    git_branch_at_proposal: Optional[str] = None
+    # Cited papers + freeform research-note backrefs.
+    source_papers: List[PaperReference] = Field(default_factory=list)
+    research_note_ids: List[Any] = Field(
+        default_factory=list,
+        description="List of research_notes._id values used to build this proposal")
+
+    # ---- Scientific content ----------------------------------------------
+    hypothesis: str
+    motivation: str = ""
+    code_changes_summary: str = ""
+    experiment_arms: List[ExperimentArm] = Field(default_factory=list)
+    n_seeds_per_arm: int = 1
+    num_iterations_per_seed: int = 5000
+    expected_wall_time_hours: Optional[float] = None
+    success_criteria: SuccessCriteria
+
+    # ---- Judge -----------------------------------------------------------
+    judge_review: Optional[JudgeReview] = None
+
+    # ---- User decision ---------------------------------------------------
+    decision: Optional[UserDecision] = None
+
+    # ---- Implementation tracking -----------------------------------------
+    implementation_started_at: Optional[datetime.datetime] = None
+    implementation_branch: Optional[str] = None
+    implementation_pr_url: Optional[str] = None
+    implementation_log: List[str] = Field(
+        default_factory=list,
+        description="Streamed activity chunks from the Cursor SDK agent. "
+                    "Appended in real time so the dashboard tab can tail it.")
+    implementation_finished_at: Optional[datetime.datetime] = None
+    implementation_failure_reason: Optional[str] = None
+
+    # ---- Training jobs ---------------------------------------------------
+    training_job_ids: List[Any] = Field(
+        default_factory=list,
+        description="ObjectIds of TRAIN jobs queued for this proposal")
+
+    # ---- Outcome ---------------------------------------------------------
+    results: Optional[OutcomeResult] = None
+
+    # ---- Cost ------------------------------------------------------------
+    cost: CostBreakdown = Field(default_factory=CostBreakdown)
+
+    # ---- Audit log -------------------------------------------------------
+    audit_events: List[AuditEvent] = Field(default_factory=list)
+
+
+class ResearchNote(BaseModel):
+    """One row in db.research_notes.
+
+    Append-only. The MadScientist worker writes these as it reads papers
+    + inspects the codebase + observes past results. Acts as both the
+    agent's working memory AND a potential future vector-store target
+    for similarity-based retrieval ("what have we already seen about
+    DAPG-style aux losses?").
+    """
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+
+    at: datetime.datetime
+    cycle_id: Any = Field(..., description="ObjectId grouping notes from same MadScientist cycle")
+    source_type: Literal[
+        "arxiv_abstract", "arxiv_full", "web_page",
+        "codebase_observation", "results_observation", "user_message"
+    ]
+    source_ref: str = Field(
+        ...,
+        description="Stable identifier for the source - 'arxiv:1709.10089', "
+                    "'https://...', 'rl_agent/robotaxi.py:1462', 'proposal:<oid>'")
+    text: str
+    embedding: Optional[List[float]] = Field(
+        default=None,
+        description="Optional vector embedding for similarity search. None until "
+                    "we wire up a vector store; the field is reserved here so "
+                    "future embedders can backfill without a schema migration.")
+    tokens_used: int = 0
+    cost_usd: float = 0.0
+
+
+class JudgeRubricVersion(BaseModel):
+    """One row in db.judge_rubric_history.
+
+    A versioned snapshot of the rubric the Judge worker applies. New
+    versions are appended (not edits) so historical Judge reviews remain
+    interpretable when the rubric evolves.
+    """
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+
+    version: int = Field(..., description="Monotonic integer; 0 = stub placeholder")
+    effective_from: datetime.datetime
+    rubric_markdown: str = Field(
+        ...,
+        description="Full text of madscientist/JUDGE_RUBRIC.md at this version")
+    rubric_axes: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Parsed axes for structured scoring. Each entry has at "
+                    "least {name, description, scale_min, scale_max}")
+    authored_by: str = Field(
+        ...,
+        description="'deep_research_initial' for v1, then 'self_revising_v<N>' once Phase 3")
+    git_sha: Optional[str] = None

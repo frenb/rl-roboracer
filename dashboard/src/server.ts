@@ -238,6 +238,16 @@ export const createServer = (config): express.Application => {
     const f: string = path.join(__dirname, '/../experiment_designs.html');
     res.sendFile(f);
   });
+
+  // MadScientist Lab tab. Phase 0 just serves the static stub so the
+  // GoldenLayout tab in the left column (next to the Tensorboard tabs)
+  // has somewhere to point. Phase 1 will add data endpoints under
+  // /madscientist/activity, /madscientist/proposals, etc. that this
+  // page polls on the standard 5s interval.
+  app.get('/madscientist', (req, res) => {
+    const f: string = path.join(__dirname, '/../madscientist.html');
+    res.sendFile(f);
+  });
   app.get('/get_models', (req,res) => {
     if(needsUpdate(req, modelsChanged))
     {
@@ -764,15 +774,45 @@ export const createServer = (config): express.Application => {
     const ARCHIVED_ROOT = '/tmp/jobsdata';
 
     const body = req.body || {};
-    const rawIds = Array.isArray(body.jobIds) ? body.jobIds : [];
-    // Path-safety: an attacker-controlled jobId of '../..' would let
-    // them point a symlink at any host path. We restrict to BSON
-    // ObjectId hex (or the seeded passthrough sentinel) and reject
-    // everything else.
+
+    // Two accepted request shapes:
+    //   Legacy: { jobIds: ["<oid>", ...] }
+    //     -> symlink at /tmp/tb_compare/<oid>; TB run name becomes
+    //        "compare/<oid>/<sub>" - opaque, hard to map back to
+    //        the Analysis-tab slot the user sees on the right.
+    //   Labeled: { jobs: [{ jobId: "<oid>", label: "base" }, ...] }
+    //     -> symlink at /tmp/tb_compare/<label>_<short_jobId>; TB
+    //        run becomes "compare/base_6a09ddd9/<sub>" - the operator
+    //        can read it off the sidebar and immediately know which
+    //        Analysis-tab column the run belongs to.
+    //
+    // The labeled shape is what the goldenlayout shell sends after
+    // sorting selected models by create_date. The legacy shape is
+    // still supported as a fallback (e.g., manual curl, older
+    // dashboard builds).
+    type JobEntry = { jobId: string; label: string | null };
     const safeIdRe = /^[a-zA-Z0-9_-]{1,64}$/;
-    const jobIds: string[] = rawIds
-      .map((x: any) => String(x || '').trim())
-      .filter((s: string) => s.length > 0 && safeIdRe.test(s));
+    // Labels are even more permissive than ids but still bounded;
+    // we use them to name a filesystem dir so we strip anything that
+    // could break the path (no slashes, dots, etc.).
+    const safeLabelRe = /^[a-zA-Z0-9_-]{1,32}$/;
+    let entries: JobEntry[] = [];
+    if (Array.isArray(body.jobs)) {
+      entries = (body.jobs as any[])
+        .map((j: any) => ({
+          jobId: String((j && j.jobId) || '').trim(),
+          label: (j && j.label && safeLabelRe.test(String(j.label)))
+            ? String(j.label) : null,
+        }))
+        .filter((e) => e.jobId.length > 0 && safeIdRe.test(e.jobId));
+    } else {
+      const rawIds = Array.isArray(body.jobIds) ? body.jobIds : [];
+      entries = rawIds
+        .map((x: any) => String(x || '').trim())
+        .filter((s: string) => s.length > 0 && safeIdRe.test(s))
+        .map((jobId: string) => ({ jobId, label: null }));
+    }
+    const jobIds: string[] = entries.map((e) => e.jobId);
 
     try {
       fs.mkdirSync(COMPARE_ROOT, { recursive: true });
@@ -812,14 +852,18 @@ export const createServer = (config): express.Application => {
 
     const linked: string[] = [];
     const missing: string[] = [];
-    for (const id of jobIds) {
+    // jobId -> on-disk symlink basename so the caller can mirror the
+    // mapping into its TB regex filter.
+    const linkNames: { [jobId: string]: string } = {};
+    for (const entry of entries) {
+      const id = entry.jobId;
       // move_all_jobs_data() in rl_agent/robotaxi.py archives
       // /tmp/active/<id>/{eval,train,learner,metrics}/ AS
       // /tmp/jobsdata/<id>/<id>/{eval,train,learner,metrics}/ -
       // doubly nested - because the function groups everything for
       // a job under its own subdir of /tmp/jobsdata/<id>/.
       //
-      // We want TB run names to look like "compare/<id>/eval"
+      // We want TB run names to look like "compare/<label>_<short>/eval"
       // (parallel to "current/<id>/eval" for the live job), not
       // "compare/<id>/<id>/eval". So if the inner doubled-up dir
       // exists, symlink to THAT; otherwise fall back to the outer
@@ -840,7 +884,25 @@ export const createServer = (config): express.Application => {
         missing.push(id);
         continue;
       }
-      const dst = path.join(COMPARE_ROOT, id);
+      // Compose the symlink basename. With a label: e.g.
+      // "base_0f407569" (label + last 8 chars of jobId for visual
+      // disambiguation when two labels match - shouldn't happen in
+      // normal use, but the short-id suffix keeps the symlink
+      // stably distinct).
+      //
+      // Last 8 chars (not first 8) so this matches the rest of the
+      // dashboard: formatters.shortId in dashboard/components.js
+      // also uses slice(-8) for table cells like the Models tab's
+      // ID column. That way an operator who notes "model
+      // ...0f407569" on the Models tab can immediately recognize
+      // "base_0f407569" in the TB sidebar without mental
+      // remapping.
+      //
+      // Without a label: the full jobId (legacy back-compat).
+      const dstName = entry.label
+        ? `${entry.label}_${id.slice(-8)}`
+        : id;
+      const dst = path.join(COMPARE_ROOT, dstName);
       try {
         // Type 'dir' makes Windows happy if this ever runs on a
         // Windows container; on Linux it's ignored. fs.symlinkSync
@@ -848,13 +910,14 @@ export const createServer = (config): express.Application => {
         // async chain isn't worth the complexity.
         fs.symlinkSync(src, dst, 'dir');
         linked.push(id);
+        linkNames[id] = dstName;
       } catch (e: any) {
         console.error(`set_tb_compare_jobs: symlink ${src} -> ${dst} failed: ${e}`);
         missing.push(id);
       }
     }
 
-    res.json({ ok: true, linked, missing });
+    res.json({ ok: true, linked, missing, linkNames });
   });
 
   app.get('/', (req, res) => {
