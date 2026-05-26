@@ -18,9 +18,12 @@
                 border-b border-slate-200 dark:border-slate-700
                 shadow-card relative z-[3] flex-shrink-0">
       <h1 class="text-2xl font-semibold tracking-tight m-0 mr-3">Mad Scientist Lab</h1>
-      <span class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
-        <span class="inline-block w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-        <span>Phase 0 scaffolding · worker disabled</span>
+      <span data-role="status-pill"
+            class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400"
+            aria-live="polite">
+        <span data-role="status-dot"
+              class="inline-block w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+        <span data-role="status-text">connecting…</span>
       </span>
 
       <div class="flex flex-wrap gap-2 ml-auto">
@@ -154,31 +157,261 @@
   </div>
 
   <!-- Cache-busted (see jobs.html). Bump ?v=... when components.js changes. -->
-  <script src="/components.js?v=20260525-madsci-scaffold"></script>
+  <script src="/components.js?v=20260525-madsci-phase1a"></script>
   <script>
     (function () {
-      const { showToast } = window.RoboracerUI;
+      const { showToast, confirmDialog } = window.RoboracerUI;
 
-      // ---- Phase 1 wiring points ----
-      //
-      // The four data-role hosts above (activity-feed, pending-list,
-      // implementations-list, training-list, outcomes-list) become
-      // poll targets in Phase 1. Each polls the dashboard server route
-      // /madscientist/<section> on the standard 5s interval and renders
-      // the latest snapshot.
-      //
-      // Activity feed:   GET /madscientist/activity     -> recent events
-      // Pending list:    GET /madscientist/proposals?status=pending_user
-      // Implementations: GET /madscientist/proposals?status=implementing
-      //                                                 +status=pr_open
-      // Training:        GET /madscientist/proposals?status=training
-      //                  joined to db.jobs for live percent_complete
-      // Outcomes:        GET /madscientist/proposals?status=done,failed
-      //
-      // For now (Phase 0) we render the placeholder content from the
-      // HTML above and don't poll. This file exists so Phase 1's JS
-      // additions land here without touching the goldenlayout or
-      // server-routing infra.
+      // ---- DOM hooks ---------------------------------------------------
+      const activityHost = document.querySelector('[data-role="activity-feed"]');
+      const pendingHost  = document.querySelector('[data-role="pending-list"]');
+      const pendingCount = document.querySelector('[data-role="pending-count"]');
+      const inFlightImpl = document.querySelector('[data-role="implementations-list"]');
+      const inFlightTrain = document.querySelector('[data-role="training-list"]');
+      const outcomesHost = document.querySelector('[data-role="outcomes-list"]');
+      const statusDot   = document.querySelector('[data-role="status-dot"]');
+      const statusText  = document.querySelector('[data-role="status-text"]');
+
+      // ---- Tiny utilities ----------------------------------------------
+      const esc = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      function relTime(iso) {
+        if (!iso) return '—';
+        const t = Date.parse(iso);
+        if (!Number.isFinite(t)) return iso;
+        const dt = Math.max(0, Date.now() - t);
+        if (dt < 60_000) return Math.round(dt / 1000) + 's ago';
+        if (dt < 3600_000) return Math.round(dt / 60_000) + 'm ago';
+        if (dt < 86_400_000) return Math.round(dt / 3600_000) + 'h ago';
+        return Math.round(dt / 86_400_000) + 'd ago';
+      }
+      function setStatus(ok, label) {
+        statusDot.className = 'inline-block w-1.5 h-1.5 rounded-full ' +
+          (ok ? 'bg-emerald-400' : 'bg-red-400');
+        statusText.textContent = label;
+      }
+
+      // Map verdict -> Tailwind classes for the verdict pill on each card.
+      const VERDICT_TONE = {
+        strong_accept: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+        accept:        'bg-emerald-50  text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300',
+        weak_accept:   'bg-amber-50    text-amber-700   dark:bg-amber-900/30   dark:text-amber-300',
+        weak_reject:   'bg-orange-50   text-orange-700  dark:bg-orange-900/30  dark:text-orange-300',
+        reject:        'bg-red-100     text-red-700     dark:bg-red-900/40     dark:text-red-300',
+      };
+
+      // ---- Renderers ---------------------------------------------------
+
+      function renderActivity(events) {
+        if (!events || !events.length) {
+          activityHost.innerHTML = '<div class="text-center py-6">No activity yet.</div>';
+          return;
+        }
+        activityHost.innerHTML = events.map((e) => {
+          const at = e.at && (e.at.$date || e.at);
+          return (
+            '<div class="flex items-start gap-2 py-1 border-b border-slate-100 dark:border-slate-800 last:border-0">' +
+              '<span class="text-slate-400 dark:text-slate-500 w-16 shrink-0">' + esc(relTime(at)) + '</span>' +
+              '<span class="text-indigo-600 dark:text-indigo-300 w-44 shrink-0 truncate">' + esc(e.by_agent || '?') + '</span>' +
+              '<span class="text-slate-700 dark:text-slate-300 w-24 shrink-0">' + esc(e.event || '?') + '</span>' +
+              '<span class="text-slate-500 dark:text-slate-400 truncate" title="' + esc(e.proposal_title || '') + '">' +
+                esc(e.proposal_title || '(unknown proposal)') +
+              '</span>' +
+            '</div>'
+          );
+        }).join('');
+      }
+
+      function renderPending(proposals) {
+        const pending = proposals.filter((p) =>
+          p.status === 'pending_user' || p.status === 'deferred');
+        const n = pending.length;
+        pendingCount.textContent = n === 0
+          ? '0 awaiting your approval'
+          : `${n} awaiting your approval`;
+        if (!n) {
+          pendingHost.innerHTML = '<div class="text-center py-6 text-xs">' +
+            'No proposals awaiting your approval.</div>';
+          return;
+        }
+        pendingHost.innerHTML = pending.map(renderProposalCard).join('');
+        pendingHost.querySelectorAll('[data-decide-action]').forEach((btn) => {
+          btn.addEventListener('click', onDecideClick);
+        });
+      }
+
+      function renderProposalCard(p) {
+        const judge = p.judge_review || {};
+        const verdict = judge.overall || 'pending';
+        const tone = VERDICT_TONE[verdict] || 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300';
+        const normalized = (typeof judge.normalized_score === 'number')
+          ? `(${(judge.normalized_score * 100).toFixed(0)}%)`
+          : '';
+        const concerns = (judge.concerns || []).slice(0, 3).map(esc).join('<br>');
+        const created = p.created_at && (p.created_at.$date || p.created_at);
+        return (
+          '<div class="border border-slate-200 dark:border-slate-700 rounded-xl p-4 mb-3 last:mb-0">' +
+            '<div class="flex items-start gap-3">' +
+              '<div class="flex-1 min-w-0">' +
+                '<div class="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate" title="' + esc(p.title) + '">' +
+                  esc(p.title || '(untitled)') +
+                '</div>' +
+                '<div class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">' +
+                  esc(relTime(created)) +
+                  ' · ' + esc(p.experiment_arms ? p.experiment_arms.length : 0) + ' arms' +
+                  ' · ' + esc(p.n_seeds_per_arm || 0) + ' seeds' +
+                  ' · ' + esc(p.expected_wall_time_hours || '?') + 'h estimate' +
+                '</div>' +
+              '</div>' +
+              '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide ' + tone + '">' +
+                esc(verdict.replace(/_/g, ' ')) +
+                (normalized ? ' <span class="font-mono opacity-70">' + normalized + '</span>' : '') +
+              '</span>' +
+            '</div>' +
+            (p.hypothesis ? '<div class="mt-2 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">' +
+              '<span class="font-semibold">Hypothesis:</span> ' + esc(p.hypothesis) +
+              '</div>' : '') +
+            (concerns ? '<div class="mt-2 text-xs text-amber-700 dark:text-amber-300 leading-snug">' +
+              '<span class="font-semibold">Concerns:</span><br>' + concerns +
+              '</div>' : '') +
+            '<div class="mt-3 flex flex-wrap gap-2">' +
+              '<button data-decide-action="approve" data-id="' + esc(p._id) + '" ' +
+                      'class="btn-base btn-primary text-xs">Approve</button>' +
+              '<button data-decide-action="reject" data-id="' + esc(p._id) + '" ' +
+                      'class="btn-base btn-danger text-xs">Reject</button>' +
+              '<button data-decide-action="defer" data-id="' + esc(p._id) + '" ' +
+                      'class="btn-base btn-secondary text-xs">Defer</button>' +
+            '</div>' +
+          '</div>'
+        );
+      }
+
+      function renderInFlight(proposals) {
+        const impls = proposals.filter((p) =>
+          p.status === 'approved' || p.status === 'implementing' || p.status === 'pr_open');
+        const trains = proposals.filter((p) => p.status === 'training');
+
+        inFlightImpl.innerHTML = impls.length
+          ? impls.map((p) =>
+              '<div class="py-1 border-b border-slate-100 dark:border-slate-800 last:border-0">' +
+                '<div class="font-medium text-slate-700 dark:text-slate-200 truncate">' + esc(p.title) + '</div>' +
+                '<div class="text-[11px] text-slate-500 dark:text-slate-400">' +
+                  esc(p.status) + (p.implementation_branch ? ' · ' + esc(p.implementation_branch) : '') +
+                '</div>' +
+              '</div>').join('')
+          : '<div>Nothing implementing.</div>';
+
+        inFlightTrain.innerHTML = trains.length
+          ? trains.map((p) =>
+              '<div class="py-1 border-b border-slate-100 dark:border-slate-800 last:border-0">' +
+                '<div class="font-medium text-slate-700 dark:text-slate-200 truncate">' + esc(p.title) + '</div>' +
+                '<div class="text-[11px] text-slate-500 dark:text-slate-400">' +
+                  esc((p.training_job_ids || []).length) + ' jobs queued' +
+                '</div>' +
+              '</div>').join('')
+          : '<div>No proposal-linked TRAIN jobs running.</div>';
+      }
+
+      function renderOutcomes(proposals) {
+        const out = proposals.filter((p) => p.status === 'done' || p.status === 'failed');
+        if (!out.length) {
+          outcomesHost.innerHTML = '<div class="text-center py-6">No completed proposals yet.</div>';
+          return;
+        }
+        outcomesHost.innerHTML = out.map((p) => {
+          const r = p.results || {};
+          const verdict = r.verdict || p.status;
+          const delta = (typeof r.primary_delta === 'number')
+            ? (r.primary_delta * 100).toFixed(1) + '%'
+            : '—';
+          return (
+            '<div class="py-1 border-b border-slate-100 dark:border-slate-800 last:border-0">' +
+              '<span class="font-medium text-slate-700 dark:text-slate-200">' + esc(p.title) + '</span>' +
+              ' · <span class="font-mono">' + esc(verdict) + '</span>' +
+              ' · delta=' + esc(delta) +
+            '</div>'
+          );
+        }).join('');
+      }
+
+      // ---- Decide-button handler ---------------------------------------
+
+      async function onDecideClick(ev) {
+        const btn = ev.currentTarget;
+        const action = btn.getAttribute('data-decide-action');
+        const id = btn.getAttribute('data-id');
+        if (!action || !id) return;
+
+        // Confirm for reject. Approve + defer pass through; reject is
+        // terminal and worth a click-thru.
+        if (action === 'reject') {
+          const ok = await confirmDialog({
+            title: 'Reject this proposal?',
+            message: 'Rejected proposals are terminal. The MadScientist can re-pitch later but this one closes out.',
+            confirmLabel: 'Reject',
+            confirmVariant: 'danger',
+          });
+          if (!ok) return;
+        }
+
+        const note = ''; // Phase 1A: empty note. Phase 1C will add a
+                         // text-area to capture the operator's rationale.
+
+        try {
+          const res = await fetch('/madscientist/decide', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ proposal_id: id, action, note }),
+          });
+          if (!res.ok) {
+            const err = await res.text();
+            showToast({ type: 'error', message: 'Decide failed: ' + err.slice(0, 200) });
+            return;
+          }
+          const j = await res.json();
+          showToast({
+            type: 'success',
+            message: `Proposal ${action}ed (new status: ${j.new_status}).`,
+          });
+          // Immediate refresh so the operator sees the proposal move.
+          pollOnce();
+        } catch (e) {
+          showToast({ type: 'error', message: 'Decide failed: ' + String(e) });
+        }
+      }
+
+      // ---- Poll loop ---------------------------------------------------
+
+      let pollInFlight = false;
+      async function pollOnce() {
+        if (pollInFlight) return;
+        pollInFlight = true;
+        try {
+          const [propsRes, actRes] = await Promise.all([
+            fetch('/madscientist/proposals'),
+            fetch('/madscientist/activity'),
+          ]);
+          if (!propsRes.ok || !actRes.ok) throw new Error('HTTP ' + propsRes.status + '/' + actRes.status);
+          const proposals = await propsRes.json();
+          const activity  = await actRes.json();
+          renderActivity(activity);
+          renderPending(proposals);
+          renderInFlight(proposals);
+          renderOutcomes(proposals);
+          setStatus(true, `last poll ${new Date().toLocaleTimeString()}`);
+        } catch (err) {
+          console.error(err);
+          setStatus(false, 'poll failed: ' + String(err.message || err).slice(0, 80));
+        } finally {
+          pollInFlight = false;
+        }
+      }
+
+      // Initial fetch + 5s interval, matching other dashboard tabs.
+      pollOnce();
+      const pollHandle = setInterval(pollOnce, 5000);
+      window.addEventListener('beforeunload', () => clearInterval(pollHandle));
     })();
   </script>
 

@@ -248,6 +248,196 @@ export const createServer = (config): express.Application => {
     const f: string = path.join(__dirname, '/../madscientist.html');
     res.sendFile(f);
   });
+
+  // ---- MadScientist API ----------------------------------------------
+  //
+  // Three endpoints feed the Mad Scientist Lab dashboard tab. Each is
+  // intentionally narrow:
+  //
+  //   GET /madscientist/proposals?status=<csv>&limit=<n>
+  //       Returns proposals filtered by status. status defaults to
+  //       "pending_user,implementing,pr_open,training,done,failed"
+  //       (everything an operator might want to see). Heavy fields
+  //       (rubric markdown, full audit_events) are stripped server-
+  //       side to keep the payload small for the 5s poll cadence.
+  //
+  //   GET /madscientist/activity?limit=<n>
+  //       Returns recent audit_events flattened across all proposals,
+  //       sorted by timestamp desc. Renders as the activity feed.
+  //
+  //   POST /madscientist/decide
+  //       Body: { proposal_id, action: "approve"|"reject"|"defer", note }
+  //       Updates the proposal's status + decision fields. Phase 1A
+  //       does NOT yet trigger the orchestrator on "approve" - that
+  //       lands in Phase 1C. For now an approved proposal just sits
+  //       at status=approved waiting for the human to act on it.
+  //
+  // The status enum + collection name come straight from the Python
+  // side (rl_agent/madscientist/constants.py); we duplicate them
+  // here because the dashboard server doesn't import Python modules.
+  // Drift risk is low because the values are extremely stable.
+
+  const MS_PROPOSALS_COLL = 'proposals';
+  const MS_VALID_DECISIONS = new Set([
+    'approve', 'reject', 'defer', 'approve_with_revisions',
+  ]);
+  const MS_OBJID_RE = /^[a-fA-F0-9]{24}$/;
+
+  app.get('/madscientist/proposals', (req, res) => {
+    const rawStatus = (req.query.status as string | undefined) || '';
+    let statusFilter: string[];
+    if (rawStatus.trim()) {
+      statusFilter = rawStatus.split(',').map((s) => s.trim()).filter((s) => s.length);
+    } else {
+      // Default: everything except still-being-judged (those don't
+      // need UI attention yet) and the explicitly-rejected ones
+      // (they live in the activity feed instead).
+      statusFilter = [
+        'pending_user', 'deferred', 'approved', 'implementing',
+        'pr_open', 'training', 'done', 'failed',
+      ];
+    }
+    const limit = Math.max(1, Math.min(200,
+      parseInt((req.query.limit as string) || '50', 10) || 50));
+
+    // Projection: omit heavy / sensitive / not-yet-used fields. Keeps
+    // the polled payload small.
+    const projection = {
+      // never send: rubric markdown, full audit_event details (we
+      // serve those separately from /madscientist/activity),
+      // implementation_log streams (those are tailed via a
+      // dedicated endpoint in Phase 1C).
+      audit_events: 0,
+      implementation_log: 0,
+    };
+
+    dbo.collection(MS_PROPOSALS_COLL)
+      .find({ status: { $in: statusFilter } }, { projection })
+      .sort({ updated_at: -1, created_at: -1 })
+      .limit(limit)
+      .toArray((err, docs) => {
+        if (err) {
+          console.error('GET /madscientist/proposals:', err);
+          res.status(500).json({ error: String(err) });
+          return;
+        }
+        res.json(docs || []);
+      });
+  });
+
+  app.get('/madscientist/activity', (req, res) => {
+    const limit = Math.max(1, Math.min(200,
+      parseInt((req.query.limit as string) || '30', 10) || 30));
+
+    // Aggregate the most-recent N audit_events across all proposals,
+    // sorted by timestamp desc. We use a Mongo aggregation so the
+    // unwind + sort + limit happens server-side instead of streaming
+    // every proposal across the wire.
+    dbo.collection(MS_PROPOSALS_COLL).aggregate([
+      // Only proposals that have any audit_events at all.
+      { $match: { audit_events: { $exists: true, $ne: [] } } },
+      // Pop each event into its own doc.
+      { $unwind: '$audit_events' },
+      // Promote the event's fields + carry through identifying info.
+      { $project: {
+          _id: 0,
+          proposal_id: '$_id',
+          proposal_title: '$title',
+          proposal_status: '$status',
+          at: '$audit_events.at',
+          by_agent: '$audit_events.by_agent',
+          event: '$audit_events.event',
+          detail: '$audit_events.detail',
+        } },
+      { $sort: { at: -1 } },
+      { $limit: limit },
+    ]).toArray((err, rows) => {
+      if (err) {
+        console.error('GET /madscientist/activity:', err);
+        res.status(500).json({ error: String(err) });
+        return;
+      }
+      res.json(rows || []);
+    });
+  });
+
+  app.post('/madscientist/decide', (req, res) => {
+    const body = req.body || {};
+    const proposalId = String(body.proposal_id || '').trim();
+    const action = String(body.action || '').trim();
+    const note = String(body.note || '').slice(0, 4000);
+
+    if (!MS_OBJID_RE.test(proposalId)) {
+      res.status(400).json({ error: 'proposal_id must be a 24-char hex ObjectId' });
+      return;
+    }
+    if (!MS_VALID_DECISIONS.has(action)) {
+      res.status(400).json({
+        error: `action must be one of ${Array.from(MS_VALID_DECISIONS).join(', ')}`,
+      });
+      return;
+    }
+
+    const now = new Date();
+    // Map the action to the next status:
+    //   approve / approve_with_revisions -> "approved" (Phase 1C
+    //     orchestrator will pick this up). For now it just sits.
+    //   reject -> "rejected" (terminal, no further worker action).
+    //   defer -> "deferred" (soft state; user can revisit later).
+    let nextStatus: string;
+    if (action === 'reject') {
+      nextStatus = 'rejected';
+    } else if (action === 'defer') {
+      nextStatus = 'deferred';
+    } else {
+      nextStatus = 'approved';
+    }
+
+    const decision = {
+      at: now,
+      by: 'user',
+      action,
+      note,
+      revision_applied: action === 'approve_with_revisions',
+      source: 'dashboard',
+    };
+    const auditEvent = {
+      at: now,
+      by_agent: 'user',
+      event: 'decided',
+      detail: {
+        action,
+        next_status: nextStatus,
+        note_chars: note.length,
+        source: 'dashboard',
+      },
+    };
+
+    dbo.collection(MS_PROPOSALS_COLL).updateOne(
+      { _id: ObjectID(proposalId) },
+      {
+        $set: { status: nextStatus, decision, updated_at: now },
+        $push: { audit_events: auditEvent },
+      },
+      {},
+      (err, result) => {
+        if (err) {
+          console.error('POST /madscientist/decide:', err);
+          res.status(500).json({ error: String(err) });
+          return;
+        }
+        if (result.matchedCount === 0) {
+          res.status(404).json({ error: 'proposal not found' });
+          return;
+        }
+        res.json({
+          ok: true,
+          proposal_id: proposalId,
+          new_status: nextStatus,
+          action,
+        });
+      });
+  });
   app.get('/get_models', (req,res) => {
     if(needsUpdate(req, modelsChanged))
     {
