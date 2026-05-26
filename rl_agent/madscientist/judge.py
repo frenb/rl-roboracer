@@ -89,6 +89,10 @@ _JUDGE_SYSTEM_PROMPT_TEMPLATE = """You are the Judge agent for the MadScientist 
 
 You are independent (not adversarial). Surface concerns to the operator without replacing their judgment. Even on accepts, list at least one concern unless the verdict is strong_accept.
 
+CURRENT DATE: {today_iso}
+
+Note on arxiv IDs: the format is YYMM.NNNNN. So 2605.NNNNN means submitted in May 2026 - these are LEGITIMATE recent papers, not "future-dated" hallucinations. Don't penalize papers solely on YYMM appearance. Pre-rubric check A has already HTTP-probed every cited arxiv URL; a paper that's in the proposal IS reachable on arxiv.org.
+
 Score each of the 8 axes 0-5 per the level anchors in the rubric. Mechanically follow the anchors - do not improvise scoring categories.
 
 If an axis is genuinely N/A (e.g., a pure-codebase proposal has no source papers, so paper_faithfulness=N/A), add its key to axes_skipped instead of giving it a score.
@@ -134,8 +138,11 @@ _JUDGE_USER_PROMPT_TEMPLATE = """Review this proposal. Return the JSON object sp
 
 def build_judge_prompts(
     rubric_markdown: str, proposal_doc: Dict[str, Any],
+    *,
+    today: Optional[datetime.date] = None,
 ) -> Tuple[str, str]:
     """Return (system_prompt, user_prompt) for the Anthropic call."""
+    today = today or datetime.datetime.now(datetime.timezone.utc).date()
     # Compact the proposal so we don't waste tokens on indentation but
     # keep it human-readable enough that the LLM doesn't choke.
     proposal_for_prompt = _clean_proposal_for_prompt(proposal_doc)
@@ -143,7 +150,8 @@ def build_judge_prompts(
         proposal_for_prompt, indent=2, default=str, sort_keys=False)
     return (
         _JUDGE_SYSTEM_PROMPT_TEMPLATE.format(
-            rubric_markdown=rubric_markdown),
+            rubric_markdown=rubric_markdown,
+            today_iso=today.isoformat()),
         _JUDGE_USER_PROMPT_TEMPLATE.format(
             proposal_json=proposal_json),
     )
