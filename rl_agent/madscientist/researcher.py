@@ -307,6 +307,10 @@ _RESEARCHER_SYSTEM_PROMPT = """You are the MadScientist Researcher agent. Your j
   * what's already been tried (existing experiment_designs, reward_designs, top past models)
   * the project's research goals: improve a Unity-rendered autonomous-driving RL agent that mixes BC pretraining with online SAC
 
+CURRENT DATE: {today_iso}
+
+Note on arxiv IDs: the format is YYMM.NNNNN. So 2605.NNNNN means submitted in May 2026 - these are LEGITIMATE recent papers, not "future-dated" hallucinations. Don't dismiss recent papers solely on YYMM. Every arxiv_id you cite will be HTTP-probed against https://arxiv.org/abs/<arxiv_id> before your proposal is accepted - a 404 means the paper doesn't exist and you'll be asked to revise.
+
 The proposal will be reviewed by a Judge agent against a rubric. Your output must:
 
   1. Pass the Judge's 7 pre-rubric checks:
@@ -441,8 +445,11 @@ def build_researcher_prompts(
     budget: Dict[str, Any],
     *,
     days_back: int = DEFAULT_RESEARCH_DAYS_BACK,
+    today: Optional[datetime.date] = None,
 ) -> Tuple[str, str]:
     """Return (system_prompt, user_prompt) for the first researcher call."""
+    today = today or datetime.datetime.now(datetime.timezone.utc).date()
+    today_iso = today.isoformat()
     papers_block = "\n\n".join(
         f"[{p['arxiv_id']}] {p['title']}\n"
         f"  authors: {', '.join((p.get('authors') or [])[:3])}"
@@ -465,7 +472,12 @@ def build_researcher_prompts(
         codebase_json=json.dumps(codebase, indent=2, default=str),
         budget_block=budget_block,
     )
-    return (_RESEARCHER_SYSTEM_PROMPT, user_prompt)
+    # Plain .replace() rather than .format() because the system prompt
+    # contains literal JSON examples with { / } characters that
+    # str.format() would mis-parse as placeholders.
+    system_prompt = _RESEARCHER_SYSTEM_PROMPT.replace(
+        "{today_iso}", today_iso)
+    return (system_prompt, user_prompt)
 
 
 def build_revision_prompt(failures: List[str]) -> str:
@@ -476,6 +488,31 @@ def build_revision_prompt(failures: List[str]) -> str:
 
 
 # ---- Response parsing (shared with judge.py shape) -----------------------
+
+
+# Canonical URL prefix for arxiv papers. The Researcher overwrites
+# any LLM-emitted source_papers[*].url with this canonical form
+# derived from arxiv_id.
+_ARXIV_ABS_URL = "https://arxiv.org/abs/"
+
+
+def _canonicalize_paper_urls(candidate: Dict[str, Any]) -> None:
+    """In-place rewrite of every source_papers[*].url to the canonical
+    https://arxiv.org/abs/<arxiv_id> form.
+
+    Idempotent. No-op if source_papers is missing / not a list / the
+    entry is missing arxiv_id. Tolerates string entries (rare LLM
+    failure mode) by skipping them.
+    """
+    papers = candidate.get("source_papers")
+    if not isinstance(papers, list):
+        return
+    for p in papers:
+        if not isinstance(p, dict):
+            continue
+        aid = p.get("arxiv_id")
+        if isinstance(aid, str) and aid.strip():
+            p["url"] = _ARXIV_ABS_URL + aid.strip()
 
 
 _JSON_BLOCK_RE = re.compile(r"\{(?:[^{}]|\{[^{}]*\})*\}", re.DOTALL)
@@ -775,13 +812,24 @@ def research_one_cycle(
                     "fences, no commentary.")})
             continue
 
-        # Pre-rubric self-check. We construct a temporary proposal-like
-        # object for the checks (most check helpers accept dicts).
+        # Canonicalize source_papers[*].url BEFORE running checks. We
+        # don't trust the LLM to produce well-formed URLs (it routinely
+        # malforms them - missing protocol, wrong host, etc.), so we
+        # derive the canonical URL from arxiv_id directly. This also
+        # ensures the dashboard's "view paper" links work.
+        _canonicalize_paper_urls(candidate)
+
+        # Pre-rubric self-check. probe_urls=True so we HTTP-HEAD every
+        # canonical arxiv URL before submission - catches the
+        # LLM-hallucinated-arxiv-id failure mode (the LLM can substitute
+        # a plausible-looking arxiv_id that doesn't actually resolve,
+        # even when given a list of real papers in context). Costs
+        # ~100ms per paper, plenty cheap.
         check_result = pre_rubric_checks.run_all(
             candidate,
             monthly_budget_usd=monthly_budget_usd,
             spent_so_far_usd=budget["spent_this_month_usd"],
-            probe_urls=False,  # Researcher trusts arxiv IDs it fetched
+            probe_urls=True,
         )
         if check_result.all_passed:
             parsed = candidate

@@ -33,7 +33,7 @@ import os
 import sys
 import traceback
 from typing import Any, Dict, List
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from pymongo import MongoClient
 
@@ -396,6 +396,106 @@ def test_rate_gate():
         lambda: client.messages.create.call_count == 0)
 
 
+def test_canonicalize_paper_urls():
+    print("\nGroup 8: _canonicalize_paper_urls rewrites source_papers[*].url",
+          flush=True)
+
+    # Empty source_papers - no-op
+    c = {}
+    researcher._canonicalize_paper_urls(c)
+    _expect("empty proposal - no-op", lambda: c == {})
+
+    # Mixed-shape source_papers
+    c = {"source_papers": [
+        {"arxiv_id": "2308.12345", "url": "http://wrong.example/x"},
+        {"arxiv_id": "2605.26078"},  # no url field
+        {"arxiv_id": ""},             # blank arxiv_id - skip
+        "not a dict",                 # tolerated, skip
+    ]}
+    researcher._canonicalize_paper_urls(c)
+    papers = c["source_papers"]
+    _expect(
+        "first paper url overwritten with canonical",
+        lambda: papers[0]["url"] == "https://arxiv.org/abs/2308.12345")
+    _expect(
+        "second paper url populated with canonical",
+        lambda: papers[1]["url"] == "https://arxiv.org/abs/2605.26078")
+    _expect(
+        "blank arxiv_id paper unchanged",
+        lambda: "url" not in papers[2])
+    _expect(
+        "non-dict paper unchanged",
+        lambda: papers[3] == "not a dict")
+
+
+def test_fake_arxiv_id_rejected_by_url_probe():
+    print("\nGroup 9: fake arxiv_id (URL 404) -> rejected by pre-rubric check A",
+          flush=True)
+    db = _db()
+
+    # LLM returns a proposal with arxiv_id "9999.99999" which won't
+    # resolve. We mock httpx.head to simulate the 404.
+    fake_id_proposal = _good_proposal_dict()
+    fake_id_proposal["source_papers"] = [
+        {"arxiv_id": "9999.99999", "title": "fake paper",
+         "section_refs": ["nowhere"]},
+    ]
+    client = _mock_anthropic_returning(fake_id_proposal, fake_id_proposal,
+                                       fake_id_proposal)
+
+    # Stub httpx.head to return 404 for any URL. Important: patch the
+    # httpx that pre_rubric_checks imports lazily, NOT a global httpx
+    # we may have already imported elsewhere.
+    fake_resp_404 = MagicMock()
+    fake_resp_404.status_code = 404
+    fake_httpx = MagicMock()
+    fake_httpx.head = MagicMock(return_value=fake_resp_404)
+
+    pre_count = db.proposals.count_documents({})
+    with patch.dict("sys.modules", {"httpx": fake_httpx}):
+        res = researcher.research_one_cycle(
+            db, client,
+            monthly_budget_usd=250.0,
+            max_proposals_per_day=10,
+            max_revisions=2,
+            arxiv_fetcher=_mock_arxiv_fetcher)
+    post_count = db.proposals.count_documents({})
+
+    _expect(
+        "fake-id cycle returns None (no submission)",
+        lambda: res is None)
+    _expect(
+        "no proposal inserted",
+        lambda: pre_count == post_count)
+    # Should have tried the initial + 2 revisions = 3 calls (all
+    # producing the same fake id) before giving up.
+    _expect(
+        "LLM called 3 times (initial + max_revisions=2 retries) before abandon",
+        lambda: client.messages.create.call_count == 3,
+        f"call_count={client.messages.create.call_count}")
+
+
+def test_today_date_in_prompt():
+    print("\nGroup 10: build_researcher_prompts injects today's date",
+          flush=True)
+    sys_p, usr_p = researcher.build_researcher_prompts(
+        papers=[], codebase={}, budget={
+            "monthly_budget_usd": 250.0,
+            "spent_this_month_usd": 0.0,
+            "remaining_this_month_usd": 250.0,
+            "max_proposals_per_day": 1,
+            "proposals_today": 0,
+            "can_propose_today": True,
+        },
+        today=datetime.date(2026, 5, 25))
+    _expect(
+        "system prompt contains today's date",
+        lambda: "2026-05-25" in sys_p)
+    _expect(
+        "system prompt contains arxiv YYMM note",
+        lambda: "YYMM" in sys_p)
+
+
 def test_codebase_context_shape():
     print("\nGroup 7: fetch_codebase_context returns sensible structure",
           flush=True)
@@ -425,10 +525,28 @@ def test_codebase_context_shape():
 # ---- Main ---------------------------------------------------------------
 
 
+def _install_default_httpx_mock():
+    """Inject a fake httpx module that ALWAYS returns 200 OK on head().
+
+    Tests that need a different behavior (e.g., the 404-rejection test
+    in Group 9) override sys.modules['httpx'] inside their own `with
+    patch.dict(...)` block. This default mock keeps the other tests
+    offline + deterministic.
+    """
+    import sys as _sys
+    fake_resp_200 = MagicMock()
+    fake_resp_200.status_code = 200
+    fake_httpx = MagicMock()
+    fake_httpx.head = MagicMock(return_value=fake_resp_200)
+    _sys.modules["httpx"] = fake_httpx
+
+
 def main() -> int:
     print("=" * 64, flush=True)
     print("Unit tests: rl_agent/madscientist/researcher.py", flush=True)
     print("=" * 64, flush=True)
+
+    _install_default_httpx_mock()
 
     db = _db()
     try:
@@ -438,6 +556,9 @@ def main() -> int:
         test_persistent_check_failure_aborts()
         test_budget_gate()
         test_rate_gate()
+        test_canonicalize_paper_urls()
+        test_fake_arxiv_id_rejected_by_url_probe()
+        test_today_date_in_prompt()
         test_codebase_context_shape()
     finally:
         _cleanup(db)
