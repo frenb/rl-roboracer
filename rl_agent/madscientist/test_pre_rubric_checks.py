@@ -382,10 +382,118 @@ def test_check_g():
         lambda: not pre_rubric_checks.check_g_reward_invariant_secondary(p3).passed)
 
 
+# ---- Check H: paper evidence (concrete section_refs + supporting_evidence) ----
+
+def test_check_h():
+    print("\nCheck H: paper evidence (concrete section_refs + supporting_evidence)",
+          flush=True)
+
+    # PASS: no source papers (pure-codebase proposal)
+    _expect(
+        "no source papers - PASS (vacuously)",
+        lambda: pre_rubric_checks.check_h_paper_evidence(
+            _baseline_proposal()).passed)
+
+    # PASS: concrete section_refs + sufficient supporting_evidence
+    good = _baseline_proposal(source_papers=[
+        PaperReference(
+            arxiv_id="1709.10089",
+            title="DAPG",
+            section_refs=["Section 4.2", "Eq. 12"],
+            supporting_evidence=(
+                "Eq. 12 introduces the auxiliary BC loss term scaled "
+                "by lambda; this is the knob we are sweeping.")),
+    ])
+    _expect(
+        "concrete refs + good evidence - PASS",
+        lambda: pre_rubric_checks.check_h_paper_evidence(good).passed)
+
+    # PASS: each entry exercising a different locator pattern
+    variants = _baseline_proposal(source_papers=[
+        PaperReference(
+            arxiv_id="2104.06129",
+            section_refs=["§3.1"],
+            supporting_evidence="A" * 40),
+        PaperReference(
+            arxiv_id="2308.12345",
+            section_refs=["Theorem 3"],
+            supporting_evidence="A" * 40),
+        PaperReference(
+            arxiv_id="2401.00001",
+            section_refs=["Fig. 5"],
+            supporting_evidence="A" * 40),
+        PaperReference(
+            arxiv_id="2401.00002",
+            section_refs=["Page 7"],
+            supporting_evidence="A" * 40),
+    ])
+    _expect(
+        "section_refs locator variants (§, Theorem, Fig., Page) - PASS",
+        lambda: pre_rubric_checks.check_h_paper_evidence(variants).passed)
+
+    # FAIL: section_refs lacks a concrete locator (thematic descriptors only)
+    vague_refs = _baseline_proposal(source_papers=[
+        PaperReference(
+            arxiv_id="2605.26078",
+            section_refs=[
+                "Langevin-type diffusion variance analysis",
+                "Bellman recursion dependence",
+            ],
+            supporting_evidence=(
+                "The paper analyses gradient variance under Langevin "
+                "dynamics; this connects to our batch-size hypothesis.")),
+    ])
+    _expect(
+        "section_refs has no concrete locator - FAIL",
+        lambda: not pre_rubric_checks.check_h_paper_evidence(vague_refs).passed)
+    _expect(
+        "FAIL reason mentions 'concrete locator'",
+        lambda: "concrete locator" in (
+            pre_rubric_checks.check_h_paper_evidence(vague_refs).reason or ""))
+
+    # FAIL: section_refs concrete, supporting_evidence missing
+    no_evidence = _baseline_proposal(source_papers=[
+        PaperReference(
+            arxiv_id="1709.10089",
+            section_refs=["Section 4.2"],
+            supporting_evidence=""),
+    ])
+    _expect(
+        "missing supporting_evidence - FAIL",
+        lambda: not pre_rubric_checks.check_h_paper_evidence(no_evidence).passed)
+
+    # FAIL: section_refs concrete, supporting_evidence too short
+    short_evidence = _baseline_proposal(source_papers=[
+        PaperReference(
+            arxiv_id="1709.10089",
+            section_refs=["Eq. 4"],
+            supporting_evidence="yes."),
+    ])
+    _expect(
+        "supporting_evidence too short - FAIL",
+        lambda: not pre_rubric_checks.check_h_paper_evidence(short_evidence).passed)
+    _expect(
+        "FAIL reason mentions character count",
+        lambda: "too short" in (
+            pre_rubric_checks.check_h_paper_evidence(short_evidence).reason or ""))
+
+    # FAIL: BOTH vague refs AND short evidence -> reason should mention BOTH papers if multiple
+    multi_bad = _baseline_proposal(source_papers=[
+        PaperReference(arxiv_id="1709.10089", section_refs=["vague"], supporting_evidence="A" * 40),
+        PaperReference(arxiv_id="2104.06129", section_refs=["Eq. 12"], supporting_evidence="x"),
+    ])
+    result = pre_rubric_checks.check_h_paper_evidence(multi_bad)
+    _expect(
+        "two-paper-failure - both arxiv ids surfaced in reason",
+        lambda: ("1709.10089" in (result.reason or ""))
+                and ("2104.06129" in (result.reason or "")),
+        f"reason={result.reason!r}")
+
+
 # ---- run_all aggregator -------------------------------------------------
 
 def test_run_all_aggregator():
-    print("\nrun_all: aggregator returns all 7 results + correct all_passed",
+    print("\nrun_all: aggregator returns all 8 results + correct all_passed",
           flush=True)
 
     p = _baseline_proposal()
@@ -394,8 +502,8 @@ def test_run_all_aggregator():
         "good proposal - all_passed=True",
         lambda: res.all_passed)
     _expect(
-        "good proposal - 7 results returned",
-        lambda: len(res.results) == 7,
+        "good proposal - 8 results returned",
+        lambda: len(res.results) == 8,
         f"got {len(res.results)}")
 
     # Bad proposal: empty hypothesis (B) + only 1 arm (C).
@@ -428,6 +536,7 @@ def main() -> int:
     test_check_e()
     test_check_f()
     test_check_g()
+    test_check_h()
     test_run_all_aggregator()
 
     print("\n" + "=" * 64, flush=True)

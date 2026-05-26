@@ -248,7 +248,11 @@ def _build_test_proposal() -> Dict[str, Any]:
             PaperReference(
                 arxiv_id="1709.10089",
                 title="DAPG paper",
-                section_refs=["Eq. 4"]),
+                section_refs=["Eq. 4", "Section 3.1"],
+                supporting_evidence=(
+                    "Eq. 4 defines the DAPG auxiliary BC loss term that "
+                    "we add to the SAC actor objective; lambda is the "
+                    "knob this proposal sweeps.")),
         ],
         hypothesis="DAPG aux BC loss raises avg_return >= 10% over baseline.",
         motivation="DAPG works in continuous control; untested in our env.",

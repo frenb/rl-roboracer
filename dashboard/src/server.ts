@@ -246,6 +246,14 @@ export const createServer = (config): express.Application => {
   // page polls on the standard 5s interval.
   app.get('/madscientist', (req, res) => {
     const f: string = path.join(__dirname, '/../madscientist.html');
+    // The HTML embeds an inline <script>, so a stale cached copy of
+    // this file ships stale JS too. Disable the HTTP cache for this
+    // route so iterating on the dashboard during dev doesn't require
+    // a hard reload every time. Hot path is cheap (one file read per
+    // tab open).
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.sendFile(f);
   });
 
@@ -359,6 +367,226 @@ export const createServer = (config): express.Application => {
       }
       res.json(rows || []);
     });
+  });
+
+  // POST /madscientist/proposals/:id/edit
+  //   Body: { patch: { <field>: <value>, ... } }
+  //   Mutates whitelisted fields on a proposal that's still in
+  //   `pending_user` or `deferred` state. Once the operator approves /
+  //   rejects / defers (or the orchestrator picks it up), the proposal
+  //   is locked - mutating it after the orchestrator has queued TRAIN
+  //   jobs would silently break the experiment design.
+  //
+  //   The whitelist below is intentionally minimal - everything an
+  //   operator would realistically want to nudge before approving (the
+  //   hypothesis text, the success threshold, seeds/iters/wall-time).
+  //   Editing experiment_arms is NOT supported here; reject and let
+  //   the researcher regenerate is the right flow for that.
+  //
+  //   Every edit appends an audit_events entry with a field-level diff
+  //   so the operator's nudges are reconstructible later.
+  const MS_EDITABLE_TOP_LEVEL = new Set([
+    'title', 'hypothesis', 'motivation', 'code_changes_summary',
+    'n_seeds_per_arm', 'num_iterations_per_seed',
+    'expected_wall_time_hours',
+  ]);
+  const MS_EDITABLE_PRIMARY = new Set([
+    'metric', 'arm_a', 'arm_b', 'comparator',
+    'threshold', 'threshold_kind',
+  ]);
+  const MS_VALID_COMPARATORS = new Set(['>=', '<=', '>', '<']);
+  const MS_VALID_THRESHOLD_KINDS = new Set(['relative', 'absolute']);
+  const MS_EDITABLE_STATUSES = new Set(['pending_user', 'deferred']);
+
+  app.post('/madscientist/proposals/:id/edit', (req, res) => {
+    const proposalId = String(req.params.id || '').trim();
+    if (!MS_OBJID_RE.test(proposalId)) {
+      res.status(400).json({ error: 'proposal id must be a 24-char hex ObjectId' });
+      return;
+    }
+    const body = req.body || {};
+    const rawPatch = (body.patch && typeof body.patch === 'object') ? body.patch : null;
+    if (!rawPatch) {
+      res.status(400).json({ error: 'body.patch object required' });
+      return;
+    }
+
+    // Validate + assemble the $set + diff trail. We fetch the
+    // existing doc first so the diff can record before-values; that
+    // makes the audit log readable ("hypothesis: 'A' -> 'B'") rather
+    // than just "field X was edited".
+    dbo.collection(MS_PROPOSALS_COLL).findOne(
+      { _id: ObjectID(proposalId) },
+      {},
+      (findErr, existing) => {
+        if (findErr) {
+          console.error('POST /madscientist/proposals/:id/edit findOne:', findErr);
+          res.status(500).json({ error: String(findErr) });
+          return;
+        }
+        if (!existing) {
+          res.status(404).json({ error: 'proposal not found' });
+          return;
+        }
+        if (!MS_EDITABLE_STATUSES.has(existing.status)) {
+          res.status(409).json({
+            error: `proposal status=${existing.status} is no longer editable. ` +
+              `Only pending_user / deferred proposals can be edited.`,
+          });
+          return;
+        }
+
+        const set: Record<string, any> = {};
+        const diff: Record<string, { from: any; to: any }> = {};
+
+        // Top-level fields
+        for (const k of Object.keys(rawPatch)) {
+          if (!MS_EDITABLE_TOP_LEVEL.has(k)) continue;
+          const v = rawPatch[k];
+          let normalized: any = v;
+          if (k === 'n_seeds_per_arm' || k === 'num_iterations_per_seed') {
+            const n = Number.parseInt(String(v), 10);
+            if (!Number.isFinite(n) || n < 1 || n > 100000) {
+              res.status(400).json({
+                error: `${k} must be an integer in [1, 100000]; got ${JSON.stringify(v)}`,
+              });
+              return;
+            }
+            normalized = n;
+          } else if (k === 'expected_wall_time_hours') {
+            // null allowed (means "unknown"); otherwise positive float
+            if (v === null || v === undefined || v === '') {
+              normalized = null;
+            } else {
+              const f = Number.parseFloat(String(v));
+              if (!Number.isFinite(f) || f < 0 || f > 10000) {
+                res.status(400).json({
+                  error: `expected_wall_time_hours must be a non-negative float < 10000; ` +
+                    `got ${JSON.stringify(v)}`,
+                });
+                return;
+              }
+              normalized = f;
+            }
+          } else {
+            if (typeof v !== 'string') {
+              res.status(400).json({
+                error: `${k} must be a string; got ${typeof v}`,
+              });
+              return;
+            }
+            normalized = v.slice(0, 16000);
+          }
+          if (existing[k] !== normalized) {
+            set[k] = normalized;
+            diff[k] = { from: existing[k] ?? null, to: normalized };
+          }
+        }
+
+        // success_criteria.primary (string)
+        if (typeof rawPatch['success_criteria.primary'] === 'string') {
+          const v = rawPatch['success_criteria.primary'].slice(0, 8000);
+          const existingPrimary = (existing.success_criteria && existing.success_criteria.primary) || '';
+          if (existingPrimary !== v) {
+            set['success_criteria.primary'] = v;
+            diff['success_criteria.primary'] = { from: existingPrimary, to: v };
+          }
+        }
+
+        // success_criteria.primary_parsed.{metric,arm_a,arm_b,comparator,threshold,threshold_kind}
+        for (const k of Array.from(MS_EDITABLE_PRIMARY)) {
+          const dottedKey = `success_criteria.primary_parsed.${k}`;
+          if (!(dottedKey in rawPatch)) continue;
+          let v = rawPatch[dottedKey];
+          if (k === 'comparator') {
+            if (!MS_VALID_COMPARATORS.has(String(v))) {
+              res.status(400).json({
+                error: `comparator must be one of ${Array.from(MS_VALID_COMPARATORS).join(', ')}; ` +
+                  `got ${JSON.stringify(v)}`,
+              });
+              return;
+            }
+          } else if (k === 'threshold_kind') {
+            if (!MS_VALID_THRESHOLD_KINDS.has(String(v))) {
+              res.status(400).json({
+                error: `threshold_kind must be one of ${Array.from(MS_VALID_THRESHOLD_KINDS).join(', ')}; ` +
+                  `got ${JSON.stringify(v)}`,
+              });
+              return;
+            }
+          } else if (k === 'threshold') {
+            const f = Number.parseFloat(String(v));
+            if (!Number.isFinite(f)) {
+              res.status(400).json({
+                error: `threshold must be a finite number; got ${JSON.stringify(v)}`,
+              });
+              return;
+            }
+            v = f;
+          } else {
+            // metric / arm_a / arm_b: strings, length-capped
+            if (typeof v !== 'string' || !v.trim()) {
+              res.status(400).json({
+                error: `${k} must be a non-empty string; got ${JSON.stringify(v)}`,
+              });
+              return;
+            }
+            v = v.trim().slice(0, 200);
+          }
+          const existingParsed = (existing.success_criteria
+            && existing.success_criteria.primary_parsed) || {};
+          if (existingParsed[k] !== v) {
+            set[dottedKey] = v;
+            diff[dottedKey] = { from: existingParsed[k] ?? null, to: v };
+          }
+        }
+
+        if (Object.keys(set).length === 0) {
+          res.json({
+            ok: true,
+            proposal_id: proposalId,
+            updated_fields: [],
+            note: 'patch contained no changes',
+          });
+          return;
+        }
+
+        const now = new Date();
+        set.updated_at = now;
+        const auditEvent = {
+          at: now,
+          by_agent: 'user',
+          event: 'edited',
+          detail: {
+            source: 'dashboard',
+            field_diff: diff,
+          },
+        };
+
+        dbo.collection(MS_PROPOSALS_COLL).updateOne(
+          { _id: ObjectID(proposalId), status: { $in: Array.from(MS_EDITABLE_STATUSES) } },
+          { $set: set, $push: { audit_events: auditEvent } },
+          {},
+          (updErr, result) => {
+            if (updErr) {
+              console.error('POST /madscientist/proposals/:id/edit updateOne:', updErr);
+              res.status(500).json({ error: String(updErr) });
+              return;
+            }
+            if (result.matchedCount === 0) {
+              // Lost the race: status changed between findOne and updateOne.
+              res.status(409).json({
+                error: 'proposal status changed concurrently; refresh and retry',
+              });
+              return;
+            }
+            res.json({
+              ok: true,
+              proposal_id: proposalId,
+              updated_fields: Object.keys(set).filter((k) => k !== 'updated_at'),
+            });
+          });
+      });
   });
 
   app.post('/madscientist/decide', (req, res) => {

@@ -1,6 +1,6 @@
 """Pre-rubric deterministic checks from JUDGE_RUBRIC.md section 2.
 
-Seven checks (A-G) that run BEFORE the LLM-scoring step. Each is
+Eight checks (A-H) that run BEFORE the LLM-scoring step. Each is
 deterministic and pure-Python (with one optional network probe in
 check A). The Judge worker calls run_all(proposal, ...) on every
 proposal before forking out to the rubric LLM call; a single failure
@@ -9,8 +9,8 @@ recorded in proposal.judge_review.concerns.
 
 These are the cheap fail-fast checks - they catch the largest classes
 of garbage proposals (hallucinated papers, missing controls, schema-
-key typos, over-budget plans, edits to safety-critical paths) without
-spending a single LLM token.
+key typos, over-budget plans, edits to safety-critical paths, vague
+paper citations) without spending a single LLM token.
 
 Each check returns a CheckResult(passed, reason). run_all() aggregates
 into an AllChecksResult with .all_passed and .failed convenience
@@ -75,6 +75,33 @@ SAFETY_CRITICAL_PATTERNS = (
     "virtual_endpoint/virtual.py",
     "dashboard/",
 )
+
+
+# Check H: concrete-locator regex for section_refs. Each cited paper's
+# section_refs entries must contain at least one of these tokens (or
+# a bare digit) to count as "concrete" - i.e., locator info a human
+# reviewer can use to flip directly to the relevant passage.
+# Examples that PASS:  "Section 4.2", "Eq. 12", "Theorem 3",
+#                      "Algorithm 1", "Fig. 5", "§3.1", "Page 7",
+#                      "Appendix B", "Table 2", "Lemma 1.3"
+# Examples that FAIL:  "Langevin-type diffusion variance analysis"
+#                      "Bellman recursion dependence"
+#                      "the variance bound"
+_CONCRETE_LOCATOR_RE = re.compile(
+    r"(\d+(\.\d+)?)"                # any digit (covers '4', '4.2', '12')
+    r"|\b("
+    r"section|sec\.?|chapter|chap\.?|appendix|app\.?"
+    r"|eq(uation)?\.?|theorem|thm\.?|lemma|proposition|prop\.?|corollary"
+    r"|algorithm|algo\.?|figure|fig\.?|table|tab\.?"
+    r"|page|p\.|pg\.?|§"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Check H: supporting_evidence minimum char length. Short enough that
+# a 1-sentence paraphrase fits ("Eq. 12 bounds variance as O(1/sqrt(B)).")
+# Long enough that one-word entries ("yes", "true") get rejected.
+_MIN_SUPPORTING_EVIDENCE_CHARS = 40
 
 
 # Default cost estimator constants. Tune from observed data later.
@@ -373,6 +400,66 @@ def check_g_reward_invariant_secondary(proposal) -> CheckResult:
     return CheckResult("G", True, None)
 
 
+def check_h_paper_evidence(proposal) -> CheckResult:
+    """H: every cited paper has CONCRETE section_refs AND non-empty
+    supporting_evidence.
+
+    The Researcher's earlier failure mode was citing a paper with
+    section_refs like ['Langevin-type diffusion variance analysis']
+    - thematic descriptors rather than locators. A human reviewer
+    can't flip directly to a "Langevin-type diffusion variance
+    analysis"; they CAN flip to "Section 4.2" or "Eq. 12". This
+    check enforces:
+
+      * Every PaperReference has >=1 section_refs entry matching
+        _CONCRETE_LOCATOR_RE (digit, Section, Eq., Theorem, ...).
+      * Every PaperReference has supporting_evidence of >=40 chars
+        explaining WHY this passage supports the proposal's
+        hypothesis.
+
+    PASSES vacuously when no source_papers are cited (pure-codebase
+    proposals are a legitimate path).
+    """
+    papers = _get(proposal, "source_papers") or []
+    if not papers:
+        return CheckResult("H", True, None)
+
+    problems: List[str] = []
+    for idx, p in enumerate(papers):
+        arxiv_id = _get(p, "arxiv_id", "?")
+        section_refs = _get(p, "section_refs") or []
+
+        # Tolerate either str (rare LLM mistake) or list[str].
+        if isinstance(section_refs, str):
+            section_refs = [section_refs]
+
+        concrete_refs = [
+            s for s in section_refs
+            if isinstance(s, str) and _CONCRETE_LOCATOR_RE.search(s)
+        ]
+        if not concrete_refs:
+            problems.append(
+                f"paper {arxiv_id!r}: section_refs lacks a concrete locator "
+                f"(need at least one entry with a digit or a token like "
+                f"'Section', 'Eq.', 'Theorem', 'Algorithm', 'Fig.', "
+                f"'Table', '§', 'Page'). Got: {section_refs!r}")
+
+        evidence = _get(p, "supporting_evidence", "")
+        if not isinstance(evidence, str):
+            evidence = ""
+        evidence = evidence.strip()
+        if len(evidence) < _MIN_SUPPORTING_EVIDENCE_CHARS:
+            problems.append(
+                f"paper {arxiv_id!r}: supporting_evidence is too short "
+                f"({len(evidence)} chars, need >={_MIN_SUPPORTING_EVIDENCE_CHARS}). "
+                f"Quote or paraphrase the specific passage that supports "
+                f"this proposal's hypothesis.")
+
+    if problems:
+        return CheckResult("H", False, "; ".join(problems))
+    return CheckResult("H", True, None)
+
+
 # ---- Aggregator ----------------------------------------------------------
 
 
@@ -384,7 +471,7 @@ def run_all(
     probe_urls: bool = False,
     schema_keys: Optional[List[str]] = None,
 ) -> AllChecksResult:
-    """Run all seven checks and return their combined result.
+    """Run all eight checks and return their combined result.
 
     Independent: a failure in one doesn't short-circuit the others -
     we want a full picture so the resulting judge_review.concerns can
@@ -402,6 +489,7 @@ def run_all(
         check_e_schema_keys(proposal, schema_keys=schema_keys),
         check_f_safety_critical(proposal),
         check_g_reward_invariant_secondary(proposal),
+        check_h_paper_evidence(proposal),
     ]
     return AllChecksResult(
         all_passed=all(r.passed for r in results),

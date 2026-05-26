@@ -94,7 +94,11 @@ def _good_proposal_dict() -> Dict[str, Any]:
             "additions."),
         "source_papers": [
             {"arxiv_id": "2308.12345", "title": "fake paper",
-             "section_refs": ["Sec 4.1"]},
+             "section_refs": ["Section 4.1", "Eq. 7"],
+             "supporting_evidence": (
+                 "Section 4.1 sweeps gamma in {0.95, 0.97, 0.99} and "
+                 "reports improved sample efficiency at gamma=0.95 "
+                 "under sparse-reward regimes.")},
         ],
         "experiment_arms": [
             {"name": "base", "experiment_design_id": "experiment-default"},
@@ -438,7 +442,10 @@ def test_fake_arxiv_id_rejected_by_url_probe():
     fake_id_proposal = _good_proposal_dict()
     fake_id_proposal["source_papers"] = [
         {"arxiv_id": "9999.99999", "title": "fake paper",
-         "section_refs": ["nowhere"]},
+         "section_refs": ["Section 4.1"],
+         "supporting_evidence": (
+             "Section 4.1 demonstrates the variance reduction we claim "
+             "in the hypothesis, motivating this experiment.")},
     ]
     client = _mock_anthropic_returning(fake_id_proposal, fake_id_proposal,
                                        fake_id_proposal)

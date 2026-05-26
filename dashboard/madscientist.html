@@ -7,6 +7,36 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="/tailwind.init.js"></script>
   <link rel="stylesheet" href="/styles.css">
+  <style>
+    /* Explicit always-visible scrollbar for [data-role="proposal-card"].
+       Each pending-decisions card is capped at max-h + overflow-y-scroll
+       so its interior scrolls when the LLM-generated content (or an
+       expanded Edit panel) overflows. Browsers (esp. dark-themed
+       Edge/Chrome on Windows and macOS in dark mode) often render the
+       default scrollbar as 0-width / transparent. This styling gives a
+       clear "this card scrolls inside" affordance regardless of OS
+       settings. */
+    [data-role="proposal-card"] {
+      scrollbar-width: auto;
+      scrollbar-color: #6366f1 #1e293b; /* indigo-500 over slate-800 */
+    }
+    [data-role="proposal-card"]::-webkit-scrollbar {
+      width: 14px;
+    }
+    [data-role="proposal-card"]::-webkit-scrollbar-track {
+      background: #1e293b; /* slate-800 */
+      border-radius: 7px;
+    }
+    [data-role="proposal-card"]::-webkit-scrollbar-thumb {
+      background: #6366f1; /* indigo-500 */
+      border-radius: 7px;
+      border: 2px solid #1e293b;
+      min-height: 40px; /* keep thumb easy to grab even on tall content */
+    }
+    [data-role="proposal-card"]::-webkit-scrollbar-thumb:hover {
+      background: #818cf8; /* indigo-400 */
+    }
+  </style>
 </head>
 <body class="h-full m-0 font-sans antialiased text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-[#0b1120]">
 
@@ -79,7 +109,10 @@
             0 awaiting your approval
           </span>
         </div>
-        <div data-role="pending-list" class="p-4 min-h-[120px] text-sm text-slate-500 dark:text-slate-400">
+        <div data-role="pending-list"
+             style="height: 600px;"
+             class="p-4 min-h-[120px] overflow-y-auto
+                    text-sm text-slate-500 dark:text-slate-400">
           <div class="text-center py-6 text-xs">
             No proposals awaiting your approval. The researcher will write
             here once Phase 1 ships and a research cycle completes.
@@ -157,7 +190,7 @@
   </div>
 
   <!-- Cache-busted (see jobs.html). Bump ?v=... when components.js changes. -->
-  <script src="/components.js?v=20260525-madsci-phase1a"></script>
+  <script src="/components.js?v=20260525-madsci-pending-scroll"></script>
   <script>
     (function () {
       const { showToast, confirmDialog } = window.RoboracerUI;
@@ -230,6 +263,14 @@
         pendingCount.textContent = n === 0
           ? '0 awaiting your approval'
           : `${n} awaiting your approval`;
+        // If any edit panel is currently open we skip the rerender so
+        // we don't blow away the user's typed-in changes. Save/cancel
+        // closes the panel; the next poll then refreshes normally.
+        const hasOpenEdit = pendingHost.querySelector(
+          '[data-role="edit-panel"]:not(.hidden)');
+        if (hasOpenEdit) {
+          return;
+        }
         if (!n) {
           pendingHost.innerHTML = '<div class="text-center py-6 text-xs">' +
             'No proposals awaiting your approval.</div>';
@@ -239,6 +280,146 @@
         pendingHost.querySelectorAll('[data-decide-action]').forEach((btn) => {
           btn.addEventListener('click', onDecideClick);
         });
+        pendingHost.querySelectorAll('[data-edit-action]').forEach((btn) => {
+          btn.addEventListener('click', onEditButtonClick);
+        });
+      }
+
+      function renderSourcePapers(papers) {
+        if (!papers || !papers.length) return '';
+        const rows = papers.map((paper) => {
+          const id = String(paper.arxiv_id || '').trim();
+          const url = id ? ('https://arxiv.org/abs/' + id) : null;
+          const titleHtml = url
+            ? '<a href="' + esc(url) + '" target="_blank" rel="noopener" ' +
+                'class="text-indigo-600 dark:text-indigo-300 hover:underline">' +
+                esc(paper.title || id || '(untitled paper)') +
+              '</a>'
+            : esc(paper.title || '(untitled paper)');
+          const refs = (paper.section_refs || []).filter(Boolean);
+          const refsHtml = refs.length
+            ? refs.map((r) =>
+                '<span class="inline-block px-1.5 py-0.5 mr-1 mb-1 rounded text-[10px] ' +
+                'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 ' +
+                'font-mono">' + esc(r) + '</span>').join('')
+            : '<span class="text-[10px] text-slate-400 italic">no section refs</span>';
+          const evidence = paper.supporting_evidence
+            ? '<div class="mt-1 text-[11px] text-slate-600 dark:text-slate-400 italic leading-snug ' +
+                'border-l-2 border-slate-300 dark:border-slate-600 pl-2">' +
+                esc(paper.supporting_evidence) +
+              '</div>'
+            : '<div class="mt-1 text-[10px] text-amber-600 dark:text-amber-400 italic">' +
+                '(no supporting_evidence excerpt)' +
+              '</div>';
+          return (
+            '<div class="py-1 first:pt-0 last:pb-0 border-b border-slate-100 dark:border-slate-800 last:border-0">' +
+              '<div class="text-[12px] font-medium">' + titleHtml +
+                (id ? ' <span class="font-mono text-[10px] text-slate-400">arXiv:' + esc(id) + '</span>' : '') +
+              '</div>' +
+              '<div class="mt-0.5">' + refsHtml + '</div>' +
+              evidence +
+            '</div>'
+          );
+        }).join('');
+        return (
+          '<div class="mt-2 text-xs">' +
+            '<div class="font-semibold text-slate-700 dark:text-slate-300 mb-1">Source papers:</div>' +
+            rows +
+          '</div>'
+        );
+      }
+
+      function renderEditPanel(p) {
+        const id = esc(p._id);
+        const parsed = (p.success_criteria && p.success_criteria.primary_parsed) || {};
+        const primary = (p.success_criteria && p.success_criteria.primary) || '';
+        // Inputs use data-edit-key with the dotted path so the submit
+        // handler can build a $set patch generically.
+        const textInput = (key, value, rows) =>
+          '<textarea data-edit-key="' + esc(key) + '" rows="' + (rows || 2) + '" ' +
+            'class="w-full text-xs font-mono p-2 rounded border border-slate-300 ' +
+            'dark:border-slate-700 bg-white dark:bg-slate-950 ' +
+            'text-slate-900 dark:text-slate-100">' +
+            esc(value || '') +
+          '</textarea>';
+        const numInput = (key, value, min, max, step) =>
+          '<input type="number" data-edit-key="' + esc(key) + '" ' +
+            (value != null ? 'value="' + esc(value) + '" ' : '') +
+            (min != null ? 'min="' + esc(min) + '" ' : '') +
+            (max != null ? 'max="' + esc(max) + '" ' : '') +
+            (step != null ? 'step="' + esc(step) + '" ' : '') +
+            'class="w-full text-xs p-2 rounded border border-slate-300 ' +
+            'dark:border-slate-700 bg-white dark:bg-slate-950 ' +
+            'text-slate-900 dark:text-slate-100" />';
+        const selectInput = (key, value, options) =>
+          '<select data-edit-key="' + esc(key) + '" ' +
+            'class="w-full text-xs p-2 rounded border border-slate-300 ' +
+            'dark:border-slate-700 bg-white dark:bg-slate-950 ' +
+            'text-slate-900 dark:text-slate-100">' +
+            options.map((o) =>
+              '<option value="' + esc(o) + '"' +
+                (o === value ? ' selected' : '') + '>' +
+                esc(o) +
+              '</option>').join('') +
+          '</select>';
+        const lbl = (text) =>
+          '<div class="text-[10px] uppercase tracking-wide font-semibold ' +
+          'text-slate-500 dark:text-slate-400 mt-2 mb-1">' + esc(text) + '</div>';
+
+        return (
+          '<div data-role="edit-panel" data-id="' + id + '" ' +
+              'class="mt-3 hidden border-t border-slate-200 dark:border-slate-700 pt-3">' +
+            lbl('Title') +                textInput('title', p.title, 1) +
+            lbl('Hypothesis') +           textInput('hypothesis', p.hypothesis, 3) +
+            lbl('Motivation') +           textInput('motivation', p.motivation, 3) +
+            lbl('Code changes summary') + textInput('code_changes_summary', p.code_changes_summary, 2) +
+            lbl('Success criterion (free-form)') +
+              textInput('success_criteria.primary', primary, 2) +
+
+            '<div class="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2">' +
+              '<div>' + lbl('metric') +
+                textInput('success_criteria.primary_parsed.metric', parsed.metric, 1) +
+              '</div>' +
+              '<div>' + lbl('arm_a') +
+                textInput('success_criteria.primary_parsed.arm_a', parsed.arm_a, 1) +
+              '</div>' +
+              '<div>' + lbl('arm_b') +
+                textInput('success_criteria.primary_parsed.arm_b', parsed.arm_b, 1) +
+              '</div>' +
+              '<div>' + lbl('comparator') +
+                selectInput('success_criteria.primary_parsed.comparator',
+                  parsed.comparator || '>=', ['>=', '<=', '>', '<']) +
+              '</div>' +
+              '<div>' + lbl('threshold') +
+                numInput('success_criteria.primary_parsed.threshold',
+                  parsed.threshold, null, null, 'any') +
+              '</div>' +
+              '<div>' + lbl('threshold_kind') +
+                selectInput('success_criteria.primary_parsed.threshold_kind',
+                  parsed.threshold_kind || 'relative', ['relative', 'absolute']) +
+              '</div>' +
+            '</div>' +
+
+            '<div class="grid grid-cols-3 gap-2 mt-2">' +
+              '<div>' + lbl('seeds / arm') +
+                numInput('n_seeds_per_arm', p.n_seeds_per_arm, 1, 100, 1) +
+              '</div>' +
+              '<div>' + lbl('iters / seed') +
+                numInput('num_iterations_per_seed', p.num_iterations_per_seed, 1, 100000, 1) +
+              '</div>' +
+              '<div>' + lbl('est wall hours') +
+                numInput('expected_wall_time_hours', p.expected_wall_time_hours, 0, 10000, 'any') +
+              '</div>' +
+            '</div>' +
+
+            '<div class="mt-3 flex flex-wrap gap-2">' +
+              '<button data-edit-action="save" data-id="' + id + '" ' +
+                'class="btn-base btn-primary text-xs">Save edits</button>' +
+              '<button data-edit-action="cancel" data-id="' + id + '" ' +
+                'class="btn-base btn-secondary text-xs">Cancel</button>' +
+            '</div>' +
+          '</div>'
+        );
       }
 
       function renderProposalCard(p) {
@@ -250,8 +431,23 @@
           : '';
         const concerns = (judge.concerns || []).slice(0, 3).map(esc).join('<br>');
         const created = p.created_at && (p.created_at.$date || p.created_at);
+        // Card height is FIXED at 380px via inline style and strictly
+        // smaller than the parent pending-list (600px via inline style
+        // on the markup above). Pixels chosen over vh so the visible
+        // gap below the card is deterministic and doesn't shrink on
+        // shorter viewports. Math (600px parent, 380px card, parent
+        // p-4=16px each side):
+        //   parent outer:  600px
+        //   parent inner:  568px  (after pt-4 + pb-4 = 32px)
+        //   card outer:    380px
+        //   visible gap:   188px  (clearly visible breathing room)
+        // The card's overflow-y-scroll handles content (incl. an
+        // expanded Edit panel) exceeding the fixed 380px card height.
         return (
-          '<div class="border border-slate-200 dark:border-slate-700 rounded-xl p-4 mb-3 last:mb-0">' +
+          '<div data-role="proposal-card" ' +
+              'style="height: 380px;" ' +
+              'class="border border-slate-200 dark:border-slate-700 rounded-xl ' +
+              'p-4 mb-3 last:mb-0 overflow-y-scroll">' +
             '<div class="flex items-start gap-3">' +
               '<div class="flex-1 min-w-0">' +
                 '<div class="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate" title="' + esc(p.title) + '">' +
@@ -272,6 +468,7 @@
             (p.hypothesis ? '<div class="mt-2 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">' +
               '<span class="font-semibold">Hypothesis:</span> ' + esc(p.hypothesis) +
               '</div>' : '') +
+            renderSourcePapers(p.source_papers) +
             (concerns ? '<div class="mt-2 text-xs text-amber-700 dark:text-amber-300 leading-snug">' +
               '<span class="font-semibold">Concerns:</span><br>' + concerns +
               '</div>' : '') +
@@ -282,7 +479,10 @@
                       'class="btn-base btn-danger text-xs">Reject</button>' +
               '<button data-decide-action="defer" data-id="' + esc(p._id) + '" ' +
                       'class="btn-base btn-secondary text-xs">Defer</button>' +
+              '<button data-edit-action="toggle" data-id="' + esc(p._id) + '" ' +
+                      'class="btn-base btn-secondary text-xs">Edit</button>' +
             '</div>' +
+            renderEditPanel(p) +
           '</div>'
         );
       }
@@ -378,6 +578,84 @@
           pollOnce();
         } catch (e) {
           showToast({ type: 'error', message: 'Decide failed: ' + String(e) });
+        }
+      }
+
+      // ---- Edit-button handler -----------------------------------------
+
+      async function onEditButtonClick(ev) {
+        const btn = ev.currentTarget;
+        const action = btn.getAttribute('data-edit-action');
+        const id = btn.getAttribute('data-id');
+        if (!action || !id) return;
+        const panel = pendingHost.querySelector(
+          `[data-role="edit-panel"][data-id="${CSS.escape(id)}"]`);
+        if (!panel) return;
+
+        if (action === 'toggle') {
+          panel.classList.toggle('hidden');
+          return;
+        }
+        if (action === 'cancel') {
+          panel.classList.add('hidden');
+          return;
+        }
+        if (action === 'save') {
+          await saveEdits(id, panel, btn);
+        }
+      }
+
+      async function saveEdits(id, panel, saveBtn) {
+        // Collect every data-edit-key input/textarea/select inside this
+        // panel. Empty strings for top-level text fields are sent
+        // through (the server allows them); for primary_parsed nested
+        // fields we skip empty strings so we don't accidentally clobber
+        // valid values with empties from disabled / placeholder inputs.
+        const patch = {};
+        panel.querySelectorAll('[data-edit-key]').forEach((el) => {
+          const k = el.getAttribute('data-edit-key');
+          if (!k) return;
+          let v;
+          if (el.tagName === 'INPUT' && el.type === 'number') {
+            v = el.value === '' ? null : Number(el.value);
+          } else {
+            v = el.value;
+          }
+          if (k.startsWith('success_criteria.primary_parsed.') && (v === '' || v === null)) {
+            return;
+          }
+          patch[k] = v;
+        });
+
+        saveBtn.disabled = true;
+        const prevText = saveBtn.textContent;
+        saveBtn.textContent = 'Saving…';
+        try {
+          const res = await fetch(`/madscientist/proposals/${encodeURIComponent(id)}/edit`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ patch }),
+          });
+          if (!res.ok) {
+            const err = await res.text();
+            showToast({ type: 'error', message: 'Edit failed: ' + err.slice(0, 240) });
+            return;
+          }
+          const j = await res.json();
+          const n = (j.updated_fields || []).length;
+          showToast({
+            type: 'success',
+            message: n
+              ? `Updated ${n} field${n === 1 ? '' : 's'}.`
+              : 'No changes to save.',
+          });
+          panel.classList.add('hidden');
+          pollOnce();
+        } catch (e) {
+          showToast({ type: 'error', message: 'Edit failed: ' + String(e) });
+        } finally {
+          saveBtn.disabled = false;
+          saveBtn.textContent = prevText;
         }
       }
 
