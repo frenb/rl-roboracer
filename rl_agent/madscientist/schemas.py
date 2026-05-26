@@ -81,16 +81,67 @@ class ExperimentArm(BaseModel):
     reward_design_fields: Dict[str, Any] = Field(default_factory=dict)
 
 
+class PrimaryCriterionParsed(BaseModel):
+    """Machine-readable form of the proposal's primary success criterion.
+
+    The Researcher writes both the human-readable `SuccessCriteria.primary`
+    (a free-form sentence the Judge can sanity-check) AND this structured
+    counterpart that the outcome ingester evaluates mechanically without
+    parsing natural language.
+
+    Example: "avg_return(exp2) - avg_return(base) >= 10%" becomes
+        {
+          "metric": "avg_return",
+          "arm_a": "exp2",
+          "arm_b": "base",
+          "comparator": ">=",
+          "threshold": 0.10,
+          "threshold_kind": "relative"
+        }
+
+    When primary_parsed is None, the ingester still computes per-arm
+    summary stats but leaves OutcomeResult.primary_criterion_met as None
+    so the operator's manual review on the dashboard isn't preempted.
+    """
+    metric: str = Field(
+        ...,
+        description="One of: 'avg_return', 'avg_goals_per_episode', "
+                    "'avg_speed', 'avg_episode_length', "
+                    "'avg_steering_angle_ratio'")
+    arm_a: str = Field(
+        ...,
+        description="The variant arm whose mean we compare against the baseline")
+    arm_b: str = Field(
+        ...,
+        description="The baseline arm (typically 'base')")
+    comparator: str = Field(
+        ...,
+        description="One of '>=', '<=', '>', '<' for the delta direction")
+    threshold: float = Field(
+        ...,
+        description="Numeric threshold the delta must hit. Interpretation "
+                    "depends on threshold_kind.")
+    threshold_kind: str = Field(
+        default="relative",
+        description="'relative' (threshold is fraction of arm_b's mean) "
+                    "or 'absolute' (threshold is in metric's raw units)")
+
+
 class SuccessCriteria(BaseModel):
     """How we'll judge whether the hypothesis was supported.
 
-    `primary` is the single-number test the outcome ingester scores against.
-    `secondary` lists supporting checks. Both are free-form strings the
-    Judge can sanity-check at review time.
+    `primary` is the single human-readable statement the Judge reviews.
+    `primary_parsed` (optional) is the structured form the outcome
+    ingester evaluates mechanically. `secondary` lists supporting checks.
     """
     primary: str = Field(
         ...,
         description="A measurable statement, e.g. 'avg_return(exp2) - avg_return(base) >= 10%'")
+    primary_parsed: Optional[PrimaryCriterionParsed] = Field(
+        default=None,
+        description="Structured counterpart to `primary` for mechanical "
+                    "outcome evaluation. None = ingester computes summary "
+                    "stats only; operator decides manually.")
     secondary: List[str] = Field(default_factory=list)
 
 
