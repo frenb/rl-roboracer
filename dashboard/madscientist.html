@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en" class="dark h-full">
+<head>
+  <meta charset="utf-8">
+  <title>Mad Scientist Lab · rl-roboracer</title>
+  <!-- Same boot order as every other dashboard tab. -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/tailwind.init.js"></script>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="h-full m-0 font-sans antialiased text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-[#0b1120]">
+
+  <div class="flex flex-col h-screen w-full">
+
+    <!-- Toolbar ------------------------------------------------- -->
+    <div class="flex flex-wrap items-center gap-3 px-5 py-4 row-gap-2
+                bg-white dark:bg-slate-900
+                border-b border-slate-200 dark:border-slate-700
+                shadow-card relative z-[3] flex-shrink-0">
+      <h1 class="text-2xl font-semibold tracking-tight m-0 mr-3">Mad Scientist Lab</h1>
+      <span class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
+        <span class="inline-block w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+        <span>Phase 0 scaffolding · worker disabled</span>
+      </span>
+
+      <div class="flex flex-wrap gap-2 ml-auto">
+        <!-- Reserved for Phase 1: a "Pause All" / "Resume All" kill switch
+             that flips MADSCIENTIST_ENABLED via an API call to the
+             dashboard server. -->
+      </div>
+    </div>
+
+    <!-- Body: four stacked sections -------------------------------- -->
+    <div class="flex-1 overflow-y-auto p-4 bg-slate-50 dark:bg-[#0b1120] flex flex-col gap-4">
+
+      <!-- ============================================================
+           Section 1: Activity feed
+           Live ticker of the most recent ~20 events across all
+           MadScientist workers (researcher, judge, orchestrator,
+           outcome ingester). Populated by Phase 1's dashboard server
+           route /madscientist/activity. Empty for Phase 0.
+           ============================================================ -->
+      <section class="bg-white dark:bg-slate-900
+                      border border-slate-200 dark:border-slate-700
+                      rounded-2xl shadow-card overflow-hidden">
+        <div class="px-4 py-2.5 border-b border-slate-200 dark:border-slate-700
+                    text-xs uppercase tracking-wide font-semibold
+                    text-slate-500 dark:text-slate-400 flex items-center justify-between">
+          <span>Activity feed</span>
+          <span class="text-[10px] font-normal normal-case text-slate-400 dark:text-slate-500">
+            researcher · judge · orchestrator · outcome ingester
+          </span>
+        </div>
+        <div data-role="activity-feed" class="p-4 min-h-[120px] text-xs font-mono text-slate-500 dark:text-slate-400">
+          <div class="text-center py-6">
+            No activity yet. Phase 1 will populate this with a live tail
+            of researcher / judge / orchestrator events.
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================================
+           Section 2: Pending decisions
+           Cards for each proposal in `pending_user` status. Each card
+           shows title, hypothesis, judge verdict, and approve/reject
+           buttons. Populated by Phase 1.
+           ============================================================ -->
+      <section class="bg-white dark:bg-slate-900
+                      border border-slate-200 dark:border-slate-700
+                      rounded-2xl shadow-card overflow-hidden">
+        <div class="px-4 py-2.5 border-b border-slate-200 dark:border-slate-700
+                    text-xs uppercase tracking-wide font-semibold
+                    text-slate-500 dark:text-slate-400 flex items-center justify-between">
+          <span>Pending decisions</span>
+          <span data-role="pending-count" class="text-[10px] font-normal normal-case text-slate-400 dark:text-slate-500">
+            0 awaiting your approval
+          </span>
+        </div>
+        <div data-role="pending-list" class="p-4 min-h-[120px] text-sm text-slate-500 dark:text-slate-400">
+          <div class="text-center py-6 text-xs">
+            No proposals awaiting your approval. The researcher will write
+            here once Phase 1 ships and a research cycle completes.
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================================
+           Section 3: In-flight (implementing + training)
+           Two-column inner layout: implementations on the left, TRAIN
+           jobs on the right. Each implementation streams its Cursor SDK
+           activity log. TRAIN jobs link to the existing Jobs tab.
+           ============================================================ -->
+      <section class="bg-white dark:bg-slate-900
+                      border border-slate-200 dark:border-slate-700
+                      rounded-2xl shadow-card overflow-hidden">
+        <div class="px-4 py-2.5 border-b border-slate-200 dark:border-slate-700
+                    text-xs uppercase tracking-wide font-semibold
+                    text-slate-500 dark:text-slate-400">
+          In-flight
+        </div>
+        <div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 min-h-[120px]">
+          <div>
+            <div class="text-[11px] uppercase tracking-wide font-semibold
+                        text-slate-500 dark:text-slate-400 mb-2">
+              Implementations (Cursor agents)
+            </div>
+            <div data-role="implementations-list" class="text-xs text-slate-500 dark:text-slate-400">
+              Nothing implementing.
+            </div>
+          </div>
+          <div>
+            <div class="text-[11px] uppercase tracking-wide font-semibold
+                        text-slate-500 dark:text-slate-400 mb-2">
+              Training (TRAIN jobs)
+            </div>
+            <div data-role="training-list" class="text-xs text-slate-500 dark:text-slate-400">
+              No proposal-linked TRAIN jobs running.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================================
+           Section 4: Outcomes
+           Completed proposals with hypothesis-met badge + primary
+           delta. Links each row back to its arms in the Analysis tab.
+           Populated by Phase 1's outcome ingester.
+           ============================================================ -->
+      <section class="bg-white dark:bg-slate-900
+                      border border-slate-200 dark:border-slate-700
+                      rounded-2xl shadow-card overflow-hidden">
+        <div class="px-4 py-2.5 border-b border-slate-200 dark:border-slate-700
+                    text-xs uppercase tracking-wide font-semibold
+                    text-slate-500 dark:text-slate-400">
+          Outcomes
+        </div>
+        <div data-role="outcomes-list" class="p-4 min-h-[120px] text-xs text-slate-500 dark:text-slate-400">
+          <div class="text-center py-6">
+            No completed proposals yet.
+          </div>
+        </div>
+      </section>
+
+      <!-- Footer info: budget + cycle status. Phase 1 wires these to
+           live data from the madscientist worker. -->
+      <div class="text-[11px] text-slate-500 dark:text-slate-400 text-center py-2">
+        Phase 0 scaffolding · Mongo schema + container scaffold + dashboard
+        tab ready · Phase 1 will wire researcher + judge + orchestrator +
+        outcome ingester + email bridge.
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- Cache-busted (see jobs.html). Bump ?v=... when components.js changes. -->
+  <script src="/components.js?v=20260525-madsci-scaffold"></script>
+  <script>
+    (function () {
+      const { showToast } = window.RoboracerUI;
+
+      // ---- Phase 1 wiring points ----
+      //
+      // The four data-role hosts above (activity-feed, pending-list,
+      // implementations-list, training-list, outcomes-list) become
+      // poll targets in Phase 1. Each polls the dashboard server route
+      // /madscientist/<section> on the standard 5s interval and renders
+      // the latest snapshot.
+      //
+      // Activity feed:   GET /madscientist/activity     -> recent events
+      // Pending list:    GET /madscientist/proposals?status=pending_user
+      // Implementations: GET /madscientist/proposals?status=implementing
+      //                                                 +status=pr_open
+      // Training:        GET /madscientist/proposals?status=training
+      //                  joined to db.jobs for live percent_complete
+      // Outcomes:        GET /madscientist/proposals?status=done,failed
+      //
+      // For now (Phase 0) we render the placeholder content from the
+      // HTML above and don't poll. This file exists so Phase 1's JS
+      // additions land here without touching the goldenlayout or
+      // server-routing infra.
+    })();
+  </script>
+
+</body>
+</html>

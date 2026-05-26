@@ -1,0 +1,12 @@
+# Each MadScientist proposal clones into its own subdir here. The clones
+# are throwaway working copies - their PR branches live in GitHub, not
+# in the parent repo, so there's nothing useful to commit from this
+# tree.
+#
+# Ignore everything except this .gitignore + .gitkeep so the host dir
+# exists in the repo (so docker-compose's bind mount has a target) but
+# the actual implementation worktrees aren't accidentally committed.
+
+*
+!.gitignore
+!.gitkeep

@@ -192,3 +192,119 @@ services:
         source: ../tmp
         target: /tmp
     command: sh -c "cd /dashboard && npm start"
+
+  # ---- MadScientist agent -------------------------------------------------
+  #
+  # Autonomous research + proposal + implementation agent. Three workers
+  # (researcher, judge, orchestrator) backed by Mongo's `proposals`
+  # collection. Phase 0 (current) ships the container scaffolding +
+  # schema + Phase-0-stub heartbeat worker; Phase 1 swaps in the real
+  # research / judge / orchestrator implementations.
+  #
+  # IMPORTANT: MADSCIENTIST_ENABLED defaults to "false". The container
+  # starts and idles so it's available for inspection
+  # (`docker compose exec madscientist bash`) but does NO LLM calls,
+  # NO proposals, NO file edits until the operator flips the env var to
+  # "true" and runs `docker compose restart madscientist`. This means
+  # bringing the rest of the stack up never accidentally racks up
+  # Anthropic / Cursor bills.
+  #
+  # See:
+  #   docker/madscientist/Dockerfile            - container image
+  #   docker/madscientist/entrypoint.sh         - boot + gating
+  #   rl_agent/madscientist/                    - agent code package
+  madscientist:
+    image: madscientist:latest
+    build:
+      context: ./docker/madscientist
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    environment:
+      # ---- Worker gating ---------------------------------------------
+      # OFF by default. Flip to "true" once Phase 1 ships + secrets are
+      # populated below. Operator then runs:
+      #   docker compose restart madscientist
+      MADSCIENTIST_ENABLED: ${MADSCIENTIST_ENABLED:-false}
+
+      # ---- Mongo -----------------------------------------------------
+      # Same DSN the dashboard server uses (see dashboard/src/server.ts).
+      MONGO_URL: ${MONGO_URL:-mongodb://root:example@mongo:27017/}
+
+      # ---- LLM API keys (REQUIRED when MADSCIENTIST_ENABLED=true) ----
+      # Both keys go on the host's environment (or .env file); compose
+      # pulls them in via the ${VAR:-default} expansion. We don't bake
+      # them into the image so the same image is shareable across
+      # environments.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CURSOR_API_KEY: ${CURSOR_API_KEY:-}
+
+      # ---- Email bridge ----------------------------------------------
+      # Outbound: SMTP. For Gmail use smtp.gmail.com:587 + an app
+      # password (not your account password).
+      # Inbound: Gmail API push notifications via a Cloud Pub/Sub topic;
+      # see Phase 1's email_bridge.py for the OAuth setup walk-through.
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      NOTIFICATION_EMAIL: ${NOTIFICATION_EMAIL:-}
+      GMAIL_OAUTH_CREDS_PATH: ${GMAIL_OAUTH_CREDS_PATH:-/secrets/gmail_oauth.json}
+
+      # ---- Safety / budget knobs -------------------------------------
+      # Defaults are intentionally CONSERVATIVE - 1 proposal/day + $250/mo
+      # so the first weeks of running don't surprise-bill. Tune as you
+      # observe the spend pattern on the dashboard's budget gauge.
+      MAX_PROPOSALS_PER_DAY: ${MAX_PROPOSALS_PER_DAY:-1}
+      BUDGET_USD_PER_MONTH: ${BUDGET_USD_PER_MONTH:-250}
+      RESEARCH_CYCLE_INTERVAL_SECONDS: ${RESEARCH_CYCLE_INTERVAL_SECONDS:-21600}
+      OUTCOME_POLL_INTERVAL_SECONDS: ${OUTCOME_POLL_INTERVAL_SECONDS:-300}
+      AUTO_REJECT_AFTER_HOURS: ${AUTO_REJECT_AFTER_HOURS:-96}
+
+    volumes:
+      # The whole repo, READ-ONLY. Used for:
+      #   * Importing rl_agent.madscientist.* (PYTHONPATH=/repo in the
+      #     Dockerfile).
+      #   * Codebase introspection by the researcher (what
+      #     experiment_designs already exist, what reward functions are
+      #     in scope, what was the last training result, etc.).
+      #   * The orchestrator's `git clone --reference /repo
+      #     /worktrees/<id>/` so each implementation worktree shares
+      #     object storage with the canonical repo (saves several GB
+      #     per worktree).
+      # Read-only because we do NOT want a runaway agent rewriting
+      # production files outside of a properly-PR'd worktree.
+      - type: bind
+        source: .
+        target: /repo
+        read_only: true
+
+      # Worktrees - WRITABLE scratch space, one subdir per active
+      # implementation. The orchestrator creates / destroys these.
+      # Lives on the host so a container rebuild doesn't lose in-flight
+      # worktrees + their PR branches.
+      - type: bind
+        source: ./worktrees
+        target: /worktrees
+
+      # Git metadata for stamping git_sha + git_branch on proposals at
+      # draft time. Read-only so the agent can never accidentally
+      # write to the actual repo's .git from inside the container.
+      # (Same pattern the sim-controller uses for trainer provenance.)
+      - type: bind
+        source: ./.git
+        target: /git_meta
+        read_only: true
+
+      # Where secrets land (Gmail OAuth client_secret.json + token).
+      # The path is referenced via GMAIL_OAUTH_CREDS_PATH above so the
+      # operator can rotate without rebuilding the image. Optional;
+      # mount only when email bridge is configured.
+      - type: bind
+        source: ./secrets
+        target: /secrets
+        read_only: true
+
+    networks:
+      default:

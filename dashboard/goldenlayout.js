@@ -120,6 +120,24 @@ var config = {
                         src: tbUrl(TB_COMPARE_FILTER_ALL),
                         id: 'tensorboard_compare'
                       }
+                    },
+                    // Mad Scientist Lab: tracks the autonomous
+                    // research / proposal / implementation agent
+                    // (see rl_agent/madscientist/). Lives in the
+                    // same stack as the TB tabs so the operator can
+                    // glance at "what is the agent doing right now"
+                    // while watching live training metrics in the
+                    // adjacent tabs. Phase 0 ships an empty
+                    // scaffold; Phase 1 wires the activity feed,
+                    // pending-decision cards, and outcomes table.
+                    {
+                      type: 'component',
+                      title: 'Mad Scientist Lab',
+                      componentName: 'iframeComponent',
+                      componentState: {
+                        src: 'http://localhost/madscientist',
+                        id: 'madscientist'
+                      }
                     }
                   ]
                 }
@@ -440,19 +458,26 @@ window.addEventListener('message', function (ev) {
   // visibility into specific historical jobs without permanently
   // bloating the sidebar.
   //
-  // Run name layout after the symlink:
-  //   current/<live_job_id>/{learner,train,eval,metrics}/...
-  //   compare/<archived_job_id>/{learner,train,eval,metrics}/...
+  // SLOT LABELS: when the Models tab sends jobMeta (each entry
+  // carries jobId + model.create_date), we sort the entries by
+  // create_date ascending and assign labels base / exp1 / exp2 /
+  // exp3 / ... - matching exactly what the Analysis tab does in
+  // buildBundles -> sortBundlesByCreateDate. The labels then flow
+  // through to the symlink basenames the server creates in
+  // /tmp/tb_compare/, so TB run names read as:
   //
-  // The regex filter matches "<job_id>" anywhere in the run name so
-  // it picks up both the "current/" prefix (if the user is comparing
-  // a model from the currently-training job) and the "compare/"
-  // prefix.
+  //   compare/base_6a09ddd9/{learner,train,eval,metrics}/...
+  //   compare/exp1_6a0e9aeb/{learner,train,eval,metrics}/...
   //
-  // jobIds is provided by the Models tab. Legacy models without a
-  // job_id are filtered out there, so jobIds[] is always populated
-  // with real job ids (potentially fewer than modelIds.length - see
-  // the warning toast on the Models tab).
+  // instead of opaque 24-char ObjectIds. The operator can now map
+  // each TB sidebar entry to its Analysis-tab column at a glance.
+  //
+  // The currently-training job (if a selected model belongs to it)
+  // stays under the "current/<full_jobId>/..." prefix because
+  // /tmp/active is owned by the trainer and we can't safely rename
+  // its dir mid-run. That's an intentional inconsistency - the
+  // current/ vs compare/ prefix split itself signals "this one is
+  // live".
   try {
     // Target the dedicated 'tensorboard_compare' pane so the training
     // pane (id='tensorboard') stays pinned at the unfiltered view.
@@ -462,6 +487,37 @@ window.addEventListener('message', function (ev) {
     const tbTarget = iframeRegistry['tensorboard_compare']
       || iframeRegistry['tensorboard'];
     const rawJobIds = Array.isArray(data.jobIds) ? data.jobIds : [];
+    const rawJobMeta = Array.isArray(data.jobMeta) ? data.jobMeta : [];
+
+    // Slot label assignment. Sort by create_date ascending so the
+    // OLDEST checkpoint is base (this matches the Analysis tab's
+    // default ordering, see sortBundlesByCreateDate in
+    // analysis.html). Models without a create_date sort to the end
+    // (probably broken / partial records).
+    //
+    // We label up to N=10 slots (base, exp1, exp2, ..., exp9). Beyond
+    // 10 we fall back to "exp<N>" but the operator probably has a
+    // bigger problem than the sidebar by then.
+    const SLOT_LABELS = ['base', 'exp1', 'exp2', 'exp3', 'exp4',
+                         'exp5', 'exp6', 'exp7', 'exp8', 'exp9'];
+    const sortedMeta = rawJobMeta.slice().sort((a, b) => {
+      const ad = a && a.createDate ? Date.parse(a.createDate) : Number.POSITIVE_INFINITY;
+      const bd = b && b.createDate ? Date.parse(b.createDate) : Number.POSITIVE_INFINITY;
+      if (Number.isNaN(ad) && Number.isNaN(bd)) return 0;
+      if (Number.isNaN(ad)) return 1;
+      if (Number.isNaN(bd)) return -1;
+      return ad - bd;
+    });
+    const labeledJobs = sortedMeta.map((m, idx) => ({
+      jobId: m.jobId,
+      label: SLOT_LABELS[idx] || ('exp' + idx),
+    }));
+
+    // Body shape: labeled if Models tab supplied jobMeta, legacy
+    // {jobIds:[]} otherwise. The server accepts both.
+    const setBucketBody = labeledJobs.length
+      ? { jobs: labeledJobs }
+      : { jobIds: rawJobIds };
 
     // Fire-and-await the server-side symlink shuffle. We deliberately
     // chain the iframe reload on its completion so TB doesn't reload
@@ -473,7 +529,7 @@ window.addEventListener('message', function (ev) {
     const setBucket = fetch('/set_tb_compare_jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobIds: rawJobIds }),
+      body: JSON.stringify(setBucketBody),
     }).then((r) => {
       if (!r.ok) console.warn('set_tb_compare_jobs HTTP ' + r.status);
       return r.ok ? r.json() : null;
@@ -485,43 +541,58 @@ window.addEventListener('message', function (ev) {
     setBucket.then((bucketResp) => {
       if (!tbTarget || !tbTarget.iframe) return;
 
-      // Use the SERVER's view of which job_ids actually got linked.
-      // If a job's archived directory wasn't on disk (e.g., the
-      // currently-training job whose data lives in /tmp/active, or
-      // a model whose archive was manually deleted), the server's
-      // `linked` list will be a subset of what the dashboard sent.
+      // Use the SERVER's view of which job_ids actually got linked,
+      // INCLUDING the symlink basenames it assigned (labeled or not).
+      // bucketResp.linkNames is { jobId -> "<label>_<short>" | "<full>" }
+      // for every jobId successfully symlinked.
       //
-      // We anchor the regex to ^compare/ so the Analysis tab ONLY
-      // shows the symlink-bucket entries for the selected jobs, not
-      // accidentally any currently-training job that happens to
-      // share a job_id substring. The currently-training job is
-      // visible in the dedicated "Tensorboard (current)" tab; mixing
-      // it into the Analysis tab would smear two distinct UI
-      // intentions together. (If a selected model is the
-      // currently-training one, the symlink endpoint reports it in
-      // `missing` and we log a hint below.)
-      const escaped = rawJobIds
+      // We anchor the regex to ^(current|compare)/ so the Analysis
+      // tab shows ONLY the user's selected jobs (no leakage from
+      // other archived runs in the bucket). The currently-training
+      // job (if a selected model belongs to it) shows up under
+      // current/<full_jobId>/...; archived jobs show up under
+      // compare/<label>_<short>/...
+      const linkNames = (bucketResp && bucketResp.linkNames) || {};
+      // Build the alternation: prefer the labeled symlink basename
+      // (for archived jobs) and fall back to the full jobId (for
+      // currently-training jobs not in /tmp/jobsdata yet).
+      const alternationSegments = rawJobIds.map((id) => {
+        return linkNames[String(id)] || String(id);
+      });
+      // Also include any current/<full_jobId>/ matches for jobs
+      // whose live data is in /tmp/active (they won't have a
+      // labeled symlink but they should still show up if selected).
+      const currentSegments = rawJobIds.filter((id) =>
+        !linkNames[String(id)] // not in compare bucket = probably live
+      );
+
+      // Escape regex metacharacters in the labels / ids before joining.
+      const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const compareAlt = alternationSegments
+        .map(escapeRe)
+        .filter((s) => s.length);
+      const currentAlt = currentSegments
         .map(String)
-        .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .map(escapeRe)
         .filter((s) => s.length);
 
       let nextSrc;
-      if (escaped.length) {
-        // ^(current|compare)/(id1|id2|...) - matches any run path
-        // starting with either experiment prefix whose next path
-        // segment contains one of the requested job_ids. We allow
-        // BOTH prefixes so the Analysis tab mirrors the dashboard's
-        // Analysis tab semantics: a selected model whose parent job
-        // is still IN_PROGRESS shows up too (it lives under
-        // current/<id>/ not compare/<id>/ because there's no
-        // archive yet). Currently-training jobs that AREN'T in the
-        // selection don't match because their id isn't in the
-        // alternation.
-        //
-        // We don't anchor the closing slash because TB's run paths
-        // nest further (eval / learner/train / metrics / train) and
-        // we want ALL of those subruns shown.
-        const pattern = '^(current|compare)/(' + escaped.join('|') + ')';
+      if (compareAlt.length || currentAlt.length) {
+        // We build a single alternation with two anchored subgroups:
+        //   ^compare/(label_short|...|label_short)   - matches archived
+        //   ^current/(full_jobId|...)                - matches live
+        // Joined into one regex so a mixed selection (some live, some
+        // archived) renders cleanly.
+        const parts = [];
+        if (compareAlt.length) {
+          parts.push('^compare/(' + compareAlt.join('|') + ')');
+        }
+        if (currentAlt.length) {
+          parts.push('^current/(' + currentAlt.join('|') + ')');
+        }
+        const pattern = parts.length > 1
+          ? '(' + parts.join('|') + ')'
+          : parts[0];
         nextSrc = tbUrl(pattern);
       } else {
         // No filterable job_ids in this selection (every model was
