@@ -48,3 +48,18 @@ email-validator~=2.2
 # .env file loader so the orchestrator + workers can pick up secrets from
 # a mounted .env without baking them into the image.
 python-dotenv~=1.0
+
+# Cursor SDK - Python bindings for Cursor cloud agents. Used by the
+# Phase 1C-Full orchestrator to spawn code-writing agents that edit
+# experiment_designs.SCHEMA + open PRs when a proposal carries
+# proposed_schema_extensions.
+#
+# Public beta as of 2026-05-25 (current release: 0.1.5). Minor-version
+# bumps are likely to change the API surface, so we PIN THE MINOR with
+# ~= rather than the major - upgrades will require code review of
+# rl_agent/madscientist/cursor_orchestrator.py before bumping.
+#
+# cursor_orchestrator.py uses a lazy try/except import so the rest
+# of the system runs even without this package; the operator can
+# still skip Phase 1C-Full by leaving CURSOR_API_KEY unset.
+cursor-sdk~=0.1.5
