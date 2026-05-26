@@ -269,6 +269,27 @@ def test_check_e():
         lambda: not pre_rubric_checks.check_e_schema_keys(
             p, schema_keys=valid_keys).passed)
 
+    # Phase 1C-Full: keys declared in proposed_schema_extensions are
+    # accepted even if not in SCHEMA. The orchestrator's Cursor agent
+    # will add them before training runs.
+    p = _baseline_proposal(experiment_arms=[
+        ExperimentArm(name="base"),
+        ExperimentArm(
+            name="exp1",
+            experiment_design_fields={"aux_bc_loss_weight": 0.1}),
+    ])
+    # Inject the extensions field via setattr - simpler than reaching
+    # for Pydantic's full constructor here.
+    p.proposed_schema_extensions = [type("X", (), {
+        "name": "aux_bc_loss_weight",
+        "type": "float",
+        "default": 0.0,
+    })()]
+    _expect(
+        "key in proposed_schema_extensions is accepted (Phase 1C-Full)",
+        lambda: pre_rubric_checks.check_e_schema_keys(
+            p, schema_keys=valid_keys).passed)
+
 
 # ---- Check F: safety-critical patterns ----------------------------------
 

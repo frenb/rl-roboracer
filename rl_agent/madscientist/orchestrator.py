@@ -53,6 +53,7 @@ except ImportError:
     _EXPERIMENT_DESIGNS_SCHEMA = {}
 
 from . import constants
+from . import cursor_orchestrator
 
 
 # ---- Configuration -------------------------------------------------------
@@ -119,6 +120,16 @@ def _validate_or_fail(proposal_doc: Dict[str, Any], *, max_jobs: int) -> Optiona
         k for k in _EXPERIMENT_DESIGNS_SCHEMA.keys()
         if not k.startswith("_section_")}
 
+    # Phase 1C-Full: keys declared in proposed_schema_extensions are
+    # also accepted - the Cursor SDK path will add them to SCHEMA
+    # before training jobs run. Mirrors the relaxed pre_rubric_check_e.
+    extensions = proposal_doc.get("proposed_schema_extensions") or []
+    proposed_keys = set()
+    for ext in extensions:
+        name = ext.get("name") if isinstance(ext, dict) else getattr(ext, "name", None)
+        if isinstance(name, str) and name:
+            proposed_keys.add(name)
+
     for arm in arms:
         arm_name = arm.get("name") or "?"
         # Reject inline reward_design_fields - Phase 1C-MVP only supports
@@ -128,17 +139,20 @@ def _validate_or_fail(proposal_doc: Dict[str, Any], *, max_jobs: int) -> Optiona
                 f"arm '{arm_name}' has inline reward_design_fields; "
                 f"Phase 1C-MVP only supports reward_design_id references. "
                 f"Author the reward design on the Reward Design tab "
-                f"and reference it by id, or wait for Phase 1C-Full.")
+                f"and reference it by id, or wait for a future "
+                f"reward-authoring orchestrator extension.")
 
         # Validate experiment_design_fields keys (defense in depth).
         # Only checked when SCHEMA was importable (otherwise the set is
-        # empty and we'd reject everything).
+        # empty and we'd reject everything). Keys declared in
+        # proposed_schema_extensions are accepted.
         if valid_design_keys:
             for k in (arm.get("experiment_design_fields") or {}).keys():
-                if k not in valid_design_keys:
+                if k not in valid_design_keys and k not in proposed_keys:
                     return (
                         f"arm '{arm_name}': experiment_design_fields key "
-                        f"{k!r} is not in experiment_designs.SCHEMA. "
+                        f"{k!r} is not in experiment_designs.SCHEMA and "
+                        f"not declared in proposed_schema_extensions. "
                         f"Pre-rubric check E should have caught this; "
                         f"orchestrator refuses to queue jobs against an "
                         f"unknown schema key.")
@@ -322,27 +336,49 @@ def _queue_jobs(
 # ---- Single-proposal orchestrator ----------------------------------------
 
 
+def _needs_cursor_path(proposal_doc: Dict[str, Any]) -> bool:
+    """True iff the proposal declares non-empty proposed_schema_extensions.
+
+    Phase 1C-Full: such proposals can't be implemented via auto-queue
+    because they reference SCHEMA fields that don't exist yet. We
+    spawn a Cursor SDK code-writing agent to add the fields + open
+    a PR. After human PR review + merge, a follow-up command (Phase
+    1C-Full v2) queues the actual training jobs.
+    """
+    exts = proposal_doc.get("proposed_schema_extensions") or []
+    return bool(exts)
+
+
 def orchestrate_one(
     db,
     proposal_doc: Dict[str, Any],
     *,
     max_jobs: int = DEFAULT_MAX_JOBS_PER_PROPOSAL,
+    cursor_spawn_fn: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
     """Process a single proposal end-to-end. Returns the updated doc
     or None if the proposal wasn't eligible (status != approved /
     bad shape / etc.).
 
-    On success: status approved -> implementing -> training, training
-    job records inserted into db.jobs, audit event stamped.
+    Two paths:
+
+      * AUTO-QUEUE (Phase 1C-MVP): proposal references only existing
+        SCHEMA fields. Orchestrator seeds derived experiment_designs
+        + queues TRAIN jobs immediately. status: approved -> training.
+
+      * CURSOR (Phase 1C-Full): proposal carries
+        proposed_schema_extensions. Orchestrator spawns a Cursor cloud
+        agent that adds the SCHEMA fields + opens a PR. After PR
+        opens: status -> pr_open. Training jobs are NOT queued until
+        a follow-up operation (Phase 1C-Full v2) confirms the PR has
+        been merged - we don't want to run training against
+        unmerged code.
+
+    cursor_spawn_fn: test hook overriding the real
+        cursor_orchestrator.spawn_cursor_agent_for_proposal.
 
     On validation failure: status -> failed with implementation_failure_reason.
-
-    On exception during job insertion: status -> failed with the
-    exception message in implementation_failure_reason. The orchestrator
-    does NOT try to roll back partially-inserted jobs because those
-    are still valid TRAIN jobs - the trainer just won't pick them up
-    against the failed proposal's stats since the proposal's
-    training_job_ids list will only contain successfully-inserted ids.
+    On exception during the chosen path: status -> failed with details.
     """
     eligible, reason = _is_eligible(proposal_doc)
     if not eligible:
@@ -368,7 +404,19 @@ def orchestrate_one(
             "updated_at": now,
         }})
 
-    # ---- Step 3: seed designs + queue jobs ----------------------------
+    # ---- Step 3: pick the right path ---------------------------------
+    if _needs_cursor_path(proposal_doc):
+        return _run_cursor_path(
+            db, proposal_doc, now,
+            cursor_spawn_fn=cursor_spawn_fn)
+    return _run_auto_queue_path(db, proposal_doc, now)
+
+
+def _run_auto_queue_path(
+    db, proposal_doc: Dict[str, Any], now: datetime.datetime,
+) -> Optional[Dict[str, Any]]:
+    """Phase 1C-MVP: seed derived designs + queue TRAIN jobs."""
+    proposal_id = proposal_doc["_id"]
     try:
         training_job_ids = _queue_jobs(db, proposal_doc, now)
     except Exception as e:  # noqa: BLE001
@@ -381,7 +429,6 @@ def orchestrate_one(
             f"{type(e).__name__}: {e}",
             now, audit_detail={"phase": "job_queue", "traceback_tail": tb[-500:]})
 
-    # ---- Step 4: advance to training + record results ----------------
     finished_at = datetime.datetime.now(datetime.timezone.utc)
     update = {
         "$set": {
@@ -402,6 +449,103 @@ def orchestrate_one(
         }},
     }
     db[constants.COLL_PROPOSALS].update_one({"_id": proposal_id}, update)
+    return db[constants.COLL_PROPOSALS].find_one({"_id": proposal_id})
+
+
+def _run_cursor_path(
+    db,
+    proposal_doc: Dict[str, Any],
+    now: datetime.datetime,
+    *,
+    cursor_spawn_fn: Optional[Any] = None,
+) -> Optional[Dict[str, Any]]:
+    """Phase 1C-Full: spawn Cursor SDK code-writing agent.
+
+    Status flow:
+      approved -> implementing (already set by orchestrate_one)
+                -> pr_open  (if agent succeeded + PR URL extracted)
+                -> failed   (if agent didn't start / errored / no PR URL)
+    """
+    proposal_id = proposal_doc["_id"]
+    spawn = cursor_spawn_fn or cursor_orchestrator.spawn_cursor_agent_for_proposal
+
+    try:
+        result = spawn(db, proposal_doc)
+    except Exception as e:  # noqa: BLE001
+        tb = traceback.format_exc()
+        print(
+            f"orchestrator: Cursor spawn raised for {proposal_id}: "
+            f"{type(e).__name__}: {e}\n{tb}", flush=True)
+        return _persist_failure(
+            db, proposal_id,
+            f"Cursor spawn raised: {type(e).__name__}: {e}",
+            now, audit_detail={
+                "phase": "cursor_spawn",
+                "traceback_tail": tb[-500:]})
+
+    status = result.get("status")
+    pr_url = result.get("pr_url")
+    branch_name = result.get("branch_name")
+    agent_id = result.get("agent_id")
+    run_id = result.get("run_id")
+    finished_at = datetime.datetime.now(datetime.timezone.utc)
+
+    if status == "finished" and pr_url:
+        update = {
+            "$set": {
+                "status": constants.STATUS_PR_OPEN,
+                "implementation_pr_url": pr_url,
+                "implementation_branch": branch_name,
+                "implementation_finished_at": finished_at,
+                "updated_at": finished_at,
+            },
+            "$push": {"audit_events": {
+                "at": finished_at,
+                "by_agent": constants.AGENT_ORCHESTRATOR,
+                "event": "cursor_pr_opened",
+                "detail": {
+                    "pr_url": pr_url,
+                    "branch_name": branch_name,
+                    "agent_id": agent_id,
+                    "run_id": run_id,
+                },
+            }},
+        }
+        db[constants.COLL_PROPOSALS].update_one(
+            {"_id": proposal_id}, update)
+        print(
+            f"orchestrator (Cursor): proposal {proposal_id} -> pr_open, "
+            f"PR={pr_url}",
+            flush=True)
+        return db[constants.COLL_PROPOSALS].find_one({"_id": proposal_id})
+
+    # Cursor finished but no PR URL OR errored OR didn't start ->
+    # treat as failure. Branch name + agent metadata still stamped
+    # for forensics.
+    reason = result.get("error") or f"Cursor agent ended with status={status!r}"
+    db[constants.COLL_PROPOSALS].update_one(
+        {"_id": proposal_id},
+        {
+            "$set": {
+                "status": constants.STATUS_FAILED,
+                "implementation_failure_reason": reason,
+                "implementation_branch": branch_name,
+                "implementation_finished_at": finished_at,
+                "updated_at": finished_at,
+            },
+            "$push": {"audit_events": {
+                "at": finished_at,
+                "by_agent": constants.AGENT_ORCHESTRATOR,
+                "event": "cursor_implementation_failed",
+                "detail": {
+                    "cursor_status": status,
+                    "reason": reason,
+                    "branch_name": branch_name,
+                    "agent_id": agent_id,
+                    "run_id": run_id,
+                },
+            }},
+        })
     return db[constants.COLL_PROPOSALS].find_one({"_id": proposal_id})
 
 

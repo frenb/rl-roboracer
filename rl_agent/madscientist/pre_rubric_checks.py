@@ -264,6 +264,14 @@ def check_e_schema_keys(
     """E: every key in experiment_design_fields / reward_design_fields
     across all arms maps to a known field.
 
+    Phase 1C-Full extension: keys declared in
+    proposal.proposed_schema_extensions are ALSO accepted, since the
+    Cursor SDK orchestrator will add them to SCHEMA before the
+    training jobs run. The Researcher uses this to propose
+    experiments that need novel knobs (e.g., aux_bc_loss_weight for
+    DAPG); the Judge passes them through; the orchestrator's Cursor
+    path then implements the schema additions before queueing.
+
     schema_keys override exists for tests; default reads from
     rl_agent.experiment_designs.SCHEMA (with all "_section_*" headers
     excluded).
@@ -277,12 +285,23 @@ def check_e_schema_keys(
         valid_design_keys = set(schema_keys)
     valid_reward_keys = set(REWARD_FUNCTION_NAMES)
 
+    # Phase 1C-Full: harvest the names of any proposed extensions.
+    # These keys are accepted as if they were already in SCHEMA -
+    # the orchestrator's Cursor agent is responsible for actually
+    # adding them before training jobs can run.
+    extensions = _get(proposal, "proposed_schema_extensions") or []
+    proposed_keys = set()
+    for ext in extensions:
+        ext_name = _get(ext, "name")
+        if isinstance(ext_name, str) and ext_name:
+            proposed_keys.add(ext_name)
+
     bad: List[str] = []
     arms = _get(proposal, "experiment_arms") or []
     for a in arms:
         arm_name = _get(a, "name", "?")
         for k in (_get(a, "experiment_design_fields") or {}).keys():
-            if k not in valid_design_keys:
+            if k not in valid_design_keys and k not in proposed_keys:
                 bad.append(f"arm '{arm_name}': unknown experiment_design key {k!r}")
         for k in (_get(a, "reward_design_fields") or {}).keys():
             if k not in valid_reward_keys:

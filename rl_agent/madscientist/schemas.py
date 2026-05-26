@@ -81,6 +81,59 @@ class ExperimentArm(BaseModel):
     reward_design_fields: Dict[str, Any] = Field(default_factory=dict)
 
 
+class ProposedSchemaExtension(BaseModel):
+    """A NEW experiment_designs SCHEMA field this proposal needs added.
+
+    Researcher MVP-1B can only propose experiments using existing knobs
+    (pre-rubric check E rejects unknown keys). Phase 1C-Full relaxes
+    that: proposals can declare new fields here, the Judge accepts them
+    based on this declaration, and the Cursor SDK orchestrator
+    implements the SCHEMA addition + trainer-kwarg plumbing before
+    queueing TRAIN jobs.
+
+    Example for a DAPG-style aux BC loss experiment:
+        ProposedSchemaExtension(
+            name="aux_bc_loss_weight",
+            type="float",
+            default=0.0,
+            min_value=0.0,
+            max_value=1.0,
+            doc="DAPG-style aux BC loss weight in the SAC actor update.",
+            paper_ref="1709.10089",
+            section="_section_bc",
+        )
+
+    Field shape mirrors experiment_designs.SCHEMA entries 1:1 so the
+    Cursor agent just needs to insert this as a new dict entry.
+    """
+    name: str = Field(
+        ...,
+        description="The schema key (snake_case, no dots).")
+    type: str = Field(
+        ...,
+        description="One of 'int' | 'float' | 'bool' | 'enum' | 'list[int]'.")
+    default: Any = Field(
+        ...,
+        description="Trainer's built-in default if this knob isn't overridden.")
+    min_value: Optional[float] = Field(
+        default=None,
+        description="Soft lower bound; None = no bound. Mapped to SCHEMA's 'min'.")
+    max_value: Optional[float] = Field(
+        default=None,
+        description="Soft upper bound; None = no bound. Mapped to SCHEMA's 'max'.")
+    doc: str = Field(
+        ...,
+        description="One-line human description shown as the dashboard tooltip.")
+    paper_ref: Optional[str] = Field(
+        default=None,
+        description="arxiv id for the paper this knob ties to.")
+    section: str = Field(
+        default="_section_rl_loop",
+        description="Which SCHEMA section to insert under "
+                    "(_section_rl_loop / _section_bc / _section_replay / "
+                    "_section_optimizer / _section_network).")
+
+
 class PrimaryCriterionParsed(BaseModel):
     """Machine-readable form of the proposal's primary success criterion.
 
@@ -277,6 +330,15 @@ class Proposal(BaseModel):
     num_iterations_per_seed: int = 5000
     expected_wall_time_hours: Optional[float] = None
     success_criteria: SuccessCriteria
+
+    # Phase 1C-Full: NEW SCHEMA fields this proposal needs added to
+    # rl_agent/experiment_designs.SCHEMA before training jobs can run.
+    # Empty list = the proposal only references existing knobs (the
+    # common case; Phase 1C-MVP path auto-queues directly). Non-empty =
+    # the orchestrator routes to the Cursor SDK agent which edits the
+    # codebase and opens a PR before queueing.
+    proposed_schema_extensions: List[ProposedSchemaExtension] = Field(
+        default_factory=list)
 
     # ---- Judge -----------------------------------------------------------
     judge_review: Optional[JudgeReview] = None
