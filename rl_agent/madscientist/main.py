@@ -3,15 +3,18 @@
 Runs the active workers in a single process when MADSCIENTIST_ENABLED=true:
 
   Phase 1A (live)      : judge_loop       - LLM-scores pending proposals
-  Phase 1E (live)      : outcome_loop     - tallies completed TRAIN jobs
-                                            into proposal.results
+  Phase 1B (live)      : research_loop    - auto-generates proposals from
+                                            arxiv + codebase introspection
   Phase 1C-MVP (live)  : orchestrate_loop - seeds derived designs +
                                             queues TRAIN jobs on
                                             approved proposals (no
                                             Cursor SDK yet)
-  Phase 1B (pending)   : researcher_loop  - auto-generates proposals
+  Phase 1E (live)      : outcome_loop     - tallies completed TRAIN jobs
+                                            into proposal.results
   Phase 1C-Full (pending) : Cursor SDK code-writing agent for
                             proposals that need new SCHEMA fields
+  Phase 1D (pending)   : email_bridge     - outbound proposals + inbound
+                                            natural-language replies
 
 All loops run as daemon threads. Each polls _should_exit between
 cycles for graceful drain on SIGTERM/SIGINT. Daemon=True so a
@@ -47,6 +50,7 @@ from . import constants
 from . import judge
 from . import orchestrator
 from . import outcome_ingester
+from . import researcher
 
 
 _should_exit = False
@@ -124,15 +128,22 @@ def main():
     max_jobs_per_proposal = int(os.environ.get(
         "MAX_JOBS_PER_PROPOSAL",
         orchestrator.DEFAULT_MAX_JOBS_PER_PROPOSAL))
+    research_cycle_interval = int(os.environ.get(
+        "RESEARCH_CYCLE_INTERVAL_SECONDS",
+        constants.DEFAULT_RESEARCH_CYCLE_INTERVAL_SECONDS))
+    research_query = os.environ.get(
+        "RESEARCH_QUERY", researcher.DEFAULT_RESEARCH_QUERY)
 
     print(
-        f"madscientist: Phase 1A+1C-MVP+1E workers starting. "
+        f"madscientist: Phase 1A+1B+1C-MVP+1E workers starting. "
         f"max_proposals_per_day={max_proposals_per_day}, "
         f"budget_usd_per_month={budget_usd_per_month}, "
         f"judge_poll_seconds={judge_poll}, "
         f"outcome_poll_seconds={outcome_poll}, "
         f"orchestrator_poll_seconds={orchestrator_poll}, "
-        f"max_jobs_per_proposal={max_jobs_per_proposal}.",
+        f"max_jobs_per_proposal={max_jobs_per_proposal}, "
+        f"research_cycle_interval_seconds={research_cycle_interval}, "
+        f"research_query={research_query!r}.",
         flush=True)
 
     try:
@@ -163,6 +174,20 @@ def main():
         name="judge-loop",
         daemon=True,
     )
+    researcher_thread = threading.Thread(
+        target=researcher.research_loop,
+        kwargs={
+            "db": db,
+            "anthropic_client": anthropic_client,
+            "poll_interval_seconds": research_cycle_interval,
+            "monthly_budget_usd": budget_usd_per_month,
+            "max_proposals_per_day": max_proposals_per_day,
+            "research_query": research_query,
+            "should_stop_fn": lambda: _should_exit,
+        },
+        name="research-loop",
+        daemon=True,
+    )
     orchestrator_thread = threading.Thread(
         target=orchestrator.orchestrate_loop,
         kwargs={
@@ -185,6 +210,7 @@ def main():
         daemon=True,
     )
     judge_thread.start()
+    researcher_thread.start()
     orchestrator_thread.start()
     outcome_thread.start()
 
@@ -194,9 +220,10 @@ def main():
     #       _should_exit + a sub-poll-interval drain),
     #   (b) we get SIGTERM/SIGINT and _should_exit becomes True.
     # We tick at 1s so SIGTERM responsiveness is sub-second even
-    # though the worker loops sleep for tens of seconds.
+    # though the worker loops sleep for tens of seconds or hours.
     worker_threads = [
         ("judge", judge_thread),
+        ("research", researcher_thread),
         ("orchestrator", orchestrator_thread),
         ("outcome", outcome_thread),
     ]
@@ -215,7 +242,12 @@ def main():
     # Worker loops each call should_stop_fn(). We wait up to their
     # max poll interval + a small buffer for graceful drain. Threads
     # are daemons so if drain hangs we still exit on process exit.
-    drain_deadline = max(judge_poll, outcome_poll, orchestrator_poll) + 5
+    drain_deadline = max(
+        judge_poll, outcome_poll, orchestrator_poll,
+        # Research cycle is much longer (hours); we don't actually wait
+        # the full interval - the loop's should_stop_fn check is on a
+        # tighter cadence inside time.sleep, so 60s drain is plenty.
+        60) + 5
     for _name, t in worker_threads:
         t.join(timeout=drain_deadline)
     print("madscientist: exited cleanly.", flush=True)
