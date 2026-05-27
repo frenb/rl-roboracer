@@ -478,6 +478,111 @@ def test_comparators():
             f"got {ev.criterion_met}")
 
 
+def test_recover_stale_failures():
+    print("\nGroup 10: recover_stale_failures unsticks proposals whose jobs "
+          "were re-queued after a premature 'all failed' ingest",
+          flush=True)
+    db = _db()
+
+    # Scenario A: proposal failed by ingester (no_successful_jobs) AND
+    # has a job re-queued back to NOT_STARTED -> should recover.
+    pA = _insert_synthetic_proposal(
+        db, arms_to_returns={},
+        failed_arms={"base": 2, "exp1": 2},
+        status=constants.STATUS_FAILED)
+    # Stamp the ingester signature on the proposal: results.notes
+    # matches the regex, audit_event recorded.
+    db.proposals.update_one(
+        {"_id": pA["_id"]},
+        {"$set": {
+            "results": {
+                "notes": "All 4 linked TRAIN job(s) failed or were "
+                         "cancelled. No data to summarize.",
+                "verdict": "inconclusive",
+                "primary_criterion_met": None,
+                "n_jobs_succeeded": 0,
+                "n_jobs_failed": 4,
+                "per_arm": [],
+                "computed_at": _now(),
+            },
+        }})
+    # Re-queue one of pA's jobs back to NOT_STARTED.
+    db.jobs.update_one(
+        {"_id": pA["training_job_ids"][0]},
+        {"$set": {"status": "NOT_STARTED"}})
+
+    # Scenario B: proposal failed by ingester, BUT no jobs re-queued.
+    # Should NOT recover (still all FAILED).
+    pB = _insert_synthetic_proposal(
+        db, arms_to_returns={},
+        failed_arms={"base": 2, "exp1": 2},
+        status=constants.STATUS_FAILED)
+    db.proposals.update_one(
+        {"_id": pB["_id"]},
+        {"$set": {
+            "results": {
+                "notes": "All 4 linked TRAIN job(s) failed or were "
+                         "cancelled. No data to summarize.",
+                "verdict": "inconclusive",
+            },
+        }})
+
+    # Scenario C: proposal failed BUT for a different reason (e.g.
+    # orchestrator-level failure - results.notes doesn't match the
+    # ingester signature). Should NOT recover even if jobs are
+    # non-terminal, because the failure wasn't from the ingester.
+    pC = _insert_synthetic_proposal(
+        db, arms_to_returns={},
+        failed_arms={"base": 1},
+        status=constants.STATUS_FAILED)
+    db.proposals.update_one(
+        {"_id": pC["_id"]},
+        {"$set": {
+            "implementation_failure_reason": "orchestrator hit max_jobs cap",
+        }})
+    # Re-queue jobs but expect no recovery because notes don't match.
+    db.jobs.update_one(
+        {"_id": pC["training_job_ids"][0]},
+        {"$set": {"status": "NOT_STARTED"}})
+
+    recovered = outcome_ingester.recover_stale_failures(db)
+    recovered_set = set(str(x) for x in recovered)
+
+    _expect(
+        "scenario A (matched + re-queued) recovers",
+        lambda: str(pA["_id"]) in recovered_set,
+        f"recovered={recovered_set}")
+    _expect(
+        "scenario B (matched + no re-queue) does NOT recover",
+        lambda: str(pB["_id"]) not in recovered_set)
+    _expect(
+        "scenario C (orchestrator-failed) does NOT recover",
+        lambda: str(pC["_id"]) not in recovered_set)
+
+    # pA should be re-status'd to TRAINING with results cleared and
+    # the recovery audit event appended.
+    updated_pA = db.proposals.find_one({"_id": pA["_id"]})
+    _expect(
+        "pA status=training after recovery",
+        lambda: updated_pA["status"] == constants.STATUS_TRAINING,
+        f"status={updated_pA['status']}")
+    _expect(
+        "pA results cleared",
+        lambda: "results" not in updated_pA or updated_pA.get("results") is None)
+    _expect(
+        "pA has audit_event event=recovered_from_stale_failure",
+        lambda: any(
+            e.get("event") == "recovered_from_stale_failure"
+            for e in (updated_pA.get("audit_events") or [])))
+
+    # Calling recover_stale_failures again is idempotent: pA is now
+    # `training`, not `failed`, so the filter no longer matches.
+    second_run = outcome_ingester.recover_stale_failures(db)
+    _expect(
+        "recover_stale_failures is idempotent (no double-recovery)",
+        lambda: str(pA["_id"]) not in set(str(x) for x in second_run))
+
+
 # ---- Cleanup + main -----------------------------------------------------
 
 
@@ -510,6 +615,7 @@ def main() -> int:
         test_ingest_one_not_ready()
         test_ingest_one_idempotent_on_done()
         test_comparators()
+        test_recover_stale_failures()
     finally:
         _cleanup(db)
 

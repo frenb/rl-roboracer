@@ -397,6 +397,30 @@
           { key: 'percent_complete', label: 'Progress', sortable: true,  filter: false,
             sortValue: (row) => Number(row.percent_complete) || 0,
             render: (v) => formatters.percentBar((Number(v) || 0) / 100) },
+          // Total training iterations the job was configured for. Stamped
+          // by the dashboard form at submit time; the trainer reads this
+          // to bound its run loop (see rl_agent/robotaxi.py do_job + main).
+          // Renders with thousands separators for readability; em-dash for
+          // jobs that don't carry the field (e.g. EVAL jobs, which use
+          // num_trials instead). Sort treats missing/empty as 0 so they
+          // cluster at one end.
+          { key: 'num_iterations',   label: 'Iters',    sortable: true,  filter: false,
+            sortValue: (row) => {
+              const v = row.num_iterations;
+              if (v === '' || v == null) return 0;
+              const n = Number(v);
+              return Number.isFinite(n) ? n : 0;
+            },
+            render: (v) => {
+              if (v === '' || v == null) return '—';
+              const n = Number(v);
+              if (!Number.isFinite(n) || n <= 0) return '—';
+              // text-slate-50 (near-white) for high contrast against
+              // the dark slate-900 row background. Matches the
+              // Activity Feed Tabulator override in madscientist.html.
+              return '<span class="font-mono text-xs tabular-nums text-slate-50">' +
+                n.toLocaleString() + '</span>';
+            } },
           { key: 'started_at',       label: 'Duration', sortable: true,  filter: false,
             // Sort by computed duration (ms). Null sorts last so
             // not-yet-started jobs cluster at the end of an asc sort
