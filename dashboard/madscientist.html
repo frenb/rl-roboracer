@@ -6,8 +6,29 @@
   <!-- Same boot order as every other dashboard tab. -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="/tailwind.init.js"></script>
+  <!-- Tabulator: same data-grid library the Jobs / Models / Leaderboard
+       tabs use. Powers the Activity Feed table on this page (resizable
+       columns, sort, filter, pagination, persistent column widths). -->
+  <link rel="stylesheet" href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator_simple.min.css">
+  <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
   <link rel="stylesheet" href="/styles.css">
   <style>
+    /* Activity Feed Tabulator: bump cell text to white for better
+       contrast against the dark slate-900 section background. Targets
+       only the activity-feed table (scoped by data-role), not the
+       Jobs / Models tabs which share the same Tabulator CSS but a
+       lighter slate background. Spans inside cells that set their
+       own color (e.g. the indigo by_agent) keep their color because
+       the more-specific span color wins over this cell-level rule. */
+    [data-role="activity-feed"] .tabulator-cell {
+      color: #f8fafc; /* slate-50, near-white */
+    }
+    [data-role="activity-feed"] .tabulator-cell .text-slate-500,
+    [data-role="activity-feed"] .tabulator-cell .text-slate-400,
+    [data-role="activity-feed"] .tabulator-cell .dark\:text-slate-400 {
+      color: #f8fafc !important;
+    }
+
     /* Carousel-style Pending Decisions: one proposal-card visible at
        a time with Prev / Next navigation above it. The card is a
        two-layer construction:
@@ -83,7 +104,9 @@
            ============================================================ -->
       <section class="bg-white dark:bg-slate-900
                       border border-slate-200 dark:border-slate-700
-                      rounded-2xl shadow-card overflow-hidden shrink-0">
+                      rounded-2xl shadow-card overflow-hidden shrink-0
+                      flex flex-col"
+               style="height: 340px;">
         <div class="px-4 py-2.5 border-b border-slate-200 dark:border-slate-700
                     text-xs uppercase tracking-wide font-semibold
                     text-slate-500 dark:text-slate-400 flex items-center justify-between">
@@ -92,12 +115,11 @@
             researcher · judge · orchestrator · outcome ingester
           </span>
         </div>
-        <div data-role="activity-feed" class="p-4 min-h-[120px] text-xs font-mono text-slate-500 dark:text-slate-400">
-          <div class="text-center py-6">
-            No activity yet. Phase 1 will populate this with a live tail
-            of researcher / judge / orchestrator events.
-          </div>
-        </div>
+        <!-- TableView mounts here. It adds `flex-1 min-h-0
+             overflow-hidden` to this element at construction time so
+             the Tabulator instance fills the remaining flex space
+             below the section header. -->
+        <div data-role="activity-feed"></div>
       </section>
 
       <!-- ============================================================
@@ -203,7 +225,7 @@
   </div>
 
   <!-- Cache-busted (see jobs.html). Bump ?v=... when components.js changes. -->
-  <script src="/components.js?v=20260525-madsci-pending-scroll"></script>
+  <script src="/components.js?v=20260526-madsci-activity-tabulator"></script>
   <script>
     (function () {
       const { showToast, confirmDialog } = window.RoboracerUI;
@@ -254,26 +276,138 @@
         reject:        'bg-red-100     text-red-700     dark:bg-red-900/40     dark:text-red-300',
       };
 
-      // ---- Renderers ---------------------------------------------------
+      // ---- Activity Feed: Tabulator data grid --------------------------
+      //
+      // Resizable + sortable + filterable + paginated. Column widths
+      // persist across reloads via Tabulator's persistence layer (keyed
+      // on the /madscientist URL). Same TableView wrapper the Jobs /
+      // Models tabs use, so the look + feel are consistent.
+      const { TableView } = window.RoboracerUI;
+
+      // Render the Status column. If the proposal has associated TRAIN
+      // jobs (job_statuses non-empty, from the server's $lookup) we
+      // show an aggregated job-status badge that reflects the *actual*
+      // job state - independent of the proposal-level status. This is
+      // important because the proposal status can lag (proposal still
+      // shows `training` when all jobs are done, or stuck at `failed`
+      // while jobs are actively running). The Activity Feed should
+      // match what the operator sees in the Jobs tab.
+      //
+      // Proposals with NO jobs (pending_user, rejected, deferred,
+      // etc.) fall back to the literal proposal_status string.
+      //
+      // Display rules when job_statuses is non-empty:
+      //   any FAILED          -> red "M FAILED" + count badge
+      //   any IN_PROGRESS     -> blue "IN_PROGRESS N/total"
+      //   any PAUSED          -> amber "PAUSED N/total"
+      //   all DONE            -> green "DONE total/total"
+      //   all NOT_STARTED     -> neutral "QUEUED 0/total"
+      //   mixed NOT_STARTED + DONE (no IP) -> neutral "N/total done"
+      function renderStatusCell(v, row) {
+        const ps = v || '?';
+        const jobs = row.job_statuses || [];
+        if (!jobs.length) {
+          return '<span class="font-mono text-[11px] text-slate-50">' +
+            esc(ps) +
+          '</span>';
+        }
+        const counts = {};
+        for (const s of jobs) counts[s] = (counts[s] || 0) + 1;
+        const total = jobs.length;
+        const done = counts.DONE || 0;
+        const ip = counts.IN_PROGRESS || 0;
+        const ns = counts.NOT_STARTED || 0;
+        const failed = counts.FAILED || 0;
+        const paused = (counts.PAUSED || 0) + (counts.PAUSE_REQUESTED || 0);
+
+        const badge = (toneClasses, text) =>
+          '<span class="inline-flex items-center px-1.5 py-0.5 rounded ' +
+            'font-mono text-[10px] font-semibold ' + toneClasses + '">' +
+            esc(text) +
+          '</span>';
+        const parts = [];
+        if (failed) {
+          parts.push(badge('bg-red-900/40 text-red-300', failed + ' FAILED'));
+        }
+        if (ip) {
+          parts.push(badge('bg-blue-900/40 text-blue-300', 'IN_PROGRESS ' + ip + '/' + total));
+        } else if (paused) {
+          parts.push(badge('bg-amber-900/40 text-amber-300', 'PAUSED ' + paused + '/' + total));
+        } else if (failed === 0 && done === total) {
+          parts.push(badge('bg-emerald-900/40 text-emerald-300', 'DONE ' + done + '/' + total));
+        } else if (ns === total) {
+          parts.push(badge('bg-slate-800 text-slate-300', 'QUEUED 0/' + total));
+        }
+        if (parts.length === 0 || (done > 0 && done < total && !ip && !paused && failed === 0)) {
+          parts.push(badge('bg-slate-800 text-slate-300', done + '/' + total + ' done'));
+        }
+        return parts.join(' ');
+      }
+
+      function _activityRowKey(row) {
+        // Each activity event uniquely identified by proposal_id + at
+        // + event name. Used by TableView for stable row identity
+        // across polls (so sort / filter state doesn't churn).
+        const at = (row.at && row.at.$date) || row.at || '';
+        return String(row.proposal_id || '') + '|' +
+               String(at) + '|' +
+               String(row.event || '');
+      }
+
+      const activityTable = new TableView(activityHost, {
+        selectable: false,
+        rowKey: _activityRowKey,
+        pageSize: 25,
+        emptyMessage:
+          'No activity yet. The researcher / judge / orchestrator / ' +
+          'outcome ingester will write here as they run.',
+        columns: [
+          { key: 'at', label: 'When', sortable: true, filter: false,
+            sortValue: (row) => {
+              const v = (row.at && row.at.$date) || row.at;
+              const t = Date.parse(v);
+              return Number.isFinite(t) ? t : 0;
+            },
+            render: (_v, row) => {
+              const v = (row.at && row.at.$date) || row.at;
+              return esc(relTime(v));
+            } },
+          { key: 'by_agent', label: 'Agent', sortable: true, filter: true,
+            render: (v) =>
+              '<span class="text-indigo-600 dark:text-indigo-300 font-mono text-xs">' +
+                esc(v || '?') +
+              '</span>' },
+          { key: 'event', label: 'Event', sortable: true, filter: true,
+            render: (v) =>
+              '<span class="font-mono text-xs">' + esc(v || '?') + '</span>' },
+          { key: 'proposal_title', label: 'Proposal', sortable: true, filter: true,
+            render: (v) =>
+              '<span title="' + esc(v || '') + '">' +
+                esc(v || '(unknown proposal)') +
+              '</span>' },
+          { key: 'proposal_status', label: 'Status', sortable: true, filter: true,
+            sortValue: (row) => {
+              // Sort priority for visual scanning: failures + active
+              // work bubble to the top, completed sinks to the bottom.
+              const ps = row.proposal_status || '';
+              if (ps !== 'training' || !row.job_statuses || !row.job_statuses.length) {
+                return ps;
+              }
+              const counts = {};
+              for (const s of row.job_statuses) counts[s] = (counts[s] || 0) + 1;
+              if (counts.FAILED) return '0_failed';
+              if (counts.IN_PROGRESS) return '1_inprogress';
+              if (counts.PAUSED || counts.PAUSE_REQUESTED) return '2_paused';
+              if (counts.NOT_STARTED) return '3_queued';
+              return '4_alldone';
+            },
+            render: (v, row) => renderStatusCell(v, row) },
+        ],
+      });
+      activityTable.setLoading(true);
 
       function renderActivity(events) {
-        if (!events || !events.length) {
-          activityHost.innerHTML = '<div class="text-center py-6">No activity yet.</div>';
-          return;
-        }
-        activityHost.innerHTML = events.map((e) => {
-          const at = e.at && (e.at.$date || e.at);
-          return (
-            '<div class="flex items-start gap-2 py-1 border-b border-slate-100 dark:border-slate-800 last:border-0">' +
-              '<span class="text-slate-400 dark:text-slate-500 w-16 shrink-0">' + esc(relTime(at)) + '</span>' +
-              '<span class="text-indigo-600 dark:text-indigo-300 w-44 shrink-0 truncate">' + esc(e.by_agent || '?') + '</span>' +
-              '<span class="text-slate-700 dark:text-slate-300 w-24 shrink-0">' + esc(e.event || '?') + '</span>' +
-              '<span class="text-slate-500 dark:text-slate-400 truncate" title="' + esc(e.proposal_title || '') + '">' +
-                esc(e.proposal_title || '(unknown proposal)') +
-              '</span>' +
-            '</div>'
-          );
-        }).join('');
+        activityTable.setData(events || []);
       }
 
       function renderPending(proposals) {

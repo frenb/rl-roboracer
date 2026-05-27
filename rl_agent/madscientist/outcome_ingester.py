@@ -101,6 +101,11 @@ def _safe_mean(samples: List[float]) -> Optional[float]:
 # ingester can stop waiting and process the proposal.
 _TERMINAL_JOB_STATUSES = ("DONE", "FAILED", "CANCELLED")
 
+# Non-terminal job statuses. If a stale-failed proposal has ANY job
+# back in one of these, the proposal is eligible for recovery.
+_NON_TERMINAL_JOB_STATUSES = (
+    "NOT_STARTED", "IN_PROGRESS", "PAUSED", "PAUSE_REQUESTED")
+
 
 def _all_training_jobs_terminal(db, training_job_ids: List[Any]) -> Tuple[bool, int, int]:
     """Check whether every linked TRAIN job has reached a terminal
@@ -498,6 +503,22 @@ def outcome_loop(
                   flush=True)
             return
         try:
+            # Recovery sweep BEFORE the normal ingestion pass. Catches
+            # proposals that were prematurely flipped to `failed` by an
+            # earlier ingest cycle (e.g. trainer crashed before any
+            # job could finish, marking them all FAILED) but whose
+            # underlying jobs have since been re-queued (NOT_STARTED /
+            # IN_PROGRESS). Moves them back to `training` so the
+            # normal loop below can re-evaluate when the jobs
+            # ultimately terminate.
+            recovered = recover_stale_failures(db)
+            for rid in recovered:
+                print(
+                    f"outcome_ingester: recovered stale-failed proposal "
+                    f"{rid} -> status=training (jobs back in non-terminal "
+                    f"state)",
+                    flush=True)
+
             ingestible_statuses = [
                 constants.STATUS_APPROVED,
                 constants.STATUS_IMPLEMENTING,
@@ -528,3 +549,76 @@ def outcome_loop(
                 f"outcome_ingester: Mongo lookup failed: {e}",
                 flush=True)
         time.sleep(poll_interval_seconds)
+
+
+def recover_stale_failures(db) -> List[Any]:
+    """Scan for stale-failed proposals and reset them to `training`.
+
+    A proposal is "stale-failed" when:
+      * proposal.status == 'failed'
+      * its last audit_event is an `ingested` event whose
+        detail.reason == 'no_successful_jobs' (i.e., we marked it
+        failed BECAUSE all linked TRAIN jobs were in FAILED state at
+        the time, not because of any LLM / orchestrator decision)
+      * AT LEAST ONE of its linked TRAIN jobs is currently in a non-
+        terminal status (NOT_STARTED / IN_PROGRESS / PAUSED), meaning
+        the operator has since re-queued at least one job and we
+        should re-evaluate when training completes.
+
+    For each match we:
+      * flip status back to `training`
+      * clear proposal.results (so the next ingest produces fresh
+        per-arm stats from the recovered jobs)
+      * append an audit_event recording the recovery
+
+    Returns the list of recovered proposal _ids.
+
+    Idempotent: a proposal that's already been recovered won't match
+    again (status != 'failed' after the first recovery).
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    candidates = db[constants.COLL_PROPOSALS].find(
+        {"status": constants.STATUS_FAILED,
+         "training_job_ids": {"$exists": True, "$ne": []},
+         # Conservative gate: only recover proposals that were marked
+         # failed BY the outcome_ingester with the specific "no
+         # successful jobs" signature. Don't touch proposals failed
+         # by the orchestrator (those have a different audit event)
+         # or by the cursor agent.
+         "results.notes": {"$regex": "TRAIN job.* failed or were cancelled"}})
+    recovered_ids: List[Any] = []
+    for prop in candidates:
+        training_job_ids = prop.get("training_job_ids") or []
+        if not training_job_ids:
+            continue
+        # Any job back in a non-terminal state?
+        has_non_terminal = db.jobs.count_documents({
+            "_id": {"$in": list(training_job_ids)},
+            "status": {"$in": list(_NON_TERMINAL_JOB_STATUSES)},
+        }) > 0
+        if not has_non_terminal:
+            continue
+
+        audit_event = {
+            "at": now,
+            "by_agent": constants.AGENT_OUTCOME_INGESTER,
+            "event": "recovered_from_stale_failure",
+            "detail": {
+                "previous_status": constants.STATUS_FAILED,
+                "next_status": constants.STATUS_TRAINING,
+                "reason": "jobs_re_queued_after_stale_failure",
+            },
+        }
+        db[constants.COLL_PROPOSALS].update_one(
+            {"_id": prop["_id"], "status": constants.STATUS_FAILED},
+            {
+                "$set": {
+                    "status": constants.STATUS_TRAINING,
+                    "updated_at": now,
+                },
+                "$unset": {"results": ""},
+                "$push": {"audit_events": audit_event},
+            },
+        )
+        recovered_ids.append(prop["_id"])
+    return recovered_ids

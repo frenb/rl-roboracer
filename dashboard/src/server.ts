@@ -341,12 +341,31 @@ export const createServer = (config): express.Application => {
     // sorted by timestamp desc. We use a Mongo aggregation so the
     // unwind + sort + limit happens server-side instead of streaming
     // every proposal across the wire.
+    //
+    // For proposals in `training` state, we $lookup the related TRAIN
+    // jobs and project their status array as `job_statuses`. The
+    // dashboard Activity Feed uses this to render an aggregated job-
+    // status badge (e.g. "IN_PROGRESS 2/4 · 1 FAILED") instead of the
+    // bare `training` proposal status. Lookup happens BEFORE $unwind
+    // so we do one lookup per proposal, not one per event.
     dbo.collection(MS_PROPOSALS_COLL).aggregate([
-      // Only proposals that have any audit_events at all.
       { $match: { audit_events: { $exists: true, $ne: [] } } },
-      // Pop each event into its own doc.
+      // $lookup with a let + $expr because proposals._id is ObjectId
+      // and jobs.proposal_id is stored as the 24-char hex STRING (the
+      // madscientist orchestrator stamps it via str(proposal['_id'])
+      // - see rl_agent/madscientist/orchestrator.py). Plain
+      // localField/foreignField $lookup does strict equality and
+      // would return [] for every row because ObjectId != str.
+      { $lookup: {
+          from: 'jobs',
+          let: { proposalIdStr: { $toString: '$_id' } },
+          pipeline: [
+            { $match: { $expr: { $eq: ['$proposal_id', '$$proposalIdStr'] } } },
+            { $project: { _id: 0, status: 1 } },
+          ],
+          as: '_jobs',
+        } },
       { $unwind: '$audit_events' },
-      // Promote the event's fields + carry through identifying info.
       { $project: {
           _id: 0,
           proposal_id: '$_id',
@@ -356,6 +375,7 @@ export const createServer = (config): express.Application => {
           by_agent: '$audit_events.by_agent',
           event: '$audit_events.event',
           detail: '$audit_events.detail',
+          job_statuses: '$_jobs.status',
         } },
       { $sort: { at: -1 } },
       { $limit: limit },
