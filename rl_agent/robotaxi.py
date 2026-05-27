@@ -2645,12 +2645,29 @@ def do_job(job, num_envs=1):
         # out. The outer-loop pass that archives OTHER jobs' dirs out
         # of /tmp/active/ still runs - we always want to clean those.
         move_all_jobs_data(job["_id"], skip_current_cleanup=is_resume)
-        num_iterations=job["num_iterations"] if job["num_iterations"] != "" else 50000
-        pass_through_actions=job["pass_through_actions"] if job["pass_through_actions"] != "" else False,
-        actor_fc_layer_params_x=512 if job.get("nn_size_x") == None else int(job.get("nn_size_x"))
-        actor_fc_layer_params_y=512 if job.get("nn_size_y") == None else int(job.get("nn_size_y"))
-        critic_joint_fc_layer_params_x=512 if job.get("nn_size_x") == None else job.get("nn_size_x")
-        critic_joint_fc_layer_params_y=512 if job.get("nn_size_y") == None else job.get("nn_size_y")
+        # Job fields can arrive from Mongo as either None (never set)
+        # or the empty string '' (cleared via dashboard form). Both
+        # mean "fall back to default". Casting '' to int blows up
+        # with ValueError, so route every nullable-numeric field
+        # through this helper.
+        def _int_or(val, default):
+            if val is None or val == "":
+                return default
+            try:
+                return int(val)
+            except (ValueError, TypeError):
+                return default
+        num_iterations = _int_or(job.get("num_iterations"), 50000)
+        pass_through_actions = (
+            job["pass_through_actions"]
+            if job.get("pass_through_actions") not in (None, "")
+            else False)
+        _nn_size_x = _int_or(job.get("nn_size_x"), 512)
+        _nn_size_y = _int_or(job.get("nn_size_y"), 512)
+        actor_fc_layer_params_x = _nn_size_x
+        actor_fc_layer_params_y = _nn_size_y
+        critic_joint_fc_layer_params_x = _nn_size_x
+        critic_joint_fc_layer_params_y = _nn_size_y
         # Resolve the optional reward design and seed from the job
         # document. reward_design_id can be either an ObjectID (sent
         # by the future dashboard Reward-design tab) or the special
