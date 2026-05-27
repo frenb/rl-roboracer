@@ -8,33 +8,41 @@
   <script src="/tailwind.init.js"></script>
   <link rel="stylesheet" href="/styles.css">
   <style>
-    /* Explicit always-visible scrollbar for [data-role="proposal-card"].
-       Each pending-decisions card is capped at max-h + overflow-y-scroll
-       so its interior scrolls when the LLM-generated content (or an
-       expanded Edit panel) overflows. Browsers (esp. dark-themed
-       Edge/Chrome on Windows and macOS in dark mode) often render the
-       default scrollbar as 0-width / transparent. This styling gives a
-       clear "this card scrolls inside" affordance regardless of OS
-       settings. */
-    [data-role="proposal-card"] {
+    /* Carousel-style Pending Decisions: one proposal-card visible at
+       a time with Prev / Next navigation above it. The card is a
+       two-layer construction:
+         * [data-role="proposal-card"] - outer border-only wrapper,
+           overflow-hidden, fixed height. Scrollbar can NEVER render
+           outside this rectangle.
+         * [data-role="proposal-card-scroll"] - inner scroll
+           container, h-full + overflow-y-scroll, INSET inside the
+           outer wrapper's border so the scrollbar is visually
+           contained by the card's rounded rectangle.
+
+       Browsers on dark mode often render the default scrollbar as
+       0-width / transparent, so the explicit ::-webkit-scrollbar
+       styling below guarantees visibility regardless of OS settings.
+       Outer pending-list has NO scrollbar - users navigate between
+       proposals via the Prev / Next buttons. */
+    [data-role="proposal-card-scroll"] {
       scrollbar-width: auto;
       scrollbar-color: #6366f1 #1e293b; /* indigo-500 over slate-800 */
     }
-    [data-role="proposal-card"]::-webkit-scrollbar {
+    [data-role="proposal-card-scroll"]::-webkit-scrollbar {
       width: 14px;
     }
-    [data-role="proposal-card"]::-webkit-scrollbar-track {
-      background: #1e293b; /* slate-800 */
+    [data-role="proposal-card-scroll"]::-webkit-scrollbar-track {
+      background: #1e293b;
       border-radius: 7px;
     }
-    [data-role="proposal-card"]::-webkit-scrollbar-thumb {
-      background: #6366f1; /* indigo-500 */
+    [data-role="proposal-card-scroll"]::-webkit-scrollbar-thumb {
+      background: #6366f1;
       border-radius: 7px;
       border: 2px solid #1e293b;
-      min-height: 40px; /* keep thumb easy to grab even on tall content */
+      min-height: 40px;
     }
-    [data-role="proposal-card"]::-webkit-scrollbar-thumb:hover {
-      background: #818cf8; /* indigo-400 */
+    [data-role="proposal-card-scroll"]::-webkit-scrollbar-thumb:hover {
+      background: #818cf8;
     }
   </style>
 </head>
@@ -75,7 +83,7 @@
            ============================================================ -->
       <section class="bg-white dark:bg-slate-900
                       border border-slate-200 dark:border-slate-700
-                      rounded-2xl shadow-card overflow-hidden">
+                      rounded-2xl shadow-card overflow-hidden shrink-0">
         <div class="px-4 py-2.5 border-b border-slate-200 dark:border-slate-700
                     text-xs uppercase tracking-wide font-semibold
                     text-slate-500 dark:text-slate-400 flex items-center justify-between">
@@ -97,10 +105,16 @@
            Cards for each proposal in `pending_user` status. Each card
            shows title, hypothesis, judge verdict, and approve/reject
            buttons. Populated by Phase 1.
-           ============================================================ -->
+
+           shrink-0 on the <section> is critical: the parent body is a
+           flex-col, and without an explicit no-shrink rule sections
+           can be compressed below their content size when total
+           content > viewport, which makes children visually overlap
+           the next section. shrink-0 pins each section to its
+           natural content height. -->
       <section class="bg-white dark:bg-slate-900
                       border border-slate-200 dark:border-slate-700
-                      rounded-2xl shadow-card overflow-hidden">
+                      rounded-2xl shadow-card overflow-hidden shrink-0">
         <div class="px-4 py-2.5 border-b border-slate-200 dark:border-slate-700
                     text-xs uppercase tracking-wide font-semibold
                     text-slate-500 dark:text-slate-400 flex items-center justify-between">
@@ -110,8 +124,7 @@
           </span>
         </div>
         <div data-role="pending-list"
-             style="height: 600px;"
-             class="p-4 min-h-[120px] overflow-y-auto
+             class="p-4 min-h-[120px]
                     text-sm text-slate-500 dark:text-slate-400">
           <div class="text-center py-6 text-xs">
             No proposals awaiting your approval. The researcher will write
@@ -128,7 +141,7 @@
            ============================================================ -->
       <section class="bg-white dark:bg-slate-900
                       border border-slate-200 dark:border-slate-700
-                      rounded-2xl shadow-card overflow-hidden">
+                      rounded-2xl shadow-card overflow-hidden shrink-0">
         <div class="px-4 py-2.5 border-b border-slate-200 dark:border-slate-700
                     text-xs uppercase tracking-wide font-semibold
                     text-slate-500 dark:text-slate-400">
@@ -164,7 +177,7 @@
            ============================================================ -->
       <section class="bg-white dark:bg-slate-900
                       border border-slate-200 dark:border-slate-700
-                      rounded-2xl shadow-card overflow-hidden">
+                      rounded-2xl shadow-card overflow-hidden shrink-0">
         <div class="px-4 py-2.5 border-b border-slate-200 dark:border-slate-700
                     text-xs uppercase tracking-wide font-semibold
                     text-slate-500 dark:text-slate-400">
@@ -204,6 +217,13 @@
       const outcomesHost = document.querySelector('[data-role="outcomes-list"]');
       const statusDot   = document.querySelector('[data-role="status-dot"]');
       const statusText  = document.querySelector('[data-role="status-text"]');
+
+      // ---- Carousel state ----------------------------------------------
+      // Pending Decisions is a one-at-a-time carousel. We keep the last
+      // polled proposals around so the Prev/Next buttons can re-render
+      // locally without re-fetching from the server.
+      let currentProposalIndex = 0;
+      let lastProposals = [];
 
       // ---- Tiny utilities ----------------------------------------------
       const esc = (s) => String(s == null ? '' : s)
@@ -263,9 +283,17 @@
         pendingCount.textContent = n === 0
           ? '0 awaiting your approval'
           : `${n} awaiting your approval`;
-        // If any edit panel is currently open we skip the rerender so
-        // we don't blow away the user's typed-in changes. Save/cancel
-        // closes the panel; the next poll then refreshes normally.
+        // Clamp carousel index. After approve/reject the current
+        // proposal disappears; if we were at the last index, slide
+        // back one.
+        if (currentProposalIndex >= n) {
+          currentProposalIndex = Math.max(0, n - 1);
+        }
+        if (currentProposalIndex < 0) currentProposalIndex = 0;
+
+        // Skip rerender if an edit panel is open on the visible card,
+        // so we don't blow away the user's typed-in changes. Save or
+        // cancel closes the panel; the next poll refreshes normally.
         const hasOpenEdit = pendingHost.querySelector(
           '[data-role="edit-panel"]:not(.hidden)');
         if (hasOpenEdit) {
@@ -276,13 +304,58 @@
             'No proposals awaiting your approval.</div>';
           return;
         }
-        pendingHost.innerHTML = pending.map(renderProposalCard).join('');
+
+        // Carousel nav: Prev | counter | Next. Disabled at the edges.
+        const atStart = currentProposalIndex === 0;
+        const atEnd = currentProposalIndex === n - 1;
+        const navHtml = (
+          '<div class="flex items-center justify-between gap-3 mb-3 ' +
+              'select-none">' +
+            '<button data-role="carousel-prev" ' +
+                    'class="btn-base btn-secondary text-xs" ' +
+                    (atStart ? 'disabled' : '') + '>' +
+              '&larr; Prev' +
+            '</button>' +
+            '<span class="text-[11px] font-mono text-slate-500 dark:text-slate-400">' +
+              'Proposal ' + (currentProposalIndex + 1) + ' / ' + n +
+            '</span>' +
+            '<button data-role="carousel-next" ' +
+                    'class="btn-base btn-secondary text-xs" ' +
+                    (atEnd ? 'disabled' : '') + '>' +
+              'Next &rarr;' +
+            '</button>' +
+          '</div>'
+        );
+
+        pendingHost.innerHTML = navHtml + renderProposalCard(
+          pending[currentProposalIndex]);
         pendingHost.querySelectorAll('[data-decide-action]').forEach((btn) => {
           btn.addEventListener('click', onDecideClick);
         });
         pendingHost.querySelectorAll('[data-edit-action]').forEach((btn) => {
           btn.addEventListener('click', onEditButtonClick);
         });
+        // Carousel nav handlers re-render locally from the cached
+        // lastProposals (no server fetch needed). The poll loop will
+        // refresh data on its own 5s cadence.
+        const prevBtn = pendingHost.querySelector('[data-role="carousel-prev"]');
+        const nextBtn = pendingHost.querySelector('[data-role="carousel-next"]');
+        if (prevBtn) {
+          prevBtn.addEventListener('click', () => {
+            if (currentProposalIndex > 0) {
+              currentProposalIndex -= 1;
+              renderPending(lastProposals);
+            }
+          });
+        }
+        if (nextBtn) {
+          nextBtn.addEventListener('click', () => {
+            if (currentProposalIndex < n - 1) {
+              currentProposalIndex += 1;
+              renderPending(lastProposals);
+            }
+          });
+        }
       }
 
       function renderSourcePapers(papers) {
@@ -431,23 +504,23 @@
           : '';
         const concerns = (judge.concerns || []).slice(0, 3).map(esc).join('<br>');
         const created = p.created_at && (p.created_at.$date || p.created_at);
-        // Card height is FIXED at 380px via inline style and strictly
-        // smaller than the parent pending-list (600px via inline style
-        // on the markup above). Pixels chosen over vh so the visible
-        // gap below the card is deterministic and doesn't shrink on
-        // shorter viewports. Math (600px parent, 380px card, parent
-        // p-4=16px each side):
-        //   parent outer:  600px
-        //   parent inner:  568px  (after pt-4 + pb-4 = 32px)
-        //   card outer:    380px
-        //   visible gap:   188px  (clearly visible breathing room)
-        // The card's overflow-y-scroll handles content (incl. an
-        // expanded Edit panel) exceeding the fixed 380px card height.
+        // Carousel layout: only ONE proposal card is visible at a
+        // time (the outer pending-list shows just `pending[idx]`).
+        // The outer [data-role="proposal-card"] is a non-scrolling
+        // BORDER-only wrapper at a fixed height. The inner
+        // [data-role="proposal-card-scroll"] (which carries the
+        // indigo ::-webkit-scrollbar CSS) is the actual scroll
+        // container, INSET inside the border so the scrollbar
+        // physically cannot render outside the card's visible
+        // rectangle. Users move between proposals via the Prev /
+        // Next buttons above the card; there is no outer scrollbar.
         return (
           '<div data-role="proposal-card" ' +
               'style="height: 380px;" ' +
-              'class="border border-slate-200 dark:border-slate-700 rounded-xl ' +
-              'p-4 mb-3 last:mb-0 overflow-y-scroll">' +
+              'class="border border-slate-200 dark:border-slate-700 ' +
+              'rounded-xl mb-4 overflow-hidden">' +
+            '<div data-role="proposal-card-scroll" ' +
+                'class="h-full p-4 overflow-y-scroll">' +
             '<div class="flex items-start gap-3">' +
               '<div class="flex-1 min-w-0">' +
                 '<div class="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate" title="' + esc(p.title) + '">' +
@@ -483,7 +556,8 @@
                       'class="btn-base btn-secondary text-xs">Edit</button>' +
             '</div>' +
             renderEditPanel(p) +
-          '</div>'
+            '</div>' +   // close <div data-role="proposal-card-scroll">
+          '</div>'      // close <div data-role="proposal-card">
         );
       }
 
@@ -673,6 +747,7 @@
           if (!propsRes.ok || !actRes.ok) throw new Error('HTTP ' + propsRes.status + '/' + actRes.status);
           const proposals = await propsRes.json();
           const activity  = await actRes.json();
+          lastProposals = proposals;  // cache for carousel re-renders
           renderActivity(activity);
           renderPending(proposals);
           renderInFlight(proposals);
