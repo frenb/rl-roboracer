@@ -224,8 +224,45 @@
 
   </div>
 
+  <!-- Proposal Details modal. Opens when the user clicks a Proposal
+       cell in the Activity Feed (or the title in the carousel card).
+       Three sections: Proposal content / Judge review / Audit timeline.
+       Hidden by default; toggled via the .hidden class.
+       Click outside the inner card (overlay) or the X button to close. -->
+  <div data-role="details-modal"
+       class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm
+              flex items-center justify-center p-4">
+    <div class="bg-white dark:bg-slate-900
+                border border-slate-200 dark:border-slate-700
+                rounded-2xl shadow-card max-w-4xl w-full
+                max-h-[85vh] overflow-hidden flex flex-col"
+         data-role="details-card"
+         role="dialog" aria-modal="true" aria-labelledby="details-title">
+      <header class="flex items-start gap-3 px-5 py-3
+                     border-b border-slate-200 dark:border-slate-700
+                     bg-slate-50 dark:bg-slate-900">
+        <div class="flex-1 min-w-0">
+          <h2 id="details-title" data-role="details-title"
+              class="text-base font-semibold text-slate-900 dark:text-slate-100 truncate">
+            Loading…
+          </h2>
+          <div data-role="details-meta"
+               class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 font-mono"></div>
+        </div>
+        <button data-role="details-close"
+                class="btn-base btn-secondary text-xs"
+                aria-label="Close">Close</button>
+      </header>
+      <div data-role="details-content"
+           class="flex-1 overflow-y-auto p-5 text-sm
+                  text-slate-700 dark:text-slate-200">
+        <div class="text-center text-slate-500 py-10">Loading…</div>
+      </div>
+    </div>
+  </div>
+
   <!-- Cache-busted (see jobs.html). Bump ?v=... when components.js changes. -->
-  <script src="/components.js?v=20260526-madsci-activity-tabulator"></script>
+  <script src="/components.js?v=20260526-madsci-details-modal"></script>
   <script>
     (function () {
       const { showToast, confirmDialog } = window.RoboracerUI;
@@ -275,6 +312,422 @@
         weak_reject:   'bg-orange-50   text-orange-700  dark:bg-orange-900/30  dark:text-orange-300',
         reject:        'bg-red-100     text-red-700     dark:bg-red-900/40     dark:text-red-300',
       };
+
+      // ---- Proposal Details modal --------------------------------------
+      //
+      // Opens when the user clicks any [data-role="open-details"] button
+      // (Activity Feed Proposal cell, Pending Decisions carousel card
+      // title). Fetches /madscientist/proposals/:id and renders three
+      // sections: Proposal content, Judge review, Audit timeline.
+      // Lets the operator review approved/rejected/done/failed proposals
+      // after they've left the carousel.
+      const detailsModal = document.querySelector('[data-role="details-modal"]');
+      const detailsCard = document.querySelector('[data-role="details-card"]');
+      const detailsTitle = document.querySelector('[data-role="details-title"]');
+      const detailsMeta = document.querySelector('[data-role="details-meta"]');
+      const detailsContent = document.querySelector('[data-role="details-content"]');
+      const detailsCloseBtn = document.querySelector('[data-role="details-close"]');
+
+      function closeDetails() {
+        detailsModal.classList.add('hidden');
+      }
+      function openDetails() {
+        detailsModal.classList.remove('hidden');
+      }
+
+      // Close handlers: X button, click outside the card, Escape key.
+      detailsCloseBtn.addEventListener('click', closeDetails);
+      detailsModal.addEventListener('click', (e) => {
+        if (e.target === detailsModal) closeDetails();
+      });
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !detailsModal.classList.contains('hidden')) {
+          closeDetails();
+        }
+      });
+
+      // Event delegation: catch every [data-role="open-details"] click,
+      // wherever it's rendered (Tabulator cell, carousel card, etc.).
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-role="open-details"]');
+        if (!btn) return;
+        const id = btn.getAttribute('data-proposal-id');
+        if (id) showProposalDetails(id);
+      });
+
+      async function showProposalDetails(id) {
+        openDetails();
+        detailsTitle.textContent = 'Loading…';
+        detailsMeta.textContent = id;
+        detailsContent.innerHTML =
+          '<div class="text-center text-slate-500 py-10">Loading…</div>';
+        try {
+          const r = await fetch('/madscientist/proposals/' +
+                                encodeURIComponent(id));
+          if (!r.ok) {
+            const t = await r.text();
+            throw new Error('HTTP ' + r.status + ': ' + t.slice(0, 200));
+          }
+          const doc = await r.json();
+          renderDetails(doc);
+        } catch (err) {
+          detailsContent.innerHTML =
+            '<div class="text-red-500 py-6">Failed to load proposal: ' +
+            esc(String(err.message || err)) + '</div>';
+        }
+      }
+
+      function renderDetails(p) {
+        detailsTitle.textContent = p.title || '(untitled)';
+        const created = (p.created_at && p.created_at.$date) || p.created_at;
+        const cost = (p.cost && (
+          (p.cost.madscientist_usd || 0) +
+          (p.cost.judge_usd || 0) +
+          (p.cost.cursor_usd || 0))) || 0;
+        detailsMeta.textContent =
+          (p._id ? p._id + ' · ' : '') +
+          'status=' + (p.status || '?') + ' · ' +
+          'created ' + (created ? esc(relTime(created)) : '?') + ' · ' +
+          'cost=$' + cost.toFixed(4);
+
+        detailsContent.innerHTML =
+          renderDetailsProposalSection(p) +
+          renderDetailsJudgeSection(p) +
+          renderDetailsAuditSection(p);
+      }
+
+      function _sectionHeader(text) {
+        return '<h3 class="text-[11px] uppercase tracking-wide font-semibold ' +
+                       'text-slate-500 dark:text-slate-400 ' +
+                       'border-b border-slate-200 dark:border-slate-700 ' +
+                       'pb-1 mb-2 mt-5 first:mt-0">' +
+                 esc(text) +
+               '</h3>';
+      }
+
+      function _kv(label, value, valueHtml) {
+        const v = valueHtml
+          ? valueHtml
+          : '<span class="font-mono text-xs">' + esc(value == null ? '—' : value) + '</span>';
+        return (
+          '<div class="grid grid-cols-3 gap-2 py-0.5 text-[13px]">' +
+            '<div class="col-span-1 text-slate-500 dark:text-slate-400">' +
+              esc(label) +
+            '</div>' +
+            '<div class="col-span-2">' + v + '</div>' +
+          '</div>'
+        );
+      }
+
+      function renderDetailsProposalSection(p) {
+        let out = _sectionHeader('Proposal (Researcher output)');
+
+        // Long text fields
+        if (p.hypothesis) {
+          out += _kv('Hypothesis', null,
+            '<div class="whitespace-pre-wrap leading-relaxed">' +
+              esc(p.hypothesis) +
+            '</div>');
+        }
+        if (p.motivation) {
+          out += _kv('Motivation', null,
+            '<div class="whitespace-pre-wrap leading-relaxed text-slate-600 dark:text-slate-300">' +
+              esc(p.motivation) +
+            '</div>');
+        }
+        if (p.code_changes_summary) {
+          out += _kv('Code changes', null,
+            '<div class="whitespace-pre-wrap leading-relaxed text-slate-600 dark:text-slate-300 font-mono text-xs">' +
+              esc(p.code_changes_summary) +
+            '</div>');
+        }
+
+        // Source papers - inline render (similar to carousel card)
+        const papers = p.source_papers || [];
+        if (papers.length) {
+          let papersHtml = '';
+          for (const paper of papers) {
+            const aid = (paper.arxiv_id || '').trim();
+            const url = aid ? 'https://arxiv.org/abs/' + aid : null;
+            const titleHtml = url
+              ? '<a href="' + esc(url) + '" target="_blank" rel="noopener" ' +
+                  'class="text-indigo-600 dark:text-indigo-300 hover:underline">' +
+                  esc(paper.title || aid || '(untitled)') +
+                '</a>'
+              : esc(paper.title || '(untitled)');
+            const refs = (paper.section_refs || []).filter(Boolean);
+            const refsHtml = refs.length
+              ? refs.map((rr) =>
+                  '<span class="inline-block px-1.5 py-0.5 mr-1 mb-1 rounded text-[10px] ' +
+                  'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 ' +
+                  'font-mono">' + esc(rr) + '</span>').join('')
+              : '<span class="text-[10px] text-slate-400 italic">no section refs</span>';
+            const ev = paper.supporting_evidence
+              ? '<div class="mt-1 text-[12px] italic leading-snug ' +
+                  'border-l-2 border-slate-300 dark:border-slate-600 pl-2 ' +
+                  'text-slate-600 dark:text-slate-400">' +
+                  esc(paper.supporting_evidence) +
+                '</div>'
+              : '<div class="mt-1 text-[10px] italic text-amber-600 dark:text-amber-400">' +
+                  '(no supporting_evidence excerpt)' +
+                '</div>';
+            papersHtml +=
+              '<div class="py-1.5 border-b border-slate-100 dark:border-slate-800 last:border-0">' +
+                '<div class="text-[13px] font-medium">' + titleHtml +
+                  (aid ? ' <span class="font-mono text-[10px] text-slate-400">arXiv:' + esc(aid) + '</span>' : '') +
+                '</div>' +
+                '<div class="mt-0.5">' + refsHtml + '</div>' +
+                ev +
+              '</div>';
+          }
+          out += _kv('Source papers (' + papers.length + ')', null,
+                     '<div>' + papersHtml + '</div>');
+        }
+
+        // Experiment arms
+        const arms = p.experiment_arms || [];
+        if (arms.length) {
+          let armsHtml = '<div class="space-y-1">';
+          for (const arm of arms) {
+            const fields = arm.experiment_design_fields || {};
+            const rewardFields = arm.reward_design_fields || {};
+            const fieldsTxt = Object.keys(fields).length
+              ? Object.entries(fields).map(
+                  ([k, v]) => k + '=' + JSON.stringify(v)).join(', ')
+              : (arm.experiment_design_id || '(base / no overrides)');
+            armsHtml +=
+              '<div class="flex gap-2 items-baseline">' +
+                '<span class="font-mono text-xs px-1.5 py-0.5 rounded ' +
+                       'bg-indigo-900/30 text-indigo-300 shrink-0">' +
+                  esc(arm.name) +
+                '</span>' +
+                '<span class="font-mono text-xs text-slate-400">' +
+                  esc(fieldsTxt) +
+                  (Object.keys(rewardFields).length
+                    ? ' · reward=' + esc(JSON.stringify(rewardFields))
+                    : '') +
+                '</span>' +
+              '</div>';
+          }
+          armsHtml += '</div>';
+          out += _kv('Arms (' + arms.length + ')', null, armsHtml);
+        }
+
+        // Budget / size
+        out += _kv('Seeds × iters', null,
+          '<span class="font-mono text-xs">' +
+            esc(p.n_seeds_per_arm || '?') + ' seeds × ' +
+            (p.num_iterations_per_seed
+              ? Number(p.num_iterations_per_seed).toLocaleString()
+              : '?') + ' iters' +
+            (p.expected_wall_time_hours
+              ? ' · ~' + p.expected_wall_time_hours + 'h estimate'
+              : '') +
+          '</span>');
+
+        // Success criteria
+        const sc = p.success_criteria || {};
+        if (sc.primary) {
+          out += _kv('Primary criterion', null,
+            '<div class="font-mono text-xs whitespace-pre-wrap">' +
+              esc(sc.primary) +
+            '</div>');
+        }
+        const pp = sc.primary_parsed;
+        if (pp) {
+          out += _kv('Parsed criterion', null,
+            '<span class="font-mono text-xs">' +
+              esc(pp.metric) + '(' + esc(pp.arm_a) + ') ' +
+              esc(pp.comparator) + ' ' + esc(pp.threshold) +
+              ' (' + esc(pp.threshold_kind) + ' vs ' + esc(pp.arm_b) + ')' +
+            '</span>');
+        }
+        const secondaries = (sc.secondary || []).filter(Boolean);
+        if (secondaries.length) {
+          out += _kv('Secondary criteria', null,
+            '<ul class="list-disc pl-4 space-y-0.5 text-xs">' +
+              secondaries.map((s) => '<li>' + esc(s) + '</li>').join('') +
+            '</ul>');
+        }
+
+        // Schema extensions (Phase 1C-Full)
+        const exts = p.proposed_schema_extensions || [];
+        if (exts.length) {
+          let extHtml = '<div class="space-y-1">';
+          for (const e of exts) {
+            extHtml +=
+              '<div class="font-mono text-xs">' +
+                esc(e.name) + ' : ' + esc(e.type) +
+                ' = ' + esc(JSON.stringify(e.default)) +
+                (e.paper_ref ? ' [arXiv:' + esc(e.paper_ref) + ']' : '') +
+                '<div class="text-slate-400 italic ml-3 text-[11px]">' +
+                  esc(e.doc || '') +
+                '</div>' +
+              '</div>';
+          }
+          extHtml += '</div>';
+          out += _kv('Schema extensions', null, extHtml);
+        }
+
+        // Cost breakdown
+        const cost = p.cost || {};
+        const costParts = [];
+        if (cost.madscientist_usd) costParts.push('researcher $' + cost.madscientist_usd.toFixed(4));
+        if (cost.judge_usd) costParts.push('judge $' + cost.judge_usd.toFixed(4));
+        if (cost.cursor_usd) costParts.push('cursor $' + cost.cursor_usd.toFixed(4));
+        if (costParts.length) {
+          out += _kv('Cost', null,
+            '<span class="font-mono text-xs text-slate-400">' +
+              esc(costParts.join(' + ')) +
+            '</span>');
+        }
+
+        return out;
+      }
+
+      function renderDetailsJudgeSection(p) {
+        const jr = p.judge_review;
+        if (!jr) {
+          return _sectionHeader('Judge review') +
+            '<div class="text-slate-500 italic text-xs py-2">' +
+              'Not judged yet.' +
+            '</div>';
+        }
+
+        let out = _sectionHeader('Judge review');
+
+        const verdict = jr.overall || 'pending';
+        const verdictTone = VERDICT_TONE[verdict] ||
+          'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300';
+        const normalized = (typeof jr.normalized_score === 'number')
+          ? ' · ' + (jr.normalized_score * 100).toFixed(0) + '%'
+          : '';
+        out += _kv('Verdict', null,
+          '<span class="inline-flex items-center px-2 py-0.5 rounded-full ' +
+                 'text-[11px] font-semibold uppercase tracking-wide ' +
+                 verdictTone + '">' +
+            esc(verdict.replace(/_/g, ' ')) + esc(normalized) +
+          '</span>' +
+          (jr.bumped ? ' <span class="text-[10px] text-amber-400 ml-1">(robustness bump applied)</span>' : ''));
+
+        // Scores per axis
+        const scores = jr.scores || {};
+        const axes = Object.keys(scores).sort();
+        if (axes.length) {
+          let tbl = '<table class="text-xs font-mono w-full"><tbody>';
+          for (const ax of axes) {
+            const s = scores[ax];
+            const isZero = s === 0;
+            const isFive = s === 5;
+            const cls = isZero
+              ? 'text-red-400 font-bold'
+              : isFive
+                ? 'text-emerald-400 font-bold'
+                : 'text-slate-300';
+            tbl +=
+              '<tr class="border-b border-slate-200/50 dark:border-slate-800">' +
+                '<td class="py-0.5 pr-2 text-slate-500 dark:text-slate-400">' +
+                  esc(ax.replace(/_/g, ' ')) +
+                '</td>' +
+                '<td class="py-0.5 ' + cls + ' text-right">' +
+                  esc(String(s)) + '/5' +
+                '</td>' +
+              '</tr>';
+          }
+          tbl += '</tbody></table>';
+          out += _kv('Scores', null, tbl);
+        }
+        if ((jr.axes_skipped || []).length) {
+          out += _kv('Axes skipped', null,
+            '<span class="font-mono text-xs text-slate-400">' +
+              esc((jr.axes_skipped || []).join(', ')) +
+            '</span>');
+        }
+
+        const renderList = (label, items, toneClass) => {
+          const list = (items || []).filter(Boolean);
+          if (!list.length) return '';
+          const html =
+            '<ul class="list-disc pl-4 space-y-1 text-xs ' + toneClass + '">' +
+              list.map((s) => '<li>' + esc(s) + '</li>').join('') +
+            '</ul>';
+          return _kv(label, null, html);
+        };
+        out += renderList('Strengths', jr.strengths, 'text-emerald-300');
+        out += renderList('Concerns', jr.concerns, 'text-amber-300');
+        out += renderList('Suggested revisions', jr.suggested_revisions, 'text-slate-300');
+        out += renderList('Pre-rubric failures', jr.pre_rubric_check_failures, 'text-red-300');
+
+        // Metadata
+        if (jr.judge_model || jr.judge_token_count || jr.judge_cost_usd) {
+          const meta = [];
+          if (jr.judge_model) meta.push('model=' + jr.judge_model);
+          if (jr.judge_token_count) meta.push('tokens=' + jr.judge_token_count.toLocaleString());
+          if (jr.judge_cost_usd != null) meta.push('cost=$' + jr.judge_cost_usd.toFixed(4));
+          if (jr.rubric_version != null) meta.push('rubric v' + jr.rubric_version);
+          out += _kv('Judge metadata', null,
+            '<span class="font-mono text-[11px] text-slate-400">' +
+              esc(meta.join(' · ')) +
+            '</span>');
+        }
+
+        return out;
+      }
+
+      function renderDetailsAuditSection(p) {
+        const events = p.audit_events || [];
+        if (!events.length) {
+          return _sectionHeader('Audit timeline') +
+            '<div class="text-slate-500 italic text-xs py-2">No audit events.</div>';
+        }
+        let out = _sectionHeader(
+          'Audit timeline (' + events.length + ' events)');
+        out += '<div class="space-y-1.5 text-xs">';
+        // Render in chronological order (oldest first) so reader can
+        // follow the proposal's lifecycle top-to-bottom.
+        const sorted = events.slice().sort((a, b) => {
+          const at_a = (a.at && a.at.$date) || a.at;
+          const at_b = (b.at && b.at.$date) || b.at;
+          return Date.parse(at_a) - Date.parse(at_b);
+        });
+        for (const e of sorted) {
+          const at = (e.at && e.at.$date) || e.at;
+          const atTxt = at
+            ? new Date(at).toLocaleString() + ' (' + relTime(at) + ')'
+            : '—';
+          const detailKeys = Object.keys(e.detail || {});
+          let detailHtml = '';
+          if (detailKeys.length) {
+            detailHtml =
+              '<details class="ml-3 mt-1 cursor-pointer">' +
+                '<summary class="text-[11px] text-slate-400 hover:text-slate-300">' +
+                  esc(detailKeys.join(', ')) +
+                '</summary>' +
+                '<pre class="text-[11px] mt-1 p-2 bg-slate-100 dark:bg-slate-800 ' +
+                       'rounded font-mono whitespace-pre-wrap break-all overflow-x-auto">' +
+                  esc(JSON.stringify(e.detail, null, 2)) +
+                '</pre>' +
+              '</details>';
+          }
+          out +=
+            '<div class="border-l-2 border-slate-200 dark:border-slate-700 pl-2 py-0.5">' +
+              '<div class="flex gap-2 items-baseline">' +
+                '<span class="text-slate-400 dark:text-slate-500 ' +
+                       'shrink-0 w-44 truncate">' + esc(atTxt) + '</span>' +
+                '<span class="text-indigo-600 dark:text-indigo-300 ' +
+                       'font-mono shrink-0">' +
+                  esc(e.by_agent || '?') +
+                '</span>' +
+                '<span class="font-mono text-slate-700 dark:text-slate-200">' +
+                  esc(e.event || '?') +
+                '</span>' +
+              '</div>' +
+              detailHtml +
+            '</div>';
+        }
+        out += '</div>';
+        return out;
+      }
 
       // ---- Activity Feed: Tabulator data grid --------------------------
       //
@@ -381,10 +834,24 @@
             render: (v) =>
               '<span class="font-mono text-xs">' + esc(v || '?') + '</span>' },
           { key: 'proposal_title', label: 'Proposal', sortable: true, filter: true,
-            render: (v) =>
-              '<span title="' + esc(v || '') + '">' +
-                esc(v || '(unknown proposal)') +
-              '</span>' },
+            render: (v, row) => {
+              const id = String(row.proposal_id || '');
+              const label = esc(v || '(unknown proposal)');
+              const title = esc(v || '');
+              if (!id) {
+                return '<span title="' + title + '">' + label + '</span>';
+              }
+              return (
+                '<button data-role="open-details" ' +
+                        'data-proposal-id="' + esc(id) + '" ' +
+                        'title="' + title + ' · click for full details" ' +
+                        'class="text-left text-indigo-300 hover:text-indigo-200 ' +
+                        'hover:underline cursor-pointer truncate max-w-full ' +
+                        'inline-block align-middle">' +
+                  label +
+                '</button>'
+              );
+            } },
           { key: 'proposal_status', label: 'Status', sortable: true, filter: true,
             sortValue: (row) => {
               // Sort priority for visual scanning: failures + active
@@ -657,9 +1124,15 @@
                 'class="h-full p-4 overflow-y-scroll">' +
             '<div class="flex items-start gap-3">' +
               '<div class="flex-1 min-w-0">' +
-                '<div class="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate" title="' + esc(p.title) + '">' +
+                '<button data-role="open-details" ' +
+                        'data-proposal-id="' + esc(p._id) + '" ' +
+                        'title="' + esc(p.title) + ' · click for full details" ' +
+                        'class="text-left text-sm font-semibold text-slate-900 ' +
+                        'dark:text-slate-100 hover:text-indigo-300 ' +
+                        'hover:underline truncate max-w-full block ' +
+                        'cursor-pointer">' +
                   esc(p.title || '(untitled)') +
-                '</div>' +
+                '</button>' +
                 '<div class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">' +
                   esc(relTime(created)) +
                   ' · ' + esc(p.experiment_arms ? p.experiment_arms.length : 0) + ' arms' +
