@@ -333,6 +333,35 @@ export const createServer = (config): express.Application => {
       });
   });
 
+  // GET /madscientist/proposals/:id
+  //   Returns the full proposal document including audit_events and
+  //   the full judge_review (no projection). Used by the Activity
+  //   Feed's "view details" modal so the operator can review the
+  //   proposal + judge review + audit timeline after approval (the
+  //   carousel only shows pending proposals).
+  app.get('/madscientist/proposals/:id', (req, res) => {
+    const id = String(req.params.id || '').trim();
+    if (!MS_OBJID_RE.test(id)) {
+      res.status(400).json({ error: 'proposal id must be a 24-char hex ObjectId' });
+      return;
+    }
+    dbo.collection(MS_PROPOSALS_COLL).findOne(
+      { _id: ObjectID(id) },
+      {},
+      (err, doc) => {
+        if (err) {
+          console.error('GET /madscientist/proposals/:id:', err);
+          res.status(500).json({ error: String(err) });
+          return;
+        }
+        if (!doc) {
+          res.status(404).json({ error: 'proposal not found' });
+          return;
+        }
+        res.json(doc);
+      });
+  });
+
   app.get('/madscientist/activity', (req, res) => {
     const limit = Math.max(1, Math.min(200,
       parseInt((req.query.limit as string) || '30', 10) || 30));

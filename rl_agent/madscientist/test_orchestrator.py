@@ -172,30 +172,47 @@ def test_arm_with_overlay():
     jobs = list(db.jobs.find({"_id": {"$in": res["training_job_ids"]}}))
     exp1_jobs = [j for j in jobs if j["proposal_arm"] == "exp1"]
     base_jobs = [j for j in jobs if j["proposal_arm"] == "base"]
-    _expect(
-        "base arm uses canonical default design id",
-        lambda: base_jobs[0]["experiment_design_id"] == orchestrator.CANONICAL_EXPERIMENT_DESIGN_ID,
-        f"got {base_jobs[0]['experiment_design_id']!r}")
+    # Every arm now gets its own derived design (so num_iterations
+    # from the proposal can be stamped onto it; otherwise the
+    # canonical base's num_iterations would silently override the
+    # job's stamped value via apply_to_main_kwargs at trainer time).
+    base_derived_id = base_jobs[0]["experiment_design_id"]
     derived_id = exp1_jobs[0]["experiment_design_id"]
     _expect(
-        "exp1 arm uses a derived ObjectId",
+        "base arm gets a derived ObjectId (NOT canonical string)",
+        lambda: base_derived_id != orchestrator.CANONICAL_EXPERIMENT_DESIGN_ID
+                and not isinstance(base_derived_id, str))
+    _expect(
+        "exp1 arm gets a derived ObjectId",
         lambda: derived_id != orchestrator.CANONICAL_EXPERIMENT_DESIGN_ID
                 and not isinstance(derived_id, str))
-    # The derived design should exist + carry provenance fields.
+    base_derived_doc = db.experiment_designs.find_one({"_id": base_derived_id})
     derived_doc = db.experiment_designs.find_one({"_id": derived_id})
+    _inserted_designs.append(base_derived_id)
     _inserted_designs.append(derived_id)
     _expect(
-        "derived design exists in db.experiment_designs",
+        "exp1 derived design exists",
         lambda: derived_doc is not None)
     _expect(
-        "derived design carries gamma + batch_size at top level",
+        "exp1 derived design carries gamma + batch_size at top level",
         lambda: derived_doc.get("gamma") == 0.95 and derived_doc.get("batch_size") == 256)
     _expect(
-        "derived design carries proposal_id provenance",
+        "exp1 derived design carries proposal_id provenance",
         lambda: derived_doc.get("proposal_id") == str(p["_id"]))
     _expect(
-        "derived design carries base_design_id pointing at canonical",
+        "exp1 derived design carries base_design_id pointing at canonical",
         lambda: derived_doc.get("base_design_id") == orchestrator.CANONICAL_EXPERIMENT_DESIGN_ID)
+    # num_iterations stamping (the fix for the dashboard-vs-job
+    # divergence the operator hit).
+    expected_iters = int(p.get("num_iterations_per_seed") or 5000)
+    _expect(
+        "base derived design has num_iterations stamped from proposal",
+        lambda: base_derived_doc.get("num_iterations") == expected_iters,
+        f"got {base_derived_doc.get('num_iterations')!r}, expected {expected_iters}")
+    _expect(
+        "exp1 derived design has num_iterations stamped from proposal",
+        lambda: derived_doc.get("num_iterations") == expected_iters,
+        f"got {derived_doc.get('num_iterations')!r}, expected {expected_iters}")
 
 
 def test_arm_with_design_reference_only():
@@ -224,18 +241,35 @@ def test_arm_with_design_reference_only():
     for jid in res["training_job_ids"]:
         _inserted_jobs.append(jid)
     exp1_job = db.jobs.find_one({"_id": res["training_job_ids"][1]})
+    # Even when arm references an existing design without overlay
+    # fields, the orchestrator now creates a derived design that
+    # inherits from ref_id and stamps num_iterations. The derived
+    # design carries base_design_id=ref_id for provenance.
+    exp1_design_id = exp1_job["experiment_design_id"]
     _expect(
-        "exp1 arm passes through the referenced design id",
-        lambda: str(exp1_job["experiment_design_id"]) == str(ref_id),
-        f"got {exp1_job['experiment_design_id']!r}")
+        "exp1 design id is a derived ObjectId (not the bare ref_id)",
+        lambda: exp1_design_id != ref_id and not isinstance(exp1_design_id, str),
+        f"got {exp1_design_id!r}")
+    exp1_derived = db.experiment_designs.find_one({"_id": exp1_design_id})
+    _inserted_designs.append(exp1_design_id)
+    _expect(
+        "exp1 derived design has base_design_id pointing at the referenced design",
+        lambda: exp1_derived.get("base_design_id") == str(ref_id),
+        f"got base_design_id={exp1_derived.get('base_design_id')!r}, ref_id={ref_id}")
+    _expect(
+        "exp1 derived design has num_iterations stamped from proposal",
+        lambda: exp1_derived.get("num_iterations") == int(
+            p.get("num_iterations_per_seed") or 5000))
 
-    # And no new derived design should have been created.
-    extras = db.experiment_designs.count_documents(
+    # ref-only arms still produce a derived design per arm (2 arms
+    # here -> 2 derived). The ref_id itself stays around as the
+    # base; we count derived designs by proposal_id provenance.
+    derived_count = db.experiment_designs.count_documents(
         {"proposal_id": str(p["_id"])})
     _expect(
-        "no new derived design for ref-only arm",
-        lambda: extras == 0,
-        f"found {extras} derived design(s)")
+        "2 derived designs total (one per arm) for ref-only proposal",
+        lambda: derived_count == 2,
+        f"found {derived_count} derived design(s)")
 
 
 def test_inline_reward_rejected():
