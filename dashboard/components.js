@@ -52,7 +52,7 @@
   // DevTools console which build of components.js is actually running.
   // Bump alongside the ?v=... query string in jobs/models/leaderboard/
   // analysis HTML when shipping a change to this file.
-  console.log('[RoboracerUI] components.js v20260524-pauseresume loaded');
+  console.log('[RoboracerUI] components.js v20260530-design-name-full loaded');
 
   /* ---------- formatters ---------------------------------------- */
 
@@ -144,6 +144,10 @@
       const isCanonical = opts.isCanonical;
       const action = opts.action;              // data-action value
       const idAttrName = opts.idAttrName;      // data-* attribute name
+      // noTruncate: show the full design name (no 14ch ellipsis clamp).
+      // The column then sizes to the content under fitData. Callers
+      // that want compact cells leave this falsy (default).
+      const nameClamp = opts.noTruncate ? '' : 'truncate max-w-[14ch] ';
 
       if (!name) {
         const emptyTip = kind === 'reward'
@@ -174,7 +178,7 @@
       if (!designId) {
         // Case 2: name without id - non-clickable.
         return '<span class="inline-flex items-center gap-1 whitespace-nowrap">' +
-               '<span class="truncate max-w-[14ch]">' + safeName + '</span>' +
+               '<span class="' + nameClamp + '">' + safeName + '</span>' +
                verPill + canonicalTag + '</span>';
       }
       // model-id-aware: when the row has a `_id` (i.e. it's a Model
@@ -189,7 +193,7 @@
       return '<span class="inline-flex items-center gap-1 whitespace-nowrap">' +
         '<button type="button" data-action="' + action + '" ' +
                 'data-' + idAttrName + '="' + safeDesignId + '"' + modelIdAttr + ' ' +
-                'class="truncate max-w-[14ch] text-left ' +
+                'class="' + nameClamp + 'text-left ' +
                        'text-slate-200 hover:text-indigo-300 ' +
                        'dark:text-slate-200 dark:hover:text-indigo-300 ' +
                        'underline decoration-dotted decoration-slate-500 ' +
@@ -202,12 +206,13 @@
         verPill + canonicalTag + '</span>';
     },
 
-    rewardDesignBadge(row) {
+    rewardDesignBadge(row, opts) {
       // Models stamp reward_design_id + name + version + code;
       // jobs stamp id + name only. Both shapes flow through here.
       // Row's `_id` is forwarded as opts.modelId when present so the
       // emitted button carries data-model-id for the Models-tab
-      // handler's model-scoped fetch path.
+      // handler's model-scoped fetch path. Pass {noTruncate:true} to
+      // show the full design name instead of the 14ch clamp.
       return formatters._designBadgeHtml({
         kind: 'reward',
         name: row.reward_design_name,
@@ -217,10 +222,11 @@
         action: 'view-reward-design',
         idAttrName: 'reward-design-id',
         modelId: row._id || row.id,                   // present on Model rows; absent on Job rows
+        noTruncate: !!(opts && opts.noTruncate),
       });
     },
 
-    experimentDesignBadge(row) {
+    experimentDesignBadge(row, opts) {
       return formatters._designBadgeHtml({
         kind: 'experiment',
         name: row.experiment_design_name,
@@ -230,6 +236,7 @@
         action: 'view-experiment-design',
         idAttrName: 'experiment-design-id',
         modelId: row._id || row.id,
+        noTruncate: !!(opts && opts.noTruncate),
       });
     },
 
@@ -557,6 +564,33 @@
         onRowClick: null,
         rowClass: null,
         columns: [],
+        // Optional accordion-style row grouping. When `groupBy` is set
+        // (a field-name string or a row->value function), Tabulator
+        // renders collapsible group headers. `groupStartOpen` controls
+        // whether groups begin expanded (default true; pass false for
+        // a true accordion). `groupHeader` optionally customizes the
+        // header markup: (value, count, data, group) => htmlString.
+        // `groupToggleElement` controls what toggles a group: 'arrow'
+        // (default Tabulator behavior - only the arrow) or 'header'
+        // (the whole header row, friendlier click target).
+        groupBy: null,
+        groupStartOpen: true,
+        groupHeader: null,
+        groupToggleElement: 'header',
+        // Pagination on by default. Grouped/accordion tables with a
+        // bounded row count usually pass `pagination: false` so all
+        // groups render on one scrollable surface (no page splitting,
+        // no confusing rows-counter footer).
+        pagination: true,
+        // Column-width persistence on by default. Pass false for
+        // fitColumns/grouped tables so stale persisted widths can't
+        // force a horizontal scrollbar.
+        persistColumnWidths: true,
+        // Column sizing strategy. 'fitData' (default) sizes each column
+        // to its content; 'fitColumns' stretches columns to fill the
+        // table width. Grouped/accordion tables usually want
+        // 'fitColumns' so the grid spans the full container width.
+        layout: 'fitData',
       }, options || {});
 
       // Make the host fill its flex parent so Tabulator's internal
@@ -617,11 +651,12 @@
         // sticks to the bottom. Without `height`, the table grows to
         // fit content and the pagination footer drifts off-screen.
         height: '100%',
-        // 'fitData' lets each column size to its widest cell, which
-        // mirrors what the hand-rolled TableView did. 'fitColumns'
-        // would force columns to fill the table width and would
-        // override resize attempts; we explicitly avoid that.
-        layout: 'fitData',
+        // Column sizing. 'fitData' (default) lets each column size to
+        // its widest cell, mirroring the hand-rolled TableView.
+        // Callers can opt into 'fitColumns' (fill table width) via the
+        // `layout` option - used by the grouped Activity Feed so the
+        // grid spans the full section width.
+        layout: this.opts.layout || 'fitData',
         layoutColumnsOnNewData: false,
         responsiveLayout: false,
         movableColumns: false,
@@ -635,8 +670,8 @@
         // is the checkbox column.
         selectable: this.opts.selectable ? true : false,
         selectableRangeMode: 'click',
-        // Pagination
-        pagination: true,
+        // Pagination (callers can disable via pagination: false).
+        pagination: this.opts.pagination !== false,
         paginationMode: 'local',
         paginationSize: this.opts.pageSize,
         paginationSizeSelector: this.opts.pageSizes,
@@ -650,11 +685,31 @@
         // Persistence: remember column widths per tab. Sort + filter
         // intentionally not persisted because the tabs poll
         // continuously and tend to want fresh state on reload.
+        // Callers can disable width persistence via
+        // persistColumnWidths:false - useful for fitColumns/grouped
+        // tables where stale persisted widths (from a prior fitData
+        // layout) would sum wider than the container and force an
+        // unwanted horizontal scrollbar.
         persistenceID: persistKey,
-        persistence: {
-          columns: ['width'],
-        },
+        persistence: (this.opts.persistColumnWidths === false)
+          ? false
+          : { columns: ['width'] },
         rowFormatter: this.opts.rowClass ? this._buildRowFormatter() : undefined,
+        // Accordion-style grouping. Only set the group options when a
+        // groupBy is supplied so non-grouped tables (Jobs / Models /
+        // etc.) are unaffected. groupBy accepts a field name or a
+        // row->value function. groupHeader (when provided) customizes
+        // the collapsible header markup.
+        ...(this.opts.groupBy ? {
+          groupBy: this.opts.groupBy,
+          groupStartOpen: this.opts.groupStartOpen,
+          // 'header' makes the whole header row a click target to
+          // expand/collapse, not just the tiny arrow.
+          groupToggleElement: this.opts.groupToggleElement || 'header',
+          ...(typeof this.opts.groupHeader === 'function'
+            ? { groupHeader: this.opts.groupHeader }
+            : {}),
+        } : {}),
         // Sticky header is the default in Tabulator; no opt needed.
       });
 
@@ -671,6 +726,27 @@
           this._tabulator.replaceData(d);
         }
       });
+
+      // Track which accordion groups the user has expanded so they
+      // survive the 5s poll refresh. replaceData re-applies
+      // groupStartOpen (collapsing everything), so on each refresh we
+      // re-expand the groups in this set (see setData). We maintain it
+      // off the groupVisibilityChanged event rather than querying
+      // isVisible() at refresh time (which proved racy). The suppress
+      // flag stops the bulk re-apply from feeding its own events back
+      // into the set.
+      this._openGroupKeys = new Set();
+      this._suppressGroupEvents = false;
+      if (this.opts.groupBy) {
+        this._tabulator.on('groupVisibilityChanged', (group, visible) => {
+          if (this._suppressGroupEvents) return;
+          try {
+            const k = String(group.getKey());
+            if (visible) this._openGroupKeys.add(k);
+            else this._openGroupKeys.delete(k);
+          } catch (e) { /* ignore */ }
+        });
+      }
 
       if (this.opts.selectable) {
         this._tabulator.on('rowSelectionChanged', (data /*, rows */) => {
@@ -760,6 +836,10 @@
         if (c.cellClass)   col.cssClass = c.cellClass;
         if (c.headerClass) col.headerCssClass = c.headerClass;
         if (c.hozAlign)    col.hozAlign = c.hozAlign;
+        // Explicit width (px) + widthGrow (proportional fill factor
+        // under the 'fitColumns' layout). Optional per column.
+        if (c.width != null)     col.width = c.width;
+        if (c.widthGrow != null) col.widthGrow = c.widthGrow;
 
         // Cell renderer. Our render callback signature is
         // (value, row) => htmlString. Tabulator's formatter
@@ -892,6 +972,40 @@
       // - new data implies the underlying request succeeded.
       this.setLoading(false);
       this.setError(null);
+      // Preserve the body scroll position across the data refresh.
+      // The tabs poll every 5s and call setData; Tabulator's
+      // replaceData doesn't reliably keep the vertical scroll of the
+      // .tabulator-tableholder, so a user reading row 50 gets yanked
+      // back to the top on every tick. Capture scrollTop/scrollLeft
+      // before, restore after (both synchronously and post-promise to
+      // beat any internal Tabulator scroll reset).
+      const holder = this.root.querySelector('.tabulator-tableholder');
+      const savedTop = holder ? holder.scrollTop : 0;
+      const savedLeft = holder ? holder.scrollLeft : 0;
+      const restoreScroll = () => {
+        const h = this.root.querySelector('.tabulator-tableholder');
+        if (!h) return;
+        if (savedTop > 0) h.scrollTop = savedTop;
+        if (savedLeft > 0) h.scrollLeft = savedLeft;
+      };
+      // When grouping is active, replaceData re-applies groupStartOpen
+      // and collapses every group (which also resets scroll). Re-expand
+      // the groups the user had open - tracked in this._openGroupKeys
+      // via the groupVisibilityChanged event. Suppress that event
+      // during the bulk re-apply so our own show()/hide() calls don't
+      // mutate the set we're reading from.
+      const restoreGroups = () => {
+        if (!this.opts.groupBy) return;
+        this._suppressGroupEvents = true;
+        try {
+          this._tabulator.getGroups().forEach((g) => {
+            const k = String(g.getKey());
+            if (this._openGroupKeys.has(k)) g.show();
+            else g.hide();
+          });
+        } catch (e) { /* groups not ready; ignore */ }
+        this._suppressGroupEvents = false;
+      };
       // Tabulator's replaceData returns a promise; once data is in,
       // the very first non-empty load triggers a full redraw so the
       // fitData layout algorithm picks up real cell content widths.
@@ -901,6 +1015,17 @@
       // Subsequent setData calls skip the redraw so user-resized
       // columns + steady-state widths don't jump on every poll tick.
       const replaceResult = this._tabulator.replaceData(decorated);
+      // After the data swap settles, re-expand the groups the user had
+      // open (must happen before restoring scroll, since expanding
+      // groups changes content height), then restore scroll. On the
+      // first non-empty load openGroupKeys is empty + savedTop is 0,
+      // so both are no-ops and the redraw(true) below lays out fresh.
+      const restoreState = () => { restoreGroups(); restoreScroll(); };
+      if (replaceResult && typeof replaceResult.then === 'function') {
+        replaceResult.then(restoreState, restoreState);
+      } else {
+        Promise.resolve().then(restoreState);
+      }
       if (this._needsFirstDataLayout && decorated.length > 0) {
         this._needsFirstDataLayout = false;
         const doRelayout = () => {
