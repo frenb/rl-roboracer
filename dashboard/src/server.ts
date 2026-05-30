@@ -6,6 +6,7 @@ import * as mongoDB from 'mongodb';
 const ObjectID = require('mongodb').ObjectID;
 const cors = require('cors');
 const { spawn } = require('child_process');
+const crypto = require('crypto');
 import { log, LogLevel } from './log';
 import * as morgan from 'morgan';
 
@@ -635,6 +636,174 @@ export const createServer = (config): express.Application => {
               updated_fields: Object.keys(set).filter((k) => k !== 'updated_at'),
             });
           });
+      });
+  });
+
+  // GET /madscientist/act?token=<pid.action.exp.hmac>
+  //   The magic-link target for the Approve / Reject / Defer buttons in
+  //   the proposal notification email (see
+  //   rl_agent/madscientist/email_bridge.py). Verifies the HMAC-SHA256
+  //   token (signed with MADSCIENTIST_TOKEN_SECRET, must match the
+  //   Python signer), applies the decision via the same logic as
+  //   /madscientist/decide, and returns a small HTML confirmation page
+  //   (since it's opened in a browser from an email client).
+  //
+  //   "Single use" is enforced by gating the update on the proposal
+  //   still being in pending_user/deferred - a stale link can't
+  //   override a decision already taken (e.g. can't reject a proposal
+  //   that's already approved + training).
+  const MS_TOKEN_SECRET = (process.env.MADSCIENTIST_TOKEN_SECRET || '').trim();
+  const MS_ACT_STATUSES = new Set(['pending_user', 'deferred']);
+
+  function msActPage(opts: { ok: boolean; heading: string; body: string }): string {
+    const accent = opts.ok ? '#4f46e5' : '#dc2626';
+    return `<!DOCTYPE html><html><head><meta charset="utf-8">` +
+      `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+      `<title>MadScientist decision</title></head>` +
+      `<body style="margin:0;background:#0f172a;font-family:Arial,sans-serif">` +
+      `<div style="max-width:520px;margin:40px auto;background:#ffffff;` +
+      `border-radius:14px;overflow:hidden;border:1px solid #e2e8f0">` +
+      `<div style="padding:18px 22px;background:#0f172a;color:#818cf8;` +
+      `font-size:11px;letter-spacing:0.08em;text-transform:uppercase;` +
+      `font-weight:700">MadScientist</div>` +
+      `<div style="padding:24px">` +
+      `<h2 style="margin:0 0 10px 0;color:${accent};font-size:20px">${opts.heading}</h2>` +
+      `<div style="color:#334155;font-size:14px;line-height:1.6">${opts.body}</div>` +
+      `<div style="margin-top:22px"><a href="/madscientist" ` +
+      `style="display:inline-block;padding:10px 18px;background:#4f46e5;` +
+      `color:#fff;text-decoration:none;border-radius:8px;font-weight:600;` +
+      `font-size:14px">Open the dashboard</a></div>` +
+      `</div></div></body></html>`;
+  }
+
+  app.get('/madscientist/act', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const token = String(req.query.token || '');
+
+    if (!MS_TOKEN_SECRET) {
+      res.status(503).send(msActPage({
+        ok: false,
+        heading: 'One-click decisions are disabled',
+        body: 'MADSCIENTIST_TOKEN_SECRET is not configured on the server, ' +
+          'so signed decision links can\'t be verified. Use the dashboard ' +
+          'to decide.',
+      }));
+      return;
+    }
+
+    const parts = token.split('.');
+    if (parts.length !== 4) {
+      res.status(400).send(msActPage({
+        ok: false, heading: 'Invalid link',
+        body: 'This decision link is malformed.',
+      }));
+      return;
+    }
+    const [pid, action, expStr, sig] = parts;
+    const signed = `${pid}.${action}.${expStr}`;
+    const expected = crypto.createHmac('sha256', MS_TOKEN_SECRET)
+      .update(signed).digest('hex');
+    // Constant-time compare; lengths must match for timingSafeEqual.
+    const sigBuf = Buffer.from(sig);
+    const expBuf = Buffer.from(expected);
+    const sigOk = sigBuf.length === expBuf.length &&
+      crypto.timingSafeEqual(sigBuf, expBuf);
+    if (!sigOk) {
+      res.status(403).send(msActPage({
+        ok: false, heading: 'Invalid or tampered link',
+        body: 'The signature on this decision link did not verify.',
+      }));
+      return;
+    }
+    const exp = parseInt(expStr, 10);
+    if (!Number.isFinite(exp) || Math.floor(Date.now() / 1000) > exp) {
+      res.status(410).send(msActPage({
+        ok: false, heading: 'Link expired',
+        body: 'This decision link has expired. Use the dashboard to decide.',
+      }));
+      return;
+    }
+    if (!MS_ACT_STATUSES.has('pending_user') || !MS_VALID_DECISIONS.has(action)) {
+      res.status(400).send(msActPage({
+        ok: false, heading: 'Invalid action',
+        body: `Action ${action} is not recognized.`,
+      }));
+      return;
+    }
+    if (!MS_OBJID_RE.test(pid)) {
+      res.status(400).send(msActPage({
+        ok: false, heading: 'Invalid link',
+        body: 'The proposal id in this link is malformed.',
+      }));
+      return;
+    }
+
+    const now = new Date();
+    let nextStatus: string;
+    if (action === 'reject') nextStatus = 'rejected';
+    else if (action === 'defer') nextStatus = 'deferred';
+    else nextStatus = 'approved';
+
+    const decision = {
+      at: now, by: 'user', action, note: '',
+      revision_applied: false, source: 'email',
+    };
+    const auditEvent = {
+      at: now, by_agent: 'user', event: 'decided',
+      detail: { action, next_status: nextStatus, source: 'email' },
+    };
+
+    // Gate the update on the proposal still awaiting a decision so a
+    // re-clicked / stale link can't override an already-made decision.
+    dbo.collection(MS_PROPOSALS_COLL).findOneAndUpdate(
+      { _id: ObjectID(pid), status: { $in: Array.from(MS_ACT_STATUSES) } },
+      { $set: { status: nextStatus, decision, updated_at: now },
+        $push: { audit_events: auditEvent } },
+      { returnDocument: 'before' },
+      (err, result) => {
+        if (err) {
+          console.error('GET /madscientist/act:', err);
+          res.status(500).send(msActPage({
+            ok: false, heading: 'Server error',
+            body: 'Something went wrong applying your decision. Try the dashboard.',
+          }));
+          return;
+        }
+        const matched = result && result.value;
+        if (!matched) {
+          // Either the proposal doesn't exist or it's no longer
+          // awaiting a decision (already decided / in flight).
+          dbo.collection(MS_PROPOSALS_COLL).findOne(
+            { _id: ObjectID(pid) }, { projection: { status: 1, title: 1 } },
+            (e2, cur) => {
+              if (e2 || !cur) {
+                res.status(404).send(msActPage({
+                  ok: false, heading: 'Proposal not found',
+                  body: 'This proposal no longer exists.',
+                }));
+                return;
+              }
+              res.status(409).send(msActPage({
+                ok: false, heading: 'Already decided',
+                body: `This proposal is already <b>${cur.status}</b>, so your ` +
+                  `<b>${action}</b> click had no effect. Open the dashboard ` +
+                  `to see its current state.`,
+              }));
+            });
+          return;
+        }
+        const title = matched.title || '(untitled)';
+        const verb = action === 'approve' ? 'approved'
+          : action === 'reject' ? 'rejected' : 'deferred';
+        res.send(msActPage({
+          ok: true,
+          heading: `Proposal ${verb}`,
+          body: `<b>${String(title).replace(/[&<>]/g, '')}</b> is now ` +
+            `<b>${nextStatus}</b>.` +
+            (action === 'approve'
+              ? ' The orchestrator will queue its training jobs shortly.'
+              : ''),
+        }));
       });
   });
 
