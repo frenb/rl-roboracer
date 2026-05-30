@@ -147,6 +147,11 @@ def test_plain_approved_proposal():
         "jobs have proposal_arm in {base, exp1}",
         lambda: {j["proposal_arm"] for j in jobs} == {"base", "exp1"})
     _expect(
+        "all jobs have experiment_design_name stamped (so the Jobs tab "
+        "Experiment design column renders a label)",
+        lambda: all(j.get("experiment_design_name") for j in jobs),
+        f"got names={[j.get('experiment_design_name') for j in jobs]!r}")
+    _expect(
         "jobs have status=NOT_STARTED",
         lambda: all(j["status"] == "NOT_STARTED" for j in jobs))
     _expect(
