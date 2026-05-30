@@ -267,7 +267,9 @@ def _build_job_doc(
     proposal_id_str: str,
     arm_name: str,
     experiment_design_id: Any,
+    experiment_design_name: Optional[str],
     reward_design_id: Optional[str],
+    reward_design_name: Optional[str],
     seed: int,
     num_iterations: int,
     now: datetime.datetime,
@@ -277,7 +279,10 @@ def _build_job_doc(
 
     Keeps all the legacy-but-required fields (pass_through_actions,
     nn_size_x/y, demo_job_id) populated with their defaults so the
-    trainer's job-document accessors don't KeyError on them.
+    trainer's job-document accessors don't KeyError on them. Stamps
+    the {experiment,reward}_design_name fields so the Jobs tab's
+    badge columns render proper labels (matching what
+    dashboard-submitted jobs carry).
     """
     return {
         # ---- Core job fields the trainer reads -------------------------
@@ -296,7 +301,9 @@ def _build_job_doc(
         "nn_size_y": "",
         # ---- Design references -----------------------------------------
         "experiment_design_id": experiment_design_id,
+        "experiment_design_name": experiment_design_name,
         "reward_design_id": reward_design_id,
+        "reward_design_name": reward_design_name,
         "seed": seed,
         # ---- Proposal linkage (new in Phase 1C) ------------------------
         # outcome_ingester.py groups results per arm using
@@ -307,6 +314,52 @@ def _build_job_doc(
         "percent_complete": 0,
         "create_date": now,
     }
+
+
+def _lookup_design_name(db, design_id) -> Optional[str]:
+    """Return the `name` field of a design document by its id, or None
+    if the lookup fails (missing doc, bad id type, etc.).
+
+    Tolerates id stored as ObjectId, str(ObjectId), or the canonical
+    string '_id' like 'experiment-default'.
+    """
+    if not design_id:
+        return None
+    doc = None
+    try:
+        from bson import ObjectId
+        try:
+            doc = db.experiment_designs.find_one({"_id": ObjectId(str(design_id))})
+        except Exception:  # noqa: BLE001
+            doc = None
+    except ImportError:
+        doc = None
+    if doc is None:
+        doc = db.experiment_designs.find_one({"_id": str(design_id)})
+    if doc is None:
+        return None
+    return doc.get("name")
+
+
+def _lookup_reward_design_name(db, reward_id) -> Optional[str]:
+    """Same as _lookup_design_name but for the reward_designs
+    collection."""
+    if not reward_id:
+        return None
+    doc = None
+    try:
+        from bson import ObjectId
+        try:
+            doc = db.reward_designs.find_one({"_id": ObjectId(str(reward_id))})
+        except Exception:  # noqa: BLE001
+            doc = None
+    except ImportError:
+        doc = None
+    if doc is None:
+        doc = db.reward_designs.find_one({"_id": str(reward_id)})
+    if doc is None:
+        return None
+    return doc.get("name")
 
 
 def _queue_jobs(
@@ -328,12 +381,19 @@ def _queue_jobs(
             db, arm, proposal_id_str, arm_name,
             num_iterations=num_iterations, now=now)
         reward_id = _resolve_reward_design_id(arm)
+        # Resolve human-readable names so the Jobs tab's badge
+        # columns render proper labels (matching dashboard-submitted
+        # jobs which stamp these at submit time).
+        design_name = _lookup_design_name(db, design_id)
+        reward_name = _lookup_reward_design_name(db, reward_id)
         for seed in range(n_seeds):
             job = _build_job_doc(
                 proposal_id_str=proposal_id_str,
                 arm_name=arm_name,
                 experiment_design_id=design_id,
+                experiment_design_name=design_name,
                 reward_design_id=reward_id,
+                reward_design_name=reward_name,
                 seed=seed,
                 num_iterations=num_iterations,
                 now=now)
