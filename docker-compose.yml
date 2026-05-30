@@ -181,6 +181,10 @@ services:
       - "8080:8080"
     environment:
       - DATABASE_NAME=robotaxi
+      # Shared secret the dashboard uses to VERIFY the HMAC-signed
+      # magic-link decision tokens minted by the madscientist
+      # email_bridge. Must match the madscientist service's value.
+      - MADSCIENTIST_TOKEN_SECRET=${MADSCIENTIST_TOKEN_SECRET:-}
     volumes:
       - type: bind
         source: ./dashboard
@@ -251,6 +255,18 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       NOTIFICATION_EMAIL: ${NOTIFICATION_EMAIL:-}
       GMAIL_OAUTH_CREDS_PATH: ${GMAIL_OAUTH_CREDS_PATH:-/secrets/gmail_oauth.json}
+      # Base URL the email's Approve/Reject/Defer magic-link buttons
+      # point at. HTTP routes are on port 80 (8080 is the WebSocket
+      # server -> "426 Upgrade Required"). localhost works only when
+      # mail is opened on this host; set to a LAN / Tailscale / tunnel
+      # URL to click from a phone.
+      DASHBOARD_PUBLIC_URL: ${DASHBOARD_PUBLIC_URL:-http://localhost}
+      # HMAC secret that SIGNS the decision tokens. Must match the
+      # dashboard service's MADSCIENTIST_TOKEN_SECRET. Empty => email
+      # still sends but without one-click buttons (dashboard link only).
+      MADSCIENTIST_TOKEN_SECRET: ${MADSCIENTIST_TOKEN_SECRET:-}
+      NOTIFY_POLL_INTERVAL_SECONDS: ${NOTIFY_POLL_INTERVAL_SECONDS:-60}
+      DECISION_TOKEN_TTL_SECONDS: ${DECISION_TOKEN_TTL_SECONDS:-604800}
 
       # ---- Safety / budget knobs -------------------------------------
       # Defaults are intentionally CONSERVATIVE - 1 proposal/day + $250/mo

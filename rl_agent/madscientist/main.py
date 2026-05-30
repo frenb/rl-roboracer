@@ -47,6 +47,7 @@ import time
 from pymongo import MongoClient
 
 from . import constants
+from . import email_bridge
 from . import judge
 from . import orchestrator
 from . import outcome_ingester
@@ -133,16 +134,34 @@ def main():
         constants.DEFAULT_RESEARCH_CYCLE_INTERVAL_SECONDS))
     research_query = os.environ.get(
         "RESEARCH_QUERY", researcher.DEFAULT_RESEARCH_QUERY)
+    # Email bridge config. base_url is where the magic-link buttons in
+    # the proposal email point; default localhost works only when mail
+    # is opened on this host - set DASHBOARD_PUBLIC_URL to a LAN /
+    # Tailscale / tunnel address to make the buttons clickable from a
+    # phone. token_secret signs the buttons; empty => email still sends
+    # but without one-click buttons (dashboard link only).
+    notify_poll = int(os.environ.get(
+        "NOTIFY_POLL_INTERVAL_SECONDS",
+        email_bridge.DEFAULT_NOTIFY_POLL_INTERVAL_SECONDS))
+    dashboard_public_url = os.environ.get(
+        "DASHBOARD_PUBLIC_URL", "http://localhost:8080").strip()
+    token_secret = os.environ.get("MADSCIENTIST_TOKEN_SECRET", "").strip()
+    token_ttl = int(os.environ.get(
+        "DECISION_TOKEN_TTL_SECONDS",
+        email_bridge.DEFAULT_DECISION_TOKEN_TTL_SECONDS))
 
     print(
-        f"madscientist: Phase 1A+1B+1C-MVP+1E workers starting. "
+        f"madscientist: Phase 1A+1B+1C-MVP+1D+1E workers starting. "
         f"max_proposals_per_day={max_proposals_per_day}, "
         f"budget_usd_per_month={budget_usd_per_month}, "
         f"judge_poll_seconds={judge_poll}, "
         f"outcome_poll_seconds={outcome_poll}, "
         f"orchestrator_poll_seconds={orchestrator_poll}, "
+        f"notify_poll_seconds={notify_poll}, "
         f"max_jobs_per_proposal={max_jobs_per_proposal}, "
         f"research_cycle_interval_seconds={research_cycle_interval}, "
+        f"dashboard_public_url={dashboard_public_url!r}, "
+        f"email_buttons={'on' if token_secret else 'off'}, "
         f"research_query={research_query!r}.",
         flush=True)
 
@@ -209,10 +228,24 @@ def main():
         name="outcome-loop",
         daemon=True,
     )
+    email_thread = threading.Thread(
+        target=email_bridge.notify_loop,
+        kwargs={
+            "db": db,
+            "base_url": dashboard_public_url,
+            "token_secret": token_secret,
+            "poll_interval_seconds": notify_poll,
+            "token_ttl_seconds": token_ttl,
+            "should_stop_fn": lambda: _should_exit,
+        },
+        name="email-bridge-loop",
+        daemon=True,
+    )
     judge_thread.start()
     researcher_thread.start()
     orchestrator_thread.start()
     outcome_thread.start()
+    email_thread.start()
 
     # Block the main thread until either:
     #   (a) any worker thread exits (which usually means it hit an
@@ -226,6 +259,7 @@ def main():
         ("research", researcher_thread),
         ("orchestrator", orchestrator_thread),
         ("outcome", outcome_thread),
+        ("email", email_thread),
     ]
     while not _should_exit:
         died = next(

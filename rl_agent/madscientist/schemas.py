@@ -362,6 +362,13 @@ class Proposal(BaseModel):
     # ---- Judge -----------------------------------------------------------
     judge_review: Optional[JudgeReview] = None
 
+    # ---- Notification ----------------------------------------------------
+    # Set by the email_bridge when it sends the "new proposal awaiting
+    # your decision" email. Presence of this stamp is what makes the
+    # notify loop idempotent (it only emails proposals that don't yet
+    # carry it). None = not yet notified.
+    notified_at: Optional[datetime.datetime] = None
+
     # ---- User decision ---------------------------------------------------
     decision: Optional[UserDecision] = None
 
