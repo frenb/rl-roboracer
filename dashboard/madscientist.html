@@ -28,6 +28,58 @@
     [data-role="activity-feed"] .tabulator-cell .dark\:text-slate-400 {
       color: #f8fafc !important;
     }
+    /* Accordion group headers: readable light text + a subtle indigo-
+       tinted band so each proposal's collapsible header stands apart
+       from its event rows. Lay the row out as flex so Tabulator's
+       expand/collapse arrow sits inline with our custom header content
+       (the full-width flex div we return from groupHeader) instead of
+       overlapping it. */
+    [data-role="activity-feed"] .tabulator-group {
+      color: #f8fafc;
+      background: #1e293b; /* slate-800 */
+      border-bottom: 1px solid #334155; /* slate-700 */
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+    }
+    [data-role="activity-feed"] .tabulator-group.tabulator-group-visible {
+      background: #283548;
+    }
+    [data-role="activity-feed"] .tabulator-group:hover {
+      background: #334155;
+    }
+    /* Keep the arrow at its natural size (don't let flex shrink it to
+       0) and give it a little breathing room from our content. */
+    [data-role="activity-feed"] .tabulator-group .tabulator-arrow {
+      flex: 0 0 auto;
+      margin-right: 10px;
+    }
+    /* Collapsed groups render a right-pointing triangle whose colored
+       edge is border-left; expanded groups render a down-pointing
+       triangle whose colored edge is border-top. Color each state's
+       visible edge indigo so the arrow reads clearly on the dark band. */
+    [data-role="activity-feed"] .tabulator-group:not(.tabulator-group-visible) .tabulator-arrow {
+      border-left-color: #818cf8 !important; /* indigo-400 */
+    }
+    [data-role="activity-feed"] .tabulator-group.tabulator-group-visible .tabulator-arrow {
+      border-top-color: #818cf8 !important;
+    }
+    /* Our custom header content fills the remaining row width. */
+    [data-role="activity-feed"] .tabulator-group > div {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    /* fitColumns sizes columns to the container, so horizontal scroll
+       should never be needed. Hard-guard against it (e.g. a 1px
+       sub-pixel rounding overflow) so the feed never shows an
+       x-scrollbar. */
+    [data-role="activity-feed"] .tabulator-tableholder {
+      overflow-x: hidden !important;
+    }
+    [data-role="activity-feed"] .tabulator-group {
+      box-sizing: border-box;
+      max-width: 100%;
+    }
 
     /* Carousel-style Pending Decisions: one proposal-card visible at
        a time with Prev / Next navigation above it. The card is a
@@ -262,7 +314,7 @@
   </div>
 
   <!-- Cache-busted (see jobs.html). Bump ?v=... when components.js changes. -->
-  <script src="/components.js?v=20260526-madsci-details-modal"></script>
+  <script src="/components.js?v=20260530-design-name-full"></script>
   <script>
     (function () {
       const { showToast, confirmDialog } = window.RoboracerUI;
@@ -283,6 +335,11 @@
       // locally without re-fetching from the server.
       let currentProposalIndex = 0;
       let lastProposals = [];
+      // Tracks which proposal _id the carousel card last rendered, so
+      // a poll-driven rerender can restore the inner-scroll position
+      // when the same proposal is still on screen (and reset to top
+      // when a Prev/Next nav swapped to a different proposal).
+      let lastRenderedProposalId = null;
 
       // ---- Tiny utilities ----------------------------------------------
       const esc = (s) => String(s == null ? '' : s)
@@ -354,6 +411,24 @@
         const id = btn.getAttribute('data-proposal-id');
         if (id) showProposalDetails(id);
       });
+
+      // The Activity Feed accordion group headers contain a clickable
+      // proposal-title link. Because groupToggleElement is 'header',
+      // a plain click would ALSO expand/collapse the group. Intercept
+      // the details link in the CAPTURE phase on the activity host so
+      // we (a) open the modal and (b) stopPropagation before the event
+      // reaches Tabulator's group-toggle handler OR the document-level
+      // open-details delegate above (avoids a double-open + an
+      // unwanted toggle). Clicking anywhere ELSE on the header still
+      // toggles the group normally.
+      activityHost.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-role="open-details"]');
+        if (!btn) return;
+        e.stopPropagation();
+        e.preventDefault();
+        const id = btn.getAttribute('data-proposal-id');
+        if (id) showProposalDetails(id);
+      }, true);
 
       async function showProposalDetails(id) {
         openDetails();
@@ -807,15 +882,63 @@
                String(row.event || '');
       }
 
+      // Accordion group header: one collapsible row per proposal,
+      // showing the proposal title (clickable -> details modal), the
+      // event count, and an aggregated job-status badge. Tabulator
+      // prepends its own expand/collapse toggle arrow. The rows under
+      // each header are the individual audit events.
+      function activityGroupHeader(value, count, data /*, group */) {
+        const title = value || '(unknown proposal)';
+        // All rows in a group share the same proposal_id /
+        // proposal_status / job_statuses; read from the first row.
+        const row0 = (data && data[0]) || {};
+        const pid = String(row0.proposal_id || '');
+        const statusBadge = renderStatusCell(row0.proposal_status, row0);
+        const titleHtml = pid
+          ? '<button data-role="open-details" data-proposal-id="' + esc(pid) + '" ' +
+              'title="' + esc(title) + ' · click for full details" ' +
+              'class="text-left text-indigo-300 hover:text-indigo-200 ' +
+              'hover:underline cursor-pointer font-semibold">' +
+              esc(title) +
+            '</button>'
+          : '<span class="font-semibold">' + esc(title) + '</span>';
+        return (
+          '<div class="flex items-center gap-3 w-full">' +
+            '<span class="flex-1 min-w-0 truncate">' + titleHtml + '</span>' +
+            '<span class="text-[10px] font-mono text-slate-400 shrink-0">' +
+              count + (count === 1 ? ' event' : ' events') +
+            '</span>' +
+            '<span class="shrink-0">' + statusBadge + '</span>' +
+          '</div>'
+        );
+      }
+
       const activityTable = new TableView(activityHost, {
         selectable: false,
         rowKey: _activityRowKey,
-        pageSize: 25,
+        // Accordion: group rows by proposal, collapsed by default. The
+        // whole header row toggles expand/collapse (groupToggleElement
+        // defaults to 'header' in TableView).
+        groupBy: (row) => row.proposal_title || '(unknown proposal)',
+        groupStartOpen: false,
+        groupHeader: activityGroupHeader,
+        // No pagination: the event count is bounded (~30 server-side)
+        // and an accordion reads best as one scrollable surface with
+        // no page-splitting of groups + no rows-counter footer.
+        pagination: false,
+        // Fill the section width (default fitData would leave a gap on
+        // the right, as the columns are narrow).
+        layout: 'fitColumns',
+        // Don't persist column widths: fitColumns recomputes to fit the
+        // container each load, and stale persisted widths (from an
+        // earlier fitData layout) would otherwise force a horizontal
+        // scrollbar.
+        persistColumnWidths: false,
         emptyMessage:
           'No activity yet. The researcher / judge / orchestrator / ' +
           'outcome ingester will write here as they run.',
         columns: [
-          { key: 'at', label: 'When', sortable: true, filter: false,
+          { key: 'at', label: 'When', sortable: true, filter: false, width: 110,
             sortValue: (row) => {
               const v = (row.at && row.at.$date) || row.at;
               const t = Date.parse(v);
@@ -826,54 +949,53 @@
               return esc(relTime(v));
             } },
           { key: 'by_agent', label: 'Agent', sortable: true, filter: true,
+            widthGrow: 2,
             render: (v) =>
               '<span class="text-indigo-600 dark:text-indigo-300 font-mono text-xs">' +
                 esc(v || '?') +
               '</span>' },
           { key: 'event', label: 'Event', sortable: true, filter: true,
+            widthGrow: 3,
             render: (v) =>
               '<span class="font-mono text-xs">' + esc(v || '?') + '</span>' },
-          { key: 'proposal_title', label: 'Proposal', sortable: true, filter: true,
-            render: (v, row) => {
-              const id = String(row.proposal_id || '');
-              const label = esc(v || '(unknown proposal)');
-              const title = esc(v || '');
-              if (!id) {
-                return '<span title="' + title + '">' + label + '</span>';
-              }
-              return (
-                '<button data-role="open-details" ' +
-                        'data-proposal-id="' + esc(id) + '" ' +
-                        'title="' + title + ' · click for full details" ' +
-                        'class="text-left text-indigo-300 hover:text-indigo-200 ' +
-                        'hover:underline cursor-pointer truncate max-w-full ' +
-                        'inline-block align-middle">' +
-                  label +
-                '</button>'
-              );
-            } },
-          { key: 'proposal_status', label: 'Status', sortable: true, filter: true,
-            sortValue: (row) => {
-              // Sort priority for visual scanning: failures + active
-              // work bubble to the top, completed sinks to the bottom.
-              const ps = row.proposal_status || '';
-              if (ps !== 'training' || !row.job_statuses || !row.job_statuses.length) {
-                return ps;
-              }
-              const counts = {};
-              for (const s of row.job_statuses) counts[s] = (counts[s] || 0) + 1;
-              if (counts.FAILED) return '0_failed';
-              if (counts.IN_PROGRESS) return '1_inprogress';
-              if (counts.PAUSED || counts.PAUSE_REQUESTED) return '2_paused';
-              if (counts.NOT_STARTED) return '3_queued';
-              return '4_alldone';
-            },
-            render: (v, row) => renderStatusCell(v, row) },
         ],
       });
       activityTable.setLoading(true);
 
+      // Content signature of the last rendered activity payload. The
+      // 5s poll re-fetches /madscientist/activity every tick, but the
+      // data is identical between most ticks - only the relative
+      // "When" label would drift, which isn't worth a full table
+      // rebuild (each rebuild collapses expanded accordion groups +
+      // resets scroll). We skip setData entirely when the meaningful
+      // content hasn't changed, so the feed only re-renders on a real
+      // data change (new event, status transition, etc.).
+      let lastActivitySig = null;
+
+      function _activitySignature(events) {
+        // Include only the fields the feed renders + groups by. The
+        // `at` timestamps are absolute (formatted to relative at
+        // render time) so they're stable between polls for the same
+        // event - they only differ when a genuinely new event lands.
+        return JSON.stringify((events || []).map((e) => [
+          e.proposal_id,
+          e.proposal_title,
+          e.proposal_status,
+          e.by_agent,
+          e.event,
+          (e.at && e.at.$date) || e.at,
+          (e.job_statuses || []).join(','),
+        ]));
+      }
+
       function renderActivity(events) {
+        const sig = _activitySignature(events);
+        if (sig === lastActivitySig) {
+          // Nothing meaningful changed since last render; leave the
+          // table (and the user's expanded groups + scroll) untouched.
+          return;
+        }
+        lastActivitySig = sig;
         activityTable.setData(events || []);
       }
 
@@ -903,7 +1025,21 @@
         if (!n) {
           pendingHost.innerHTML = '<div class="text-center py-6 text-xs">' +
             'No proposals awaiting your approval.</div>';
+          lastRenderedProposalId = null;
           return;
+        }
+
+        // Capture the current inner-scroll position so a poll-driven
+        // rerender (every 5s) doesn't yank the card back to the top
+        // while the operator is reading. We only restore the scroll
+        // when the SAME proposal is still on screen; a Prev/Next nav
+        // change (different proposal id) intentionally starts at top.
+        const displayedId = String(pending[currentProposalIndex]._id || '');
+        let savedScrollTop = 0;
+        const existingScroll = pendingHost.querySelector(
+          '[data-role="proposal-card-scroll"]');
+        if (existingScroll && lastRenderedProposalId === displayedId) {
+          savedScrollTop = existingScroll.scrollTop;
         }
 
         // Carousel nav: Prev | counter | Next. Disabled at the edges.
@@ -930,6 +1066,15 @@
 
         pendingHost.innerHTML = navHtml + renderProposalCard(
           pending[currentProposalIndex]);
+        lastRenderedProposalId = displayedId;
+        // Restore the saved inner-scroll position (0 on a nav change or
+        // first render of this proposal). Done synchronously right
+        // after innerHTML so there's no visible scroll flicker.
+        const newScroll = pendingHost.querySelector(
+          '[data-role="proposal-card-scroll"]');
+        if (newScroll && savedScrollTop > 0) {
+          newScroll.scrollTop = savedScrollTop;
+        }
         pendingHost.querySelectorAll('[data-decide-action]').forEach((btn) => {
           btn.addEventListener('click', onDecideClick);
         });
