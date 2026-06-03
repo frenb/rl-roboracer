@@ -71,67 +71,105 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
         SceneData sceneDataMessage = new SceneData();
         if (car != null) {
             CarController cc = car.GetComponent<CarController>();
-            sceneCarDataMessage.car.location_x = car.transform.position.x;
-            sceneCarDataMessage.car.location_y = car.transform.position.y;
-            sceneCarDataMessage.car.location_z = car.transform.position.z;
-            sceneCarDataMessage.car.speed = car.GetComponent<CarController>().GetSpeed();
-            sceneCarDataMessage.car.cost = GetDistanceFromTraj();          
-            sceneCarDataMessage.car.dist_from_goal = 
-                Vector3.Distance(
-                    car.transform.position, 
-                    cc.GetNextGoal().transform.position);
-                
-            sceneCarDataMessage.car.dist_from_traj = GetAngleToGoal()/180;
-            sceneCarDataMessage.car.has_reached_goal = IsGoalComplete();
-            sceneCarDataMessage.car.has_crashed = cc.HasCrashed();
-            sceneCarDataMessage.car.current_goal = GetCurrentGoalName();
-            sceneCarDataMessage.car.last_goal_reached = GetLastGoalCompletedName();
-            sceneCarDataMessage.car.rotation_z = car.transform.eulerAngles.z;
-            sceneCarDataMessage.last_executed_cmd_id = cc.cmd_id;
-            sceneCarDataMessage.car.left = cc.distToClosestObjects[0];
-            sceneCarDataMessage.car.forward_left = cc.distToClosestObjects[1];
-            sceneCarDataMessage.car.forward_left_left = cc.distToClosestObjects[2];
-            sceneCarDataMessage.car.n_27_50 = cc.distToClosestObjects[3];
-            sceneCarDataMessage.car.n_25_00 = cc.distToClosestObjects[4];
-            sceneCarDataMessage.car.n_22_50 = cc.distToClosestObjects[5];
-            sceneCarDataMessage.car.n_20_00 = cc.distToClosestObjects[6];
-            sceneCarDataMessage.car.n_17_50 = cc.distToClosestObjects[7];
-            sceneCarDataMessage.car.n_15_00 = cc.distToClosestObjects[8];
-            sceneCarDataMessage.car.n_12_50 = cc.distToClosestObjects[9];
-            sceneCarDataMessage.car.n_10_00 = cc.distToClosestObjects[10];
-            sceneCarDataMessage.car.n_07_50 = cc.distToClosestObjects[11];
-            sceneCarDataMessage.car.n_05_00 = cc.distToClosestObjects[12];
-            sceneCarDataMessage.car.n_02_50 = cc.distToClosestObjects[13];
-            sceneCarDataMessage.car.forward = cc.distToClosestObjects[14];
-            sceneCarDataMessage.car.p_02_50 = cc.distToClosestObjects[15];
-            sceneCarDataMessage.car.p_05_00 = cc.distToClosestObjects[16];
-            sceneCarDataMessage.car.p_07_50 = cc.distToClosestObjects[17];
-            sceneCarDataMessage.car.p_10_00 = cc.distToClosestObjects[18];
-            sceneCarDataMessage.car.p_12_50 = cc.distToClosestObjects[19];
-            sceneCarDataMessage.car.p_15_00 = cc.distToClosestObjects[20];
-            sceneCarDataMessage.car.p_17_50 = cc.distToClosestObjects[21];
-            sceneCarDataMessage.car.p_20_00 = cc.distToClosestObjects[22];
-            sceneCarDataMessage.car.p_22_50 = cc.distToClosestObjects[23];
-            sceneCarDataMessage.car.p_25_00 = cc.distToClosestObjects[24];
-            sceneCarDataMessage.car.p_27_50 = cc.distToClosestObjects[25];
-            sceneCarDataMessage.car.forward_right_right = cc.distToClosestObjects[26];
-            sceneCarDataMessage.car.forward_right = cc.distToClosestObjects[27];
-            sceneCarDataMessage.car.right = cc.distToClosestObjects[28];
-            sceneCarDataMessage.car.angular_velocity = cc.GetAngularVelocity();
-            sceneCarDataMessage.car.goal_1 = GetAllGoalCount();
-            sceneCarDataMessage.car.goal_2 = GetVelocityCarAngleDiff()/180;
-            sceneCarDataMessage.car.goal_3 =  GetGoalCount("Goal-3");
-            sceneCarDataMessage.car.goal_4 =  GetGoalCount("Goal-4");
-            sceneCarDataMessage.car.acceleration = cc.GetAcceleration();
-            sceneDataMessage.object_location.x = car.transform.position.x;
-            sceneDataMessage.object_location.y = car.transform.position.y;
-            sceneDataMessage.object_location.z = car.transform.position.z;
-            sceneDataMessage.pole_cart.pole_angular_speed = sceneCarDataMessage.car.speed;
-            sceneDataMessage.pole_cart.upright = sceneCarDataMessage.car.has_reached_goal;
-            sceneDataMessage.last_executed_cmd_id = sceneCarDataMessage.last_executed_cmd_id;  
+            // Always stamp the cmd_id so the trainer's scene_data_events[cmd_id]
+            // fires even when goals are temporarily unavailable. cc.cmd_id is a
+            // plain int on the car component — safe to read regardless of goal
+            // state. Without this, last_executed_cmd_id stays at 0 and the
+            // trainer waits the full 5s timeout every single step.
+            if (cc != null)
+                sceneCarDataMessage.last_executed_cmd_id = cc.cmd_id;
+
+            // If goals are mid-regeneration, skip the goal-dependent car data
+            // block but fall through so the ros.Send (below) still fires.
+            if (cc != null && GoalsAlive(cc))
+            {
+                sceneCarDataMessage.car.location_x = car.transform.position.x;
+                sceneCarDataMessage.car.location_y = car.transform.position.y;
+                sceneCarDataMessage.car.location_z = car.transform.position.z;
+                sceneCarDataMessage.car.speed = car.GetComponent<CarController>().GetSpeed();
+                sceneCarDataMessage.car.cost = GetDistanceFromTraj();          
+                sceneCarDataMessage.car.dist_from_goal = 
+                    Vector3.Distance(
+                        car.transform.position, 
+                        cc.GetNextGoal().transform.position);
+                    
+                sceneCarDataMessage.car.dist_from_traj = GetAngleToGoal()/180;
+                sceneCarDataMessage.car.has_reached_goal = IsGoalComplete();
+                sceneCarDataMessage.car.has_crashed = cc.HasCrashed();
+                sceneCarDataMessage.car.current_goal = GetCurrentGoalName();
+                sceneCarDataMessage.car.last_goal_reached = GetLastGoalCompletedName();
+                sceneCarDataMessage.car.rotation_z = car.transform.eulerAngles.z;
+                sceneCarDataMessage.car.left = cc.distToClosestObjects[0];
+                sceneCarDataMessage.car.forward_left = cc.distToClosestObjects[1];
+                sceneCarDataMessage.car.forward_left_left = cc.distToClosestObjects[2];
+                sceneCarDataMessage.car.n_27_50 = cc.distToClosestObjects[3];
+                sceneCarDataMessage.car.n_25_00 = cc.distToClosestObjects[4];
+                sceneCarDataMessage.car.n_22_50 = cc.distToClosestObjects[5];
+                sceneCarDataMessage.car.n_20_00 = cc.distToClosestObjects[6];
+                sceneCarDataMessage.car.n_17_50 = cc.distToClosestObjects[7];
+                sceneCarDataMessage.car.n_15_00 = cc.distToClosestObjects[8];
+                sceneCarDataMessage.car.n_12_50 = cc.distToClosestObjects[9];
+                sceneCarDataMessage.car.n_10_00 = cc.distToClosestObjects[10];
+                sceneCarDataMessage.car.n_07_50 = cc.distToClosestObjects[11];
+                sceneCarDataMessage.car.n_05_00 = cc.distToClosestObjects[12];
+                sceneCarDataMessage.car.n_02_50 = cc.distToClosestObjects[13];
+                sceneCarDataMessage.car.forward = cc.distToClosestObjects[14];
+                sceneCarDataMessage.car.p_02_50 = cc.distToClosestObjects[15];
+                sceneCarDataMessage.car.p_05_00 = cc.distToClosestObjects[16];
+                sceneCarDataMessage.car.p_07_50 = cc.distToClosestObjects[17];
+                sceneCarDataMessage.car.p_10_00 = cc.distToClosestObjects[18];
+                sceneCarDataMessage.car.p_12_50 = cc.distToClosestObjects[19];
+                sceneCarDataMessage.car.p_15_00 = cc.distToClosestObjects[20];
+                sceneCarDataMessage.car.p_17_50 = cc.distToClosestObjects[21];
+                sceneCarDataMessage.car.p_20_00 = cc.distToClosestObjects[22];
+                sceneCarDataMessage.car.p_22_50 = cc.distToClosestObjects[23];
+                sceneCarDataMessage.car.p_25_00 = cc.distToClosestObjects[24];
+                sceneCarDataMessage.car.p_27_50 = cc.distToClosestObjects[25];
+                sceneCarDataMessage.car.forward_right_right = cc.distToClosestObjects[26];
+                sceneCarDataMessage.car.forward_right = cc.distToClosestObjects[27];
+                sceneCarDataMessage.car.right = cc.distToClosestObjects[28];
+                sceneCarDataMessage.car.angular_velocity = cc.GetAngularVelocity();
+                sceneCarDataMessage.car.goal_1 = GetAllGoalCount();
+                sceneCarDataMessage.car.goal_2 = GetVelocityCarAngleDiff()/180;
+                sceneCarDataMessage.car.goal_3 =  GetGoalCount("Goal-3");
+                sceneCarDataMessage.car.goal_4 =  GetGoalCount("Goal-4");
+                sceneCarDataMessage.car.acceleration = cc.GetAcceleration();
+                sceneDataMessage.object_location.x = car.transform.position.x;
+                sceneDataMessage.object_location.y = car.transform.position.y;
+                sceneDataMessage.object_location.z = car.transform.position.z;
+                sceneDataMessage.pole_cart.pole_angular_speed = sceneCarDataMessage.car.speed;
+                sceneDataMessage.pole_cart.upright = sceneCarDataMessage.car.has_reached_goal;
+            }
+            // Mirror the cmd_id onto the SceneData message too (always, not
+            // just inside the GoalsAlive block).
+            sceneDataMessage.last_executed_cmd_id = sceneCarDataMessage.last_executed_cmd_id;
         }
-        Debug.Log(topicName + "->"+ sceneCarDataMessage);
         ros.Send(topicName, sceneCarDataMessage);
+    }
+
+    // True only when every goal in the car's list is still alive. Returns false
+    // during the brief window where a track regeneration has destroyed the
+    // Goal-N objects but the car hasn't been rebuilt yet, so Publish() can skip
+    // that frame instead of dereferencing a destroyed GameObject.
+    private static bool GoalsAlive(CarController cc)
+    {
+        if (cc.goals == null || cc.goals.Count == 0)
+        {
+            Debug.LogWarning("[SceneDataPublisher] GoalsAlive=false: goals list is " +
+                             (cc.goals == null ? "NULL" : "EMPTY (count=0)") +
+                             ". Car data will be published as zeros this frame.");
+            return false;
+        }
+        int nullCount = 0;
+        foreach (GameObject g in cc.goals)
+            if (g == null) nullCount++;
+        if (nullCount > 0)
+        {
+            Debug.LogWarning($"[SceneDataPublisher] GoalsAlive=false: {nullCount}/{cc.goals.Count} " +
+                             "goals are destroyed. Mid-regeneration window — car data will be zeros.");
+            return false;
+        }
+        return true;
     }
 
     private float GetAllGoalCount(){
@@ -226,8 +264,11 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
         if(!cc.sphere)
             cc.sphere = Instantiate(cc.spherePrefab);
         cc.sphere.transform.position = closestPoint;
-        int road = LayerMask.NameToLayer("Road");
-        cc.sphere.layer = road;
+        // Layer 2 = Ignore Raycast: this trajectory debug sphere sits at the
+        // next goal's position. If left on Default (layer 0) it is hit by the
+        // car's SphereCast (layerMask=1), creating a cluster of perception
+        // spheres at the goal and making the car "crash" into an invisible wall.
+        cc.sphere.layer = 2;
         cc.sphere.transform.localScale = new Vector3(2,2,2);     
         return closestPoint;
     }
@@ -255,7 +296,7 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
         float distance = Vector3.Distance(closestPoint, car.transform.position);
         MoveDebugSphere(closestPoint, closestPoint);//car.transform.position);
         float direction = AngleDir(car, closestPoint);
-        Debug.Log("anglebetween: " + direction + " " + car.transform.position );
+        //Debug.Log("anglebetween: " + direction + " " + car.transform.position );
         return direction * distance;
     }
     private bool IsGoalComplete(){

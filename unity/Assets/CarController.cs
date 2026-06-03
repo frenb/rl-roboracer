@@ -27,6 +27,9 @@ public class CarController : MonoBehaviour {
     public GameObject [] distToClosestObjectsDebugSpheres = new GameObject [29]; 
     public LayerMask layerMask;
     public bool rayCastEnabled = false;
+    [Tooltip("Draw Debug.DrawRay lines in the Scene view for each SphereCast so you can visually " +
+             "confirm perception is working. Green = hit, white = miss. Off by default to reduce clutter.")]
+    public bool showRaycastGizmos = true;
     public bool manualControlEnabled = false;
     public  Dictionary<string, string> stats = new Dictionary<string, string>();
     public int numCollisions=0;
@@ -145,11 +148,38 @@ public class CarController : MonoBehaviour {
             i++;
         }
     }
+
+    /// <summary>
+    /// Called by TrackGenerator right after it (re)builds the track. Drops the
+    /// car's references to the goals/curbs that were just destroyed and
+    /// re-acquires the new goal set, so stale entries in collisions / triggers
+    /// / goals can't trigger MissingReferenceException on the next FixedUpdate.
+    ///
+    /// On a normal episode reset SimController destroys + re-instantiates the
+    /// car, so its state is already fresh; this is the path that keeps an
+    /// IN-PLACE regenerate (e.g. an editor "Generate Track" during Play, or a
+    /// future mid-run regen) from leaving the live car pointing at destroyed
+    /// objects.
+    /// </summary>
+    public void OnTrackRegenerated()
+    {
+        collisions.Clear();
+        triggers.Clear();
+        SetUpGoalsArray();
+        goalIndex = goals.Count > 0 ? goalIndex % goals.Count : 0;
+    }
     
     public bool IsNextGoal(string goalName){
-        if (goals.Count>0 && goals[(goalIndex + 1) % goals.Count].name == goalName)
+        if (goals.Count == 0)
+            return false;
+        GameObject next = goals[(goalIndex + 1) % goals.Count];
+        // next may have been destroyed if the track was regenerated; treat a
+        // destroyed/null goal as "not the next goal" rather than throwing.
+        if (next == null)
+            return false;
+        if (next.name == goalName)
             return true;
-        else 
+        else
             return false;
     }
     public GameObject GetNextGoal(){
@@ -180,6 +210,12 @@ public class CarController : MonoBehaviour {
     {
         foreach(GameObject go in goals)
         {
+            // Skip goals destroyed by a track regeneration; go.name would throw
+            // MissingReferenceException every FixedUpdate during the regen
+            // window. The list is refreshed on the next reset (SimController
+            // re-instantiates the car + SetUpGoalsArray).
+            if (go == null)
+                continue;
             if (IsNextGoal(go.name))
             {
                 Renderer r = go.GetComponent<Renderer>();
@@ -325,6 +361,11 @@ public class CarController : MonoBehaviour {
 
     public void addCollisions(){
         foreach(Collision c in collisions){
+            // The hit collider may have been destroyed by a track
+            // regeneration while still referenced here; accessing
+            // c.gameObject.name would throw MissingReferenceException.
+            if(c == null || c.collider == null)
+                continue;
             if(!c.gameObject.name.Contains("Curb") 
                 && !c.gameObject.name.Contains("Rail"))
                 continue;
@@ -334,6 +375,9 @@ public class CarController : MonoBehaviour {
         }
 
         foreach(Collider c in triggers){
+            // Skip triggers destroyed by a track regeneration (e.g. old goals).
+            if(c == null)
+                continue;
             string name = "trig: " + c.gameObject.name;
             string value;
             if (!stats.TryGetValue(name, out value))
@@ -382,52 +426,38 @@ public class CarController : MonoBehaviour {
         RaycastHit hitData = new RaycastHit();
         Vector3 dwn = transform.TransformDirection(Vector3.down);
         bool foundObject = false;
-        int i;
         float radius = 0.15f;
-        for(i=-5;i<5;i++){
-            int myD = (int)d;
+        for(int i = -5; i < 5; i++){
             foundObject 
             = distToClosestObjectsBools[(int) d]
-            = Physics.SphereCast(start+dwn*i*0.001f, radius, direction, out  hitData, 100000000, layerMask);
-            
-            Debug.DrawRay(
-                start + dwn*i*0.01f,
-                direction.normalized*Math.Min(distance, hitData.distance),
-                foundObject ? Color.red: color, 
-                0.02f,
-                true);
-            
-            DrawLine(
-                start + dwn*i*0.01f, 
-                start + dwn*i*0.01f + direction*Math.Min(distance, hitData.distance),
-                foundObject ? Color.red: color,
-                0.02f
-            );
-
+            // Use `distance` (from DrawRayWrapper: d=50m * distanceMultiple)
+            // instead of 100,000,000 so forward diagonal rays don't shoot
+            // across the entire loop interior and hit the far wall at 80+m.
+            // The 50m cap matches the road corridor + a generous forward
+            // look-ahead without crossing to the opposite side of the track.
+            = Physics.SphereCast(start+dwn*i*0.001f, radius, direction, out hitData, distance, layerMask);
             if(foundObject)
                 break; 
         }
         
-        if(distToClosestObjectsBools[(int) d])
+        bool hit = distToClosestObjectsBools[(int) d];
+        if (showRaycastGizmos)
+        {
+            float drawLen = hit ? hitData.distance : 50f;
+            Debug.DrawRay(start, direction.normalized * drawLen,
+                          hit ? Color.green : Color.white, 0.05f);
+        }
+
+        if (hit)
         {
             distToClosestObjectsRHs[(int) d] = hitData;
             distToClosestObjects[(int) d] = hitData.distance;
             return true;
-        } 
-        else {
-            Debug.Log("nothing in this direction " + d + " old data: " + distToClosestObjects[(int) d]);
-            // only override distance to 100 for directions other than right or left
-            // otherwise use the last value
-            // if (d == directions.LEFT || d == directions.RIGHT)
-            //     return false;
-            
-            // distToClosestObjectsRHs[(int) d] = new RaycastHit();
-            // distToClosestObjects[(int) d] = 100;
+        }
+        else
+        {
             return false;
         }
-        //      distToClosestObjectsRHs[(int) d] = new RaycastHit();
-        //      distToClosestObjects[(int) d] = 100;
-        // }
     }
     float [] rotations = {0f}; //, 1f,2f,3f,4f,5f,-1f,-2f,-3f,-4f,-5f};
     float d = 50f;
@@ -722,6 +752,13 @@ public class CarController : MonoBehaviour {
         bool isRock = name.Contains("rock");
         if(!isCurb && !isRail && !isRock)
             return;
+        // Log the exact crash contact so we can identify errant colliders.
+        ContactPoint cp = collision.GetContact(0);
+        Debug.LogWarning(
+            $"[CRASH] hit '{name}' layer={collision.gameObject.layer} " +
+            $"at world pos={collision.gameObject.transform.position} " +
+            $"contact={cp.point} " +
+            $"car pos={transform.position}");
         collisions.Add(collision);
         numCollisions = collisions.Count;
     }

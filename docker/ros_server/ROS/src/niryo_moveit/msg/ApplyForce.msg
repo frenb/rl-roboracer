@@ -2,3 +2,5 @@ float64 acceleration
 float64 steering_angle
 int32 cmd_id
 int32 num_obstacles
+float64 corner_radius
+float64 curvature_difficulty

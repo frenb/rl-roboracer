@@ -93,6 +93,30 @@
 
     Re-applies on supervisor respawn so a recycled Unity client
     doesn't drift back to the default spawn location.
+
+.PARAMETER GymPollSeconds
+    How often (seconds) to check whether the dashboard has requested
+    a different Unity binary (gym hot-swap). Default 10. Set to 0
+    to disable gym polling entirely (useful when the gym is fixed for
+    the whole session).
+
+.PARAMETER DashboardUrl
+    Base URL of the dashboard HTTP server that exposes
+    GET /get_desired_gym?index=<N> and POST /set_desired_gym.
+    Default http://localhost (the dashboard container's published
+    port 80). Change if the dashboard runs on a different host/port.
+
+.PARAMETER GymSource
+    The SOURCE .exe path the initial -Path instance copy was mirrored
+    from (RunNClients.ps1 passes the unity/Builds/latest/<game>.exe it
+    copied into unity/Builds/instances/<Index>/). Used as the baseline
+    for gym-switch comparison so a job whose gym points at the same
+    source doesn't trigger a needless restart on the first poll. When a
+    gym switch IS needed, the new source build is mirrored into this
+    actor's per-index instance dir (unity/Builds/instances/<Index>/) so
+    multiple actors never collide on Unity's "Force Single Instance"
+    mutex (which locks on the .exe path). Empty means "no known source"
+    - the first non-empty desired gym then triggers one switch.
 #>
 [CmdletBinding()]
 param(
@@ -109,7 +133,14 @@ param(
     [int]$WindowHeight = 0,
     [string]$WindowQuality = 'Fastest',
     [switch]$Popup,
-    [string]$LogFile
+    [string]$LogFile,
+    [int]$GymPollSeconds = 10,
+    # Use the IPv4 loopback explicitly. 'localhost' resolves to the IPv6
+    # ::1 first in .NET, but Docker Desktop publishes the dashboard port
+    # only on IPv4 127.0.0.1, so an http://localhost request hangs until
+    # timeout. 127.0.0.1 connects immediately.
+    [string]$DashboardUrl = 'http://127.0.0.1',
+    [string]$GymSource = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -156,39 +187,137 @@ if (-not (Test-Path -LiteralPath $Path)) {
     throw "Binary not found: $Path"
 }
 
-# Default each client to its own Player.log next to its .exe. PowerShell
-# binds an unset [string] parameter as either $null or '' depending on
-# version, so guard with a single -not check that handles both.
-$exeDir = Split-Path -Parent $Path
-if (-not $LogFile) {
-    $LogFile = Join-Path $exeDir 'Player.log'
+# ---- Mutable launch state -------------------------------------------
+# These script-scoped variables are updated by Set-ActiveExePath
+# whenever a gym hot-swap changes the binary path. Start-Client and
+# the supervise loop always read the current values, not the values
+# that were set at parameter-parse time.
+# ---------------------------------------------------------------------
+$script:ActivePath    = $Path
+$script:ActiveExeArgs = $null   # set by Set-ActiveExePath below
+$script:ActiveCwd     = $null
+# The SOURCE build exe the currently-running binary was mirrored from.
+# Gym switching compares the dashboard's desired source against this so
+# we only restart when the requested build genuinely differs.
+$script:ActiveGymSource = $GymSource
+
+function Set-ActiveExePath {
+    param([string]$NewPath)
+    if (-not (Test-Path -LiteralPath $NewPath)) {
+        throw "Binary not found: $NewPath"
+    }
+
+    $script:ActivePath = $NewPath
+    $exeDir = Split-Path -Parent $NewPath
+
+    # Default the log next to the .exe (avoids spaces on the command line).
+    $logPath = if ($LogFile) { $LogFile } else { Join-Path $exeDir 'Player.log' }
+    $logFileName = [System.IO.Path]::GetFileName($logPath)
+    $logDir      = Split-Path -Parent $logPath
+    if (-not (Test-Path -LiteralPath $logDir)) {
+        New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    }
+    $script:ActiveCwd = $logDir
+
+    $script:ActiveExeArgs = @(
+        '--ros-ip',     $RosIp,
+        '--ros-port',   $RosPort,
+        '--unity-port', $UnityPort,
+        '-screen-width',    $WindowWidth,
+        '-screen-height',   $WindowHeight,
+        '-screen-quality',  $WindowQuality,
+        '-logfile',     $logFileName
+    )
+    if ($Popup) { $script:ActiveExeArgs += '-popupwindow' }
 }
 
-# Start-Process -ArgumentList joins elements with spaces and does NOT
-# auto-quote, so a path containing spaces (e.g. a workspace dir whose
-# name has a space in it) would be split. Sidestep the quoting question
-# entirely: launch Unity
-# with cwd = $exeDir and pass a relative -logfile filename. The log
-# file ends up at $LogFile but no spaces traverse the command line.
-$logFileFileName = [System.IO.Path]::GetFileName($LogFile)
-$logFileDir      = Split-Path -Parent $LogFile
-if (-not (Test-Path -LiteralPath $logFileDir)) {
-    New-Item -ItemType Directory -Force -Path $logFileDir | Out-Null
-}
-# The -WorkingDirectory passed to Start-Process must equal $logFileDir
-# for the relative -logfile arg to resolve to $LogFile.
-$cwdForUnity = $logFileDir
+# Initialise with the resolved path from the parameter block above.
+Set-ActiveExePath -NewPath $Path
 
-$exeArgs = @(
-    '--ros-ip', $RosIp,
-    '--ros-port', $RosPort,
-    '--unity-port', $UnityPort,
-    '-screen-width', $WindowWidth,
-    '-screen-height', $WindowHeight,
-    '-screen-quality', $WindowQuality,
-    '-logfile', $logFileFileName
-)
-if ($Popup) { $exeArgs += '-popupwindow' }
+# ---- Gym hot-swap helpers -------------------------------------------
+function Get-DesiredGymPath {
+    # Ask the dashboard for the file_path the current job wants.
+    # Falls back to '' on any error so the caller can treat a missing
+    # or unreachable dashboard as "no switch needed".
+    #
+    # We use a raw HttpWebRequest with Proxy=$null rather than
+    # Invoke-RestMethod: on Windows PowerShell 5.1 Invoke-RestMethod can
+    # hang on proxy auto-detection, and resolving 'localhost' to IPv6 ::1
+    # (which Docker Desktop doesn't bind) makes it time out. The explicit
+    # request below, paired with the IPv4 DashboardUrl default, connects
+    # immediately.
+    if ($GymPollSeconds -le 0) { return '' }
+    try {
+        $uri = "${DashboardUrl}/get_desired_gym?index=${Index}"
+        $req = [System.Net.HttpWebRequest]::Create($uri)
+        $req.Method  = 'GET'
+        $req.Timeout = 4000
+        $req.Proxy   = $null
+        $resp   = $req.GetResponse()
+        $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
+        $json   = $reader.ReadToEnd()
+        $reader.Close()
+        $resp.Close()
+
+        $obj = $json | ConvertFrom-Json
+        $p = [string]($obj.file_path)
+
+        # Strip a single pair of surrounding quotes a pasted path may
+        # carry (Explorer's "Copy as path" wraps in double quotes), so
+        # Test-Path / robocopy below get a clean filesystem path even if
+        # an older gym record was stored with the quotes intact.
+        $p = $p.Trim()
+        if ($p.Length -ge 2 -and $p[0] -eq $p[-1] -and ($p[0] -eq '"' -or $p[0] -eq "'")) {
+            $p = $p.Substring(1, $p.Length - 2).Trim()
+        }
+        return $p
+    } catch {
+        # Dashboard not reachable / no gym set yet — not an error.
+        return ''
+    }
+}
+
+function Switch-ToGym {
+    <#
+      Mirror the gym's SOURCE build into this actor's per-index instance
+      dir (unity/Builds/instances/<Index>/) and point the launch state at
+      the per-index copy. Per-index copies are mandatory: Unity's "Force
+      Single Instance" Player Setting locks on the .exe path, so N actors
+      sharing one .exe would let only the first launch and silently block
+      the rest. Mirroring the same way RunNClients.ps1 does keeps multi-
+      actor gym switches collision-free.
+
+      $SourceExePath : absolute path to the gym's .exe (the build the user
+                       registered on the Gyms tab). Its parent dir is the
+                       full Unity build folder that gets mirrored.
+    #>
+    param([string]$SourceExePath)
+
+    $sourceDir = Split-Path -Parent $SourceExePath
+    $exeName   = Split-Path -Leaf   $SourceExePath
+
+    $repoRoot    = Split-Path $PSScriptRoot -Parent
+    $instanceDir = Join-Path $repoRoot ("unity\Builds\instances\{0}" -f $Index)
+    if (-not (Test-Path -LiteralPath $instanceDir)) {
+        New-Item -ItemType Directory -Force -Path $instanceDir | Out-Null
+    }
+
+    Write-Host "[$Index] gym switch: mirroring '$sourceDir' -> '$instanceDir' ..."
+    & robocopy $sourceDir $instanceDir /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
+    # robocopy exit codes 0..7 are success-with-info; >=8 is a real error.
+    if ($LASTEXITCODE -ge 8) {
+        throw "[$Index] robocopy failed mirroring gym build (exit $LASTEXITCODE): $sourceDir -> $instanceDir"
+    }
+    $global:LASTEXITCODE = 0
+
+    $instanceExe = Join-Path $instanceDir $exeName
+    if (-not (Test-Path -LiteralPath $instanceExe)) {
+        throw "[$Index] gym build mirrored but exe missing: $instanceExe"
+    }
+
+    Set-ActiveExePath -NewPath $instanceExe
+    $script:ActiveGymSource = $SourceExePath
+}
 
 # Grid-positioning plumbing. Loaded only once, even if the wrapper
 # script gets re-sourced. Pulls in System.Windows.Forms for screen
@@ -256,8 +385,50 @@ function Move-ProcessWindowToGrid {
         $Index, $col, $row, $x, $y, $tileW, $tileH)
 }
 
+# Seconds to hold the cross-supervisor launch lock waiting for the new
+# Unity client to create its graphics device (signalled by its main
+# window appearing). Bounds how long one actor blocks the others; a
+# wedged client that never makes a window releases the slot after this.
+$LaunchSettleSec = 30
+
+function Wait-ForClientWindow {
+    param([int]$ProcessId, [int]$TimeoutSec = 30)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+        if (-not $p) { return $false }                       # exited
+        if ($p.MainWindowHandle -ne [IntPtr]::Zero) { return $true }  # device + window up
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+
 function Start-Client {
-    $p = Start-Process -FilePath $Path -ArgumentList $exeArgs -WorkingDirectory $cwdForUnity -PassThru
+    # Serialize device creation across ALL actors: only one Unity client
+    # creates its D3D device at a time, so a respawn can't collide with a
+    # running sibling and deadlock at "GfxDevice: creating device client".
+    $gotSlot = Enter-LaunchSlot -TimeoutSec 90 -StaleSec 60
+    if (-not $gotSlot) {
+        Write-Host "[$Index] launch slot wait timed out; launching anyway."
+    }
+    try {
+        $p = Start-Process `
+                -FilePath        $script:ActivePath `
+                -ArgumentList    $script:ActiveExeArgs `
+                -WorkingDirectory $script:ActiveCwd `
+                -PassThru
+        # Hold the slot until this client's window (= graphics device
+        # created) appears, so the next actor's launch starts only after
+        # this one is past the contended GfxDevice phase. A wedged client
+        # that never makes a window releases the slot after the timeout.
+        $up = Wait-ForClientWindow -ProcessId $p.Id -TimeoutSec $LaunchSettleSec
+        if (-not $up) {
+            Write-Host "[$Index] window not up within ${LaunchSettleSec}s of launch (may still be initializing or wedged)."
+        }
+    }
+    finally {
+        Exit-LaunchSlot
+    }
     Move-ProcessWindowToGrid -ProcessId $p.Id -Index $Index -Cols $GridCols -Rows $GridRows
     return $p
 }
@@ -268,7 +439,7 @@ function Start-Client {
 # the finally below; together they cover normal exit, Stop-Stack
 # kills (file gets removed by the consistency check on stale entries),
 # and Ctrl-C.
-Register-Supervisor -ProcessId $PID -Index $Index -Exe $Path
+Register-Supervisor -ProcessId $PID -Index $Index -Exe $script:ActivePath
 
 try {
     $proc = Start-Client
@@ -276,15 +447,61 @@ try {
     Write-Host ("[{0}] started PID={1}, ROS endpoint {2}:{3} <-> unityPort {4}, {5} {6}x{7} {8}" -f `
         $Index, $proc.Id, $RosIp, $RosPort, $UnityPort, $mode, $WindowWidth, $WindowHeight, $WindowQuality)
     Write-Host "[$Index] log: $LogFile"
+    Write-Host "[$Index] gym polling: every ${GymPollSeconds}s via ${DashboardUrl}/get_desired_gym?index=${Index}"
 
-    # Track consecutive .Responding misses so a transient main-thread stall
-    # under multi-actor GPU contention doesn't get punished with a Kill().
-    # Only a sustained N-poll-window unresponsive streak is treated as a
-    # real hang (e.g. Unity is genuinely deadlocked, not just slow).
-    $missStreak = 0
+    $missStreak     = 0
+    $gymLastChecked = [DateTime]::UtcNow.AddSeconds(-$GymPollSeconds) # check on first poll
 
     while ($true) {
         Start-Sleep -Seconds $PollSeconds
+
+        # ---- Gym hot-swap check ----------------------------------------
+        # If the dashboard signals a different gym SOURCE build, mirror it
+        # into this actor's per-index instance dir and restart Unity from
+        # the copy. Compares against $script:ActiveGymSource (the source
+        # the running binary was mirrored from) so an identical request
+        # doesn't trigger a needless restart. Only runs when
+        # GymPollSeconds > 0 and enough time has elapsed.
+        if ($GymPollSeconds -gt 0) {
+            $now = [DateTime]::UtcNow
+            if (($now - $gymLastChecked).TotalSeconds -ge $GymPollSeconds) {
+                $gymLastChecked = $now
+                $desiredSource = Get-DesiredGymPath
+                if ($desiredSource -and $desiredSource -ne $script:ActiveGymSource) {
+                    if (Test-Path -LiteralPath $desiredSource) {
+                        Write-Host ("[$Index] GYM SWITCH: {0} -> {1}" -f $script:ActiveGymSource, $desiredSource)
+                        # Kill the running Unity process cleanly before switching.
+                        $current = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
+                        if ($current) {
+                            try {
+                                $current.Kill()
+                                $current.WaitForExit(10000)
+                            } catch {
+                                Write-Host "[$Index] gym switch: kill failed (process may have already exited): $_"
+                            }
+                        }
+                        # Mirror the new build into instances/<Index>/ and
+                        # restart from the per-index copy.
+                        try {
+                            Switch-ToGym -SourceExePath $desiredSource
+                            $proc = Start-Client
+                            Write-Host "[$Index] gym switch complete. New PID=$($proc.Id) -> $($script:ActivePath)"
+                        } catch {
+                            Write-Host "[$Index] gym switch FAILED: $_"
+                            # Fall back to relaunching whatever we had so the
+                            # actor isn't left dead. ActivePath is unchanged
+                            # if Switch-ToGym threw before Set-ActiveExePath.
+                            $proc = Start-Client
+                        }
+                        $missStreak = 0
+                        continue
+                    } else {
+                        Write-Host "[$Index] Desired gym binary not found at '$desiredSource'; keeping current."
+                    }
+                }
+            }
+        }
+        # ----------------------------------------------------------------
 
         # Re-fetch so .Responding reads live state.
         $current = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue

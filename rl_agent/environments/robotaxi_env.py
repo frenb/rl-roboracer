@@ -41,6 +41,12 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         self.job_id=""
         self.has_reset = False
         self.pass_through_actions = False
+        # Procedural-track curriculum knobs, forwarded to Unity's
+        # TrackGenerator on each reset (see course.do_reset_blocking ->
+        # RobotApi.DoReset). Defaults match the trainer/SCHEMA defaults so an
+        # unconfigured env reproduces the baseline track.
+        self.corner_radius = 10.0
+        self.curvature_difficulty = 0.0
         self.data = {}
 
     def action_spec(self):
@@ -83,15 +89,25 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         """
         return self._api.get_timeout_counts()
 
-    def configure(self, job_id="", pass_through_actions=False):
+    def configure(self, job_id="", pass_through_actions=False,
+                  corner_radius=10.0, curvature_difficulty=0.0):
         """Apply per-job configuration to this env.
 
         Exposed as a method (rather than direct attribute writes) so the
         same call site can dispatch through ``ParallelPyEnvironment.call``
         in multi-env training.
+
+        ``corner_radius`` / ``curvature_difficulty`` are the procedural-track
+        curriculum knobs; they're stored here and read by the course's
+        do_reset_blocking() so each Unity reset regenerates the track at the
+        requested difficulty.
         """
         self.job_id = job_id
         self.pass_through_actions = pass_through_actions
+        if corner_radius is not None:
+            self.corner_radius = float(corner_radius)
+        if curvature_difficulty is not None:
+            self.curvature_difficulty = float(curvature_difficulty)
 
     def install_reward_design(self, name, code):
         """Compile a reward-design module and patch it onto our course.

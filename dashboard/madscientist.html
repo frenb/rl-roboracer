@@ -172,6 +172,17 @@
              the Tabulator instance fills the remaining flex space
              below the section header. -->
         <div data-role="activity-feed"></div>
+        <!-- Pager footer: Prev | range | Next. Pages through older
+             activity events (server-side $skip/$limit). -->
+        <div class="px-4 py-2 border-t border-slate-200 dark:border-slate-700
+                    flex items-center justify-between gap-3 shrink-0">
+          <button data-role="activity-prev"
+                  class="btn-base btn-secondary text-xs" disabled>&larr; Newer</button>
+          <span data-role="activity-range"
+                class="text-[11px] font-mono text-slate-500 dark:text-slate-400">—</span>
+          <button data-role="activity-next"
+                  class="btn-base btn-secondary text-xs" disabled>Older &rarr;</button>
+        </div>
       </section>
 
       <!-- ============================================================
@@ -321,6 +332,14 @@
 
       // ---- DOM hooks ---------------------------------------------------
       const activityHost = document.querySelector('[data-role="activity-feed"]');
+      const activityPrevBtn  = document.querySelector('[data-role="activity-prev"]');
+      const activityNextBtn  = document.querySelector('[data-role="activity-next"]');
+      const activityRangeEl  = document.querySelector('[data-role="activity-range"]');
+
+      // ---- Activity paging state ---------------------------------------
+      const ACTIVITY_PAGE_SIZE = 30;
+      let activityOffset = 0;   // # of most-recent events skipped
+      let activityTotal  = 0;   // total events across all proposals
       const pendingHost  = document.querySelector('[data-role="pending-list"]');
       const pendingCount = document.querySelector('[data-role="pending-count"]');
       const inFlightImpl = document.querySelector('[data-role="implementations-list"]');
@@ -988,16 +1007,59 @@
         ]));
       }
 
-      function renderActivity(events) {
-        const sig = _activitySignature(events);
+      // Accepts the paged payload { rows, total, offset, limit } from
+      // /madscientist/activity. Updates the table + the pager footer.
+      function renderActivity(payload) {
+        const events = (payload && payload.rows) || [];
+        activityTotal = (payload && Number(payload.total)) || 0;
+        if (payload && Number.isFinite(Number(payload.offset))) {
+          activityOffset = Number(payload.offset);
+        }
+        updateActivityPager();
+
+        // Fold the offset into the signature so a page change always
+        // re-renders even if the row content happens to look similar.
+        const sig = activityOffset + '|' + _activitySignature(events);
         if (sig === lastActivitySig) {
           // Nothing meaningful changed since last render; leave the
           // table (and the user's expanded groups + scroll) untouched.
           return;
         }
         lastActivitySig = sig;
-        activityTable.setData(events || []);
+        activityTable.setData(events);
       }
+
+      function updateActivityPager() {
+        const start = activityTotal === 0 ? 0 : activityOffset + 1;
+        const end = Math.min(activityOffset + ACTIVITY_PAGE_SIZE, activityTotal);
+        activityRangeEl.textContent = activityTotal === 0
+          ? 'no events'
+          : `${start}\u2013${end} of ${activityTotal}`;
+        activityPrevBtn.disabled = activityOffset <= 0;
+        activityNextBtn.disabled = (activityOffset + ACTIVITY_PAGE_SIZE) >= activityTotal;
+      }
+
+      // Fetch + render just the current activity page (used by the
+      // pager buttons for an immediate update without waiting for the
+      // 5s poll).
+      async function loadActivityPage() {
+        const res = await fetch(
+          '/madscientist/activity?limit=' + ACTIVITY_PAGE_SIZE +
+          '&offset=' + activityOffset);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        renderActivity(await res.json());
+      }
+
+      activityPrevBtn.addEventListener('click', () => {
+        if (activityOffset <= 0) return;
+        activityOffset = Math.max(0, activityOffset - ACTIVITY_PAGE_SIZE);
+        loadActivityPage().catch((e) => console.error('activity prev:', e));
+      });
+      activityNextBtn.addEventListener('click', () => {
+        if ((activityOffset + ACTIVITY_PAGE_SIZE) >= activityTotal) return;
+        activityOffset += ACTIVITY_PAGE_SIZE;
+        loadActivityPage().catch((e) => console.error('activity next:', e));
+      });
 
       function renderPending(proposals) {
         const pending = proposals.filter((p) =>
@@ -1494,7 +1556,9 @@
         try {
           const [propsRes, actRes] = await Promise.all([
             fetch('/madscientist/proposals'),
-            fetch('/madscientist/activity'),
+            // Preserve the page the operator is currently viewing.
+            fetch('/madscientist/activity?limit=' + ACTIVITY_PAGE_SIZE +
+                  '&offset=' + activityOffset),
           ]);
           if (!propsRes.ok || !actRes.ok) throw new Error('HTTP ' + propsRes.status + '/' + actRes.status);
           const proposals = await propsRes.json();

@@ -19,6 +19,10 @@ public class SimController : MonoBehaviour
     public GameObject idealTrajectoryPrefab;
     public GameObject spherePrefab;
     public GameObject goalObject;
+    // Procedural track. Optional: if assigned (or found at Start), the track
+    // is regenerated on every RESTART from the curriculum knobs carried on the
+    // ApplyForce reset message. Leave null to keep a static hand-built scene.
+    public TrackGenerator trackGenerator;
 
     // public GameObject streamCamera;
     // public GameObject publishedCamera;
@@ -71,6 +75,7 @@ public class SimController : MonoBehaviour
     {
         Debug.Log("starting sim controller");
         Time.timeScale = 3;
+        if (trackGenerator == null) trackGenerator = FindObjectOfType<TrackGenerator>();
         ApplyForce af = new ApplyForce();
         af.num_obstacles=0;
         InstantiateObjects(af);
@@ -154,24 +159,47 @@ public class SimController : MonoBehaviour
         if (carPrefab != null)
         {
             car = Instantiate(carPrefab);
-            //car.name = "car";
             car.GetComponent<CarController>().numObstacles = (int) af.num_obstacles;
             car.GetComponent<CarController>().SetUpGoalsArray();
-            System.Random rand = new System.Random();
-            int maxRange =  car.GetComponent<CarController>().goals.Count;
-            index = rand.Next(0, maxRange - 1);
+            int maxRange = car.GetComponent<CarController>().goals.Count;
+            Debug.Log($"[SimController] SetUpGoalsArray found {maxRange} goals. " +
+                      $"Goal-1 findable via Find={GameObject.Find("Goal-1") != null}.");
+            if (maxRange == 0)
+            {
+                // No goals found - track may not have been generated yet or
+                // Goal-N objects are missing.
+                Debug.LogError("[SimController] SetUpGoalsArray found 0 goals. " +
+                               "Ensure TrackGenerator has generated the track (generateOnAwake=true) " +
+                               "and Goal-1 exists in the scene before InstantiateObjects runs.");
+                index = 0;
+            }
+            else
+            {
+                System.Random rand = new System.Random();
+                // rand.Next upper bound is exclusive; clamp to [0, maxRange-1].
+                index = rand.Next(0, maxRange);
+            }
             Vector3 carPos = getCarStartPosition(index);
-            Quaternion carRot =  getCarStartRotation(index);
+            Quaternion carRot = getCarStartRotation(index);
             car.transform.position = carPos;
             car.transform.rotation = carRot;
-            car.transform.position += car.transform.forward*4;
+            car.transform.position += car.transform.forward * 4;
         }
-        //DestroyGoals();
-        
+
+        if (car == null || car.GetComponent<CarController>().goals.Count == 0)
+        {
+            Debug.LogError("[SimController] Cannot complete InstantiateObjects — car or goals missing.");
+            return;
+        }
+
         goal = car.GetComponent<CarController>().goals[index];
         car.GetComponent<CarController>().goalIndex = index;
         debugSphere = Instantiate(spherePrefab);
         debugSphere.name = "debugSphere";
+        // Layer 2 = Ignore Raycast: Sphere.prefab defaults to layer 0 (Default).
+        // With layerMask=1 (Default only), SphereCast hits this sphere and
+        // creates a cluster of perception spheres at the goal position.
+        debugSphere.layer = 2;
         goal.GetComponent<Goal>().goalComplete = false;
 
         GameObject ngo = GameObject.Find("New Game Object");
@@ -247,9 +275,29 @@ public class SimController : MonoBehaviour
     {
         Debug.Log("SimController::Restarting");
         DestroyObjects();
+        // Regenerate the procedural track BEFORE InstantiateObjects, because
+        // InstantiateObjects -> CarController.SetUpGoalsArray() reads the
+        // Goal-N objects the generator creates, and the car start pose is
+        // placed on one of those goals.
+        ApplyTrackConfig(af);
         InstantiateObjects(af);
         sceneDataPublisher.UpdateWorldRefs();
         currentWait = WAIT_FRAMES;
+    }
+
+    // Apply the per-reset track-curriculum knobs carried on the ApplyForce
+    // reset message and rebuild the track. A corner_radius of 0 means the
+    // message carried no track params (e.g. the empty ApplyForce used on the
+    // very first Start), so we leave the Awake-generated track untouched.
+    private void ApplyTrackConfig(ApplyForce af)
+    {
+        if (trackGenerator == null) return;
+        if (af.corner_radius <= 0.0) return;
+        trackGenerator.cornerRadius = (float) af.corner_radius;
+        trackGenerator.curvatureDifficulty = (float) af.curvature_difficulty;
+        trackGenerator.Generate();
+        Debug.Log($"SimController::regenerated track cornerRadius={af.corner_radius} " +
+                  $"curvatureDifficulty={af.curvature_difficulty}");
     }
     public void ApplyForce(ApplyForce af)
     {

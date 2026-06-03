@@ -270,8 +270,10 @@ class RobotApi:
                     f'{e.details()}',
                     flush=True)
 
-    def DoResetBlocking(self, num_obstacles=20):
-        asyncio.run_coroutine_threadsafe(self.DoReset(num_obstacles), self.loop).result()
+    def DoResetBlocking(self, num_obstacles=20, corner_radius=10.0, curvature_difficulty=0.0):
+        asyncio.run_coroutine_threadsafe(
+            self.DoReset(num_obstacles, corner_radius, curvature_difficulty),
+            self.loop).result()
     
     def DoApplyForceBlocking(self, acceleration=100.0, steering_angle=30.0, num_obstacles=20):
         result = asyncio.run_coroutine_threadsafe(
@@ -293,13 +295,20 @@ class RobotApi:
         return asyncio.run_coroutine_threadsafe(self.GetCarSceneData(), self.loop).result()
     
     
-    async def DoReset(self, num_obstacles=20):
+    async def DoReset(self, num_obstacles=20, corner_radius=10.0, curvature_difficulty=0.0):
         #print(673236)
         self.reset_event.clear()
+        # corner_radius / curvature_difficulty drive the procedural
+        # TrackGenerator on the Unity side (regenerated on RESTART). The ROS
+        # ApplyForce.msg declares both as float64, and the JSON->ROS converter
+        # runs with check_types=True, so they MUST be floats here (an int
+        # would raise TypeError in message_converter).
         force_angle = {
             'acceleration': 0.0,
             'steering_angle': 0.0,
-            'num_obstacles': num_obstacles
+            'num_obstacles': num_obstacles,
+            'corner_radius': float(corner_radius),
+            'curvature_difficulty': float(curvature_difficulty),
         }
         await self._do_sim_command( { 'cmd' : 0 , 'ApplyForce': force_angle} )
         try:

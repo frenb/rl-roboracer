@@ -36,6 +36,10 @@ export const createServer = (config): express.Application => {
   // job via the New-Job form's "Experiment design" dropdown alongside
   // the existing Reward design dropdown.
   var experimentDesignsChanged = true;
+  // The gyms collection records registered Unity scene / gym
+  // configurations (name + full file path). Selected per-job via the
+  // New-Job and Eval dialogs' "Gym" dropdowns.
+  var gymsChanged = true;
   var MongoClient = mongoDB.MongoClient;
   var url = process.env.MONGODB_URL || "mongodb://root:example@mongo:27017";
   var dbo;
@@ -95,6 +99,13 @@ export const createServer = (config): express.Application => {
     experimentDesignsChangeStream.on('change', (change) => {
       console.log('Change detected (experiment_designs):', change);
       experimentDesignsChanged=true;
+    });
+
+    const gyms = dbo.collection("gyms");
+    const gymsChangeStream = gyms.watch();
+    gymsChangeStream.on('change', (change) => {
+      console.log('Change detected (gyms):', change);
+      gymsChanged=true;
     });
 
   });
@@ -206,6 +217,84 @@ export const createServer = (config): express.Application => {
     });
   });
 
+  // Full-cleanup delete of a model. Removes, in order:
+  //   1. the saved-model files on disk at the model's `location`
+  //      (e.g. /saved_models/robotaxi/SacAgent/8) — bounded to the
+  //      /saved_models tree for safety,
+  //   2. the leaderboard_scores rows that reference it (matched by
+  //      `path` == location), and
+  //   3. the model document itself.
+  //
+  // `location` is passed by the client (read off the model row) so we
+  // don't need a pre-read; if absent we still delete the DB doc and skip
+  // the file step. The DB doc delete is last so a file/score failure
+  // doesn't orphan the record without the user knowing.
+  app.post('/delete_model', (req, res) => {
+    const body = req.body || {};
+    if (!body._id) {
+      res.status(400).json({ error: "_id is required" });
+      return;
+    }
+
+    let idFilter;
+    try {
+      idFilter = { "_id": ObjectID(body._id) };
+    } catch (e) {
+      idFilter = { "_id": String(body._id) }; // legacy string _id
+    }
+
+    const location = typeof body.location === 'string' ? body.location.trim() : '';
+    const summary: any = { files_deleted: false, scores_deleted: 0 };
+
+    // 1. Delete on-disk files. Safety: only paths strictly under
+    //    /saved_models/ (never the root itself) are eligible, so a
+    //    malformed/empty location can't wipe the whole tree.
+    const SAVED_ROOT = '/saved_models';
+    if (location.startsWith(SAVED_ROOT + '/')) {
+      const resolved = path.resolve(location);
+      if (resolved.startsWith(SAVED_ROOT + path.sep) && resolved !== SAVED_ROOT) {
+        try {
+          if (fs.existsSync(resolved)) {
+            fs.rmSync(resolved, { recursive: true, force: true });
+            summary.files_deleted = true;
+            console.log('delete_model: removed files at', resolved);
+          }
+        } catch (e) {
+          console.error('delete_model: file removal failed for', resolved, e);
+          summary.file_error = String((e as Error).message || e);
+        }
+      }
+    }
+
+    // 2. Delete leaderboard_scores rows referencing this model by path.
+    const removeScores = (cb: () => void) => {
+      if (!location) { cb(); return; }
+      dbo.collection("leaderboard_scores").deleteMany(
+        { path: location },
+        function(err, result) {
+          if (err) {
+            console.error('delete_model: leaderboard_scores cleanup failed:', err);
+          } else if (result) {
+            summary.scores_deleted = result.deletedCount || 0;
+          }
+          cb();
+        });
+    };
+
+    // 3. Delete the model document.
+    removeScores(() => {
+      dbo.collection("models").deleteOne(idFilter, function(err, result) {
+        if (err) {
+          console.error('delete_model failed:', err);
+          res.status(500).json({ error: String(err.message || err), ...summary });
+          return;
+        }
+        console.log('delete_model: removed model', body._id, summary);
+        res.json({ ...result, ...summary });
+      });
+    });
+  });
+
   app.get('/models', (req, res) => {
     const lb: string = path.join(__dirname, '/../models.html');
     res.sendFile(lb);
@@ -238,6 +327,53 @@ export const createServer = (config): express.Application => {
   app.get('/experiment_designs', (req, res) => {
     const f: string = path.join(__dirname, '/../experiment_designs.html');
     res.sendFile(f);
+  });
+
+  app.get('/gyms', (req, res) => {
+    const f: string = path.join(__dirname, '/../gyms.html');
+    res.sendFile(f);
+  });
+
+  // ---------------------------------------------------------------- *
+  // Desired-gym state for the Unity supervisor hot-swap feature.
+  //
+  // When do_job in robotaxi.py picks up a job that carries a gym,
+  // it POSTs to /set_desired_gym with the gym's file_path. Each
+  // RunClientWrapper.ps1 supervisor polls /get_desired_gym?index=N
+  // and restarts the Unity process with the new binary if the path
+  // has changed.
+  //
+  // State is in-memory (keyed by actor index or '*' for all actors).
+  // It does not survive a dashboard container restart, which is
+  // intentional: after a restart the supervisors poll once more and
+  // the running job's do_job will re-signal if it hasn't finished yet.
+  // ---------------------------------------------------------------- *
+  const desiredGymState: Map<string, any> = new Map();
+
+  app.get('/get_desired_gym', (req, res) => {
+    const idx = req.query.index !== undefined ? String(req.query.index) : '*';
+    // Return the per-index entry if present, otherwise the wildcard entry.
+    const state = desiredGymState.get(idx) || desiredGymState.get('*') || null;
+    res.json(state || {});
+  });
+
+  app.post('/set_desired_gym', (req, res) => {
+    const body = req.body || {};
+    if (!body.file_path) {
+      res.status(400).json({ error: 'file_path is required' });
+      return;
+    }
+    // If index is omitted or '*', broadcast to all actors.
+    const idx = body.index !== undefined ? String(body.index) : '*';
+    const state = {
+      gym_id:    String(body.gym_id   || ''),
+      gym_name:  String(body.gym_name || ''),
+      file_path: String(body.file_path),
+      set_at:    new Date().toISOString(),
+    };
+    desiredGymState.set(idx, state);
+    console.log(`[desired-gym] index=${idx} -> ${state.file_path}`);
+    res.json({ ok: true, index: idx, state });
   });
 
   // MadScientist Lab tab. Phase 0 just serves the static stub so the
@@ -366,6 +502,10 @@ export const createServer = (config): express.Application => {
   app.get('/madscientist/activity', (req, res) => {
     const limit = Math.max(1, Math.min(200,
       parseInt((req.query.limit as string) || '30', 10) || 30));
+    // Page offset (number of most-recent events to skip). Enables the
+    // dashboard's Prev/Next paging through older activity.
+    const offset = Math.max(0,
+      parseInt((req.query.offset as string) || '0', 10) || 0);
 
     // Aggregate the most-recent N audit_events across all proposals,
     // sorted by timestamp desc. We use a Mongo aggregation so the
@@ -408,14 +548,23 @@ export const createServer = (config): express.Application => {
           job_statuses: '$_jobs.status',
         } },
       { $sort: { at: -1 } },
-      { $limit: limit },
-    ]).toArray((err, rows) => {
+      // $facet returns one page of events AND the total event count in a
+      // single round-trip, so the dashboard pager can show "X–Y of Z"
+      // and disable Next at the end without a second query.
+      { $facet: {
+          rows:  [ { $skip: offset }, { $limit: limit } ],
+          total: [ { $count: 'count' } ],
+      } },
+    ]).toArray((err, result) => {
       if (err) {
         console.error('GET /madscientist/activity:', err);
         res.status(500).json({ error: String(err) });
         return;
       }
-      res.json(rows || []);
+      const facet = (result && result[0]) || {};
+      const rows = facet.rows || [];
+      const total = (facet.total && facet.total[0] && facet.total[0].count) || 0;
+      res.json({ rows, total, offset, limit });
     });
   });
 
@@ -1305,6 +1454,121 @@ export const createServer = (config): express.Application => {
           return;
         }
         console.log('experiment_design archived', body._id);
+        res.json(result);
+      });
+  });
+
+  // ---------------------------------------------------------------- *
+  // Gyms CRUD
+  //
+  // A "gym" is a registered Unity scene / environment configuration:
+  //   name      : human-friendly label shown in job dropdowns
+  //   file_path : absolute path to the scene/config file on the host
+  //   description: optional notes
+  //
+  // /get_gyms      : list all (non-archived) gyms
+  // /add_gym       : register a new gym
+  // /update_gym    : rename / change path / description
+  // /archive_gym   : soft-delete
+  // ---------------------------------------------------------------- *
+
+  app.get('/get_gyms', (req, res) => {
+    if (needsUpdate(req, gymsChanged)) {
+      gymsChanged = false;
+      dbo.collection("gyms").find({}).toArray(function(err, result) {
+        if (err) throw err;
+        console.log(`${result.length} gyms retrieved`);
+        res.json(result);
+      });
+      return;
+    }
+    console.log('No gyms retrieved');
+    res.status(200).send('NO_CHANGES');
+  });
+
+  // Strip a single pair of surrounding quotes from a pasted path.
+  // Windows Explorer's "Copy as path" wraps the value in double quotes;
+  // storing those breaks Test-Path / robocopy on the supervisor side.
+  function stripQuotes(s: string): string {
+    const t = String(s == null ? '' : s).trim();
+    if (t.length >= 2 && t[0] === t[t.length - 1] && (t[0] === '"' || t[0] === "'")) {
+      return t.slice(1, -1).trim();
+    }
+    return t;
+  }
+
+  app.post('/add_gym', (req, res) => {
+    const body = req.body || {};
+    if (!body.name || !body.file_path) {
+      res.status(400).json({ error: "name and file_path are required" });
+      return;
+    }
+    const now = new Date();
+    const doc = {
+      name:        String(body.name),
+      file_path:   stripQuotes(body.file_path),
+      description: String(body.description || ''),
+      archived:    !!body.archived,
+      created_at:  now,
+      updated_at:  now,
+    };
+    dbo.collection("gyms").insertOne(doc, function(err, result) {
+      if (err) {
+        console.error('add_gym failed:', err);
+        res.status(500).json({ error: String(err.message || err) });
+        return;
+      }
+      console.log('gym inserted', result.insertedId);
+      res.json(result);
+    });
+  });
+
+  app.post('/update_gym', (req, res) => {
+    const body = req.body || {};
+    if (!body._id) {
+      res.status(400).json({ error: "_id is required" });
+      return;
+    }
+    let idFilter;
+    try { idFilter = { "_id": ObjectID(body._id) }; }
+    catch (e) { idFilter = { "_id": String(body._id) }; }
+    const setFields: any = { updated_at: new Date() };
+    if (body.name        !== undefined) setFields.name        = String(body.name);
+    if (body.file_path   !== undefined) setFields.file_path   = stripQuotes(body.file_path);
+    if (body.description !== undefined) setFields.description = String(body.description);
+    if (body.archived    !== undefined) setFields.archived    = !!body.archived;
+    dbo.collection("gyms").updateOne(
+      idFilter, { "$set": setFields }, { upsert: false },
+      function(err, result) {
+        if (err) {
+          console.error('update_gym failed:', err);
+          res.status(500).json({ error: String(err.message || err) });
+          return;
+        }
+        res.json(result);
+      });
+  });
+
+  app.post('/archive_gym', (req, res) => {
+    const body = req.body || {};
+    if (!body._id) {
+      res.status(400).json({ error: "_id is required" });
+      return;
+    }
+    let idFilter;
+    try { idFilter = { "_id": ObjectID(body._id) }; }
+    catch (e) { idFilter = { "_id": String(body._id) }; }
+    dbo.collection("gyms").updateOne(
+      idFilter,
+      { "$set": { archived: true, updated_at: new Date() } },
+      { upsert: false },
+      function(err, result) {
+        if (err) {
+          console.error('archive_gym failed:', err);
+          res.status(500).json({ error: String(err.message || err) });
+          return;
+        }
+        console.log('gym archived', body._id);
         res.json(result);
       });
   });
