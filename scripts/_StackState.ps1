@@ -194,6 +194,74 @@ function Clear-WtHostPid {
     }
 }
 
+# ---- Launch serialization lock -----------------------------------------
+# A cross-supervisor mutex so only ONE Unity client creates its graphics
+# device at a time. Two Unity instances racing GfxDevice creation on the
+# same GPU can deadlock (one wins, the other wedges at "GfxDevice:
+# creating device client" with no window). The per-actor 15s launch
+# stagger in RunNClients avoids this on the INITIAL bring-up, but a
+# supervisor RESPAWN (crash / unresponsive-kill / gym-switch) has no such
+# coordination and can collide with a running sibling. This lock makes
+# every launch path - initial and respawn - serialize through one slot.
+#
+# Implemented as an atomic file create (FileMode.CreateNew throws if the
+# file already exists), which is the portable lock primitive on Windows.
+function Get-LaunchLockFile {
+    return Join-Path (Get-StackStateDir) 'launch.lock'
+}
+
+# Acquire the launch slot. Blocks until the lock is free (or stolen as
+# stale), then returns. Never blocks forever:
+#   * If the holder has held it longer than StaleSec, the lock is assumed
+#     orphaned (holder crashed mid-launch) and stolen.
+#   * If TimeoutSec elapses without acquiring, we proceed anyway rather
+#     than deadlock the supervisor (logged by the caller).
+function Enter-LaunchSlot {
+    param(
+        [int]$TimeoutSec = 90,
+        [int]$StaleSec   = 60
+    )
+    $lockPath = Get-LaunchLockFile
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ($true) {
+        try {
+            # Atomic create-or-fail. Holding the FileStream open isn't
+            # necessary; the file's mere existence is the lock. Write our
+            # PID + timestamp so a stale lock can be detected.
+            $fs = [System.IO.File]::Open(
+                $lockPath,
+                [System.IO.FileMode]::CreateNew,
+                [System.IO.FileAccess]::Write,
+                [System.IO.FileShare]::None)
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes(
+                ("{0}|{1}" -f $PID, (Get-Date).ToString('o')))
+            $fs.Write($bytes, 0, $bytes.Length)
+            $fs.Close()
+            return $true
+        } catch [System.IO.IOException] {
+            # Lock is held. Steal it if stale, otherwise wait.
+            try {
+                $age = (Get-Date) - [System.IO.File]::GetLastWriteTime($lockPath)
+                if ($age.TotalSeconds -ge $StaleSec) {
+                    Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+                    continue
+                }
+            } catch { }
+            if ((Get-Date) -ge $deadline) {
+                return $false  # proceed without the lock rather than hang
+            }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
+
+function Exit-LaunchSlot {
+    $lockPath = Get-LaunchLockFile
+    if (Test-Path -LiteralPath $lockPath) {
+        Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # Wipe the entire state dir. Called at the start of a fresh
 # Start-Clients run (so a previous run's stale entries can't confuse
 # the next Stop-Stack).

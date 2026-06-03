@@ -324,9 +324,13 @@ class DonutCourse (BaseCourse):
     def do_action_after(self, action, data):
         num_obstacles = self.get_num_obstacles()
         self.update_stats()
-        steering_angle_ratio = action[1] / data["car"]["dist_from_traj"]
-        self.steering_angle_ratio_arr.append(steering_angle_ratio)
-        self.steering_angle_ratio_total += steering_angle_ratio
+        # Guard against dist_from_traj == 0 (car perfectly aligned to goal)
+        # which would produce inf/nan that then cascade through numpy stats.
+        dist = data["car"]["dist_from_traj"]
+        if dist != 0:
+            steering_angle_ratio = action[1] / dist
+            self.steering_angle_ratio_arr.append(steering_angle_ratio)
+            self.steering_angle_ratio_total += steering_angle_ratio
         self.speeds_arr.append(data["car"]["speed"])
         self.speeds_total += data["car"]["speed"]
 
@@ -346,7 +350,7 @@ class DonutCourse (BaseCourse):
         self.max_speed=0 if len(self.speeds_arr) == 0 else max(np.max(self.speeds_arr), self.max_speed)
         self.avg_speed=self.speeds_total / self.steps_total
         self.max_speed_last_30=0 if len(self.speeds_arr) <30 else np.max(self.speeds_arr[-30:])
-        self.avg_speed_last_30=np.average(self.speeds_arr[-30:])
+        self.avg_speed_last_30=np.average(self.speeds_arr[-30:]) if len(self.speeds_arr) > 0 else 0.0
         # steps per goal stats
         self.max_steps_per_goal=0
         self.avg_steps_per_goal=0
@@ -356,14 +360,22 @@ class DonutCourse (BaseCourse):
         self.max_goals_per_episode=0 if len(self.goals_per_episode_arr) == 0 else max(np.max(self.goals_per_episode_arr), self.max_goals_per_episode)
         self.avg_goals_per_episode=self.goals_per_episode_total / max(1,self.num_episodes_total)
         self.max_goals_per_episode_last_30=0 if len(self.goals_per_episode_arr) <30 else np.max(self.goals_per_episode_arr[-30:])
-        self.avg_goals_per_episode_last_30=np.average(self.goals_per_episode_arr[-30:])
+        self.avg_goals_per_episode_last_30=np.average(self.goals_per_episode_arr[-30:]) if len(self.goals_per_episode_arr) > 0 else 0.0
         # steering angle ratio stats, used to determine if car is driving off track
         steering_angle_ratio_arr = np.array(self.steering_angle_ratio_arr)
         self.avg_steering_angle_ratio=self.steering_angle_ratio_total / self.steps_total
-        steering_angle_ratio_arr_no_nan = steering_angle_ratio_arr[~(np.isinf(steering_angle_ratio_arr)) & ~(np.isnan(steering_angle_ratio_arr))]
-        self.avg_steering_angle_ratio_last_30=np.average(steering_angle_ratio_arr_no_nan[-30:])
+        if len(steering_angle_ratio_arr) > 0:
+            steering_angle_ratio_arr_no_nan = steering_angle_ratio_arr[~(np.isinf(steering_angle_ratio_arr)) & ~(np.isnan(steering_angle_ratio_arr))]
+            self.avg_steering_angle_ratio_last_30=np.average(steering_angle_ratio_arr_no_nan[-30:]) if len(steering_angle_ratio_arr_no_nan) > 0 else 0.0
+        else:
+            self.avg_steering_angle_ratio_last_30=0.0
     
     def do_reset_blocking(self):
         num_obstacles = self.get_num_obstacles()
         #self.reset_stats()
-        self._api.DoResetBlocking(num_obstacles)
+        # Forward the per-job track-curriculum knobs (set via env.configure)
+        # so Unity regenerates the procedural track at the requested
+        # difficulty on this reset. getattr defaults keep older envs working.
+        corner_radius = getattr(self.env, "corner_radius", 10.0)
+        curvature_difficulty = getattr(self.env, "curvature_difficulty", 0.0)
+        self._api.DoResetBlocking(num_obstacles, corner_radius, curvature_difficulty)

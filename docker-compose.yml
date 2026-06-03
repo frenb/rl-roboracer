@@ -100,6 +100,12 @@ services:
       # diagnostic, e.g. when validating that N parallel actors are
       # producing independent stochastic actions per step.
       - ROBOTAXI_LOG_ACTIONS=0
+      # Cap how many archived job buckets the trainer keeps in
+      # /tmp/jobsdata. On each job pickup, prune_jobsdata() keeps the N
+      # most-recently-modified buckets and deletes the rest (the current
+      # job is always protected). Bounds disk growth + keeps archive ops
+      # fast. Set to 0 to disable pruning entirely.
+      - JOBSDATA_MAX_ARCHIVES=100
     deploy:
       resources:
         reservations:
@@ -117,8 +123,19 @@ services:
       - type: bind
         source: ../tfrecords
         target: /tfrecords
-      - type: bind
-        source: ../tmp
+      # /tmp lives on a Docker NAMED VOLUME (not a host bind mount) so
+      # that /tmp/active and /tmp/jobsdata sit on the same native ext4
+      # filesystem inside the Docker VM. That makes the trainer's
+      # archive step (shutil.move active -> jobsdata in
+      # move_all_jobs_data) an instant same-filesystem rename instead of
+      # the slow cross-bridge copy+delete a Windows bind mount forces
+      # (os.rename returns EXDEV across the grpc-fuse bridge). The
+      # dashboard service mounts the SAME volume so its
+      # /tmp/jobsdata -> /tmp/tb_compare symlinks resolve for TensorBoard.
+      # Trade-off: /tmp is no longer browsable from Windows Explorer;
+      # inspect via `docker compose exec sim-controller ls /tmp/jobsdata`.
+      - type: volume
+        source: tmpdata
         target: /tmp
       # Read-only mount of the repo's .git so the trainer can stamp
       # git_sha + git_branch on every model + job document. Without
@@ -192,8 +209,21 @@ services:
       - type: bind
         source: ./rl_agent
         target: /python_ws/src
+      # Saved models, mounted at the SAME container path the trainer uses
+      # (/saved_models) so the dashboard's /delete_model can remove a
+      # model's on-disk files by its stored `location` (e.g.
+      # /saved_models/robotaxi/SacAgent/8). Read-write because deletion
+      # needs to remove directories. The trainer (sim-controller) writes
+      # here; the dashboard only ever deletes on explicit user action.
       - type: bind
-        source: ../tmp
+        source: ../saved_models
+        target: /saved_models
+      # Same named volume as sim-controller (see the long note there).
+      # Both services must share it so the dashboard's
+      # /tmp/jobsdata -> /tmp/tb_compare symlinks are visible to the
+      # TensorBoard process running in sim-controller.
+      - type: volume
+        source: tmpdata
         target: /tmp
     command: sh -c "cd /dashboard && npm start"
 
@@ -324,3 +354,13 @@ services:
 
     networks:
       default:
+
+# Named volumes.
+volumes:
+  # Shared /tmp for sim-controller + dashboard. Holds the trainer's
+  # live job data (/tmp/active), the archived job buckets
+  # (/tmp/jobsdata), and the on-demand TensorBoard compare bucket
+  # (/tmp/tb_compare). Lives on the Docker VM's native filesystem so
+  # archive moves are instant renames. Resolves to the Compose volume
+  # name "<project>_tmpdata" (rl-roboracer_tmpdata).
+  tmpdata:

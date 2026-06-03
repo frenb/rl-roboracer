@@ -15,6 +15,12 @@ namespace RosMessageTypes.NiryoMoveit
         public double steering_angle;
         public int cmd_id;
         public int num_obstacles;
+        // Procedural-track curriculum knobs (see TrackGenerator). Appended
+        // AFTER num_obstacles so the binary layout extends the existing
+        // message without shifting prior field offsets. MUST stay in the same
+        // order as niryo_moveit/ApplyForce.msg.
+        public double corner_radius;
+        public double curvature_difficulty;
 
         public ApplyForce()
         {
@@ -22,14 +28,18 @@ namespace RosMessageTypes.NiryoMoveit
             this.steering_angle = 0.0;
             this.cmd_id = 0;
             this.num_obstacles = 0;
+            this.corner_radius = 0.0;
+            this.curvature_difficulty = 0.0;
         }
 
-        public ApplyForce(double acceleration, double steering_angle, int cmd_id, int num_obstacles)
+        public ApplyForce(double acceleration, double steering_angle, int cmd_id, int num_obstacles, double corner_radius, double curvature_difficulty)
         {
             this.acceleration = acceleration;
             this.steering_angle = steering_angle;
             this.cmd_id = cmd_id;
             this.num_obstacles = num_obstacles;
+            this.corner_radius = corner_radius;
+            this.curvature_difficulty = curvature_difficulty;
         }
         public override List<byte[]> SerializationStatements()
         {
@@ -38,6 +48,8 @@ namespace RosMessageTypes.NiryoMoveit
             listOfSerializations.Add(BitConverter.GetBytes(this.steering_angle));
             listOfSerializations.Add(BitConverter.GetBytes(this.cmd_id));
             listOfSerializations.Add(BitConverter.GetBytes(this.num_obstacles));
+            listOfSerializations.Add(BitConverter.GetBytes(this.corner_radius));
+            listOfSerializations.Add(BitConverter.GetBytes(this.curvature_difficulty));
 
             return listOfSerializations;
         }
@@ -52,6 +64,10 @@ namespace RosMessageTypes.NiryoMoveit
             offset += 4;
             this.num_obstacles = BitConverter.ToInt32(data, offset);
             offset += 4;
+            this.corner_radius = BitConverter.ToDouble(data, offset);
+            offset += 8;
+            this.curvature_difficulty = BitConverter.ToDouble(data, offset);
+            offset += 8;
 
             return offset;
         }
@@ -62,7 +78,9 @@ namespace RosMessageTypes.NiryoMoveit
             "\nacceleration: " + acceleration.ToString() +
             "\nsteering_angle: " + steering_angle.ToString() +
             "\ncmd_id: " + cmd_id.ToString() +
-            "\nnum_obstacles: " + num_obstacles.ToString();
+            "\nnum_obstacles: " + num_obstacles.ToString() +
+            "\ncorner_radius: " + corner_radius.ToString() +
+            "\ncurvature_difficulty: " + curvature_difficulty.ToString();
         }
     }
 }

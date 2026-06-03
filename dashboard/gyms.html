@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en" class="dark h-full">
+<head>
+  <meta charset="utf-8">
+  <title>Gyms · rl-roboracer</title>
+  <!-- Tailwind first, then config, then base styles. Order matters:
+       tailwind.init.js depends on `window.tailwind` being defined by
+       the CDN script, and styles.css imports the fonts. -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/tailwind.init.js"></script>
+  <!-- Tabulator: powers the data grid via the TableView wrapper in
+       components.js. "simple" theme overridden in styles.css. -->
+  <link rel="stylesheet" href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator_simple.min.css">
+  <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="h-full m-0 font-sans antialiased text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-[#0b1120]">
+
+  <div class="flex flex-col h-screen w-full">
+
+    <!-- Toolbar -->
+    <div class="flex flex-wrap items-center gap-3 px-5 py-4 row-gap-2
+                bg-white dark:bg-slate-900
+                border-b border-slate-200 dark:border-slate-700
+                shadow-card relative z-[3] flex-shrink-0">
+      <h1 class="text-2xl font-semibold tracking-tight m-0 mr-3">Gyms</h1>
+      <span data-role="gym-count"
+            class="px-2 py-0.5 rounded-full text-xs font-medium
+                   bg-slate-100 dark:bg-slate-800
+                   text-slate-600 dark:text-slate-300"></span>
+
+      <span data-role="freshness"
+            class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400"
+            aria-live="polite"
+            title="Time since the last successful poll of /get_gyms">
+        <span data-role="freshness-dot"
+              class="inline-block w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+        <span data-role="freshness-text">connecting…</span>
+      </span>
+
+      <div class="flex flex-wrap gap-2 ml-auto">
+        <button data-action="create" class="btn-base btn-primary">+ Add gym</button>
+      </div>
+    </div>
+
+    <!-- Body -->
+    <div class="flex-1 overflow-hidden flex flex-col p-4 gap-4 bg-slate-50 dark:bg-[#0b1120]">
+      <div data-role="table"></div>
+    </div>
+
+  </div>
+
+  <!-- Add-gym modal -->
+  <div data-role="create-modal" aria-hidden="true"
+       class="fixed inset-0 z-[100] modal-blur bg-slate-900/40 dark:bg-slate-950/65
+              flex items-center justify-center p-4
+              opacity-0 transition-opacity duration-200 pointer-events-none">
+    <div role="dialog" aria-modal="true" aria-labelledby="create-modal-title"
+         class="w-full max-w-[520px] max-h-[calc(100vh-2rem)]
+                bg-white dark:bg-slate-900
+                border border-slate-200 dark:border-slate-700
+                rounded-2xl shadow-card-lg
+                flex flex-col
+                opacity-0 -translate-y-3 scale-[0.98]
+                transition duration-200">
+      <div class="px-6 py-5 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+        <h2 id="create-modal-title" class="m-0 text-base font-semibold tracking-tight">Add gym</h2>
+        <button data-action="close-modal" aria-label="Close"
+                class="px-2 py-1 text-sm rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400">×</button>
+      </div>
+      <div class="px-6 py-6 overflow-y-auto">
+        <form id="add-gym-form" onsubmit="return false;"
+              class="grid grid-cols-[minmax(120px,max-content)_1fr] gap-4 items-start">
+
+          <label for="f-gym-name" class="text-xs font-medium text-slate-600 dark:text-slate-300 pt-2">Name</label>
+          <div class="flex flex-col gap-1">
+            <input id="f-gym-name" name="name" type="text"
+                   placeholder="e.g. Donut 0.429 chicane"
+                   class="w-full input-base">
+            <p class="text-[11px] text-slate-400 dark:text-slate-500 m-0">
+              Human-friendly label shown in job dropdowns.
+            </p>
+          </div>
+
+          <label for="f-gym-path" class="text-xs font-medium text-slate-600 dark:text-slate-300 pt-2">Binary path</label>
+          <div class="flex flex-col gap-1">
+            <input id="f-gym-path" name="file_path" type="text"
+                   placeholder="C:\path\to\Game.exe"
+                   class="w-full input-base font-mono text-xs">
+            <p class="text-[11px] text-slate-400 dark:text-slate-500 m-0">
+              Full path to the Unity <code>.exe</code> on the Windows host. The supervisor
+              hot-swaps to this binary when the job is picked up.
+            </p>
+          </div>
+
+          <label for="f-gym-desc" class="text-xs font-medium text-slate-600 dark:text-slate-300 pt-2">Description</label>
+          <input id="f-gym-desc" name="description" type="text"
+                 placeholder="(optional)"
+                 class="w-full input-base">
+
+        </form>
+      </div>
+      <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
+        <button data-action="close-modal" class="btn-base btn-secondary">Cancel</button>
+        <button data-action="submit-create" class="btn-base btn-primary">Add gym</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cache-busted via ?v=... so each edit is treated as a new URL by
+       the browser, preventing iframes inside the GoldenLayout shell from
+       serving a stale cached copy. Bump when changing components.js. -->
+  <script src="/components.js?v=20260530-design-name-full"></script>
+  <script>
+    (function () {
+      const { TableView, formatters, showToast } = window.RoboracerUI;
+
+      // Local HTML-escape (components.js keeps its `escape` private).
+      function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+        }[c]));
+      }
+
+      /* ---------- Table setup --------------------------------- */
+      const tableHost = document.querySelector('[data-role="table"]');
+      const table = new TableView(tableHost, {
+        selectable: false,
+        rowKey: (row) => row._id,
+        pageSize: 50,
+        emptyMessage: 'No gyms yet — click "+ Add gym" to register one.',
+        // Disable width persistence: the actions column gained a second
+        // button (Edit) and a stale persisted width would clip it.
+        persistColumnWidths: false,
+        columns: [
+          { key: 'name', label: 'Name', sortable: true, filter: true,
+            render: (v) => `<span class="font-medium">${esc(v)}</span>` },
+          { key: 'file_path', label: 'Binary path', sortable: true, filter: true,
+            render: (v) => formatters.truncatePath(v) },
+          { key: 'description', label: 'Description', sortable: false, filter: false,
+            render: (v) => `<span class="text-xs text-slate-500 dark:text-slate-400">${esc(v)}</span>` },
+          { key: 'created_at', label: 'Added', sortable: true, filter: false,
+            render: (v) => formatters.relativeTime(v) },
+          { key: '_id', label: 'Actions', sortable: false, filter: false,
+            width: 170,
+            render: (v, row) => {
+              if (row.archived) {
+                return '<span class="text-xs italic text-slate-400 dark:text-slate-500">archived</span>';
+              }
+              return `<div class="flex gap-1.5 justify-start">
+                <button class="btn-base btn-secondary text-xs" data-edit-id="${esc(v)}">Edit</button>
+                <button class="btn-base btn-secondary text-xs" data-archive-id="${esc(v)}">Archive</button>
+              </div>`;
+            } },
+        ],
+      });
+      table.setLoading(true);
+
+      // Cache of the latest gyms keyed by _id so the Edit button can
+      // prefill the modal without a second fetch.
+      const gymsById = new Map();
+
+      const countEl = document.querySelector('[data-role="gym-count"]');
+      function updateCount(rows) {
+        const active = rows.filter((r) => !r.archived).length;
+        countEl.textContent = active === 0 ? '' : `${active} gym${active === 1 ? '' : 's'}`;
+      }
+
+      /* ---------- Freshness pill ------------------------------ */
+      const freshDot  = document.querySelector('[data-role="freshness-dot"]');
+      const freshText = document.querySelector('[data-role="freshness-text"]');
+      function setFresh(ok) {
+        if (ok) {
+          freshDot.className = 'inline-block w-1.5 h-1.5 rounded-full bg-emerald-500';
+          freshText.textContent = 'updated ' + new Date().toLocaleTimeString();
+        } else {
+          freshDot.className = 'inline-block w-1.5 h-1.5 rounded-full bg-red-500';
+          freshText.textContent = 'connection error';
+        }
+      }
+
+      /* ---------- Polling ------------------------------------- */
+      async function pollOnce() {
+        try {
+          const res = await fetch('/get_gyms?force=true');
+          if (!res.ok) { setFresh(false); return; }
+          const text = await res.text();
+          if (text && text !== 'NO_CHANGES') {
+            const gyms = JSON.parse(text) || [];
+            gymsById.clear();
+            for (const g of gyms) gymsById.set(String(g._id), g);
+            table.setData(gyms);
+            updateCount(gyms);
+          }
+          setFresh(true);
+        } catch (e) {
+          console.warn('gyms poll failed:', e);
+          setFresh(false);
+        }
+      }
+      pollOnce();
+      const pollHandle = setInterval(pollOnce, 8000);
+      window.addEventListener('beforeunload', () => clearInterval(pollHandle));
+
+      /* ---------- Archive (event delegation) ------------------ */
+      tableHost.addEventListener('click', async (ev) => {
+        const btn = ev.target.closest('[data-archive-id]');
+        if (!btn) return;
+        const id = btn.dataset.archiveId;
+        if (!id || !confirm('Archive this gym? It will no longer appear in job dropdowns.')) return;
+        try {
+          const r = await fetch('/archive_gym', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ _id: id }),
+          });
+          if (!r.ok) { showToast({ type: 'error', message: `Archive failed (HTTP ${r.status})` }); return; }
+          showToast({ type: 'success', message: 'Gym archived.' });
+          pollOnce();
+        } catch (e) {
+          showToast({ type: 'error', message: 'Archive error: ' + e });
+        }
+      });
+
+      /* ---------- Add / Edit gym modal ------------------------ */
+      const modal     = document.querySelector('[data-role="create-modal"]');
+      const dialogEl  = modal.querySelector('[role="dialog"]');
+      const formEl    = document.getElementById('add-gym-form');
+      const submitBtn = modal.querySelector('[data-action="submit-create"]');
+      const createBtn = document.querySelector('[data-action="create"]');
+      const titleEl   = document.getElementById('create-modal-title');
+      const nameInput = document.getElementById('f-gym-name');
+      const pathInput = document.getElementById('f-gym-path');
+      const descInput = document.getElementById('f-gym-desc');
+
+      // null = add mode; a string _id = edit mode.
+      let currentEditId = null;
+
+      function showModal() {
+        modal.classList.remove('opacity-0', 'pointer-events-none');
+        modal.classList.add('opacity-100', 'pointer-events-auto');
+        dialogEl.classList.remove('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        dialogEl.classList.add('opacity-100', 'translate-y-0', 'scale-100');
+        modal.setAttribute('aria-hidden', 'false');
+        nameInput.focus();
+      }
+      function closeModal() {
+        modal.classList.add('opacity-0', 'pointer-events-none');
+        modal.classList.remove('opacity-100', 'pointer-events-auto');
+        dialogEl.classList.add('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        dialogEl.classList.remove('opacity-100', 'translate-y-0', 'scale-100');
+        modal.setAttribute('aria-hidden', 'true');
+        currentEditId = null;
+      }
+
+      function openAddModal() {
+        currentEditId = null;
+        formEl.reset();
+        titleEl.textContent = 'Add gym';
+        submitBtn.textContent = 'Add gym';
+        showModal();
+      }
+
+      function openEditModal(id) {
+        const gym = gymsById.get(String(id));
+        if (!gym) { showToast({ type: 'error', message: 'Gym not found; refresh and retry.' }); return; }
+        currentEditId = String(id);
+        nameInput.value = gym.name || '';
+        pathInput.value = gym.file_path || '';
+        descInput.value = gym.description || '';
+        titleEl.textContent = 'Edit gym';
+        submitBtn.textContent = 'Save changes';
+        showModal();
+      }
+
+      createBtn.addEventListener('click', openAddModal);
+      modal.addEventListener('click', (ev) => { if (ev.target === modal) closeModal(); });
+      modal.querySelectorAll('[data-action="close-modal"]').forEach((b) =>
+        b.addEventListener('click', closeModal));
+      document.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape' && modal.classList.contains('opacity-100')) closeModal();
+      });
+
+      // Edit button (event delegation on the table).
+      tableHost.addEventListener('click', (ev) => {
+        const btn = ev.target.closest('[data-edit-id]');
+        if (!btn) return;
+        openEditModal(btn.dataset.editId);
+      });
+
+      submitBtn.addEventListener('click', async () => {
+        const name      = nameInput.value.trim();
+        const file_path = pathInput.value.trim();
+        const description = descInput.value.trim();
+        if (!name)      { showToast({ type: 'error', message: 'Name is required.' }); return; }
+        if (!file_path) { showToast({ type: 'error', message: 'Binary path is required.' }); return; }
+
+        const editing = currentEditId !== null;
+        const url     = editing ? '/update_gym' : '/add_gym';
+        const payload = editing
+          ? { _id: currentEditId, name, file_path, description }
+          : { name, file_path, description };
+
+        submitBtn.disabled = true;
+        const origText = submitBtn.textContent;
+        submitBtn.textContent = editing ? 'Saving…' : 'Adding…';
+        try {
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            showToast({ type: 'error', message: 'Failed: ' + (body.error || 'HTTP ' + res.status) });
+            return;
+          }
+          showToast({ type: 'success', message: editing ? `Gym "${name}" updated.` : `Gym "${name}" added.` });
+          closeModal();
+          pollOnce();
+        } catch (e) {
+          showToast({ type: 'error', message: 'Request failed: ' + e });
+        } finally {
+          submitBtn.disabled = false;
+          submitBtn.textContent = origText;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -5,7 +5,20 @@ FROM ros:noetic-ros-base-focal
 RUN sudo apt-get update && sudo apt-get install -y vim iputils-ping net-tools python3-pip ros-noetic-robot-state-publisher ros-noetic-moveit ros-noetic-rosbridge-suite ros-noetic-joy ros-noetic-ros-control ros-noetic-ros-controllers dos2unix python3-venv
 RUN sudo -H pip3 install rospkg jsonpickle
 RUN sudo ln -s /usr/bin/python3 /usr/bin/python
-RUN sudo python -m pip install grpcio google-api-python-client
+# Dependency-rot fix for the focal base image. The system pyOpenSSL (19.x)
+# references legacy OpenSSL bindings (X509_V_FLAG_NOTIFY_POLICY,
+# X509_V_FLAG_CB_ISSUER_CHECK, ...) that modern cryptography removed. Once
+# google-api-python-client/google-auth pull cryptography>=38.0.3, the next
+# pip3 call (whose vendored urllib3 imports the system pyOpenSSL) crashes with
+# "module 'lib' has no attribute 'X509_V_FLAG_*'". google-auth needs
+# cryptography>=38.0.3 while pyOpenSSL 19 needs cryptography<35, so pinning
+# cryptography alone can't satisfy both. Fix: install a MATCHED, modern
+# pyOpenSSL + cryptography pair into /usr/local (which shadows the focal system
+# pyOpenSSL on sys.path). pyOpenSSL 23.3.0 requires cryptography>=41.0.5,<42,
+# so 41.0.7 satisfies both it and google-auth, and 23.3.0 no longer touches the
+# removed bindings. This step runs via `python -m pip` while crypto is still
+# the stock 2.8 (so pip itself still works); later pip3 calls see the new pair.
+RUN sudo python -m pip install grpcio google-api-python-client "cryptography==41.0.7" "pyopenssl==23.3.0"
 RUN pip3 install tensorboard
 RUN pip3 install pymongo
 RUN pip3 install numpy --upgrade

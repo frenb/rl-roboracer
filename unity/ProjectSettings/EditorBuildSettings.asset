@@ -20,4 +20,7 @@ EditorBuildSettings:
   - enabled: 0
     path: Assets/Scenes/straight-course.unity
     guid: a8540729f9e20be459c142854fe13016
+  - enabled: 0
+    path: Assets/Scenes/generated-course.unity
+    guid: 90b04f809f51b7a4e9f7e6de09b00ffe
   m_configObjects: {}

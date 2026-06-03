@@ -157,6 +157,11 @@ if ($gameExes.Count -gt 1) {
     throw "Expected exactly one game .exe in $latestDir, found $($gameExes.Count): $names."
 }
 $exeName = $gameExes[0].Name
+# The source exe in latest/ that every per-index copy is mirrored from.
+# Passed to each wrapper as -GymSource so its gym-switch baseline starts
+# correct (a gym pointing at this same build won't trigger a needless
+# restart on the first dashboard poll).
+$gymSourceExe = Join-Path $latestDir $exeName
 
 # Sync per-index copies via robocopy /MIR. /MIR mirrors changes only,
 # so a steady-state re-run is fast. Quiet flags suppress robocopy's
@@ -226,6 +231,7 @@ for ($i = 0; $i -lt $N; $i++) {
         '-Index {0}'            -f $i
         '-RosIp "{0}"'          -f $RosIp
         '-Path "{0}"'           -f $exePath
+        '-GymSource "{0}"'      -f $gymSourceExe
         '-WindowWidth {0}'      -f $WindowWidth
         '-WindowHeight {0}'     -f $WindowHeight
         '-WindowQuality "{0}"'  -f $WindowQuality

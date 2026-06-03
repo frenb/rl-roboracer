@@ -75,6 +75,53 @@ import numpy as np
 from scipy.interpolate import interp1d
 from numpy import interp
 import tensorflow as tf
+
+# ---- GPU memory sharing with the Unity clients --------------------------
+# The Unity gym clients run on the same GPU as this trainer (they need an
+# active renderer for physics + raycasting; see RosBootstrap.cs). By
+# default TensorFlow GREEDILY pre-allocates almost all GPU memory on first
+# use, which leaves the Unity clients unable to create their D3D graphics
+# device — they wedge at "GfxDevice: creating device client" with no
+# window if the trainer starts before them. Enabling memory growth makes
+# TF allocate only what it actually needs (far less than the full GPU for
+# the SAC nets here), so the Unity clients always have headroom regardless
+# of which side starts first.
+#
+# Runs at module import so every process that imports robotaxi.py — the
+# main trainer AND each ParallelPyEnvironment subprocess — applies it
+# before any GPU op initializes the device. set_memory_growth must be
+# called before the GPU is touched; doing it here guarantees that.
+#
+# Optionally cap TF to a hard ceiling (MB) via ROBOTAXI_GPU_MEMORY_LIMIT_MB
+# to reserve a fixed slice for the Unity clients. Unset = memory growth.
+def _configure_gpu_memory():
+    try:
+        gpus = tf.config.list_physical_devices('GPU')
+        if not gpus:
+            return
+        limit_mb = os.environ.get("ROBOTAXI_GPU_MEMORY_LIMIT_MB", "").strip()
+        if limit_mb:
+            mb = int(limit_mb)
+            for gpu in gpus:
+                tf.config.set_logical_device_configuration(
+                    gpu,
+                    [tf.config.LogicalDeviceConfiguration(memory_limit=mb)])
+            print(f"[gpu] capped TF to {mb} MB/GPU "
+                  f"(reserving the rest for Unity clients)", flush=True)
+        else:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            print(f"[gpu] enabled memory growth on {len(gpus)} GPU(s) "
+                  f"(TF takes only what it needs; leaves room for Unity)",
+                  flush=True)
+    except Exception as _e:  # noqa: BLE001
+        # Never let GPU config block the trainer from starting; a failure
+        # here just falls back to TF's default greedy allocation.
+        print(f"[gpu] memory config skipped: {_e}", flush=True)
+
+
+_configure_gpu_memory()
+
 from tf_agents.agents.ppo import ppo_agent
 from tf_agents.agents.ddpg import critic_network
 from tf_agents.agents.sac import sac_agent
@@ -451,7 +498,8 @@ def build_train_env(num_envs, course_type='donut'):
          for i in range(num_envs)])
 
 
-def configure_env(env, job_id="", pass_through_actions=False):
+def configure_env(env, job_id="", pass_through_actions=False,
+                  corner_radius=10.0, curvature_difficulty=0.0):
     """Apply per-job config to a single env or all parallel subprocess envs.
 
     tf-agents 0.11 doesn't put a public `call()` proxy on
@@ -461,17 +509,23 @@ def configure_env(env, job_id="", pass_through_actions=False):
     same fire-all-then-wait-all pattern that ParallelPyEnvironment.seed
     uses internally lets all four subprocess configure() calls run
     concurrently instead of serially.
+
+    ``corner_radius`` / ``curvature_difficulty`` are the procedural-track
+    curriculum knobs; they're constant across a job, so every actor gets the
+    same values and the shared Unity scene regenerates one consistent track.
     """
     from tf_agents.environments import parallel_py_environment
     if isinstance(env, parallel_py_environment.ParallelPyEnvironment):
         promises = [
-            proc_env.call('configure', job_id, pass_through_actions)
+            proc_env.call('configure', job_id, pass_through_actions,
+                          corner_radius, curvature_difficulty)
             for proc_env in env._envs
         ]
         for promise in promises:
             promise()
     else:
-        env.configure(job_id, pass_through_actions)
+        env.configure(job_id, pass_through_actions,
+                      corner_radius, curvature_difficulty)
 
 
 def install_reward_design_on_env(env, name, code):
@@ -641,6 +695,20 @@ def main(
     # means "trainer defaults" - the same effect as the canonical
     # "Default" seeded design.
     experiment_design=None,
+    # ---- Track / curriculum plumbing (STAGED) -----------------------
+    # corner_radius_val + curvature_difficulty_val come from the
+    # experiment_designs SCHEMA's "Track / environment (curriculum)"
+    # section and are overlaid here by apply_to_main_kwargs just like
+    # any other design field. They are deliberately INERT today: the
+    # course is hardcoded to "donut" (see build_train_env below) and
+    # there is no Python->Unity channel for track geometry yet, so we
+    # only record + log them. The follow-up that wires the ROS
+    # ApplyForce message + SimController->TrackGenerator bridge will
+    # thread these into the env reset. Accepting the kwargs now keeps
+    # designs/jobs that carry these fields from raising a TypeError
+    # when main() is invoked.
+    corner_radius_val=10.0,
+    curvature_difficulty_val=0.0,
     # ---- Seed plumbing ----------------------------------------------
     # Optional RNG seed used for the bit-identical validation
     # procedure (see rl_agent/reward_designs.py docs). When set, we
@@ -678,6 +746,15 @@ def main(
     num_eval_episodes = num_eval_episodes_val # @param {type:"integer"}
     eval_interval = eval_interval_val # @param {type:"integer"}
     policy_save_interval = policy_save_interval_val # @param {type:"integer"}
+    # Track / curriculum knobs are applied live: configure_env() below stamps
+    # them onto every env, and the course forwards them to Unity's
+    # TrackGenerator on each episode reset. Log the effective values for
+    # provenance (a non-default value here = a non-default procedural track).
+    print(
+        f"[track-curriculum] corner_radius={corner_radius_val}, "
+        f"curvature_difficulty={curvature_difficulty_val} "
+        f"(applied on each Unity reset by TrackGenerator).",
+        flush=True)
     # Environment. Use same for eval and collection, though this does not seem standard?
     env = build_train_env(num_envs, course_type="donut")
     # Bookkeeping that used to live on env.course; tracking it in main() lets
@@ -748,7 +825,9 @@ def main(
     # Existing code unconditionally overwrote pass_through_actions to False
     # immediately after assigning the requested value, so the requested
     # value never took effect. Preserve that here by passing False directly.
-    configure_env(env, job_id=job_id, pass_through_actions=False)
+    configure_env(env, job_id=job_id, pass_through_actions=False,
+                  corner_radius=corner_radius_val,
+                  curvature_difficulty=curvature_difficulty_val)
     print(f"pass_through_actions: False")
 
     # Seed every RNG we know about so bit-identical comparison runs are
@@ -1938,7 +2017,8 @@ def get_saved_model(policy_type, version=None, path_arg=None):
     return saved_policy, path
 
 def load_saved_model(policy_type, version=None, path=None, job_id="",
-                     num_trials=None, num_eval_episodes=None):
+                     num_trials=None, num_eval_episodes=None,
+                     corner_radius=10.0, curvature_difficulty=0.0):
     """Build an env, load the policy at ``path`` (or by version), run an
     EVAL through it, persist the resulting per-trial means to MongoDB.
 
@@ -1959,9 +2039,21 @@ def load_saved_model(policy_type, version=None, path=None, job_id="",
         ``run_policy``. ``None`` keeps the default. Currently not
         surfaced in the dashboard; reserved for a future refinement
         of the Eval modal.
+      corner_radius: procedural-track corner tightness forwarded to
+        Unity's TrackGenerator on every episode reset (matches the
+        same-named TRAIN kwarg so eval geometry equals training geometry).
+      curvature_difficulty: 0..1 chicane density forwarded to
+        Unity's TrackGenerator on every episode reset.
     """
     env = make_env('ros-server-0:50051')
     env.job_id = job_id
+    # Mirror main()'s configure_env call so the track geometry at eval
+    # time matches what was used during training.  Without this, every
+    # DoReset defaults to curvature_difficulty=0.0 regardless of what
+    # the job doc (or the Unity Inspector) specifies.
+    configure_env(env, job_id=job_id, pass_through_actions=False,
+                  corner_radius=corner_radius,
+                  curvature_difficulty=curvature_difficulty)
     # Publish the current env's specs to MongoDB so the Models-tab
     # "Compat" column has up-to-date data for every robot_type the
     # sim-controller has touched. Cheap (one Mongo upsert), runs
@@ -2515,6 +2607,58 @@ def get_jobs():
     debug_print(jobs)
     return jobs
 
+def _signal_gym_switch(job):
+    """Tell the Unity supervisors which gym binary this job wants.
+
+    POSTs the job's gym file_path to the dashboard's /set_desired_gym
+    endpoint (broadcast to all actor indices via index='*'). Each
+    RunClientWrapper.ps1 supervisor on the Windows host polls
+    /get_desired_gym?index=<N> and hot-swaps the Unity binary when the
+    requested source build differs from what it's running.
+
+    Fires for ANY job type that carries gym_file_path. No-op (and never
+    raises) when the job has no gym or the dashboard is unreachable, so a
+    missing/locked dashboard never blocks a job from running.
+    """
+    raw_path = job.get("gym_file_path") or ""
+    # The Gyms-tab form may have stored a path the user pasted WITH
+    # surrounding quotes (e.g. copied from Explorer's "Copy as path",
+    # which wraps the value in double quotes). Strip a single matching
+    # pair of leading/trailing single or double quotes so the path the
+    # supervisor receives is a clean filesystem path.
+    gym_file_path = raw_path.strip()
+    if len(gym_file_path) >= 2 and gym_file_path[0] == gym_file_path[-1] and gym_file_path[0] in ("'", '"'):
+        gym_file_path = gym_file_path[1:-1].strip()
+
+    gym_name = job.get("gym_name") or job.get("gym_id") or "(none)"
+    print(f"do_job: gym={gym_name!r} file_path={gym_file_path!r}", flush=True)
+
+    if not gym_file_path:
+        return
+
+    try:
+        import urllib.request, json as _json
+        payload = _json.dumps({
+            "gym_id":    str(job.get("gym_id", "")),
+            "gym_name":  str(job.get("gym_name", "")),
+            "file_path": gym_file_path,
+        }).encode()
+        req = urllib.request.Request(
+            "http://dashboard/set_desired_gym",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            print(
+                f"do_job: gym switch signalled to dashboard "
+                f"({resp.status}): {gym_file_path!r}",
+                flush=True,
+            )
+    except Exception as e:
+        print(f"do_job: gym switch signal failed (non-fatal): {e}", flush=True)
+
+
 def do_job(job, num_envs=1):
     print(job["job_type"])
     # Decide resume-vs-fresh BEFORE flipping status to IN_PROGRESS, so
@@ -2574,7 +2718,14 @@ def do_job(job, num_envs=1):
         update_job(job["_id"], datetime.datetime.now(datetime.timezone.utc), "started_at")
     #Move all data for jobs with _id = job["_id"] from /tmp to /jobsdata
     job_type = job["job_type"]
-    
+
+    # Gym hot-swap signal — fires for EVERY job type that carries a gym so
+    # the Unity supervisors switch to the requested binary before the job
+    # runs. Must run BEFORE the job_type branches below (TRAIN starts the
+    # env immediately, EVAL builds its env right away too), so the
+    # supervisor has the desired-gym path queued when the env first resets.
+    _signal_gym_switch(job)
+
     if job_type == "DEMO":
         num_iterations=job["num_iterations"] if job["num_iterations"] != "" else 50000
         print(job)
@@ -2645,6 +2796,9 @@ def do_job(job, num_envs=1):
         # out. The outer-loop pass that archives OTHER jobs' dirs out
         # of /tmp/active/ still runs - we always want to clean those.
         move_all_jobs_data(job["_id"], skip_current_cleanup=is_resume)
+        # Bound /tmp/jobsdata growth: keep only the JOBSDATA_MAX_ARCHIVES
+        # most-recent job buckets (default 100). Protects the current job.
+        prune_jobsdata(current_id=job["_id"])
         # Job fields can arrive from Mongo as either None (never set)
         # or the empty string '' (cleared via dashboard form). Both
         # mean "fall back to default". Casting '' to int blows up
@@ -2787,6 +2941,16 @@ def do_job(job, num_envs=1):
         # so we could pass skip_current_cleanup=is_resume into that call.
         # We just thread the same flag into main() here.
 
+        def _job_float(key, default):
+            """Read a float from the job doc, falling back to default."""
+            v = job.get(key)
+            if v is None or v == "":
+                return default
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return default
+
         base_kwargs = dict(
             job_id=job["_id"],
             num_envs=num_envs,
@@ -2801,6 +2965,13 @@ def do_job(job, num_envs=1):
             experiment_design=experiment_design_doc,
             seed=seed,
             is_resume_val=is_resume,
+            # Track-geometry curriculum knobs read directly from the job doc
+            # so the user can set them in the New-job form without needing an
+            # experiment design. The experiment_design overlay (apply_to_main_kwargs
+            # below) still wins if the design also specifies these fields, which
+            # preserves the "design is authoritative" precedence everywhere else.
+            corner_radius_val=_job_float("corner_radius_val", 10.0),
+            curvature_difficulty_val=_job_float("curvature_difficulty_val", 0.0),
         )
         if is_resume:
             print(
@@ -2853,8 +3024,22 @@ def do_job(job, num_envs=1):
                 return int(v)
             except (TypeError, ValueError):
                 return None
+        def _opt_float(v, default):
+            if v is None or v == "":
+                return default
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return default
         num_trials = _opt_int(job.get("num_trials"))
         num_eval_episodes = _opt_int(job.get("num_eval_episodes"))
+        # Mirror the TRAIN path: forward the same track-curriculum knobs
+        # that main() reads from experiment_designs so the eval track
+        # matches the training track geometry.  Defaults match Unity's
+        # TrackGenerator inspector defaults so omitting them from the
+        # job doc is safe.
+        eval_corner_radius = _opt_float(job.get("corner_radius_val"), 10.0)
+        eval_curvature_difficulty = _opt_float(job.get("curvature_difficulty_val"), 0.0)
         # Wrap the EVAL dispatch in an EvalSpecMismatchError catch so a
         # model with stale observation/action specs against the current
         # env reports cleanly instead of tearing down the whole
@@ -2868,12 +3053,16 @@ def do_job(job, num_envs=1):
                 run_randompolicy(
                     job_id=job["_id"],
                     num_trials=num_trials,
-                    num_eval_episodes=num_eval_episodes)
+                    num_eval_episodes=num_eval_episodes,
+                    corner_radius=eval_corner_radius,
+                    curvature_difficulty=eval_curvature_difficulty)
             else:
                 load_saved_model(
                     model_type, path=location, job_id=job["_id"],
                     num_trials=num_trials,
-                    num_eval_episodes=num_eval_episodes)
+                    num_eval_episodes=num_eval_episodes,
+                    corner_radius=eval_corner_radius,
+                    curvature_difficulty=eval_curvature_difficulty)
         except EvalSpecMismatchError as e:
             # Record the precise reason on the job doc so the dashboard
             # (Jobs tab and, eventually, the Models tab Compat column)
@@ -3257,6 +3446,89 @@ def move_all_jobs_data(id, skip_current_cleanup=False):
     else:
         move_data(id, folders=["eval", "metrics", "train", "learner"])
 
+
+def prune_jobsdata(keep=None, current_id=None):
+    """Cap /tmp/jobsdata to the `keep` most-recently-modified job buckets.
+
+    /tmp/jobsdata accumulates one bucket per archived job (moved there by
+    move_all_jobs_data). Left unbounded it grows without limit (it reached
+    ~27 GB / 228 buckets in practice), which also makes the rmtree-on-
+    replace and any filesystem scans over the bind mount slow.
+
+    We rank top-level buckets by directory mtime (newest first), keep the
+    `keep` newest, and rmtree the rest. The current job's bucket is always
+    protected regardless of rank so an in-flight archive is never deleted.
+
+    `keep` defaults to the JOBSDATA_MAX_ARCHIVES env var (fallback 100).
+    A value <= 0 disables pruning entirely.
+
+    Pruned buckets can no longer be opened in TensorBoard's "Compare in
+    Analysis" view (that symlinks /tmp/jobsdata/<id> into the compare
+    bucket). Saved models live under a separate mount (/saved_models) and
+    are unaffected — only old jobs' TB scalar history is dropped.
+    """
+    if keep is None:
+        try:
+            keep = int(os.environ.get("JOBSDATA_MAX_ARCHIVES", "100"))
+        except (TypeError, ValueError):
+            keep = 100
+    if keep <= 0:
+        print("prune_jobsdata: disabled (keep <= 0)", flush=True)
+        return
+
+    jobsdata_root = "/tmp/jobsdata"
+    if not os.path.isdir(jobsdata_root):
+        return
+
+    current_str = str(current_id) if current_id is not None else None
+
+    # Gather (path, mtime) for every top-level bucket.
+    buckets = []
+    for entry in os.listdir(jobsdata_root):
+        path = os.path.join(jobsdata_root, entry)
+        if not os.path.isdir(path):
+            continue
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = 0.0
+        buckets.append((entry, path, mtime))
+
+    if len(buckets) <= keep:
+        print(
+            f"prune_jobsdata: {len(buckets)} bucket(s) <= keep={keep}; "
+            "nothing to prune.", flush=True)
+        return
+
+    # Newest first; everything past `keep` is a deletion candidate. The
+    # current job's bucket is force-protected even if it somehow sorts old.
+    buckets.sort(key=lambda b: b[2], reverse=True)
+    survivors = buckets[:keep]
+    candidates = buckets[keep:]
+
+    deleted = 0
+    freed_bytes = 0
+    for entry, path, _ in candidates:
+        if current_str is not None and entry == current_str:
+            continue  # never delete the in-flight job's archive
+        try:
+            for dirpath, _dirs, files in os.walk(path):
+                for f in files:
+                    try:
+                        freed_bytes += os.path.getsize(os.path.join(dirpath, f))
+                    except OSError:
+                        pass
+            shutil.rmtree(path)
+            deleted += 1
+        except Exception as e:  # noqa: BLE001
+            print(f"prune_jobsdata: failed to remove {path}: {e}", flush=True)
+
+    print(
+        f"prune_jobsdata: kept {len(survivors)} newest, deleted {deleted} "
+        f"bucket(s), freed ~{freed_bytes / (1024 * 1024):.1f} MB.",
+        flush=True)
+
+
 def move_data(job_id, folders=[""]):
     #Move all data for jobs with _id = job["_id"] from /tmp to /jobsdata
     # shutil.move is non-idempotent: if dst already exists as a
@@ -3346,7 +3618,8 @@ def _get_job_lifecycle_state(job_id):
 def _is_job_cancelled(job_id):
     return _get_job_lifecycle_state(job_id) == 'cancel'
 
-def run_randompolicy(job_id="", num_trials=None, num_eval_episodes=None):
+def run_randompolicy(job_id="", num_trials=None, num_eval_episodes=None,
+                     corner_radius=10.0, curvature_difficulty=0.0):
     """Run a uniformly-random-action EVAL job as a baseline benchmark.
 
     Mirrors load_saved_model's pattern: builds a single env on
@@ -3368,6 +3641,10 @@ def run_randompolicy(job_id="", num_trials=None, num_eval_episodes=None):
     ``max_episodes`` and ``num_eval_episodes`` args. None means
     "leave run_policy's default alone".
 
+    ``corner_radius`` / ``curvature_difficulty`` mirror the TRAIN knobs
+    so the random-policy baseline runs on the same track geometry as
+    the trained model it is being compared against.
+
     Previously broke with `NameError: name 'env' is not defined`
     because it referenced a module-global env that was removed in the
     rl_agent factory refactor (commit fbe3bce). This fix builds its
@@ -3376,6 +3653,9 @@ def run_randompolicy(job_id="", num_trials=None, num_eval_episodes=None):
     debug_print("in random policy")
     env = make_env('ros-server-0:50051')
     env.job_id = job_id
+    configure_env(env, job_id=job_id, pass_through_actions=False,
+                  corner_radius=corner_radius,
+                  curvature_difficulty=curvature_difficulty)
     # Same publication step as load_saved_model so the RandomPyPolicy
     # baseline path also keeps the dashboard's env_specs current.
     publish_env_spec(env)

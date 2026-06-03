@@ -168,6 +168,36 @@
                   class="w-full input-base appearance-none select-chevron pr-8">
             <option value="">Trainer defaults (no experiment design)</option>
           </select>
+
+          <!-- Track geometry (curriculum knobs).  Forwarded to Unity's
+               TrackGenerator on every episode reset so the track geometry
+               matches what you want the agent trained / evaluated on.
+               Defaults match Unity's Inspector defaults (radius 10, no
+               chicanes). -->
+          <label for="f-corner-radius"
+                 class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="Procedural-track corner tightness in metres. Smaller = tighter turns. Default 10 (matches Unity Inspector default).">Corner radius</label>
+          <input id="f-corner-radius" name="corner_radius_val" type="number"
+                 min="0" step="0.5" placeholder="10"
+                 class="w-full input-base"
+                 title="Procedural-track corner tightness in metres. Default 10.">
+
+          <label for="f-curvature-difficulty"
+                 class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="Chicane density 0–1. 0 = plain rectangle; 1 = max chicanes on long edges. Default 0.">Curvature difficulty</label>
+          <input id="f-curvature-difficulty" name="curvature_difficulty_val" type="number"
+                 min="0" max="1" step="0.001" placeholder="0"
+                 class="w-full input-base"
+                 title="Chicane density 0–1. 0 = plain rectangle; 1 = max chicanes. Default 0.">
+
+          <!-- Gym selector. Populated from /get_gyms on modal open.
+               Records which Unity scene / environment the job runs against. -->
+          <label for="f-gym"
+                 class="text-xs font-medium text-slate-600 dark:text-slate-300">Gym</label>
+          <select id="f-gym" name="gym_id"
+                  class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="">No gym selected</option>
+          </select>
         </form>
       </div>
       <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
@@ -603,6 +633,40 @@
         loadExperimentDesignsIntoDropdown().catch((err) => {
           console.warn('experiment_designs hydrate failed:', err);
         });
+        loadGymsIntoDropdown().catch((err) => {
+          console.warn('gyms hydrate failed:', err);
+        });
+      }
+
+      // ---- Gym dropdown population ------------------------------ *
+      //
+      // Mirrors the experiment/reward design loaders. Gyms are stored
+      // in the MongoDB 'gyms' collection with name + file_path fields.
+      // Only non-archived entries are shown.
+      async function loadGymsIntoDropdown() {
+        const sel = document.getElementById('f-gym');
+        if (!sel) return;
+        let gyms = [];
+        try {
+          const res = await fetch('/get_gyms?force=true');
+          if (res.ok) {
+            const text = await res.text();
+            if (text && text !== 'NO_CHANGES') gyms = JSON.parse(text) || [];
+          }
+        } catch (e) {
+          console.warn('gyms fetch failed:', e);
+        }
+        while (sel.options.length > 1) sel.remove(1);
+        const visible = gyms
+          .filter((g) => !g.archived)
+          .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+        for (const g of visible) {
+          const opt = document.createElement('option');
+          opt.value = String(g._id);
+          opt.textContent = String(g.name || '(unnamed)');
+          opt.title = String(g.file_path || '');
+          sel.appendChild(opt);
+        }
       }
 
       // ---- Experiment-design dropdown population ---------------- *
@@ -729,7 +793,27 @@
           demo_job_id: String(fd.get('demo_job_id') || ''),
           // pass_through_actions is hardcoded false in the trainer.
           pass_through_actions: false,
+          // Track geometry — forwarded to Unity's TrackGenerator on every
+          // episode reset. Only included when the user fills the field in;
+          // omitting them lets do_job use trainer defaults (10.0 / 0.0).
+          ...(fd.get('corner_radius_val') !== ''
+            ? { corner_radius_val: Number(fd.get('corner_radius_val')) } : {}),
+          ...(fd.get('curvature_difficulty_val') !== ''
+            ? { curvature_difficulty_val: Number(fd.get('curvature_difficulty_val')) } : {}),
         };
+        // Gym — record which Unity scene / gym this job runs against.
+        // gym_file_path is stamped directly on the job doc so do_job
+        // can signal the Unity supervisor without a MongoDB round-trip.
+        const gymId = String(fd.get('gym_id') || '');
+        if (gymId) {
+          payload.gym_id = gymId;
+          const gymSel = document.getElementById('f-gym');
+          if (gymSel && gymSel.selectedIndex >= 0) {
+            const selOpt = gymSel.options[gymSel.selectedIndex];
+            payload.gym_name      = selOpt.textContent || '';
+            payload.gym_file_path = selOpt.title || ''; // title holds file_path
+          }
+        }
         // Reward design only applies to TRAIN jobs - the trainer's
         // EVAL / DEMO / BC branches don't look at this field. We
         // still stamp it on every job_type if the user picked one,

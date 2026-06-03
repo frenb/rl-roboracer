@@ -254,6 +254,39 @@ SCHEMA = {
         "paper_ref": None,
         "kwarg": "critic_joint_fc_layer_params_y",
     },
+
+    "_section_env": "Track / environment (curriculum)",
+    "corner_radius": {
+        "type": "float",
+        "default": 10.0,
+        "min": 2.0, "max": 12.0,
+        "doc": (
+            "[Curriculum / track geometry] Centreline turn radius (m) of the "
+            "procedurally-generated track corners. Smaller = tighter, harder "
+            "turns; larger = gentler. This is the primary curriculum lever: "
+            "schedule a sequence of arms/jobs with DECREASING corner_radius to "
+            "progressively harden the track. Applied live in the simulator: "
+            "the trainer forwards it on every episode reset and Unity's "
+            "TrackGenerator rebuilds the track at this radius."
+        ),
+        "paper_ref": None,
+        "kwarg": "corner_radius_val",
+    },
+    "curvature_difficulty": {
+        "type": "float",
+        "default": 0.0,
+        "min": 0.0, "max": 1.0,
+        "doc": (
+            "[Curriculum / track geometry] Chicane density on the track's long "
+            "edges, 0..1. 0 = plain rectangle (four gentle corners); 1 = many "
+            "tight chicanes. A second difficulty axis that pairs with "
+            "corner_radius. Applied live in the simulator: forwarded on every "
+            "episode reset and used by Unity's TrackGenerator to rebuild the "
+            "track."
+        ),
+        "paper_ref": None,
+        "kwarg": "curvature_difficulty_val",
+    },
 }
 
 

@@ -122,4 +122,8 @@ class SimpleCourse (BaseCourse):
     
     def do_reset_blocking(self):
         num_obstacles = self.get_num_obstacles()
-        self._api.DoResetBlocking(num_obstacles)
+        # Forward the per-job track-curriculum knobs (set via env.configure);
+        # getattr defaults keep older envs working.
+        corner_radius = getattr(self.env, "corner_radius", 10.0)
+        curvature_difficulty = getattr(self.env, "curvature_difficulty", 0.0)
+        self._api.DoResetBlocking(num_obstacles, corner_radius, curvature_difficulty)

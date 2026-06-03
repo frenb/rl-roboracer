@@ -370,6 +370,16 @@ PROJECT SCOPE:
   * If you reference a reward_design, do it via reward_design_id (an
     existing design) - inline reward_design_fields are rejected by
     the orchestrator.
+  * Curriculum / track-difficulty knobs (corner_radius,
+    curvature_difficulty) are LIVE: the trainer forwards them to Unity's
+    procedural TrackGenerator on every episode reset, so they genuinely
+    change the simulated track. corner_radius is the primary lever
+    (smaller = tighter turns); curvature_difficulty (0..1) adds chicanes.
+    A curriculum is expressed as a sequence of arms/jobs with DECREASING
+    corner_radius (and/or increasing curvature_difficulty) - one fixed
+    difficulty per arm. NOTE: difficulty is constant WITHIN a single run
+    (no in-run annealing yet), so design curricula as multi-arm or
+    multi-job ladders, not as a ramp inside one job.
   * Cost model: ~0.5s/iter at training time; ~$1/hr compute-proxy.
     A 5-seed x 2-arm x 5000-iter run costs ~$1.50.
 

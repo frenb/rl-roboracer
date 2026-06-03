@@ -217,6 +217,18 @@ var config = {
                       // network sizes, demo-protected buffer knobs.
                       // Same ".html" rationale as siblings above.
                       componentState: { src: "http://localhost/experiment_designs.html", id: 'experiment_designs' }
+                    },
+                    {
+                      type: 'component',
+                      title: 'Gyms',
+                      componentName: 'iframeComponent',
+                      // Registry of Unity scene / gym configurations.
+                      // Gyms appear as a dropdown in the New Job and
+                      // Eval Selected dialogs so every job can record
+                      // which track geometry it ran against.
+                      // ?v= busts the browser cache whenever this number
+                      // is incremented after a gyms.html update.
+                      componentState: { src: "http://localhost/gyms.html?v=4", id: 'gyms' }
                     }
                   ]
                 }
