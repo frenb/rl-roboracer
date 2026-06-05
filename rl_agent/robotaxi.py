@@ -2746,16 +2746,23 @@ def do_job(job, num_envs=1):
     # and Express's res.json serialises it as ISO-8601 with a 'Z'
     # suffix. The Jobs grid in dashboard/jobs.html uses these to
     # render a Duration column that ticks live for IN_PROGRESS jobs.
-    # Jobs that crash mid-run leave `started_at` set but no `ended_at`
-    # - the dashboard recognises that case and shows '—' for duration.
-    # Resume note: when a job is paused-then-resumed it returns here
-    # with started_at already populated from the original run. Keep
-    # the original started_at so the Jobs-tab duration shows total
-    # elapsed wall-clock since the job was first picked up (which is
-    # the most natural meaning for the operator). A future "active
-    # training time" metric could subtract the PAUSED windows, but
-    # for now we keep it simple.
-    if not job.get("started_at"):
+    #
+    # We stamp started_at = NOW on every FRESH pickup, OVERWRITING any
+    # pre-existing value. This is deliberate: some jobs arrive with a
+    # queue-time started_at already set (e.g. older MadScientist
+    # orchestrator builds stamped it at creation, and you can see it on
+    # never-run NOT_STARTED jobs whose started_at == create_date). If we
+    # merely preserved that, Duration would measure time-since-QUEUED -
+    # a job that waited days in the queue then trained briefly would show
+    # a multi-day duration. Overwriting on fresh pickup makes Duration
+    # reflect actual run time.
+    #
+    # On RESUME (pause/resume or crash-recovery) we KEEP the original
+    # started_at so the duration spans the whole training (including the
+    # paused gap). A future "active training time" metric could subtract
+    # the PAUSED windows, but for now total wall-clock-since-first-run is
+    # the natural meaning for a resumed job.
+    if not _is_train_resume:
         update_job(job["_id"], datetime.datetime.now(datetime.timezone.utc), "started_at")
     #Move all data for jobs with _id = job["_id"] from /tmp to /jobsdata
     job_type = job["job_type"]
