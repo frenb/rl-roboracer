@@ -1400,7 +1400,24 @@ def main(
     print("Log interval: " + str(log_interval), flush=True)
     min_write_step = 0
 
-    for _ in range(num_iterations):
+    # Bound the loop by REMAINING work, not a flat num_iterations count.
+    # `train_step` is the global step counter; on a fresh start it's 0
+    # (range = num_iterations, unchanged), but on a RESUME / crash-recovery
+    # it's been restored to where the prior run left off. Looping a flat
+    # num_iterations from there would train far past the target and leave
+    # percent_complete (= step / num_iterations) stuck above 100% with the
+    # job perpetually IN_PROGRESS. Training only the remaining iterations
+    # makes a resumed job stop at the target, hit 100%, exit this loop,
+    # and let do_job's trailer flip it to DONE. If it's already complete
+    # on resume, remaining is 0 and we skip straight to the DONE path.
+    start_step = int(train_step.numpy())
+    remaining_iterations = max(0, num_iterations - start_step)
+    if is_resume_val or start_step > 0:
+        print(f"main: training {remaining_iterations} more iteration(s) "
+              f"(start_step={start_step}, target={num_iterations}).",
+              flush=True)
+
+    for _ in range(remaining_iterations):
         # Cooperative lifecycle check. The dashboard's Jobs-tab Pause
         # button writes status=PAUSE_REQUESTED; Set-to-done / Delete
         # write DONE / NOT_STARTED / etc. Without this poll the
@@ -1643,6 +1660,15 @@ def main(
             print('step = {0}: loss = {1}'.format(step, loss_info.loss.numpy()))
         curr_iteration=curr_iteration+1
     print("Training completed")
+    # If we trained all the way to the target step (normal completion or
+    # an already-complete resume), stamp percent_complete=100 so the Jobs
+    # tab matches the imminent DONE flip. A pause/cancel breaks out with
+    # train_step < num_iterations, so this won't fire on those paths.
+    if int(train_step.numpy()) >= num_iterations:
+        try:
+            update_job(job_id, 100.0, "percent_complete")
+        except Exception as _e:  # noqa: BLE001
+            print(f"main: final percent_complete=100 write failed: {_e}", flush=True)
     rb_observer.close()
     # In multi-env mode rb_observer is the fan-out wrapper; expert_observer
     # is a separate writer into the same table that we have to close on
@@ -2603,7 +2629,12 @@ def get_jobs():
     debug_print("in get_jobs")
     is_not_started = {"status": "NOT_STARTED"}
     is_in_progress = {"status": "IN_PROGRESS"}
-    jobs = db.jobs.find({"$or":[is_not_started, is_in_progress]})
+    # Drain the queue in a predictable FIFO order by creation time so the
+    # "next" job picked up after one pauses/finishes is the oldest queued
+    # one, not an arbitrary Mongo natural-order pick. create_date is
+    # stamped at job creation; jobs missing it (legacy) sort first under
+    # ascending order, which is fine.
+    jobs = db.jobs.find({"$or":[is_not_started, is_in_progress]}).sort("create_date", 1)
     debug_print(jobs)
     return jobs
 
@@ -2672,6 +2703,16 @@ def do_job(job, num_envs=1):
         and _detect_resume_for_train_job(job))
 
     update_job(job["_id"], "IN_PROGRESS")
+
+    # Clear any stale `ended_at` from a previous run of this job (a
+    # re-queue, resume, or crash-recovery). Without this, the dashboard's
+    # duration cell sees a leftover ended_at and renders the FROZEN old
+    # duration (ended - started) instead of ticking live; and if started_at
+    # was refreshed to be newer than the stale ended_at, it clamps to 0 -
+    # the "zero / wrong duration" symptom. Nulling it here means a running
+    # job has started_at + null ended_at, so the UI shows live elapsed,
+    # and the end-of-job trailer stamps a fresh ended_at on completion.
+    update_job(job["_id"], None, "ended_at")
 
     # Conditional percent_complete reset.
     #   * Fresh pickup: zero out so a re-queued job doesn't carry stale
