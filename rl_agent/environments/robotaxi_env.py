@@ -109,6 +109,21 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         if curvature_difficulty is not None:
             self.curvature_difficulty = float(curvature_difficulty)
 
+    def publish_rollouts(self, payload_json):
+        """Forward a policy-rollout-viz payload to Unity via this env's api.
+
+        Exposed as an env method so the trainer can dispatch it through
+        ``ParallelPyEnvironment.call('publish_rollouts', payload_json)`` on
+        a single actor's subprocess (the one whose Unity client we want to
+        render on). The main process samples the policy and builds the JSON;
+        this hop just hands it to the subprocess's existing RobotApi channel
+        (which is already connected to that actor's ros-server). Best-effort.
+        """
+        try:
+            self._api.PublishRolloutsBlocking(payload_json)
+        except Exception as e:  # noqa: BLE001
+            print(f"publish_rollouts skipped: {e}", flush=True)
+
     def install_reward_design(self, name, code):
         """Compile a reward-design module and patch it onto our course.
 

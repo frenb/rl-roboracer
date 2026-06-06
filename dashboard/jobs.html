@@ -46,7 +46,16 @@
         <span data-role="freshness-text">connecting…</span>
       </span>
 
+      <!-- Global queue pause state pill. Reflects /get_queue_state. -->
+      <span data-role="queue-state"
+            class="px-2 py-0.5 rounded-full text-xs font-medium
+                   bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400"
+            title="Global job-queue state. When paused, the running job checkpoints & pauses and the trainer stops picking up new jobs.">—</span>
+
       <div class="flex flex-wrap gap-2 ml-auto">
+        <button data-action="toggle-queue"
+                class="btn-base btn-secondary"
+                title="Pause/resume the whole job queue. Pausing checkpoints & pauses the currently-running job AND stops new pickups; resuming restarts the auto-paused job from its checkpoint and drains the queue again.">Pause queue</button>
         <button data-action="clear-selection" disabled
                 class="btn-base btn-secondary">Clear selection</button>
         <button data-action="restart" disabled
@@ -505,6 +514,64 @@
       table.onSelectionChange(refreshButtons);
 
       clearBtn.addEventListener('click', () => table.clearSelection());
+
+      /* ---------- Global queue pause/resume -------------------- */
+      const toggleQueueBtn = document.querySelector('[data-action="toggle-queue"]');
+      const queueStateEl   = document.querySelector('[data-role="queue-state"]');
+      let queuePaused = null;  // null until first poll
+
+      function renderQueueState(paused) {
+        queuePaused = paused;
+        if (paused) {
+          queueStateEl.textContent = 'queue paused';
+          queueStateEl.className = 'px-2 py-0.5 rounded-full text-xs font-medium '
+            + 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300';
+          toggleQueueBtn.textContent = 'Resume queue';
+          toggleQueueBtn.classList.remove('btn-secondary');
+          toggleQueueBtn.classList.add('btn-primary');
+        } else {
+          queueStateEl.textContent = 'queue running';
+          queueStateEl.className = 'px-2 py-0.5 rounded-full text-xs font-medium '
+            + 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300';
+          toggleQueueBtn.textContent = 'Pause queue';
+          toggleQueueBtn.classList.remove('btn-primary');
+          toggleQueueBtn.classList.add('btn-secondary');
+        }
+      }
+
+      async function pollQueueState() {
+        try {
+          const res = await fetch('/get_queue_state');
+          if (!res.ok) return;
+          const body = await res.json();
+          renderQueueState(!!body.paused);
+        } catch (e) { /* leave last-known state */ }
+      }
+
+      toggleQueueBtn.addEventListener('click', async () => {
+        const next = !queuePaused;
+        toggleQueueBtn.disabled = true;
+        try {
+          const res = await fetch('/set_queue_state', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paused: next }),
+          });
+          if (!res.ok) { showToast({ type: 'error', message: `Queue toggle failed (HTTP ${res.status})` }); return; }
+          renderQueueState(next);
+          showToast({ type: 'success', message: next
+            ? 'Queue paused — the running job will checkpoint & pause, and no new jobs are picked up.'
+            : 'Queue resumed — auto-paused job(s) resume from checkpoint and the queue drains again.' });
+        } catch (e) {
+          showToast({ type: 'error', message: 'Queue toggle failed: ' + e });
+        } finally {
+          toggleQueueBtn.disabled = false;
+        }
+      });
+
+      pollQueueState();
+      const queueStateHandle = setInterval(pollQueueState, 5000);
+      window.addEventListener('beforeunload', () => clearInterval(queueStateHandle));
 
       restartBtn.addEventListener('click', async () => {
         const sel = table.getSelectedRows();

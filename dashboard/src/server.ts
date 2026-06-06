@@ -295,6 +295,70 @@ export const createServer = (config): express.Application => {
     });
   });
 
+  // Global job-queue pause switch. A singleton doc in queue_control that
+  // the trainer's run_jobs_loop polls (_is_queue_paused). When paused, the
+  // trainer stops picking up NEW jobs but leaves all job statuses alone, so
+  // the operator can halt the queue, test something, then resume where it
+  // left off. Distinct from per-job Pause (which checkpoints + PAUSES a
+  // single running job).
+  app.get('/get_queue_state', (req, res) => {
+    dbo.collection("queue_control").findOne({ _id: "singleton" }, function(err, doc) {
+      if (err) {
+        console.error('get_queue_state failed:', err);
+        res.status(500).json({ error: String(err) });
+        return;
+      }
+      res.json({ paused: !!(doc && (doc as any).paused) });
+    });
+  });
+
+  app.post('/set_queue_state', (req, res) => {
+    const paused = !!(req.body && req.body.paused);
+    dbo.collection("queue_control").updateOne(
+      { _id: "singleton" },
+      { "$set": { paused: paused, updated_at: new Date() } },
+      { upsert: true },
+      function(err) {
+        if (err) {
+          console.error('set_queue_state failed:', err);
+          res.status(500).json({ error: String(err) });
+          return;
+        }
+        console.log('queue paused =', paused);
+
+        // Also pause/resume the currently-running job(s), reusing the
+        // per-job lifecycle machinery the trainer already understands:
+        //   * Pausing: flip IN_PROGRESS jobs to PAUSE_REQUESTED. The
+        //     trainer's training loop polls this each iteration, saves a
+        //     Learner checkpoint, and sets PAUSED. We tag them with
+        //     queue_auto_paused so resume knows which jobs WE paused (vs
+        //     jobs the operator paused by hand, which should stay paused).
+        //   * Resuming: flip those tagged jobs back to NOT_STARTED so the
+        //     trainer re-picks them (FIFO) and resumes from the checkpoint
+        //     via its resume-detection path; clear the tag.
+        const jobsCol = dbo.collection("jobs");
+        const after = (e2: any, summary: any) => {
+          if (e2) {
+            console.error('set_queue_state job update failed:', e2);
+            res.status(500).json({ error: String(e2) });
+            return;
+          }
+          res.json({ ok: true, paused, jobs: summary });
+        };
+        if (paused) {
+          jobsCol.updateMany(
+            { status: "IN_PROGRESS" },
+            { "$set": { status: "PAUSE_REQUESTED", queue_auto_paused: true } },
+            (e2, r) => after(e2, { paused: r ? r.modifiedCount : 0 }));
+        } else {
+          jobsCol.updateMany(
+            { queue_auto_paused: true },
+            { "$set": { status: "NOT_STARTED" }, "$unset": { queue_auto_paused: "" } },
+            (e2, r) => after(e2, { resumed: r ? r.modifiedCount : 0 }));
+        }
+      });
+  });
+
   app.get('/models', (req, res) => {
     const lb: string = path.join(__dirname, '/../models.html');
     res.sendFile(lb);
