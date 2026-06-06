@@ -155,6 +155,7 @@ from environments.courses import donut_course,simple_course
 from envs import make_env
 from replay import make_local_replay
 import collect_training_data
+from rollout_viz import RolloutViz
 import logging
 import signal
 import sys
@@ -1417,6 +1418,12 @@ def main(
               f"(start_step={start_step}, target={num_iterations}).",
               flush=True)
 
+    # Optional policy trajectory-rollout visualization (off unless
+    # ROLLOUT_VIZ_ENABLED). Samples action sequences from the live collect
+    # policy and publishes them to Unity for the candidate-path fan. See
+    # rl_agent/rollout_viz.py + docs/trajectory-rollout-viz.md.
+    rollout_viz = RolloutViz()
+
     for _ in range(remaining_iterations):
         # Cooperative lifecycle check. The dashboard's Jobs-tab Pause
         # button writes status=PAUSE_REQUESTED; Set-to-done / Delete
@@ -1536,6 +1543,11 @@ def main(
 
         train_iter_elapsed = time.time() - train_iter_start
         step = agent_learner.train_step_numpy
+
+        # Publish a rollout-viz fan for the live policy (throttled; no-op
+        # unless ROLLOUT_VIZ_ENABLED). collect_policy is the stochastic
+        # SAC policy, so its sampled action sequences show real spread.
+        rollout_viz.maybe_publish(collect_policy, step, env)
 
         # Buffer-size readout via Reverb's server_info gRPC (same query
         # print_replay_buffer_size used to do). One round-trip per
@@ -1827,6 +1839,13 @@ def run_policy(saved_policy, tf_env, job_id="",
             print(f"_update_eval_progress: Mongo update failed: {e}",
                   flush=True)
 
+    # Optional rollout-viz for eval. NOTE: saved_policy is typically the
+    # GREEDY saved policy, so its sampled "fan" collapses to (near-)identical
+    # lines - the plumbing works but the spread is degenerate. Off unless
+    # ROLLOUT_VIZ_ENABLED. ts read from the batched eval env; published
+    # through the underlying RobotaxiEnv (tf_env), which owns the RobotApi.
+    eval_rollout_viz = RolloutViz()
+
     def run_one_trial(trial_idx):
         """Step the env in log_interval-sized chunks until
         num_eval_episodes episodes have completed. Returns the final
@@ -1885,6 +1904,9 @@ def run_policy(saved_policy, tf_env, job_id="",
 
             eval_actor.run()
             step += log_interval
+            # Rollout-viz fan (throttled; no-op unless ROLLOUT_VIZ_ENABLED).
+            # ts from the batched eval env, publish via the RobotaxiEnv.
+            eval_rollout_viz.maybe_publish(saved_policy, step, batch_tf_env, tf_env)
             episodes_done = int(episodes_metric.result())
             partial = ', '.join(
                 '{} = {:.4f}'.format(m.name, float(m.result()))
@@ -2624,6 +2646,25 @@ def log_reward(job_id, type, score, diff=None, extra_data=None, step_costs=[], p
     db.logs.insert_one(new_log)
 def log_blob(blob):
     db.logs.insert_one(blob)
+
+def _is_queue_paused():
+    """Global queue pause switch (separate from per-job pause).
+
+    Reads a singleton document in the `queue_control` collection that the
+    dashboard's Pause/Resume-queue button toggles. When paused, run_jobs_loop
+    stops picking up NEW jobs (job statuses are left untouched), so the
+    operator can halt the queue, test something, then resume right where the
+    queue left off. Fails open (returns False) on any error so a Mongo hiccup
+    can't wedge the trainer into a permanent idle.
+    """
+    try:
+        doc = db.queue_control.find_one({"_id": "singleton"})
+        return bool(doc and doc.get("paused"))
+    except Exception as e:  # noqa: BLE001
+        print(f"_is_queue_paused check failed (treating as not paused): {e}",
+              flush=True)
+        return False
+
 
 def get_jobs():
     debug_print("in get_jobs")
@@ -4000,9 +4041,33 @@ def run_jobs_loop(num_envs=1):
     _seed_canonical_reward_designs()
     _seed_canonical_experiment_design()
     print(f"Polling for jobs (num_envs={num_envs})...")
+    queue_paused_logged = False
     while True:
+        # Global queue pause gate. When the dashboard's Pause-queue button
+        # is on, we don't pick up new jobs - we just idle. Job statuses are
+        # untouched, so resuming the queue continues exactly where it left
+        # off. Logged only on transition so the idle loop isn't spammy.
+        if _is_queue_paused():
+            if not queue_paused_logged:
+                print("Job queue PAUSED (global): not picking up new jobs "
+                      "until resumed from the dashboard.", flush=True)
+                queue_paused_logged = True
+            time.sleep(5)
+            continue
+        if queue_paused_logged:
+            print("Job queue RESUMED (global): picking up jobs.", flush=True)
+            queue_paused_logged = False
+
         jobs = get_jobs()
         for j in jobs:
+            # Re-check before each job so a pause issued mid-cycle stops
+            # further pickups after the current job finishes (the running
+            # job is never interrupted by the global pause - use per-job
+            # Pause for that).
+            if _is_queue_paused():
+                print("Job queue paused mid-cycle; halting further pickups.",
+                      flush=True)
+                break
             print("doing job")
             # Outer safety net around do_job. Two graceful-error
             # codepaths inside do_job already (EvalSpecMismatchError,

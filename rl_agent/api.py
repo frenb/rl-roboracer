@@ -293,6 +293,36 @@ class RobotApi:
     
     def GetCarSceneDataBlocking(self):
         return asyncio.run_coroutine_threadsafe(self.GetCarSceneData(), self.loop).result()
+
+    async def PublishRollouts(self, payload_json):
+        """Publish a policy-rollout-visualization payload to Unity.
+
+        `payload_json` is an already-serialized JSON string carrying the
+        sampled action sequences (see rl_agent/rollout_viz.py for the
+        schema). We ship it on the `policy_rollouts` topic as a
+        std_msgs/String so Unity's TrajectoryRolloutViz can subscribe with
+        the stock StringMsg type and JSON-parse the body. Fire-and-forget:
+        a publish failure is counted + logged but never propagates (a
+        dropped viz frame is harmless).
+        """
+        try:
+            await self.rpc_client.Publish(
+                'policy_rollouts', 'std_msgs/String', {'data': payload_json})
+        except aio.AioRpcError as e:
+            self.publish_timeouts += 1
+            print(f'policy_rollouts publish RPC error {e.code()}: {e.details()}',
+                  flush=True)
+
+    def PublishRolloutsBlocking(self, payload_json):
+        # Short result() wait: this is best-effort viz, so we don't want a
+        # stuck channel to stall the training loop. run_coroutine_threadsafe
+        # hands the coroutine to the api's event-loop thread; .result(timeout)
+        # bounds how long the caller blocks.
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self.PublishRollouts(payload_json), self.loop).result(timeout=2.0)
+        except Exception as e:  # noqa: BLE001 - never let viz break training
+            print(f'PublishRolloutsBlocking skipped: {e}', flush=True)
     
     
     async def DoReset(self, num_obstacles=20, corner_radius=10.0, curvature_difficulty=0.0):
