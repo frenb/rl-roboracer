@@ -228,7 +228,7 @@ var config = {
                       // which track geometry it ran against.
                       // ?v= busts the browser cache whenever this number
                       // is incremented after a gyms.html update.
-                      componentState: { src: "http://localhost/gyms.html?v=4", id: 'gyms' }
+                      componentState: { src: "http://localhost/gyms.html?v=5", id: 'gyms' }
                     }
                   ]
                 }
@@ -248,10 +248,33 @@ var myLayout = new GoldenLayout( config );
 var iframeRegistry = {};
 
 var iframeComponent = function(container, componentState) {
+    // Tell the embedded page to redraw its Tabulator. GoldenLayout sets an
+    // inactive tab's iframe to display:none; Tabulator (height:100%) then lays
+    // out a zero-height body and DOESN'T recompute when the tab is shown again,
+    // so the body sticks all-white. A cross-iframe ResizeObserver can miss this
+    // display:none->block transition (Chrome), so we explicitly post a redraw
+    // signal on show + resize; the page's TableView listens for it.
+    var postRedraw = () => {
+      try {
+        const ifr = container.getElement().get(0).childNodes[0];
+        if (ifr && ifr.contentWindow) {
+          ifr.contentWindow.postMessage({ type: 'roboracer:redraw' }, '*');
+        }
+      } catch (e) { /* ignore */ }
+    };
     container.on('resize', () => {
       const iframe = container.getElement().get(0).childNodes[0];
       iframe.width = container.width;
       iframe.height = container.height;
+      postRedraw();
+    });
+    // When this tab becomes active its iframe transitions hidden->shown; the
+    // size may not be final on the first 'show' tick, so re-send a couple of
+    // times as the layout settles.
+    container.on('show', () => {
+      postRedraw();
+      setTimeout(postRedraw, 60);
+      setTimeout(postRedraw, 200);
     });
     // This code seems to run only once; attach .on event handlers to react
     // to changes, don't expect this code to be rerun.

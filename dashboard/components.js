@@ -759,6 +759,25 @@
         this._resizeObserver.observe(this.root);
       }
 
+      // Explicit redraw signal from the GoldenLayout shell (goldenlayout.js
+      // posts {type:'roboracer:redraw'} on this tab's show/resize). This is the
+      // reliable path for the all-white-body bug since a cross-iframe
+      // ResizeObserver can miss the display:none->block transition. We redraw
+      // on the next frame(s) so the iframe's restored size has settled.
+      if (typeof window !== 'undefined' && window.addEventListener) {
+        this._onRedrawMessage = (ev) => {
+          const d = ev && ev.data;
+          if (!d || d.type !== 'roboracer:redraw') return;
+          const fire = () => {
+            try { if (this._tabulator) this._tabulator.redraw(true); }
+            catch (_e) { /* pre-init / post-destroy: safe to ignore */ }
+          };
+          requestAnimationFrame(fire);
+          setTimeout(fire, 80);
+        };
+        window.addEventListener('message', this._onRedrawMessage);
+      }
+
       // Track which accordion groups the user has expanded so they
       // survive the 5s poll refresh. replaceData re-applies
       // groupStartOpen (collapsing everything), so on each refresh we
