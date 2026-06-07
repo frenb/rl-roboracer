@@ -38,7 +38,35 @@ public class HudOverlay : MonoBehaviour
     private GUIStyle _steerStyle;
     private GUIStyle _forceStyle;
     private GUIStyle _labelStyle;
+    private GUIStyle _headerStyle;
     private bool _assetsReady = false;
+    private TrajectoryRolloutViz _viz;   // source of the train/eval mode
+    private int _clientIndex = -1;        // derived from the ROS unityPort
+
+    string ClientName()
+    {
+        if (_clientIndex < 0)
+        {
+            // Launch convention (RosBootstrap): unityPort = 5005 + actor_index,
+            // so each window maps 1:1 to its actor/client index.
+            var ros = ROSConnection.instance;
+            if (ros != null)
+            {
+                int idx = ros.unityPort - 5005;
+                _clientIndex = idx >= 0 ? idx : 0;
+            }
+        }
+        return _clientIndex >= 0 ? "client-" + _clientIndex : "client-?";
+    }
+
+    string ModeText()
+    {
+        if (_viz == null) _viz = FindObjectOfType<TrajectoryRolloutViz>();
+        string m = _viz != null ? _viz.CurrentMode : "";
+        if (m == "train") return "TRAINING";
+        if (m == "eval") return "EVAL";
+        return "(mode: waiting)";
+    }
 
     void Update()
     {
@@ -69,17 +97,30 @@ public class HudOverlay : MonoBehaviour
 
         float cx = Screen.width * 0.5f;
         float top = topMargin;
+        float headerH = 22f;
+        float contentTop = top + headerH;
 
         // Background panel for readability.
         Rect panel = new Rect(cx - panelWidth * 0.5f, top - 6f,
-                              panelWidth, wheelSize + 104f);
+                              panelWidth, wheelSize + 104f + headerH);
         Color prevC = GUI.color;
         GUI.color = new Color(0f, 0f, 0f, 0.38f);
         GUI.DrawTexture(panel, _panelTex);
         GUI.color = prevC;
 
+        // Header: client name + explicit TRAINING / EVAL mode (word + color).
+        string mode = ModeText();
+        string header = ClientName() + "    " + mode;
+        _headerStyle.normal.textColor =
+            mode == "EVAL" ? new Color(1f, 0.80f, 0.40f)          // amber
+            : (mode == "TRAINING" ? new Color(0.55f, 1f, 0.65f)   // green
+            : new Color(0.72f, 0.72f, 0.78f));                    // gray waiting
+        GUI.Label(new Rect(cx - panelWidth * 0.5f, top - 2f, panelWidth, 20f),
+                  header, _headerStyle);
+
         // Steering wheel (rotated about its center).
-        Rect wheelRect = new Rect(cx - wheelSize * 0.5f, top, wheelSize, wheelSize);
+        Rect wheelRect = new Rect(cx - wheelSize * 0.5f, contentTop,
+                                  wheelSize, wheelSize);
         Matrix4x4 m = GUI.matrix;
         GUIUtility.RotateAroundPivot(wheelDeg, wheelRect.center);
         GUI.DrawTexture(wheelRect, _wheelTex);
@@ -87,12 +128,12 @@ public class HudOverlay : MonoBehaviour
 
         // Steering angle (road-wheel angle, degrees) right below the wheel.
         float steerDeg = car.steering;
-        GUI.Label(new Rect(cx - panelWidth * 0.5f, top + wheelSize + 2f,
+        GUI.Label(new Rect(cx - panelWidth * 0.5f, contentTop + wheelSize + 2f,
                            panelWidth, 24f),
                   "steer " + steerDeg.ToString("0.0") + "\u00B0", _steerStyle);
 
         // Speed readout.
-        GUI.Label(new Rect(cx - panelWidth * 0.5f, top + wheelSize + 28f,
+        GUI.Label(new Rect(cx - panelWidth * 0.5f, contentTop + wheelSize + 28f,
                            panelWidth, 30f),
                   speed.ToString("0.0") + " m/s", _speedStyle);
 
@@ -100,7 +141,7 @@ public class HudOverlay : MonoBehaviour
         _forceStyle.normal.textColor = force > 0.02f
             ? new Color(0.55f, 1f, 0.65f)
             : (force < -0.02f ? new Color(1f, 0.55f, 0.5f) : Color.white);
-        GUI.Label(new Rect(cx - panelWidth * 0.5f, top + wheelSize + 60f,
+        GUI.Label(new Rect(cx - panelWidth * 0.5f, contentTop + wheelSize + 60f,
                            panelWidth, 26f),
                   "force " + (force >= 0f ? "+" : "") + force.ToString("0.00"),
                   _forceStyle);
@@ -126,6 +167,14 @@ public class HudOverlay : MonoBehaviour
             fontSize = 18,
         };
         _steerStyle.normal.textColor = new Color(0.85f, 0.90f, 1f);
+
+        _headerStyle = new GUIStyle(GUI.skin.label)
+        {
+            alignment = TextAnchor.MiddleCenter,
+            fontSize = 15,
+            fontStyle = FontStyle.Bold,
+        };
+        _headerStyle.normal.textColor = new Color(0.6f, 0.85f, 1f);
 
         _forceStyle = new GUIStyle(GUI.skin.label)
         {

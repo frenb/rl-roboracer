@@ -306,6 +306,7 @@ class RolloutViz:
         self._policy = None
         self._obs = None            # full batched obs (num_actors, obs_dim)
         self._step = 0
+        self._mode = "train"        # "train" or "eval" (shown in the Unity HUD)
         self._ctx_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
@@ -344,11 +345,12 @@ class RolloutViz:
                 return None
         return pub
 
-    def update_context(self, policy, ts_env, step=None):
+    def update_context(self, policy, ts_env, step=None, mode="train"):
         """Hand the background thread the latest policy + FULL batched obs.
 
         Stores every actor's observation (shape (num_actors, obs_dim)); the
         thread samples + publishes one fan per actor to its own ros-server.
+        `mode` ("train"/"eval") is forwarded in the payload for the Unity HUD.
         Cheap (a small numpy copy). Called from the main thread only, so
         there's no concurrent env access. Never raises.
         """
@@ -365,6 +367,7 @@ class RolloutViz:
         with self._ctx_lock:
             self._policy = policy
             self._obs = obs
+            self._mode = mode
             if step is not None:
                 self._step = int(step)
 
@@ -382,6 +385,7 @@ class RolloutViz:
                 policy = self._policy
                 obs = self._obs
                 step = self._step
+                mode = self._mode
             if policy is not None and obs is not None:
                 n = obs.shape[0]
                 # Which actors to publish for. During eval the batch is size 1
@@ -405,6 +409,8 @@ class RolloutViz:
                         payload = build_payload(
                             samples_m[j], weights_m[j], step, self.cfg["dt"],
                             self.cfg["H"], self.cfg)
+                        payload["mode"] = mode      # train/eval, for the HUD
+                        payload["actor"] = int(i)   # actor index (HUD cross-check)
                         pub.publish_rollout(json.dumps(payload))
                 except Exception as e:  # noqa: BLE001 - never kill the thread
                     self._err_count += 1

@@ -112,7 +112,16 @@ public class TrajectoryRolloutViz : MonoBehaviour
         public float maxAlpha;
         public float minWidth;
         public float maxWidth;
+        public string mode;   // "train" / "eval" (for the HUD)
+        public int actor;     // actor index (for the HUD cross-check)
     }
+
+    // Latest train/eval mode reported by the trainer (consumed by HudOverlay).
+    // Empty when no recent payload has arrived.
+    private string _lastMode = "";
+    private float _lastModeTime = -999f;
+    public string CurrentMode =>
+        (Time.time - _lastModeTime) < 5f ? _lastMode : "";
 
     private readonly List<LineRenderer> _pool = new List<LineRenderer>();
     private Material _lineMaterial;
@@ -189,6 +198,8 @@ public class TrajectoryRolloutViz : MonoBehaviour
         {
             _active = fresh;
             _lastDataTime = Time.time;
+            _lastMode = fresh.mode ?? "";
+            _lastModeTime = Time.time;
             Debug.Log($"[TrajectoryRolloutViz] new payload step={fresh.step} "
                       + $"K={fresh.k} H={fresh.horizon} "
                       + $"accelLen={(fresh.accel == null ? -1 : fresh.accel.Length)}");
