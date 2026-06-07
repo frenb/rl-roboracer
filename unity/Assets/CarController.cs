@@ -4,6 +4,9 @@ using System.Collections.Generic;
 using UnityEngine.UI;
 using System.Linq;
 using System;
+// This project's Active Input Handling is "Input System Package (New)" only,
+// so UnityEngine.Input.GetKeyDown throws at runtime. Use the new API instead.
+using UnityEngine.InputSystem;
 
 public class CarController : MonoBehaviour {
     public List<AxleInfo> axleInfos; // the information about each individual axle
@@ -30,6 +33,23 @@ public class CarController : MonoBehaviour {
     [Tooltip("Draw Debug.DrawRay lines in the Scene view for each SphereCast so you can visually " +
              "confirm perception is working. Green = hit, white = miss. Off by default to reduce clutter.")]
     public bool showRaycastGizmos = true;
+    // In-build perception ray visualization. Debug.DrawRay (above) only shows
+    // in the Editor Scene view - it draws NOTHING in a standalone .exe build.
+    // These pooled LineRenderers render the same rays in builds. Toggle at
+    // runtime with the R key. The enabled flag is STATIC so it survives the
+    // car being destroyed + re-instantiated on every episode reset.
+    [Tooltip("Render perception SphereCast rays as in-build LineRenderers (visible in standalone "
+             + "builds, unlike Debug.DrawRay). Toggle at runtime with the R key.")]
+    public static bool ShowRaycastLines = true;
+    // Width of the in-build perception ray lines. Thin to match the old
+    // Debug.DrawRay look. PRIVATE on purpose: CarController is a prefab
+    // component, so a public field would deserialize the stale inspector value
+    // (0.8) baked into the prefab and ignore this code default.
+    private float raycastLineWidth = 0.1f;
+    private LineRenderer[] rayLineRenderers = new LineRenderer[29];
+    private Material rayLineMaterial;
+    private Transform rayLineParent;
+    private bool _lastRayLinesState = true;
     public bool manualControlEnabled = false;
     public  Dictionary<string, string> stats = new Dictionary<string, string>();
     public int numCollisions=0;
@@ -406,6 +426,83 @@ public class CarController : MonoBehaviour {
         addCollisions();  
     }
     
+    // Runtime input: toggle the in-build perception ray lines with R.
+    // Kept in Update (not FixedUpdate) so key presses aren't missed. The car
+    // is re-instantiated each episode, so the toggle state lives in the static
+    // ShowRaycastLines; we just reconcile the renderers when it flips.
+    void Update()
+    {
+        var kb = Keyboard.current;
+        if (kb != null && kb.rKey.wasPressedThisFrame)
+            ShowRaycastLines = !ShowRaycastLines;
+        if (ShowRaycastLines != _lastRayLinesState)
+        {
+            SetRayLinesEnabled(ShowRaycastLines);
+            _lastRayLinesState = ShowRaycastLines;
+        }
+    }
+
+    Material RayLineMaterial()
+    {
+        if (rayLineMaterial == null)
+        {
+            var shader = Shader.Find("Sprites/Default");
+            if (shader == null) shader = Shader.Find("Unlit/Color");
+            rayLineMaterial = new Material(shader);
+        }
+        return rayLineMaterial;
+    }
+
+    void SetRayLinesEnabled(bool on)
+    {
+        for (int i = 0; i < rayLineRenderers.Length; i++)
+            if (rayLineRenderers[i] != null) rayLineRenderers[i].enabled = on;
+    }
+
+    // Create/update one pooled LineRenderer per perception direction. Called
+    // from DrawRay every physics step; cheap because lines are reused, not
+    // re-created. Green = ray hit something, translucent white = miss.
+    void UpdateRayLine(directions d, Vector3 start, Vector3 end, bool hit)
+    {
+        if (!ShowRaycastLines)
+            return;
+        int i = (int) d;
+        if (i < 0 || i >= rayLineRenderers.Length)
+            return;
+        LineRenderer lr = rayLineRenderers[i];
+        if (lr == null)
+        {
+            if (rayLineParent == null)
+            {
+                // Parent under THIS car (not a global object): the car is
+                // destroyed + re-instantiated every episode, so tying the line
+                // pool to the car's lifecycle means old lines die with it
+                // instead of accumulating as frozen snapshots around the track.
+                var parent = new GameObject("PerceptionRayLines");
+                parent.transform.SetParent(transform, false);
+                rayLineParent = parent.transform;
+            }
+            var go = new GameObject("RayLine_" + d);
+            go.transform.SetParent(rayLineParent, false);
+            lr = go.AddComponent<LineRenderer>();
+            lr.useWorldSpace = true;
+            lr.material = RayLineMaterial();
+            lr.positionCount = 2;
+            lr.numCapVertices = 2;
+            lr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            lr.receiveShadows = false;
+            rayLineRenderers[i] = lr;
+        }
+        Color c = hit ? Color.green : new Color(1f, 1f, 1f, 0.6f);
+        lr.startColor = c;
+        lr.endColor = c;
+        lr.startWidth = raycastLineWidth;
+        lr.endWidth = raycastLineWidth;
+        if (!lr.enabled) lr.enabled = true;
+        lr.SetPosition(0, start);
+        lr.SetPosition(1, end);
+    }
+
     void DrawLine(Vector3 start, Vector3 end, Color color, float duration = 0.2f)
     {
         GameObject myLine = new GameObject("Line");
@@ -441,12 +538,14 @@ public class CarController : MonoBehaviour {
         }
         
         bool hit = distToClosestObjectsBools[(int) d];
+        float drawLenOut = hit ? hitData.distance : 50f;
         if (showRaycastGizmos)
         {
-            float drawLen = hit ? hitData.distance : 50f;
-            Debug.DrawRay(start, direction.normalized * drawLen,
+            Debug.DrawRay(start, direction.normalized * drawLenOut,
                           hit ? Color.green : Color.white, 0.05f);
         }
+        // In-build line (visible in the .exe, unlike Debug.DrawRay above).
+        UpdateRayLine(d, start, start + direction.normalized * drawLenOut, hit);
 
         if (hit)
         {
