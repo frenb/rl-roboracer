@@ -110,7 +110,7 @@
   <!-- Cache-busted via ?v=... so each edit is treated as a new URL by
        the browser, preventing iframes inside the GoldenLayout shell from
        serving a stale cached copy. Bump when changing components.js. -->
-  <script src="/components.js?v=20260607-table-resize-redraw"></script>
+  <script src="/components.js?v=20260607-redraw2"></script>
   <script>
     (function () {
       const { TableView, formatters, showToast } = window.RoboracerUI;
@@ -133,14 +133,17 @@
         // button (Edit) and a stale persisted width would clip it.
         persistColumnWidths: false,
         columns: [
+          // All text columns match the Binary path column (the reference):
+          // text-xs + text-slate-600 dark:text-slate-300, for a uniform look.
           { key: 'name', label: 'Name', sortable: true, filter: true,
-            render: (v) => `<span class="font-medium">${esc(v)}</span>` },
+            render: (v) => `<span class="text-xs text-slate-600 dark:text-slate-300">${esc(v)}</span>` },
           { key: 'file_path', label: 'Binary path', sortable: true, filter: true,
             render: (v) => formatters.truncatePath(v) },
           { key: 'description', label: 'Description', sortable: false, filter: false,
-            render: (v) => `<span class="text-xs text-slate-500 dark:text-slate-400">${esc(v)}</span>` },
+            render: (v) => `<span class="text-xs text-slate-600 dark:text-slate-300">${esc(v)}</span>` },
           { key: 'created_at', label: 'Added', sortable: true, filter: false,
-            render: (v) => formatters.relativeTime(v) },
+            // relativeTime already uses the reference color; wrap to add text-xs.
+            render: (v) => `<span class="text-xs">${formatters.relativeTime(v)}</span>` },
           { key: '_id', label: 'Actions', sortable: false, filter: false,
             width: 170,
             render: (v, row) => {

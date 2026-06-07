@@ -44,6 +44,11 @@ html.dark ::selection {
   height: 12px;
 }
 ::-webkit-scrollbar-track { background: transparent; }
+/* Where the horizontal + vertical scrollbars meet. Without this the browser
+ * paints the corner with its default (white) chrome, which shows as a white
+ * square in the bottom-right of scrollable tables once BOTH scrollbars appear.
+ * Transparent lets the dark table surface behind it show through. */
+::-webkit-scrollbar-corner { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background: rgb(203 213 225);  /* slate-300 */
   border-radius: 9999px;
