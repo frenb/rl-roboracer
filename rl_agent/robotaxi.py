@@ -53,6 +53,7 @@ import math
 import shutil
 import tempfile
 import time
+import threading
 import json
 import datetime
 
@@ -155,7 +156,7 @@ from environments.courses import donut_course,simple_course
 from envs import make_env
 from replay import make_local_replay
 import collect_training_data
-from rollout_viz import RolloutViz
+from rollout_viz import get_viz
 import logging
 import signal
 import sys
@@ -657,6 +658,11 @@ def main(
     log_interval_val=5000,
     num_eval_episodes_val=10,
     eval_interval_val=5000,
+    # Target fraction of training-loop WALL-CLOCK spent in eval (the rest is
+    # collect/training). 0.25 => ~75% train / 25% eval, so the clients spend
+    # most of their time in the collect phase where the rollout-viz fans
+    # render. Set <=0 or >=1 to fall back to the old step%eval_interval gate.
+    eval_time_fraction_val=0.25,
     policy_save_interval_val=50,
     model_type="SacAgent",
     # ---- Reward-design plumbing -------------------------------------
@@ -1258,7 +1264,33 @@ def main(
               f"{pre_episodes if pre_episodes is not None else '?'}",
               flush=True)
 
-        eval_actor.run()
+        # Keep the rollout viz live during the (blocking) eval run. The
+        # in-training eval steps the SAME N-actor parallel env, so all clients
+        # are active - but the viz context is otherwise only refreshed in the
+        # TRAIN loop, leaving a frozen collect fan during eval. This helper
+        # thread refreshes the viz context (greedy eval_policy + the eval env's
+        # CACHED current_time_step, all N actors) every ~50ms so every client
+        # renders its own live eval fan. It only READS the cached batched
+        # time_step (no subprocess call), so it doesn't race the eval stepping;
+        # update_context is a no-op when ROLLOUT_VIZ is disabled.
+        _eval_viz_stop = threading.Event()
+
+        def _feed_eval_viz():
+            while not _eval_viz_stop.is_set():
+                try:
+                    get_viz().update_context(eval_policy, env, eval_step)
+                except Exception:  # noqa: BLE001 - viz must never break eval
+                    pass
+                _eval_viz_stop.wait(0.05)
+
+        _eval_viz_thread = threading.Thread(
+            target=_feed_eval_viz, name="eval-viz-feed", daemon=True)
+        _eval_viz_thread.start()
+        try:
+            eval_actor.run()
+        finally:
+            _eval_viz_stop.set()
+            _eval_viz_thread.join(timeout=1.0)
 
         eval_elapsed = time.time() - eval_start
         post_episodes = (int(pre_episodes_metric.result())
@@ -1401,6 +1433,33 @@ def main(
     print("Log interval: " + str(log_interval), flush=True)
     min_write_step = 0
 
+    # Time-budgeted eval cadence. Instead of evaluating every eval_interval
+    # steps (which made eval ~90% of wall-clock when each eval runs many
+    # episodes), keep eval to ~eval_time_fraction of the loop's wall-clock so
+    # the clients spend the majority of time in the collect phase (where the
+    # rollout-viz fans render). After an eval of duration D we train for
+    # (1-frac)/frac * D before the next eval; the FIRST eval is bootstrapped
+    # off eval_interval so we can measure an initial D. Falls back to the old
+    # step%eval_interval gate when eval_time_fraction is outside (0, 1).
+    eval_time_fraction = eval_time_fraction_val
+    # Optional env override for quick tuning without touching the job config,
+    # e.g. EVAL_TIME_FRACTION=0.2 for 80/20. Out-of-range disables budgeting.
+    try:
+        _env_frac = os.environ.get("EVAL_TIME_FRACTION")
+        if _env_frac is not None:
+            eval_time_fraction = float(_env_frac)
+    except (TypeError, ValueError):
+        pass
+    _eval_time_budgeted = (0.0 < eval_time_fraction < 1.0)
+    _eval_train_ratio = ((1.0 - eval_time_fraction) / eval_time_fraction
+                         if _eval_time_budgeted else 0.0)
+    train_time_since_eval = 0.0
+    last_eval_duration = None
+    if _eval_time_budgeted:
+        print(f"Eval time budget: ~{eval_time_fraction * 100:.0f}% eval / "
+              f"{(1 - eval_time_fraction) * 100:.0f}% train (train "
+              f"{_eval_train_ratio:.1f}x each eval's wall-clock)", flush=True)
+
     # Bound the loop by REMAINING work, not a flat num_iterations count.
     # `train_step` is the global step counter; on a fresh start it's 0
     # (range = num_iterations, unchanged), but on a RESUME / crash-recovery
@@ -1419,10 +1478,11 @@ def main(
               flush=True)
 
     # Optional policy trajectory-rollout visualization (off unless
-    # ROLLOUT_VIZ_ENABLED). Samples action sequences from the live collect
-    # policy and publishes them to Unity for the candidate-path fan. See
-    # rl_agent/rollout_viz.py + docs/trajectory-rollout-viz.md.
-    rollout_viz = RolloutViz()
+    # ROLLOUT_VIZ_ENABLED). A shared background thread samples action sequences
+    # from the live policy at ~20Hz and publishes them to Unity for the
+    # candidate-path fan; the loop just feeds it the latest policy+obs below.
+    # See rl_agent/rollout_viz.py + docs/trajectory-rollout-viz.md.
+    rollout_viz = get_viz()
 
     for _ in range(remaining_iterations):
         # Cooperative lifecycle check. The dashboard's Jobs-tab Pause
@@ -1543,6 +1603,10 @@ def main(
 
         train_iter_elapsed = time.time() - train_iter_start
         step = agent_learner.train_step_numpy
+        # Accrue training wall-clock toward the eval time budget (Section: the
+        # time-budgeted eval gate below decides when enough train time has
+        # passed to justify the next eval).
+        train_time_since_eval += train_iter_elapsed
 
         # Publish a rollout-viz fan for the live policy (throttled; no-op
         # unless ROLLOUT_VIZ_ENABLED). collect_policy is the stochastic
@@ -1568,7 +1632,19 @@ def main(
               f"buffer_size={buffer_size}/{replay_buffer_capacity}",
               flush=True)
         
-        if eval_interval and step % eval_interval == 0:
+        # Time-budgeted eval gate (see pre-loop setup): once an initial eval
+        # duration is known, eval only after train_time_since_eval reaches
+        # _eval_train_ratio x that duration (keeps eval ~eval_time_fraction of
+        # wall-clock). Before the first eval, and when budgeting is disabled,
+        # fall back to the classic step%eval_interval cadence.
+        _do_eval = False
+        if eval_interval:
+            if _eval_time_budgeted and last_eval_duration is not None:
+                _do_eval = (train_time_since_eval
+                            >= _eval_train_ratio * last_eval_duration)
+            else:
+                _do_eval = (step % eval_interval == 0)
+        if _do_eval:
             # In-training eval is bracketed by EVAL CYCLE begin / end
             # markers so robotaxi.out reads as a clean nested sequence:
             #
@@ -1659,6 +1735,11 @@ def main(
                 saved_checkpoint = True
 
             eval_cycle_elapsed = time.time() - eval_cycle_start
+            # Feed the eval duration back into the time budget and reset the
+            # train-time accumulator, so the next eval fires only after
+            # ~_eval_train_ratio x this eval's wall-clock of training.
+            last_eval_duration = eval_cycle_elapsed
+            train_time_since_eval = 0.0
             print(f"EVAL CYCLE end:   train_step={step} "
                   f"iter={curr_iteration + 1}/{num_iterations} "
                   f"elapsed_sec={eval_cycle_elapsed:.2f} "
@@ -1842,9 +1923,10 @@ def run_policy(saved_policy, tf_env, job_id="",
     # Optional rollout-viz for eval. NOTE: saved_policy is typically the
     # GREEDY saved policy, so its sampled "fan" collapses to (near-)identical
     # lines - the plumbing works but the spread is degenerate. Off unless
-    # ROLLOUT_VIZ_ENABLED. ts read from the batched eval env; published
-    # through the underlying RobotaxiEnv (tf_env), which owns the RobotApi.
-    eval_rollout_viz = RolloutViz()
+    # ROLLOUT_VIZ_ENABLED. Same shared background sampler as the train loop
+    # (get_viz singleton); we just feed it the eval policy + eval-env obs so the
+    # fan keeps updating at 20Hz through the long eval windows too.
+    eval_rollout_viz = get_viz()
 
     def run_one_trial(trial_idx):
         """Step the env in log_interval-sized chunks until
