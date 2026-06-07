@@ -1,10 +1,161 @@
 # Design: Trajectory Rollout Visualization in the Unity Client
 
-**Status:** Draft for review (Phase 1)
-**Author:** (design)
+**Status:** Implemented (Phase 1, open-loop). Sections 3–9 below are the original
+design; the **"As-built" section** immediately below is the authoritative
+description of what actually shipped and where it diverged from the draft.
 **Scope:** Render candidate future trajectories in the Unity client, sampled
 from the SAC actor policy, so an operator can *see* what the policy "intends"
 and how much spread/uncertainty there is in its action choices.
+
+---
+
+## As-built implementation (current)
+
+End-to-end pipeline as actually shipped. Key files: `rl_agent/rollout_viz.py`,
+`unity/Assets/Scripts/TrajectoryRolloutViz.cs`,
+`docker/ros_server/ROS/src/niryo_moveit/scripts/unity_node.py`.
+
+### Sampling — background thread, not in-loop (diverges from §5)
+
+A **dedicated 20 Hz daemon thread** (`RolloutViz`, a module-level singleton in
+`rollout_viz.py`) does the sampling, **decoupled from the training loop**. The
+train/eval loops merely feed it the latest `(policy, observation)` each
+iteration via `update_context()` (the old `maybe_publish()` is now a thin shim
+for that). This was necessary because the loop runs at only ~3 Hz and **stalls
+for 20–30 s during periodic eval/checkpoint cycles** — in-loop publishing made
+the fan update slowly and vanish during eval. The thread re-samples + publishes
+at a steady ~20 Hz regardless of phase (verified ~19.9 Hz, max gap ~70 ms).
+
+Each tick tiles the **current observation** into a batch of `K*H` and samples
+the policy once → `K` sequences of `H` actions (`accel`=action[0],
+`steer`=action[1]). Still strictly **open-loop**: all `H` steps are i.i.d. draws
+from the *same* current-observation distribution.
+
+### Per-trajectory probability weights (new vs the draft)
+
+Beyond the spread, each trajectory gets a **relative probability**: sum the
+per-step `log_prob` over the horizon (open-loop joint likelihood), then
+**softmax across the K sequences** → `weights[]`.
+
+Getting `log_prob` required unwrapping the policy: the trainer hands a
+`PyTFEagerPolicy` (numpy wrapper) which has no `distribution()` /
+`_actor_network`; we unwrap to the underlying TF policy (`._policy`) and call
+`distribution(ts_tf)` with TF tensors. The `'loc'` serialization bug only
+affects the **reloaded SavedModel** eval policy — on it (and any failure) we
+fall back to **uniform weights**. So weighting is meaningful during **training
+(stochastic collect policy)** and degenerate during **eval (greedy)**.
+
+### How the probabilities are computed (the math)
+
+**The actor head is a tanh-squashed diagonal Gaussian — NOT a softmax.** SAC's
+policy is continuous over the 2-D action `(accel, steer)`:
+
+1. The actor network outputs a per-dimension mean and (log) std, defining a
+   diagonal Gaussian over a *pre-squash* latent `u ~ N(μ(o), σ(o))`.
+2. The action is the **tanh squash** `a = tanh(u)` (bounded to (−1, 1), then
+   scaled to the action range), which is what keeps `accel`/`steer` in range.
+
+The density of a tanh-squashed Gaussian needs the change-of-variables
+(Jacobian) correction for the squash. For one action vector at observation `o`:
+
+```
+log π(a | o) = Σ_i [ log N(u_i; μ_i(o), σ_i(o))  −  log(1 − tanh²(u_i)) ]
+               \_______ base Gaussian _______/   \__ tanh Jacobian __/
+   with  u = atanh(a)
+```
+
+We don't implement this by hand — tf-agents' `dist.log_prob(a)` returns the
+fully corrected log-density (summed over the action dims). We sample and score
+in one shot: `a = dist.sample()`, `logp = dist.log_prob(a)`.
+
+**Per-trajectory likelihood (open-loop).** A trajectory `k` is `H` actions
+`a_{k,0..H-1}`, all drawn from the *same* current-observation distribution
+`π(·|o₀)`. Its joint log-likelihood is the sum over the horizon:
+
+```
+L_k = Σ_{h=0}^{H-1} log π(a_{k,h} | o₀)
+```
+
+Because every step is scored against the same `π(·|o₀)`, `L_k` is largest for
+sequences whose actions sit near the distribution's mode (≈ the greedy action
+repeated) and smaller for atypical/outlier sequences. It is **not** a
+closed-loop path probability (that would re-query `π` at each predicted pose).
+
+**Where softmax actually enters — across trajectories, for the viz.** To turn
+the `K` log-likelihoods into comparable, sum-to-one weights we softmax over the
+`K` sequences (max-subtracted for stability):
+
+```
+w_k = exp(L_k − max_j L_j) / Σ_j exp(L_j − max_j L_j)
+```
+
+So the only softmax in the system is this **visualization weighting over the K
+candidate paths** — the policy head itself is the continuous tanh-normal above.
+Unity then min-max normalizes `w_k` across the K paths and maps it to opacity +
+width (most likely = most opaque/widest).
+
+### Publish path — own gRPC channel (diverges from §4 RobotApi route)
+
+The thread owns a **synchronous gRPC channel straight to `ros-server-0:50051`**
+(actor-0's server) and publishes a `std_msgs/String` JSON blob on
+`policy_rollouts`. Using its own channel (not the env-subprocess `RobotApi`)
+avoids racing the training thread's `env.step()` on the same pipes.
+
+### Payload — FLAT arrays (diverges from §4 nested schema)
+
+`JsonUtility` can't parse nested lists, so the payload uses flat, k-major
+parallel arrays plus the style knobs:
+
+```jsonc
+{
+  "stamp": 1733300000.1, "step": 26771, "dt": 0.1, "horizon": 25, "k": 8,
+  "accel": [ /* length k*H, accel[k*H + h] */ ],
+  "steer": [ /* length k*H */ ],
+  "weights": [ /* length k, softmax over joint log-prob */ ],
+  // render-style knobs (so Unity is tunable WITHOUT a rebuild):
+  "lineWidth": 1.5, "probFalloff": 1.0,
+  "minAlpha": 0.30, "maxAlpha": 0.95, "minWidth": 0.40, "maxWidth": 1.6
+}
+```
+
+### ros-server bridge fix (not anticipated in the draft)
+
+This connector uses a **static routing table**, not dynamic Unity subscriptions
+(the endpoint logged zero `RegisterSubscriber` events). A topic only reaches
+Unity if listed in `unity_node.py`. We added
+`'policy_rollouts': RosSubscriber('policy_rollouts', String, tcp_server)` and
+rebuilt the `docker_ros-server:thin` image. The message stays `std_msgs/String`,
+so adding JSON fields needs no further ros-server change.
+
+### Rendering — 20 Hz redraw from the car FRONT (diverges from §6 on-message)
+
+`TrajectoryRolloutViz` (auto-attached by `SimController`) caches the latest
+payload and **redraws at 20 Hz from the car's *current* front-axle pose** (not
+just on message arrival), so the fan stays glued to the moving car. For each
+sequence it forward-simulates the bicycle model (§7) from the car's live
+speed/heading. Per-line style is driven by the probability weight (min-max
+normalized across K):
+
+- **opacity** decays **exponentially** with lower probability, floored at
+  `minAlpha`; **width** scales similarly; single **blue** hue.
+- Style params come from the payload when present, else Unity inspector
+  defaults — so opacity/width are tunable from Python env vars, no rebuild.
+
+### Toggles & related viz (new)
+
+Because Active Input Handling is **Input System only**, toggles use
+`Keyboard.current` (legacy `Input.GetKeyDown` throws). Keys: **T** = rollout
+fan, **R** = in-build perception ray lines (real `LineRenderer`s replacing
+build-invisible `Debug.DrawRay`), **H** = the steering/speed/force HUD.
+
+### Env vars (current)
+
+`ROLLOUT_VIZ_ENABLED` (gate), `ROLLOUT_VIZ_K` (8), `ROLLOUT_VIZ_HORIZON` (25),
+`ROLLOUT_VIZ_DT` (0.1), `ROLLOUT_VIZ_HZ` (20), `ROLLOUT_VIZ_ACTOR_INDEX` (0),
+`ROLLOUT_VIZ_ROS_ADDR` (`ros-server-0:50051`), and the style knobs
+`ROLLOUT_VIZ_LINE_WIDTH`, `ROLLOUT_VIZ_PROB_FALLOFF`, `ROLLOUT_VIZ_MIN_ALPHA`,
+`ROLLOUT_VIZ_MAX_ALPHA`, `ROLLOUT_VIZ_MIN_WIDTH`, `ROLLOUT_VIZ_MAX_WIDTH`.
+(`ROLLOUT_VIZ_EVERY_N_STEPS` is obsolete — the background thread is rate-based.)
 
 ---
 
