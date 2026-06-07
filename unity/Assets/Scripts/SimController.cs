@@ -83,6 +83,16 @@ public class SimController : MonoBehaviour
         // // Ros nodes instatiates here after world created.
         moveService = gameObject.AddComponent(typeof(MoveService)) as MoveService;
         sceneDataPublisher = gameObject.AddComponent(typeof(SceneDataPublisher)) as SceneDataPublisher;
+        // Auto-attach the policy trajectory-rollout visualizer so any build
+        // renders the candidate-path fan when the trainer publishes on the
+        // policy_rollouts topic (ROLLOUT_VIZ_ENABLED on the trainer side) -
+        // no need to remember to add the component to the scene by hand.
+        // It self-subscribes and no-ops until rollout messages arrive.
+        gameObject.AddComponent(typeof(TrajectoryRolloutViz));
+        // Auto-attach the real-time HUD (steering wheel + speed + force). It
+        // reads the local car each frame and draws an OnGUI overlay; toggle
+        // with the H key. No scene setup required.
+        gameObject.AddComponent(typeof(HudOverlay));
         // // Publish camera frames for computer vision.
         // if (publishedCamera != null)
         // {
