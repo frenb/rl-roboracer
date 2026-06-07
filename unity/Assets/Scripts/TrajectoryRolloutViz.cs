@@ -69,6 +69,14 @@ public class TrajectoryRolloutViz : MonoBehaviour
     [Tooltip("Hard cap on rendered trajectories (safety vs. a huge K).")]
     public int maxLines = 64;
 
+    [Header("Wall clipping")]
+    [Tooltip("Truncate each trajectory where it would cross a track wall/curb, "
+             + "so the fan doesn't pass through barriers unrealistically.")]
+    public bool stopAtWalls = true;
+    [Tooltip("Layers treated as walls/curbs for clipping. If 0 (Nothing), the "
+             + "CarController's perception layerMask is used.")]
+    public LayerMask wallMask;
+
     [Header("Probability weighting")]
     [Tooltip("Color + width each trajectory by its relative probability "
              + "(weights[] from the policy), so the most-/least-likely paths "
@@ -275,6 +283,15 @@ public class TrajectoryRolloutViz : MonoBehaviour
             ? steeringAngleDegOverride : Mathf.Max(1f, car.maxSteeringAngle);
         float dt = p.dt > 0f ? p.dt : 0.1f;
 
+        // Wall clipping: linecast each segment against the wall/curb layers at
+        // the car-body height (where the colliders are) and truncate the line
+        // at the first hit. Default to the car's perception layerMask so we
+        // clip on exactly the surfaces the policy "sees".
+        int wallMaskValue = wallMask.value != 0 ? wallMask.value
+                                                : car.layerMask.value;
+        bool clipWalls = stopAtWalls && wallMaskValue != 0;
+        float checkY = t.position.y;
+
         // Effective render style: published payload knobs override the inspector
         // defaults when present (maxAlpha>0 = "style present"), so opacity/width
         // can be tuned from Python (env vars) without a Unity rebuild.
@@ -329,6 +346,8 @@ public class TrajectoryRolloutViz : MonoBehaviour
             lr.SetPosition(0, origin);
 
             float x = origin.x, z = origin.z, yaw = yaw0, v = v0;
+            Vector3 prev = origin;
+            int drawn = 0;
             for (int h = 0; h < H; h++)
             {
                 int idx = k * H + h;
@@ -340,8 +359,31 @@ public class TrajectoryRolloutViz : MonoBehaviour
                 yaw += (v / Mathf.Max(0.01f, wheelbase)) * Mathf.Tan(steerRad) * dt;
                 x += v * Mathf.Sin(yaw) * dt;
                 z += v * Mathf.Cos(yaw) * dt;
-                lr.SetPosition(h + 1, new Vector3(x, origin.y, z));
+                Vector3 next = new Vector3(x, origin.y, z);
+
+                if (clipWalls)
+                {
+                    Vector3 a0 = new Vector3(prev.x, checkY, prev.z);
+                    Vector3 b0 = new Vector3(next.x, checkY, next.z);
+                    if (Physics.Linecast(a0, b0, out RaycastHit hit,
+                                         wallMaskValue,
+                                         QueryTriggerInteraction.Ignore))
+                    {
+                        // Terminate the trajectory at the wall.
+                        lr.SetPosition(h + 1,
+                            new Vector3(hit.point.x, origin.y, hit.point.z));
+                        drawn = h + 1;
+                        break;
+                    }
+                }
+
+                lr.SetPosition(h + 1, next);
+                drawn = h + 1;
+                prev = next;
             }
+            // Shrink to however many points we actually drew (truncates at the
+            // wall hit; origin + drawn segments).
+            lr.positionCount = drawn + 1;
         }
 
         // Hide any pooled lines beyond the current K.
