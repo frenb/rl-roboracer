@@ -727,6 +727,38 @@
         }
       });
 
+      // Fix the "switch to this tab and the table body sticks all-white" bug.
+      // GoldenLayout hosts each tab in an iframe and sets it display:none
+      // while its tab is inactive. While hidden the host is 0x0, so Tabulator
+      // (height:100%) lays out a zero-height body and renders no rows; on
+      // re-show it does NOT recompute on its own, leaving the body blank/white
+      // even though the data is loaded. A ResizeObserver on the host catches
+      // the hidden(0x0) -> shown(real-size) transition and forces a full
+      // redraw so the rows + body height repaint. Ordinary resizes (dragging
+      // the GoldenLayout splitter) get a light redraw so user-set column
+      // widths don't churn. Coalesced to one redraw per animation frame.
+      if (typeof ResizeObserver !== 'undefined') {
+        let _lw = 0, _lh = 0, _raf = null, _full = false;
+        const _doRedraw = () => {
+          _raf = null;
+          const full = _full; _full = false;
+          try { if (this._tabulator) this._tabulator.redraw(full); }
+          catch (_e) { /* pre-init / post-destroy: safe to ignore */ }
+        };
+        this._resizeObserver = new ResizeObserver(() => {
+          const rect = this.root.getBoundingClientRect();
+          const w = Math.round(rect.width), h = Math.round(rect.height);
+          if (w === _lw && h === _lh) return;
+          const wasHidden = (_lw === 0 || _lh === 0);
+          _lw = w; _lh = h;
+          if (w === 0 || h === 0) return;   // hidden now; redraw on re-show
+          if (wasHidden) _full = true;       // full recompute on show transition
+          if (_raf) cancelAnimationFrame(_raf);
+          _raf = requestAnimationFrame(_doRedraw);
+        });
+        this._resizeObserver.observe(this.root);
+      }
+
       // Track which accordion groups the user has expanded so they
       // survive the 5s poll refresh. replaceData re-applies
       // groupStartOpen (collapsing everything), so on each refresh we
