@@ -5,6 +5,7 @@ import rospy
 from ros_tcp_endpoint import TcpServer, RosPublisher, RosSubscriber, RosService, UnityService
 from niryo_moveit.msg import SceneData, CarSceneData
 from niryo_moveit.msg import MoveActionGoal, MoveActionResult, MoveActionFeedback, SimCommand, SimStatus, Camera, Sphere, ApplyForce
+from std_msgs.msg import String
 
 
 def main():
@@ -23,6 +24,13 @@ def main():
         'sim_command': RosSubscriber('sim_command', SimCommand, tcp_server),
         'sim_status': RosPublisher('sim_status', SimStatus),
         'camera/overhead': RosPublisher('camera/overhead', Camera),
+        # Trajectory-rollout viz: the trainer publishes a JSON payload as a
+        # std_msgs/String on `policy_rollouts` (see rl_agent/rollout_viz.py).
+        # This endpoint's routing table is STATIC - the embedded ROS-TCP
+        # connector does not send dynamic RegisterSubscriber syscommands - so
+        # a topic must be listed here as a RosSubscriber (ROS -> Unity) for
+        # Unity's TrajectoryRolloutViz to ever receive it.
+        'policy_rollouts': RosSubscriber('policy_rollouts', String, tcp_server),
     })
     
     rospy.spin()
