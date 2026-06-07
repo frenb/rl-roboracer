@@ -1278,7 +1278,8 @@ def main(
         def _feed_eval_viz():
             while not _eval_viz_stop.is_set():
                 try:
-                    get_viz().update_context(eval_policy, env, eval_step)
+                    get_viz().update_context(eval_policy, env, eval_step,
+                                             mode="eval")
                 except Exception:  # noqa: BLE001 - viz must never break eval
                     pass
                 _eval_viz_stop.wait(0.05)
