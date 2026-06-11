@@ -603,6 +603,50 @@ def install_reward_design_on_env(env, name, code):
         return {"installed": [], "penalty_reward": None, "actors": 1}
 
 
+def _measure_demo_batch_fraction(demo_rb, online_rb, ratio, batch_size,
+                                 sequence_length=2, n_batches=300):
+    """Empirically measure the realized demo fraction of the mixed sampler.
+
+    Mirrors replay.make_local_replay's
+    ``tf.data.Dataset.sample_from_datasets([demo, online], weights=[r, 1-r])``
+    construction, but tags each source so we can count how many sampled rows
+    actually originate in the protected demo table vs the online RL table.
+
+    Note on granularity: both source datasets already yield *batches* of
+    ``batch_size`` rows, so ``sample_from_datasets`` interleaves at batch
+    granularity - each drawn batch is wholly demo OR wholly online. The
+    per-batch composition is therefore all-or-nothing; it's the AGGREGATE
+    row fraction over many batches that converges to ``ratio``. This probe
+    reports that aggregate.
+
+    Pure measurement: builds its own throwaway datasets off the same two
+    Reverb tables (a second set of readers), so it does NOT perturb the
+    learner's training stream. Returns (realized_fraction, demo_rows,
+    total_rows).
+    """
+    import tensorflow as tf
+    demo_ds = demo_rb.as_dataset(
+        sample_batch_size=batch_size, num_steps=sequence_length)
+    online_ds = online_rb.as_dataset(
+        sample_batch_size=batch_size, num_steps=sequence_length)
+    # Replace each batch with a same-shape source flag (0=demo, 1=online) so
+    # sample_from_datasets carries only the tag, not the (large) trajectory.
+    demo_flags = demo_ds.map(lambda *a: tf.zeros([batch_size], tf.int32))
+    online_flags = online_ds.map(lambda *a: tf.ones([batch_size], tf.int32))
+    mixed = tf.data.Dataset.sample_from_datasets(
+        [demo_flags, online_flags],
+        weights=[ratio, 1.0 - ratio],
+        stop_on_empty_dataset=False)
+    demo_rows = 0
+    total_rows = 0
+    for flags in mixed.take(n_batches):
+        f = flags.numpy()
+        demo_rows += int((f == 0).sum())
+        total_rows += int(f.size)
+    realized = (demo_rows / total_rows) if total_rows else float('nan')
+    return realized, demo_rows, total_rows
+
+
 def main(
     job_id="",
     num_envs=1,
@@ -1533,6 +1577,26 @@ def main(
     rollout_viz = get_viz()
 
     _dump_startup_timings()
+
+    # ---- Demo/online batch-composition probe (two-table mode only) ------
+    # One-shot empirical check that the mixed sampler actually draws
+    # ~demo_sample_ratio of its rows from the protected demo table. Logs a
+    # single [demo-ratio] line; pure measurement, never aborts training.
+    if (demo_min_keep > 0 and demo_replay is not None
+            and 0.0 < demo_sample_ratio < 1.0):
+        try:
+            _realized, _dr, _tr = _measure_demo_batch_fraction(
+                demo_replay, reverb_replay, demo_sample_ratio,
+                batch_size, sequence_length=2, n_batches=300)
+            print(
+                f"[demo-ratio] configured={demo_sample_ratio:.3f} "
+                f"realized={_realized:.3f} "
+                f"({_dr}/{_tr} sampled rows from the demo table over 300 "
+                f"batches; demo_table protected at {demo_min_keep} samples)",
+                flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[demo-ratio] measurement failed (non-fatal): {_e}",
+                  flush=True)
 
     for _ in range(remaining_iterations):
         # Cooperative lifecycle check. The dashboard's Jobs-tab Pause
