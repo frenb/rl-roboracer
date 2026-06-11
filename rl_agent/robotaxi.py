@@ -762,6 +762,42 @@ def main(
         f"curvature_difficulty={curvature_difficulty_val} "
         f"(applied on each Unity reset by TrackGenerator).",
         flush=True)
+    # ---- Startup phase timing (measurement only) --------------------
+    # Lightweight wall-clock instrumentation for the cold-start /
+    # restart path. _phase(label) closes the currently-open phase
+    # (attributing all wall-time since the previous _phase call to it)
+    # and opens a new one; _dump_startup_timings() prints the
+    # accumulated breakdown right before the training loop begins.
+    # Pure measurement - no control-flow or data changes, so training
+    # behavior is bit-identical with or without these calls.
+    _startup_timings = []
+    _phase_state = {"label": None, "t0": time.time()}
+
+    def _phase(label):
+        now = time.time()
+        if _phase_state["label"] is not None:
+            _startup_timings.append(
+                (_phase_state["label"], now - _phase_state["t0"]))
+        _phase_state["label"] = label
+        _phase_state["t0"] = now
+
+    def _dump_startup_timings():
+        # Close the final open phase, then print a padded table.
+        _phase(None)
+        if not _startup_timings:
+            return
+        total = sum(d for _, d in _startup_timings)
+        width = max(len(name) for name, _ in _startup_timings)
+        print("\n[startup-timing] cold-start phase breakdown "
+              "(restart -> first TRAIN iteration):", flush=True)
+        for name, dur in _startup_timings:
+            pct = (100.0 * dur / total) if total > 0 else 0.0
+            print(f"[startup-timing]   {name.ljust(width)}  "
+                  f"{dur:8.2f}s  ({pct:5.1f}%)", flush=True)
+        print(f"[startup-timing]   {'TOTAL'.ljust(width)}  "
+              f"{total:8.2f}s  (100.0%)\n", flush=True)
+
+    _phase("env_spawn (Unity handshake)")
     # Environment. Use same for eval and collection, though this does not seem standard?
     env = build_train_env(num_envs, course_type="donut")
     # Bookkeeping that used to live on env.course; tracking it in main() lets
@@ -826,6 +862,7 @@ def main(
     eval_dir=os.path.join(tempdir, str(job_id),"eval")
     file_writer = tf.summary.create_file_writer(log_dir)
     file_writer.set_as_default()
+    _phase("strategy+config+reward")
     # Strategy
     use_gpu = True #@param {type:"boolean"}
     strategy = strategy_utils.get_strategy(tpu=False, use_gpu=use_gpu)
@@ -911,6 +948,7 @@ def main(
     # robot are idempotent).
     publish_env_spec(env)
 
+    _phase("network_build (actor+critic)")
     with strategy.scope():
         critic_net = critic_network.CriticNetwork(
             (observation_spec, action_spec),
@@ -929,6 +967,7 @@ def main(
             continuous_projection_net=(
                 tanh_normal_projection_network.TanhNormalProjectionNetwork))
 
+    _phase("expert_tfrecord_load (500k records)")
     record_dir = '/tfrecords/job_64168c1b58d4d8ccdb76e721'
     # 1. You already loaded the expert demos into memory as a Trajectory object
     # (Renaming the variable from 'files' to 'expert_trajectories' for clarity)
@@ -971,6 +1010,7 @@ def main(
     #     parsed_dataset=parsed_dataset)
 
 
+    _phase("agent_build (SAC)")
     # Agent.
     with strategy.scope():
         train_step = train_utils.create_train_step()
@@ -997,6 +1037,7 @@ def main(
         )
         
         tf_agent.initialize()
+    _phase("reverb_setup")
     # Replay Buffer.
     # collect_observer is fan-out-aware: in multi-env mode it splits the
     # batched Trajectory produced by ParallelPyEnvironment into N
@@ -1088,6 +1129,7 @@ def main(
     # at pause (Option A: buffer state is not preserved across the
     # pause/resume boundary). Without it, SAC's mixed sampler would
     # underflow at every gradient step.
+    _phase("demo_prefill (-> Reverb)")
     skip_demo_prefill = (
         is_resume_val
         and demo_prefill_count > 0
@@ -1141,6 +1183,7 @@ def main(
     # restores from learner_dir/train/checkpoint on init). BC-
     # pretraining on top would overwrite that with another round of
     # imitation, wasting the saved policy progress.
+    _phase("bc_pretrain")
     if bc_pretrain_steps_val > 0 and not is_resume_val:
         collect_training_data.bc_pretrain_actor_net(
             actor_net=actor_net,
@@ -1165,6 +1208,7 @@ def main(
             f"shortly).",
             flush=True)
 
+    _phase("initial_collect")
     initial_collect_actor = actor.Actor(
         env,
         random_policy,
@@ -1187,6 +1231,7 @@ def main(
         summary_dir=train_dir,
         observers=[rb_observer, env_step_metric])
     
+    _phase("learner+eval_actor build")
     eval_actor = actor.Actor(
         env,
         eval_policy,
@@ -1328,6 +1373,7 @@ def main(
               flush=True)
         return results
 
+    _phase("first_eval")
     metrics = get_eval_metrics()
 
     def log_eval_metrics(step, metrics):
@@ -1425,6 +1471,7 @@ def main(
             f"{int(train_step.numpy())} (skipping post-BC reset).",
             flush=True)
 
+    _phase("pre_train_eval")
     # Evaluate the agent's policy once before training.
     avg_return = get_eval_metrics()["AverageReturn"]
     returns = [avg_return]
@@ -1484,6 +1531,8 @@ def main(
     # candidate-path fan; the loop just feeds it the latest policy+obs below.
     # See rl_agent/rollout_viz.py + docs/trajectory-rollout-viz.md.
     rollout_viz = get_viz()
+
+    _dump_startup_timings()
 
     for _ in range(remaining_iterations):
         # Cooperative lifecycle check. The dashboard's Jobs-tab Pause
