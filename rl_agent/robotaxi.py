@@ -490,14 +490,26 @@ def build_train_env(num_envs, course_type='donut'):
         return make_env('ros-server-0:50051', course_type=course_type)
 
     from tf_agents.environments import parallel_py_environment
+    # Quiesce the rollout-viz background sampler around the multiprocessing
+    # spawn below. A concurrent TF/GPU inference in that thread races the
+    # ParallelPyEnvironment fork and can segfault the whole process (observed
+    # 2026-06-10, mid-`sample_rollouts_multi` while spawning a new job's env).
+    # pause_viz() blocks until any in-flight inference tick finishes; the
+    # finally re-enables it once all workers are started. No-op when viz is
+    # disabled or not yet constructed.
+    from rollout_viz import pause_viz, resume_viz
     # actor_index=i wraps each worker's stdout/stderr with [actor-N] so
     # robotaxi.out (and the dashboard log view) become legible when
     # multiple workers are emitting interleaved per-step prints.
-    return parallel_py_environment.ParallelPyEnvironment(
-        [(lambda i=i: make_env(f'ros-server-{i}:50051',
-                               course_type=course_type,
-                               actor_index=i))
-         for i in range(num_envs)])
+    pause_viz()
+    try:
+        return parallel_py_environment.ParallelPyEnvironment(
+            [(lambda i=i: make_env(f'ros-server-{i}:50051',
+                                   course_type=course_type,
+                                   actor_index=i))
+             for i in range(num_envs)])
+    finally:
+        resume_viz()
 
 
 def configure_env(env, job_id="", pass_through_actions=False,

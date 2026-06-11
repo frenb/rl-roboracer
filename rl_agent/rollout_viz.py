@@ -313,6 +313,14 @@ class RolloutViz:
         self._pubs = {}             # addr -> _DirectPublisher (one per server)
         self._pub_fail = set()      # addrs that failed to init (don't retry)
         self._err_count = 0
+        # Pause gate + in-flight guard. When _paused is set the _run loop
+        # skips all TF/GPU inference; _busy_lock is held around each inference
+        # tick so pause() can block until any in-flight tick finishes. This
+        # lets callers (e.g. build_train_env's ParallelPyEnvironment spawn)
+        # guarantee no TF op overlaps a multiprocessing fork, which otherwise
+        # races and segfaults the process (observed 2026-06-10).
+        self._paused = threading.Event()
+        self._busy_lock = threading.Lock()
         if self.cfg["enabled"]:
             self._start_background()
 
@@ -381,44 +389,67 @@ class RolloutViz:
         period = 1.0 / max(1.0, float(self.cfg["hz"]))
         while not self._stop.is_set():
             t0 = time.time()
-            with self._ctx_lock:
-                policy = self._policy
-                obs = self._obs
-                step = self._step
-                mode = self._mode
-            if policy is not None and obs is not None:
-                n = obs.shape[0]
-                # Which actors to publish for. During eval the batch is size 1
-                # (the single eval env on ros-server-0).
-                if self.cfg["all_actors"]:
-                    indices = list(range(n))
-                else:
-                    indices = [min(self.cfg["actor_index"], n - 1)]
-                try:
-                    # ONE batched inference for all selected actors, then split
-                    # + publish each to its own ros-server-{i}. A single big
-                    # policy call is far cheaper than one call per actor.
-                    obs_sel = obs[indices]
-                    samples_m, weights_m = sample_rollouts_multi(
-                        policy, obs_sel, self.cfg["K"], self.cfg["H"],
-                        cpu=self.cfg["cpu_inference"])
-                    for j, i in enumerate(indices):
-                        pub = self._publisher_for(i)
-                        if pub is None:
-                            continue
-                        payload = build_payload(
-                            samples_m[j], weights_m[j], step, self.cfg["dt"],
-                            self.cfg["H"], self.cfg)
-                        payload["mode"] = mode      # train/eval, for the HUD
-                        payload["actor"] = int(i)   # actor index (HUD cross-check)
-                        pub.publish_rollout(json.dumps(payload))
-                except Exception as e:  # noqa: BLE001 - never kill the thread
-                    self._err_count += 1
-                    if self._err_count <= 5 or self._err_count % 200 == 0:
-                        print(f"[rollout_viz] sample/publish error "
-                              f"#{self._err_count}: {e}", flush=True)
+            # Skip all TF/GPU inference while paused (e.g. during env spawn).
+            if self._paused.is_set():
+                self._stop.wait(period)
+                continue
+            # Hold _busy_lock around the inference tick so pause() can block
+            # until it finishes; re-check _paused inside the lock to close the
+            # race where pause() fires between the check above and the acquire.
+            with self._busy_lock:
+                if self._paused.is_set():
+                    continue
+                with self._ctx_lock:
+                    policy = self._policy
+                    obs = self._obs
+                    step = self._step
+                    mode = self._mode
+                if policy is not None and obs is not None:
+                    n = obs.shape[0]
+                    # Which actors to publish for. During eval the batch is
+                    # size 1 (the single eval env on ros-server-0).
+                    if self.cfg["all_actors"]:
+                        indices = list(range(n))
+                    else:
+                        indices = [min(self.cfg["actor_index"], n - 1)]
+                    try:
+                        # ONE batched inference for all selected actors, then
+                        # split + publish each to its own ros-server-{i}. A
+                        # single big policy call is far cheaper than per-actor.
+                        obs_sel = obs[indices]
+                        samples_m, weights_m = sample_rollouts_multi(
+                            policy, obs_sel, self.cfg["K"], self.cfg["H"],
+                            cpu=self.cfg["cpu_inference"])
+                        for j, i in enumerate(indices):
+                            pub = self._publisher_for(i)
+                            if pub is None:
+                                continue
+                            payload = build_payload(
+                                samples_m[j], weights_m[j], step,
+                                self.cfg["dt"], self.cfg["H"], self.cfg)
+                            payload["mode"] = mode     # train/eval, for the HUD
+                            payload["actor"] = int(i)  # actor index (HUD x-ref)
+                            pub.publish_rollout(json.dumps(payload))
+                    except Exception as e:  # noqa: BLE001 - never kill thread
+                        self._err_count += 1
+                        if self._err_count <= 5 or self._err_count % 200 == 0:
+                            print(f"[rollout_viz] sample/publish error "
+                                  f"#{self._err_count}: {e}", flush=True)
             elapsed = time.time() - t0
             self._stop.wait(max(0.0, period - elapsed))
+
+    def pause(self):
+        """Suspend background inference and block until any in-flight tick
+        finishes. Safe to call repeatedly; pair with resume()."""
+        self._paused.set()
+        # Acquiring _busy_lock waits out a tick that's already running its TF
+        # op, so on return no inference is in flight.
+        with self._busy_lock:
+            pass
+
+    def resume(self):
+        """Re-enable background inference after a pause()."""
+        self._paused.clear()
 
     def stop(self):
         self._stop.set()
@@ -440,3 +471,24 @@ def get_viz():
             if _GLOBAL_VIZ is None:
                 _GLOBAL_VIZ = RolloutViz()
     return _GLOBAL_VIZ
+
+
+def pause_viz():
+    """Pause the rollout-viz singleton's background sampler, if one exists.
+
+    No-op when viz is disabled or the singleton hasn't been constructed yet,
+    so it is always safe to bracket risky sections (e.g. multiprocessing
+    spawns) with pause_viz()/resume_viz() regardless of viz state. Reads the
+    singleton without the construction lock on purpose: we only want to act on
+    an ALREADY-running sampler, never to construct one here.
+    """
+    v = _GLOBAL_VIZ
+    if v is not None:
+        v.pause()
+
+
+def resume_viz():
+    """Resume the rollout-viz singleton's sampler if it exists (no-op else)."""
+    v = _GLOBAL_VIZ
+    if v is not None:
+        v.resume()
