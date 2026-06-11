@@ -321,6 +321,11 @@ class RolloutViz:
         # races and segfaults the process (observed 2026-06-10).
         self._paused = threading.Event()
         self._busy_lock = threading.Lock()
+        # HUD mode-publish throttle (see publish_mode). Steady-state mode
+        # heartbeats are rate-limited; a mode CHANGE is sent immediately.
+        self._last_mode_pub = 0.0
+        self._last_mode_published = None
+        self._mode_pub_min_interval = 1.0
         if self.cfg["enabled"]:
             self._start_background()
 
@@ -352,6 +357,54 @@ class RolloutViz:
                       f"skipping that client", flush=True)
                 return None
         return pub
+
+    def publish_mode(self, mode, n_actors=1, step=None):
+        """Publish a minimal mode-only payload so the Unity HUD's
+        TRAINING/EVAL indicator stays live even when the heavy rollout fan is
+        disabled.
+
+        Independent of cfg['enabled'] and of any TF inference: sends a tiny
+        JSON payload carrying just ``mode`` with empty trajectory arrays. The
+        Unity TrajectoryRolloutViz tolerates an empty fan (k=0 draws nothing)
+        but still reads the mode + actor for the HUD. The HUD expires the mode
+        after ~5s, so callers should invoke this at least every few seconds
+        (e.g. once per training iteration); steady-state heartbeats are
+        throttled to ~1Hz here, but a mode CHANGE is published immediately.
+        Never raises - the HUD must not disturb training.
+        """
+        try:
+            now = time.time()
+            changed = (mode != self._last_mode_published)
+            if (not changed
+                    and (now - self._last_mode_pub)
+                    < self._mode_pub_min_interval):
+                return
+            self._last_mode_pub = now
+            self._last_mode_published = mode
+            n = max(1, int(n_actors))
+            indices = (list(range(n)) if self.cfg["all_actors"]
+                       else [min(self.cfg["actor_index"], n - 1)])
+            payload = {
+                "mode": str(mode),
+                "actor": 0,
+                "k": 0,
+                "horizon": 0,
+                "dt": float(self.cfg["dt"]),
+                "step": int(step) if step is not None else 0,
+                # Empty (but present + non-null) so Unity's OnRollouts accepts
+                # the payload and updates its mode without drawing a fan.
+                "accel": [],
+                "steer": [],
+                "weights": [],
+            }
+            for i in indices:
+                pub = self._publisher_for(i)
+                if pub is None:
+                    continue
+                payload["actor"] = int(i)
+                pub.publish_rollout(json.dumps(payload))
+        except Exception:  # noqa: BLE001 - HUD mode must never break training
+            pass
 
     def update_context(self, policy, ts_env, step=None, mode="train"):
         """Hand the background thread the latest policy + FULL batched obs.

@@ -1381,6 +1381,8 @@ def main(
                 try:
                     get_viz().update_context(eval_policy, env, eval_step,
                                              mode="eval")
+                    # Keep the HUD on EVAL even when the fan is disabled.
+                    get_viz().publish_mode("eval", num_envs, eval_step)
                 except Exception:  # noqa: BLE001 - viz must never break eval
                     pass
                 _eval_viz_stop.wait(0.05)
@@ -1738,6 +1740,10 @@ def main(
         # unless ROLLOUT_VIZ_ENABLED). collect_policy is the stochastic
         # SAC policy, so its sampled action sequences show real spread.
         rollout_viz.maybe_publish(collect_policy, step, env)
+        # Keep the Unity HUD's TRAINING indicator live regardless of the fan:
+        # publish_mode is independent of ROLLOUT_VIZ_ENABLED and does no TF
+        # inference, so the HUD shows "TRAINING" even when the fan is off.
+        rollout_viz.publish_mode("train", num_envs, step)
 
         # Buffer-size readout via Reverb's server_info gRPC (same query
         # print_replay_buffer_size used to do). One round-trip per
@@ -2115,6 +2121,9 @@ def run_policy(saved_policy, tf_env, job_id="",
             # Rollout-viz fan (throttled; no-op unless ROLLOUT_VIZ_ENABLED).
             # ts from the batched eval env, publish via the RobotaxiEnv.
             eval_rollout_viz.maybe_publish(saved_policy, step, batch_tf_env, tf_env)
+            # Keep the Unity HUD on EVAL even when the fan is disabled (single
+            # eval env -> one client).
+            eval_rollout_viz.publish_mode("eval", 1, step)
             episodes_done = int(episodes_metric.result())
             partial = ', '.join(
                 '{} = {:.4f}'.format(m.name, float(m.result()))
