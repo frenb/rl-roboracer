@@ -513,7 +513,8 @@ def build_train_env(num_envs, course_type='donut'):
 
 
 def configure_env(env, job_id="", pass_through_actions=False,
-                  corner_radius=10.0, curvature_difficulty=0.0):
+                  corner_radius=10.0, curvature_difficulty=0.0,
+                  env_discount=None):
     """Apply per-job config to a single env or all parallel subprocess envs.
 
     tf-agents 0.11 doesn't put a public `call()` proxy on
@@ -532,14 +533,14 @@ def configure_env(env, job_id="", pass_through_actions=False,
     if isinstance(env, parallel_py_environment.ParallelPyEnvironment):
         promises = [
             proc_env.call('configure', job_id, pass_through_actions,
-                          corner_radius, curvature_difficulty)
+                          corner_radius, curvature_difficulty, env_discount)
             for proc_env in env._envs
         ]
         for promise in promises:
             promise()
     else:
         env.configure(job_id, pass_through_actions,
-                      corner_radius, curvature_difficulty)
+                      corner_radius, curvature_difficulty, env_discount)
 
 
 def install_reward_design_on_env(env, name, code):
@@ -802,6 +803,12 @@ def main(
     # when main() is invoked.
     corner_radius_val=10.0,
     curvature_difficulty_val=0.0,
+    # Per-step env discount returned by the course on non-terminal steps;
+    # compounds with gamma_val (effective discount = gamma * env_discount).
+    # Default 0.90 preserves legacy behavior; set 1.0 (via an experiment
+    # design) to let gamma alone govern the horizon - matters for speed/lap
+    # objectives where the ~9-step legacy horizon is too myopic.
+    env_discount_val=0.90,
     # ---- Seed plumbing ----------------------------------------------
     # Optional RNG seed used for the bit-identical validation
     # procedure (see rl_agent/reward_designs.py docs). When set, we
@@ -957,8 +964,11 @@ def main(
     # value never took effect. Preserve that here by passing False directly.
     configure_env(env, job_id=job_id, pass_through_actions=False,
                   corner_radius=corner_radius_val,
-                  curvature_difficulty=curvature_difficulty_val)
+                  curvature_difficulty=curvature_difficulty_val,
+                  env_discount=env_discount_val)
     print(f"pass_through_actions: False")
+    print(f"env_discount={env_discount_val} (effective gamma*env_discount "
+          f"= {gamma_val * env_discount_val:.4f})", flush=True)
 
     # Seed every RNG we know about so bit-identical comparison runs are
     # reproducible when the caller supplies a fixed `seed`. Only runs

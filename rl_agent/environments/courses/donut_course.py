@@ -10,6 +10,13 @@ class DonutCourse (BaseCourse):
     def __init__(self, api, env):
         self.env = env
         self._api = api
+        # Per-step discount returned on every non-terminal transition. This
+        # compounds with the SAC agent's gamma, so the EFFECTIVE discount is
+        # gamma * env_discount. Default 0.90 (legacy; with gamma=0.99 that's
+        # an effective ~0.89 / ~9-step horizon). Override per-experiment via
+        # the experiment_designs `env_discount` knob (set 1.0 to let gamma
+        # alone govern the horizon - important for speed/lap objectives).
+        self.env_discount = 0.90
         self.last_goal_reached=""
         self.speeds_arr=[]
         self.steering_angle_ratio_arr=[]
@@ -263,7 +270,7 @@ class DonutCourse (BaseCourse):
         self.steps_since_last_goal += 1
         reward = float(self._compute_standard_reward(data, data_arr, step_costs))
         log_reward(self.env.job_id, "did not fail", reward, diff=float(diff), extra_data=data, stat_array=data_arr)
-        return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
+        return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=self.env_discount)
 
     def reward_success(self, curr_step_cost, job_id, data, data_arr, step_costs, position_history):
         self.env._episode_ended = False
@@ -277,7 +284,7 @@ class DonutCourse (BaseCourse):
         print("goal reached: " + str(reward))
         log_reward(self.env.job_id, "has succeeded", reward, extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
         self.reset_after_goal_reached()
-        return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=0.90)
+        return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=self.env_discount)
 
     def reward_failure(self, job_id, step_costs, data, data_arr, position_history):
         self.env._episode_ended = True
