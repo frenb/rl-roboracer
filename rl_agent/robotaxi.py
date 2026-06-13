@@ -659,6 +659,36 @@ def _measure_demo_batch_fraction(demo_rb, online_rb, ratio, batch_size,
     return realized, demo_rows, total_rows
 
 
+def _append_eval_curve(job_id, step, avg_return, avg_ep_len):
+    """Best-effort append of one in-training eval point to a per-job CSV.
+
+    Gives a fast, file-based record of the (step, AverageReturn,
+    AverageEpisodeLength) learning curve so offline stall/recovery analysis
+    (e.g. "did this seed ever recover above its BC start?") is a trivial CSV
+    read instead of a slow unindexed db.logs scan.
+
+    Written under the job's /tmp/active/<id>/ dir, which move_all_jobs_data
+    archives to /tmp/jobsdata/<id>/ at job end - so the curve persists with
+    the job's other artifacts. Pure logging: never raises, so it can't
+    disturb the eval/training loop.
+    """
+    if not job_id:
+        return
+    try:
+        d = os.path.join("/tmp/active", str(job_id))
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, "eval_curve.csv")
+        write_header = not os.path.exists(path)
+        with open(path, "a") as f:
+            if write_header:
+                f.write("step,avg_return,avg_ep_len\n")
+            r = "" if avg_return is None else f"{float(avg_return):.6f}"
+            e = "" if avg_ep_len is None else f"{float(avg_ep_len):.4f}"
+            f.write(f"{int(step)},{r},{e}\n")
+    except Exception:  # noqa: BLE001 - logging must never disturb eval
+        pass
+
+
 def main(
     job_id="",
     num_envs=1,
@@ -1429,6 +1459,7 @@ def main(
               f"AverageEpisodeLength={avg_ep_len_str} "
               f"cumulative_episodes={post_episodes_str}",
               flush=True)
+        _append_eval_curve(job_id, eval_step, avg_return, avg_ep_len)
         return results
 
     _phase("first_eval")
