@@ -90,7 +90,8 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         return self._api.get_timeout_counts()
 
     def configure(self, job_id="", pass_through_actions=False,
-                  corner_radius=10.0, curvature_difficulty=0.0):
+                  corner_radius=10.0, curvature_difficulty=0.0,
+                  env_discount=None):
         """Apply per-job configuration to this env.
 
         Exposed as a method (rather than direct attribute writes) so the
@@ -108,6 +109,10 @@ class RobotaxiEnv(py_environment.PyEnvironment):
             self.corner_radius = float(corner_radius)
         if curvature_difficulty is not None:
             self.curvature_difficulty = float(curvature_difficulty)
+        # Per-step env discount (see DonutCourse.env_discount). None -> keep
+        # the course's default; a value overrides it for this job's course.
+        if env_discount is not None:
+            self.course.env_discount = float(env_discount)
 
     def publish_rollouts(self, payload_json):
         """Forward a policy-rollout-viz payload to Unity via this env's api.

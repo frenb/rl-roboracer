@@ -58,6 +58,14 @@ SCHEMA = {
         "paper_ref": None,
         "kwarg": "num_iterations_val",
     },
+    "env_discount": {
+        "type": "float",
+        "default": 0.90,
+        "min": 0.0, "max": 1.0,
+        "doc": "Per-step discount the env returns on non-terminal transitions; compounds with gamma (effective discount = gamma * env_discount). Legacy default 0.90 yields a short ~9-step horizon at gamma=0.99; set 1.0 to let gamma alone govern the horizon (better for speed / lap objectives).",
+        "paper_ref": None,
+        "kwarg": "env_discount_val",
+    },
     "initial_collect_steps": {
         "type": "int",
         "default": 500,
