@@ -38,6 +38,8 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         self._time_step_spec = ts.time_step_spec(self._observation_spec)
         self._state = self.course.get_empty_state()
         self._episode_ended = False
+        self._reset_pending = False  # True if Unity was already reset (avoid double reset)
+        self._immediate_reset_on_failure = True  # Set False during eval to avoid blocking
         self.job_id=""
         self.has_reset = False
         self.pass_through_actions = False
@@ -114,6 +116,14 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         if env_discount is not None:
             self.course.env_discount = float(env_discount)
 
+    def set_immediate_reset_on_failure(self, enabled):
+        """Enable/disable immediate Unity reset on episode failure.
+
+        Called via ParallelPyEnvironment.call() to toggle behavior between
+        training (immediate=True) and eval (immediate=False).
+        """
+        self._immediate_reset_on_failure = bool(enabled)
+
     def publish_rollouts(self, payload_json):
         """Forward a policy-rollout-viz payload to Unity via this env's api.
 
@@ -158,8 +168,13 @@ class RobotaxiEnv(py_environment.PyEnvironment):
 
     def _reset(self):
         self._episode_ended = False
-        #self._api.DoResetBlocking()
-        self.course.do_reset_blocking()
+        # Skip the Unity reset if it was already triggered immediately on
+        # episode end (see donut_course.reward_failure). This avoids a
+        # redundant 4-second reset wait when the trainer eventually calls
+        # step() after a termination.
+        if not self._reset_pending:
+            self.course.do_reset_blocking()
+        self._reset_pending = False
         data = self._api.GetCarSceneDataBlocking()
         self.data = data
         data_arr=self.course.scene_data_array(data)
