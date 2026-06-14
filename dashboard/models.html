@@ -1744,6 +1744,11 @@
         updateCounts(visibleRows);
       }
 
+      /* ---------- WebSocket + Polling ----------------------------------- */
+      const POLL_INTERVAL_WITH_WS = 30000;
+      const POLL_INTERVAL_WITHOUT_WS = 5000;
+      let dataWs = null;
+
       async function pollOnce(force) {
         if (pollInFlight) return;
         pollInFlight = true;
@@ -1821,10 +1826,71 @@
         }
       }
 
+      // Handle WebSocket change events
+      function handleWsChange(collection, change) {
+        const { operationType, documentKey, fullDocument } = change;
+        const id = documentKey?._id;
+        if (!id) return;
+        freshness.markSuccess();
+
+        if (collection === 'models') {
+          if (operationType === 'insert' && fullDocument) {
+            modelsCache.unshift(fullDocument);
+            rerenderTable();
+          } else if (operationType === 'update' && fullDocument) {
+            const idx = modelsCache.findIndex(m => String(m._id) === String(id));
+            if (idx >= 0) modelsCache[idx] = fullDocument;
+            else modelsCache.unshift(fullDocument);
+            rerenderTable();
+          } else if (operationType === 'delete') {
+            modelsCache = modelsCache.filter(m => String(m._id) !== String(id));
+            rerenderTable();
+          }
+        } else if (collection === 'leaderboard_scores') {
+          if (operationType === 'insert' && fullDocument) {
+            leaderboardCache.push(fullDocument);
+            rerenderTable();
+          } else if (operationType === 'update' && fullDocument) {
+            const idx = leaderboardCache.findIndex(s => String(s._id) === String(id));
+            if (idx >= 0) leaderboardCache[idx] = fullDocument;
+            else leaderboardCache.push(fullDocument);
+            rerenderTable();
+          } else if (operationType === 'delete') {
+            leaderboardCache = leaderboardCache.filter(s => String(s._id) !== String(id));
+            rerenderTable();
+          }
+        } else if (collection === 'env_specs') {
+          if (fullDocument) {
+            const idx = envSpecsCache.findIndex(e => String(e._id) === String(id));
+            if (idx >= 0) envSpecsCache[idx] = fullDocument;
+            else envSpecsCache.push(fullDocument);
+            rerenderTable();
+          }
+        }
+      }
+
+      function updatePollInterval() {
+        if (pollHandle) clearInterval(pollHandle);
+        const interval = dataWs?.isConnected() ? POLL_INTERVAL_WITH_WS : POLL_INTERVAL_WITHOUT_WS;
+        pollHandle = setInterval(() => pollOnce(false), interval);
+        console.log('[Polling] Interval set to', interval, 'ms (WS connected:', dataWs?.isConnected() || false, ')');
+      }
+
+      // Initialize WebSocket connection
+      dataWs = new RoboracerUI.DataWebSocket({
+        collections: ['models', 'leaderboard_scores', 'env_specs'],
+        onConnect: updatePollInterval,
+        onDisconnect: updatePollInterval,
+        onChange: handleWsChange,
+      });
+
       pollOnce(true);
-      pollHandle = setInterval(() => pollOnce(false), 5000);
+      dataWs.connect();
+      updatePollInterval();
+
       window.addEventListener('beforeunload', () => {
-        clearInterval(pollHandle);
+        if (pollHandle) clearInterval(pollHandle);
+        if (dataWs) dataWs.close();
         freshness.destroy();
       });
     })();

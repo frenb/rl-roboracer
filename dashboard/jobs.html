@@ -1147,21 +1147,28 @@
         }
       }, true);
 
-      /* ---------- Polling ----------------------------------- */
+      /* ---------- WebSocket + Polling ----------------------------------- */
+      // WebSocket for real-time incremental updates from MongoDB change streams.
+      // Falls back to polling if WebSocket disconnects.
 
       let pollHandle = null;
       let pollInFlight = false;
+      let ws = null;
+      let wsConnected = false;
+      let wsReconnectTimer = null;
+      const WS_RECONNECT_DELAY = 3000;
+      const POLL_INTERVAL_WITH_WS = 30000;    // Slow fallback when WS connected
+      const POLL_INTERVAL_WITHOUT_WS = 5000;  // Fast polling when WS disconnected
 
-      async function pollOnce(force) {
+      // Initial full data fetch via HTTP
+      async function fetchFullData() {
         if (pollInFlight) return;
         pollInFlight = true;
         try {
-          const url = `/get_jobs?force=${force ? 'true' : 'false'}`;
+          const url = `/get_jobs?force=true`;
           const res = await fetch(url);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const text = await res.text();
-          // Count NO_CHANGES as success too - the server reached Mongo,
-          // there just was nothing new.
           freshness.markSuccess();
           if (text === 'NO_CHANGES') return;
           const json = JSON.parse(text);
@@ -1170,10 +1177,6 @@
           json.sort((a, b) => String(b._id).localeCompare(String(a._id)));
           table.setData(json);
           updateCounts(json);
-          // If a pending focus request landed before the first poll
-          // returned data, try to satisfy it now that the table has
-          // rows. drainPendingFocus() is idempotent and a no-op if
-          // nothing's pending.
           drainPendingFocus();
         } catch (err) {
           console.error(err);
@@ -1184,8 +1187,111 @@
         }
       }
 
+      // Handle incremental update from WebSocket
+      function handleWsChange(data) {
+        const { operationType, documentKey, updateDescription, fullDocument } = data;
+        const id = documentKey?._id;
+        if (!id) return;
+
+        freshness.markSuccess();
+
+        if (operationType === 'insert' && fullDocument) {
+          // Add new row at the top (newest first)
+          table._tabulator.addData([fullDocument], true);
+          table._rows.unshift(fullDocument);
+          updateCounts(table._rows);
+          console.log('[WS] Inserted job:', id);
+        } else if (operationType === 'update' && fullDocument) {
+          // Update existing row with full document
+          table._tabulator.updateData([fullDocument]);
+          // Update internal _rows array
+          const idx = table._rows.findIndex(r => String(r._id) === String(id));
+          if (idx >= 0) table._rows[idx] = fullDocument;
+          updateCounts(table._rows);
+          console.log('[WS] Updated job:', id);
+        } else if (operationType === 'delete') {
+          // Remove row
+          table._tabulator.deleteRow(String(id));
+          table._rows = table._rows.filter(r => String(r._id) !== String(id));
+          updateCounts(table._rows);
+          console.log('[WS] Deleted job:', id);
+        } else if (operationType === 'replace' && fullDocument) {
+          // Replace entire document
+          table._tabulator.updateData([fullDocument]);
+          const idx = table._rows.findIndex(r => String(r._id) === String(id));
+          if (idx >= 0) table._rows[idx] = fullDocument;
+          updateCounts(table._rows);
+          console.log('[WS] Replaced job:', id);
+        }
+      }
+
+      // Connect to WebSocket server for real-time updates
+      function connectWebSocket() {
+        if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+          return; // Already connected or connecting
+        }
+
+        const wsUrl = `ws://${window.location.hostname}:8082`;
+        console.log('[WS] Connecting to', wsUrl);
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          console.log('[WS] Connected');
+          wsConnected = true;
+          // Subscribe to jobs collection
+          ws.send(JSON.stringify({ type: 'subscribe', collections: ['jobs'] }));
+          // Switch to slower polling as fallback
+          updatePollInterval();
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            console.log('[WS] Received:', msg.type, msg.collection || '');
+            if (msg.type === 'change' && msg.collection === 'jobs') {
+              handleWsChange(msg);
+            } else if (msg.type === 'subscribed') {
+              console.log('[WS] Subscribed to:', msg.collections);
+            }
+          } catch (e) {
+            console.error('[WS] Parse error:', e);
+          }
+        };
+
+        ws.onclose = () => {
+          console.log('[WS] Disconnected');
+          wsConnected = false;
+          ws = null;
+          updatePollInterval();
+          // Schedule reconnect
+          if (!wsReconnectTimer) {
+            wsReconnectTimer = setTimeout(() => {
+              wsReconnectTimer = null;
+              connectWebSocket();
+            }, WS_RECONNECT_DELAY);
+          }
+        };
+
+        ws.onerror = (err) => {
+          console.error('[WS] Error:', err);
+        };
+      }
+
+      // Update polling interval based on WebSocket connection state
+      function updatePollInterval() {
+        if (pollHandle) clearInterval(pollHandle);
+        const interval = wsConnected ? POLL_INTERVAL_WITH_WS : POLL_INTERVAL_WITHOUT_WS;
+        pollHandle = setInterval(() => fetchFullData(), interval);
+        console.log('[Polling] Interval set to', interval, 'ms (WS connected:', wsConnected, ')');
+      }
+
+      // Legacy pollOnce for compatibility with scheduleImmediatePoll
+      async function pollOnce(force) {
+        return fetchFullData();
+      }
+
       function scheduleImmediatePoll() {
-        setTimeout(() => pollOnce(true), 200);
+        setTimeout(() => fetchFullData(), 200);
       }
 
       /* ---------- Cross-tab "focus this job" handoff ---------------
@@ -1256,10 +1362,15 @@
         if (focusParam) requestFocusJob(focusParam);
       } catch (_e) { /* swallow */ }
 
-      pollOnce(true);
-      pollHandle = setInterval(() => pollOnce(false), 5000);
+      // Initial fetch + connect WebSocket for real-time updates
+      fetchFullData();
+      connectWebSocket();
+      updatePollInterval();
+
       window.addEventListener('beforeunload', () => {
-        clearInterval(pollHandle);
+        if (pollHandle) clearInterval(pollHandle);
+        if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
+        if (ws) ws.close();
         freshness.destroy();
       });
     })();

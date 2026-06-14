@@ -159,19 +159,19 @@ var config = {
                       type: 'component',
                       title: 'Jobs',
                       componentName: 'iframeComponent',
-                      componentState: { src: 'http://localhost/jobs', id: 'jobs' }
+                      componentState: { src: 'http://localhost/jobs?v=ws2', id: 'jobs' }
                     },
                     {
                       type: 'component',
                       title: 'Models',
                       componentName: 'iframeComponent',
-                      componentState: { src: 'http://localhost/models', id: 'models' }
+                      componentState: { src: 'http://localhost/models?v=ws1', id: 'models' }
                     },
                     {
                       type: 'component',
                       title: 'Leaderboard',
                       componentName: 'iframeComponent',
-                      componentState: { src: "http://localhost/leaderboard", id: 'leaderboard' }
+                      componentState: { src: "http://localhost/leaderboard?v=ws1", id: 'leaderboard' }
                     },
                     {
                       type: 'component',
@@ -206,7 +206,7 @@ var config = {
                       // disk, so the iframe works without waiting for
                       // a dashboard image rebuild that registers the
                       // matching /reward_designs route.
-                      componentState: { src: "http://localhost/reward_designs.html", id: 'reward_designs' }
+                      componentState: { src: "http://localhost/reward_designs.html?v=ws1", id: 'reward_designs' }
                     },
                     {
                       type: 'component',
@@ -216,7 +216,7 @@ var config = {
                       // BC pretrain, replay capacity, optimizer LRs,
                       // network sizes, demo-protected buffer knobs.
                       // Same ".html" rationale as siblings above.
-                      componentState: { src: "http://localhost/experiment_designs.html", id: 'experiment_designs' }
+                      componentState: { src: "http://localhost/experiment_designs.html?v=ws1", id: 'experiment_designs' }
                     },
                     {
                       type: 'component',
@@ -228,7 +228,7 @@ var config = {
                       // which track geometry it ran against.
                       // ?v= busts the browser cache whenever this number
                       // is incremented after a gyms.html update.
-                      componentState: { src: "http://localhost/gyms.html?v=5", id: 'gyms' }
+                      componentState: { src: "http://localhost/gyms.html?v=ws1", id: 'gyms' }
                     }
                   ]
                 }
