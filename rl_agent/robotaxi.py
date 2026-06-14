@@ -543,6 +543,33 @@ def configure_env(env, job_id="", pass_through_actions=False,
                       corner_radius, curvature_difficulty, env_discount)
 
 
+def set_immediate_reset_on_failure(env, enabled):
+    """Enable/disable immediate Unity reset on episode failure.
+
+    During TRAINING, immediate reset is desirable so the car doesn't sit
+    dead for 10+ seconds while the learner processes. During EVAL, immediate
+    reset is counterproductive because it blocks the fast eval stepping.
+
+    Dispatches to all subprocess envs in a ParallelPyEnvironment.
+    """
+    from tf_agents.environments import parallel_py_environment
+    if isinstance(env, parallel_py_environment.ParallelPyEnvironment):
+        promises = [
+            proc_env.call('set_immediate_reset_on_failure', enabled)
+            for proc_env in env._envs
+        ]
+        for promise in promises:
+            try:
+                promise()
+            except Exception:
+                pass  # Env might not have the method (backward compat)
+    else:
+        if hasattr(env, 'set_immediate_reset_on_failure'):
+            env.set_immediate_reset_on_failure(enabled)
+        elif hasattr(env, '_immediate_reset_on_failure'):
+            env._immediate_reset_on_failure = enabled
+
+
 def install_reward_design_on_env(env, name, code):
     """Install a reward design on the env (single- or multi-env aware).
 
@@ -1430,9 +1457,14 @@ def main(
         _eval_viz_thread = threading.Thread(
             target=_feed_eval_viz, name="eval-viz-feed", daemon=True)
         _eval_viz_thread.start()
+        # Disable immediate reset during eval - eval steps quickly and the
+        # blocking reset just slows it down. The normal reset path is fast
+        # enough when there's no learner delay between steps.
+        set_immediate_reset_on_failure(env, False)
         try:
             eval_actor.run()
         finally:
+            set_immediate_reset_on_failure(env, True)
             _eval_viz_stop.set()
             _eval_viz_thread.join(timeout=1.0)
 
@@ -2239,6 +2271,9 @@ def run_policy(saved_policy, tf_env, job_id="",
         return float(num) / float(den)
 
     curr_trial=0
+    # Disable immediate reset for standalone EVAL jobs - same rationale as
+    # in-training eval: eval steps quickly without learner delay.
+    set_immediate_reset_on_failure(tf_env, False)
     try:
         while curr_trial < max_episodes:
             debug_print("in loop")
@@ -2296,6 +2331,9 @@ def run_policy(saved_policy, tf_env, job_id="",
             returns, episode_lengths, avg_speeds,
             avg_goals_per_episode_arr, avg_steering_angle_ratios,
             partial=True)
+    finally:
+        # Re-enable immediate reset for any subsequent training on this env.
+        set_immediate_reset_on_failure(tf_env, True)
 
     # Final snap to 100% on a clean completion so the Jobs tab bar
     # reaches full width even if the last per-chunk update landed

@@ -291,6 +291,20 @@ class DonutCourse (BaseCourse):
         reward = float(self._compute_failure_reward(data, data_arr, step_costs, position_history))
         log_reward(self.env.job_id, "has failed - reward", reward, extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
         self.reset_after_episode()
+        # Trigger Unity reset IMMEDIATELY during TRAINING so the car doesn't
+        # sit dead for 10+ seconds waiting for the learner. Skip during EVAL
+        # because eval steps quickly and the blocking reset just slows it down.
+        if getattr(self.env, '_immediate_reset_on_failure', True):
+            try:
+                api = self._api
+                timeouts_before = getattr(api, 'reset_timeouts', 0)
+                self.do_reset_blocking()
+                timeouts_after = getattr(api, 'reset_timeouts', 0)
+                if timeouts_after == timeouts_before:
+                    # Reset succeeded without timeout - skip redundant reset later
+                    self.env._reset_pending = True
+            except Exception as e:
+                print(f"[donut_course] immediate reset after failure: {e}", flush=True)
         term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
         return term_time_step
 
