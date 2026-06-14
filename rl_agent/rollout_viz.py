@@ -271,22 +271,52 @@ class _DirectPublisher:
     Mirrors api.RpcClient.Publish's wire format (data is the JSON-encoded ROS
     message dict) but blocking, so it can be called from the viz thread without
     an asyncio loop.
+
+    Includes health tracking: consecutive failures increment _fail_count, and
+    the channel is marked unhealthy after MAX_CONSECUTIVE_FAILURES. The owning
+    RolloutViz checks is_healthy() and can call reconnect() to reset.
     """
+    MAX_CONSECUTIVE_FAILURES = 3
 
     def __init__(self, addr):
+        self._addr = addr
+        self._fail_count = 0
+        self._last_success = 0.0
+        self._connect()
+
+    def _connect(self):
         import grpc
         from virtual_endpoint.proto import ros_service_pb2
         from virtual_endpoint.proto import ros_service_pb2_grpc
         self._pb2 = ros_service_pb2
-        self._channel = grpc.insecure_channel(addr)
+        self._channel = grpc.insecure_channel(self._addr)
         self._stub = ros_service_pb2_grpc.RosNodeStub(self._channel)
+        self._fail_count = 0
 
     def publish_rollout(self, payload_json):
         req = self._pb2.PublishRequest(
             topic="policy_rollouts",
             msg_type="std_msgs/String",
             data=json.dumps({"data": payload_json}))
-        self._stub.Publish(req, timeout=3.0)
+        try:
+            self._stub.Publish(req, timeout=3.0)
+            self._fail_count = 0
+            self._last_success = time.time()
+        except Exception:
+            self._fail_count += 1
+            raise
+
+    def is_healthy(self):
+        return self._fail_count < self.MAX_CONSECUTIVE_FAILURES
+
+    def reconnect(self):
+        """Close the old channel and create a fresh connection."""
+        try:
+            self._channel.close()
+        except Exception:
+            pass
+        self._connect()
+        return self
 
 
 class RolloutViz:
@@ -311,8 +341,9 @@ class RolloutViz:
         self._stop = threading.Event()
         self._thread = None
         self._pubs = {}             # addr -> _DirectPublisher (one per server)
-        self._pub_fail = set()      # addrs that failed to init (don't retry)
+        self._pub_fail_until = {}   # addr -> timestamp when retry is allowed
         self._err_count = 0
+        self._reconnect_backoff = 10.0  # seconds to wait before retrying failed addr
         # Pause gate + in-flight guard. When _paused is set the _run loop
         # skips all TF/GPU inference; _busy_lock is held around each inference
         # tick so pause() can block until any in-flight tick finishes. This
@@ -344,19 +375,48 @@ class RolloutViz:
               flush=True)
 
     def _publisher_for(self, i):
-        """Lazily create (and cache) the gRPC publisher for actor i's server."""
+        """Lazily create (and cache) the gRPC publisher for actor i's server.
+
+        Includes health checks: if an existing publisher has too many consecutive
+        failures, we reconnect it. If initial connection fails, we back off for
+        _reconnect_backoff seconds before retrying.
+        """
         addr = self.cfg["ros_addr_template"].format(i=i)
+        now = time.time()
+
+        # Check if this address is in backoff from a recent failure
+        fail_until = self._pub_fail_until.get(addr, 0)
+        if fail_until > now:
+            return None  # still in backoff period
+
         pub = self._pubs.get(addr)
-        if pub is None and addr not in self._pub_fail:
-            try:
-                pub = _DirectPublisher(addr)
-                self._pubs[addr] = pub
-            except Exception as e:  # noqa: BLE001
-                self._pub_fail.add(addr)
-                print(f"[rollout_viz] publisher init failed for {addr} ({e}); "
-                      f"skipping that client", flush=True)
-                return None
-        return pub
+
+        # If we have an existing publisher, check its health
+        if pub is not None:
+            if not pub.is_healthy():
+                # Too many consecutive failures - reconnect
+                try:
+                    pub.reconnect()
+                    print(f"[rollout_viz] reconnected to {addr}", flush=True)
+                except Exception as e:  # noqa: BLE001
+                    self._pub_fail_until[addr] = now + self._reconnect_backoff
+                    print(f"[rollout_viz] reconnect failed for {addr} ({e}); "
+                          f"backing off {self._reconnect_backoff}s", flush=True)
+                    return None
+            return pub
+
+        # No existing publisher - create one
+        try:
+            pub = _DirectPublisher(addr)
+            self._pubs[addr] = pub
+            # Clear any previous backoff on successful connect
+            self._pub_fail_until.pop(addr, None)
+            return pub
+        except Exception as e:  # noqa: BLE001
+            self._pub_fail_until[addr] = now + self._reconnect_backoff
+            print(f"[rollout_viz] publisher init failed for {addr} ({e}); "
+                  f"backing off {self._reconnect_backoff}s", flush=True)
+            return None
 
     def publish_mode(self, mode, n_actors=1, step=None):
         """Publish a minimal mode-only payload so the Unity HUD's
@@ -473,6 +533,7 @@ class RolloutViz:
                         samples_m, weights_m = sample_rollouts_multi(
                             policy, obs_sel, self.cfg["K"], self.cfg["H"],
                             cpu=self.cfg["cpu_inference"])
+                        published_any = False
                         for j, i in enumerate(indices):
                             pub = self._publisher_for(i)
                             if pub is None:
@@ -482,11 +543,29 @@ class RolloutViz:
                                 self.cfg["dt"], self.cfg["H"], self.cfg)
                             payload["mode"] = mode     # train/eval, for the HUD
                             payload["actor"] = int(i)  # actor index (HUD x-ref)
-                            pub.publish_rollout(json.dumps(payload))
+                            try:
+                                pub.publish_rollout(json.dumps(payload))
+                                published_any = True
+                            except Exception as pub_err:  # noqa: BLE001
+                                # publish_rollout already incremented fail_count;
+                                # _publisher_for will reconnect on next call if
+                                # unhealthy. Log sparingly.
+                                self._err_count += 1
+                                if self._err_count <= 3 or self._err_count % 100 == 0:
+                                    print(f"[rollout_viz] publish error actor {i} "
+                                          f"(#{self._err_count}): {pub_err}",
+                                          flush=True)
+                        # Reset error count on any successful publish
+                        if published_any and self._err_count > 0:
+                            if self._err_count >= 10:
+                                print(f"[rollout_viz] recovered after "
+                                      f"{self._err_count} errors", flush=True)
+                            self._err_count = 0
                     except Exception as e:  # noqa: BLE001 - never kill thread
+                        # Sampling/inference error (not publish)
                         self._err_count += 1
                         if self._err_count <= 5 or self._err_count % 200 == 0:
-                            print(f"[rollout_viz] sample/publish error "
+                            print(f"[rollout_viz] sample error "
                                   f"#{self._err_count}: {e}", flush=True)
             elapsed = time.time() - t0
             self._stop.wait(max(0.0, period - elapsed))
@@ -503,6 +582,19 @@ class RolloutViz:
     def resume(self):
         """Re-enable background inference after a pause()."""
         self._paused.clear()
+
+    def reconnect_all(self):
+        """Force all cached publishers to reconnect. Call after stack restarts."""
+        for addr, pub in list(self._pubs.items()):
+            try:
+                pub.reconnect()
+                print(f"[rollout_viz] force-reconnected to {addr}", flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"[rollout_viz] force-reconnect failed for {addr}: {e}",
+                      flush=True)
+        # Clear all backoffs so we retry immediately
+        self._pub_fail_until.clear()
+        self._err_count = 0
 
     def stop(self):
         self._stop.set()
@@ -545,3 +637,14 @@ def resume_viz():
     v = _GLOBAL_VIZ
     if v is not None:
         v.resume()
+
+
+def reconnect_viz():
+    """Force the rollout-viz singleton to reconnect all gRPC channels.
+
+    Call after a stack restart (ROS containers restarted) to clear stale
+    connections. No-op if viz is disabled or singleton doesn't exist.
+    """
+    v = _GLOBAL_VIZ
+    if v is not None:
+        v.reconnect_all()
