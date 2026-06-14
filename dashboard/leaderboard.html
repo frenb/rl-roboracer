@@ -82,8 +82,13 @@
         document.querySelector('[data-role="freshness-dot"]'),
         document.querySelector('[data-role="freshness-text"]'));
 
+      /* ---------- WebSocket + Polling ----------------------------------- */
+      const POLL_INTERVAL_WITH_WS = 30000;
+      const POLL_INTERVAL_WITHOUT_WS = 5000;
       let pollHandle = null;
       let pollInFlight = false;
+      let dataWs = null;
+      let scoresCache = [];
 
       async function pollOnce(force) {
         if (pollInFlight) return;
@@ -97,11 +102,8 @@
           if (text === 'NO_CHANGES') return;
           const json = JSON.parse(text);
           if (!Array.isArray(json)) throw new Error('Unexpected response shape');
-          const rows = json.slice().sort(
-            (a, b) => Date.parse(b.create_date) - Date.parse(a.create_date)
-          );
-          table.setData(rows);
-          updateCounts(rows);
+          scoresCache = json;
+          renderTable();
         } catch (err) {
           console.error(err);
           if (table._rows.length === 0) table.setError(String(err.message || err));
@@ -111,10 +113,55 @@
         }
       }
 
+      function renderTable() {
+        const rows = scoresCache.slice().sort(
+          (a, b) => Date.parse(b.create_date) - Date.parse(a.create_date)
+        );
+        table.setData(rows);
+        updateCounts(rows);
+      }
+
+      function handleWsChange(collection, change) {
+        if (collection !== 'leaderboard_scores') return;
+        const { operationType, documentKey, fullDocument } = change;
+        const id = documentKey?._id;
+        if (!id) return;
+        freshness.markSuccess();
+
+        if (operationType === 'insert' && fullDocument) {
+          scoresCache.push(fullDocument);
+          renderTable();
+        } else if (operationType === 'update' && fullDocument) {
+          const idx = scoresCache.findIndex(s => String(s._id) === String(id));
+          if (idx >= 0) scoresCache[idx] = fullDocument;
+          else scoresCache.push(fullDocument);
+          renderTable();
+        } else if (operationType === 'delete') {
+          scoresCache = scoresCache.filter(s => String(s._id) !== String(id));
+          renderTable();
+        }
+      }
+
+      function updatePollInterval() {
+        if (pollHandle) clearInterval(pollHandle);
+        const interval = dataWs?.isConnected() ? POLL_INTERVAL_WITH_WS : POLL_INTERVAL_WITHOUT_WS;
+        pollHandle = setInterval(() => pollOnce(false), interval);
+      }
+
+      dataWs = new RoboracerUI.DataWebSocket({
+        collections: ['leaderboard_scores'],
+        onConnect: updatePollInterval,
+        onDisconnect: updatePollInterval,
+        onChange: handleWsChange,
+      });
+
       pollOnce(true);
-      pollHandle = setInterval(() => pollOnce(false), 5000);
+      dataWs.connect();
+      updatePollInterval();
+
       window.addEventListener('beforeunload', () => {
-        clearInterval(pollHandle);
+        if (pollHandle) clearInterval(pollHandle);
+        if (dataWs) dataWs.close();
         freshness.destroy();
       });
     })();

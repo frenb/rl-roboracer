@@ -12,6 +12,67 @@ import * as morgan from 'morgan';
 
 const WebSocket = require('ws');
 
+// ----------------------------------------------------------------
+// WebSocket server for real-time data updates (MongoDB change streams)
+// Clients connect to port 8081, subscribe to collections, and receive
+// incremental updates instead of polling.
+// ----------------------------------------------------------------
+const dataWss = new WebSocket.Server({ port: 8082 });
+
+// Track connected clients and their subscriptions
+// Map<WebSocket, Set<collectionName>>
+const dataClients: Map<any, Set<string>> = new Map();
+
+// Broadcast a change event to all clients subscribed to a collection
+function broadcastChange(collection: string, change: any) {
+  const message = JSON.stringify({
+    type: 'change',
+    collection,
+    operationType: change.operationType,
+    documentKey: change.documentKey,
+    // For updates, include the changed fields
+    updateDescription: change.updateDescription,
+    // For inserts/replaces, include the full document
+    fullDocument: change.fullDocument,
+  });
+
+  dataClients.forEach((subscriptions, client) => {
+    if (subscriptions.has(collection) && client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
+  });
+}
+
+dataWss.on('connection', (ws) => {
+  console.log('[DataWS] Client connected');
+  dataClients.set(ws, new Set());
+
+  ws.on('message', (data: string) => {
+    try {
+      const msg = JSON.parse(data);
+      if (msg.type === 'subscribe' && Array.isArray(msg.collections)) {
+        const subs = dataClients.get(ws);
+        msg.collections.forEach((c: string) => subs?.add(c));
+        console.log('[DataWS] Client subscribed to:', msg.collections);
+        ws.send(JSON.stringify({ type: 'subscribed', collections: msg.collections }));
+      }
+    } catch (e) {
+      console.error('[DataWS] Invalid message:', e);
+    }
+  });
+
+  ws.on('close', () => {
+    console.log('[DataWS] Client disconnected');
+    dataClients.delete(ws);
+  });
+
+  ws.on('error', (err) => {
+    console.error('[DataWS] Error:', err);
+    dataClients.delete(ws);
+  });
+});
+
+console.log('[DataWS] WebSocket server for data updates listening on port 8082');
 
 export const createServer = (config): express.Application => {
   const app: express.Application = express();
@@ -63,49 +124,57 @@ export const createServer = (config): express.Application => {
     const leaderboardScores = dbo.collection("leaderboard_scores");
     const envSpecs = dbo.collection("env_specs");
     
-    const jobsChangeStream = jobs.watch();
+    // Watch with fullDocument option so inserts/replaces include the full doc
+    const jobsChangeStream = jobs.watch([], { fullDocument: 'updateLookup' });
     jobsChangeStream.on('change', (change) => {
-      console.log('Change detected:', change);
+      console.log('Change detected (jobs):', change.operationType, change.documentKey?._id);
       jobsChanged=true;
+      broadcastChange('jobs', change);
     });
 
-    const modelsChangeStream = models.watch();
+    const modelsChangeStream = models.watch([], { fullDocument: 'updateLookup' });
     modelsChangeStream.on('change', (change) => {
-      console.log('Change detected:', change);
+      console.log('Change detected (models):', change.operationType, change.documentKey?._id);
       modelsChanged=true;
+      broadcastChange('models', change);
     });
 
-    const leaderboardScoresChangeStream = leaderboardScores.watch();
+    const leaderboardScoresChangeStream = leaderboardScores.watch([], { fullDocument: 'updateLookup' });
     leaderboardScoresChangeStream.on('change', (change) => {
-      console.log('Change detected:', change);
+      console.log('Change detected (leaderboard_scores):', change.operationType, change.documentKey?._id);
       leaderboardScoresChanged=true;
+      broadcastChange('leaderboard_scores', change);
     });
 
-    const envSpecsChangeStream = envSpecs.watch();
+    const envSpecsChangeStream = envSpecs.watch([], { fullDocument: 'updateLookup' });
     envSpecsChangeStream.on('change', (change) => {
-      console.log('Change detected (env_specs):', change);
+      console.log('Change detected (env_specs):', change.operationType, change.documentKey?._id);
       envSpecsChanged=true;
+      broadcastChange('env_specs', change);
     });
 
     const rewardDesigns = dbo.collection("reward_designs");
-    const rewardDesignsChangeStream = rewardDesigns.watch();
+    const rewardDesignsChangeStream = rewardDesigns.watch([], { fullDocument: 'updateLookup' });
     rewardDesignsChangeStream.on('change', (change) => {
-      console.log('Change detected (reward_designs):', change);
+      console.log('Change detected (reward_designs):', change.operationType, change.documentKey?._id);
       rewardDesignsChanged=true;
+      broadcastChange('reward_designs', change);
     });
 
     const experimentDesigns = dbo.collection("experiment_designs");
-    const experimentDesignsChangeStream = experimentDesigns.watch();
+    const experimentDesignsChangeStream = experimentDesigns.watch([], { fullDocument: 'updateLookup' });
     experimentDesignsChangeStream.on('change', (change) => {
-      console.log('Change detected (experiment_designs):', change);
+      console.log('Change detected (experiment_designs):', change.operationType, change.documentKey?._id);
       experimentDesignsChanged=true;
+      broadcastChange('experiment_designs', change);
     });
 
     const gyms = dbo.collection("gyms");
-    const gymsChangeStream = gyms.watch();
+    const gymsChangeStream = gyms.watch([], { fullDocument: 'updateLookup' });
     gymsChangeStream.on('change', (change) => {
-      console.log('Change detected (gyms):', change);
+      console.log('Change detected (gyms):', change.operationType, change.documentKey?._id);
       gymsChanged=true;
+      broadcastChange('gyms', change);
     });
 
   });
@@ -189,6 +258,7 @@ export const createServer = (config): express.Application => {
   });
 
   app.get('/jobs', (req, res) => {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     const lb: string = path.join(__dirname, '/../jobs.html');
     res.sendFile(lb);
   });

@@ -1412,6 +1412,106 @@
     }
   }
 
+  /* ---------- DataWebSocket: real-time MongoDB change streams ----- */
+
+  /**
+   * WebSocket client for real-time data updates from MongoDB change streams.
+   * 
+   * Usage:
+   *   const dws = new DataWebSocket({
+   *     collections: ['jobs', 'models'],
+   *     onConnect: () => console.log('Connected'),
+   *     onDisconnect: () => console.log('Disconnected'),
+   *     onChange: (collection, change) => handleChange(collection, change),
+   *   });
+   *   dws.connect();
+   *   // Later: dws.close();
+   */
+  class DataWebSocket {
+    constructor(opts = {}) {
+      this.opts = {
+        port: 8082,
+        collections: [],
+        reconnectDelay: 3000,
+        onConnect: () => {},
+        onDisconnect: () => {},
+        onChange: () => {},
+        ...opts,
+      };
+      this.ws = null;
+      this.connected = false;
+      this.reconnectTimer = null;
+    }
+
+    connect() {
+      if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
+        return;
+      }
+
+      const wsUrl = `ws://${window.location.hostname}:${this.opts.port}`;
+      console.log('[WS] Connecting to', wsUrl);
+      this.ws = new WebSocket(wsUrl);
+
+      this.ws.onopen = () => {
+        console.log('[WS] Connected');
+        this.connected = true;
+        // Subscribe to collections
+        if (this.opts.collections.length > 0) {
+          this.ws.send(JSON.stringify({ type: 'subscribe', collections: this.opts.collections }));
+        }
+        this.opts.onConnect();
+      };
+
+      this.ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'change') {
+            console.log('[WS] Received:', msg.type, msg.collection);
+            this.opts.onChange(msg.collection, msg);
+          } else if (msg.type === 'subscribed') {
+            console.log('[WS] Subscribed to:', msg.collections);
+          }
+        } catch (e) {
+          console.error('[WS] Parse error:', e);
+        }
+      };
+
+      this.ws.onclose = () => {
+        console.log('[WS] Disconnected');
+        this.connected = false;
+        this.ws = null;
+        this.opts.onDisconnect();
+        // Schedule reconnect
+        if (!this.reconnectTimer) {
+          this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            this.connect();
+          }, this.opts.reconnectDelay);
+        }
+      };
+
+      this.ws.onerror = (err) => {
+        console.error('[WS] Error:', err);
+      };
+    }
+
+    close() {
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      if (this.ws) {
+        this.ws.close();
+        this.ws = null;
+      }
+      this.connected = false;
+    }
+
+    isConnected() {
+      return this.connected;
+    }
+  }
+
   /* ---------- exports ------------------------------------------- */
 
   global.RoboracerUI = {
@@ -1420,5 +1520,6 @@
     confirmDialog,
     TableView,
     FreshnessIndicator,
+    DataWebSocket,
   };
 })(window);

@@ -182,18 +182,21 @@
         }
       }
 
-      /* ---------- Polling ------------------------------------- */
+      /* ---------- WebSocket + Polling ------------------------------------- */
+      const POLL_INTERVAL_WITH_WS = 30000;
+      const POLL_INTERVAL_WITHOUT_WS = 8000;
+      let pollHandle = null;
+      let dataWs = null;
+      let gymsCache = [];
+
       async function pollOnce() {
         try {
           const res = await fetch('/get_gyms?force=true');
           if (!res.ok) { setFresh(false); return; }
           const text = await res.text();
           if (text && text !== 'NO_CHANGES') {
-            const gyms = JSON.parse(text) || [];
-            gymsById.clear();
-            for (const g of gyms) gymsById.set(String(g._id), g);
-            table.setData(gyms);
-            updateCount(gyms);
+            gymsCache = JSON.parse(text) || [];
+            renderTable();
           }
           setFresh(true);
         } catch (e) {
@@ -201,9 +204,56 @@
           setFresh(false);
         }
       }
+
+      function renderTable() {
+        gymsById.clear();
+        for (const g of gymsCache) gymsById.set(String(g._id), g);
+        table.setData(gymsCache);
+        updateCount(gymsCache);
+      }
+
+      function handleWsChange(collection, change) {
+        if (collection !== 'gyms') return;
+        const { operationType, documentKey, fullDocument } = change;
+        const id = documentKey?._id;
+        if (!id) return;
+        setFresh(true);
+
+        if (operationType === 'insert' && fullDocument) {
+          gymsCache.push(fullDocument);
+          renderTable();
+        } else if (operationType === 'update' && fullDocument) {
+          const idx = gymsCache.findIndex(g => String(g._id) === String(id));
+          if (idx >= 0) gymsCache[idx] = fullDocument;
+          else gymsCache.push(fullDocument);
+          renderTable();
+        } else if (operationType === 'delete') {
+          gymsCache = gymsCache.filter(g => String(g._id) !== String(id));
+          renderTable();
+        }
+      }
+
+      function updatePollInterval() {
+        if (pollHandle) clearInterval(pollHandle);
+        const interval = dataWs?.isConnected() ? POLL_INTERVAL_WITH_WS : POLL_INTERVAL_WITHOUT_WS;
+        pollHandle = setInterval(pollOnce, interval);
+      }
+
+      dataWs = new RoboracerUI.DataWebSocket({
+        collections: ['gyms'],
+        onConnect: updatePollInterval,
+        onDisconnect: updatePollInterval,
+        onChange: handleWsChange,
+      });
+
       pollOnce();
-      const pollHandle = setInterval(pollOnce, 8000);
-      window.addEventListener('beforeunload', () => clearInterval(pollHandle));
+      dataWs.connect();
+      updatePollInterval();
+
+      window.addEventListener('beforeunload', () => {
+        if (pollHandle) clearInterval(pollHandle);
+        if (dataWs) dataWs.close();
+      });
 
       /* ---------- Archive (event delegation) ------------------ */
       tableHost.addEventListener('click', async (ev) => {
