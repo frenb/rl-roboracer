@@ -98,6 +98,19 @@ SCHEMA = {
         "paper_ref": None,
         "kwarg": "num_eval_episodes_val",
     },
+    "eval_time_fraction": {
+        "type": "float",
+        "default": 0.25,
+        "min": 0.0, "max": 1.0,
+        "doc": ("Target fraction of training wall-clock spent in eval. When "
+                "in (0,1), the loop uses a time-budgeted eval cadence (train "
+                "~(1-frac)/frac x each eval's wall-clock between evals) and "
+                "eval_interval only bootstraps the first eval. Set 0.0 or 1.0 "
+                "to disable budgeting and fall back to the step%eval_interval "
+                "gate. Overridden at runtime by the EVAL_TIME_FRACTION env var."),
+        "paper_ref": None,
+        "kwarg": "eval_time_fraction_val",
+    },
     "log_interval": {
         "type": "int",
         "default": 5000,
