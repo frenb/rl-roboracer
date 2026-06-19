@@ -351,6 +351,13 @@ def get_policy_type_name(policy):
         debug_print(policy_type)
     else:
         policy_type = type(policy).__name__
+        # AWAC is a SacAgent subclass; its saved policy is a plain tf-agents
+        # policy evaluated as a SacAgent (job model_type='SacAgent'), and the
+        # /saved_models/<robot>/SacAgent/ tree is the one that exists. Map the
+        # subclass name back so model saving + the Models-tab/EVAL dispatch
+        # all resolve to the same SacAgent directory.
+        if policy_type == "AwacSacAgent":
+            policy_type = "SacAgent"
     return policy_type
 
 def get_next_model_version(policy):
