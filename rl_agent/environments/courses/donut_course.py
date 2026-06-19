@@ -19,6 +19,7 @@ class DonutCourse (BaseCourse):
         self.env_discount = 0.90
         self.last_goal_reached=""
         self.speeds_arr=[]
+        self.accel_arr=[]
         self.steering_angle_ratio_arr=[]
         self.goals_per_episode_arr=[]
         self.steps_per_goal_arr=[]
@@ -28,6 +29,14 @@ class DonutCourse (BaseCourse):
         self.avg_speed=0
         self.avg_speed_last_30=0
         self.max_speed_last_30=0
+        # Commanded acceleration/force (action[0], range [0.1, 2.0]) stats.
+        # Surfaced to TensorBoard so we can track whether the policy is
+        # actually pushing the throttle toward the 2.0 ceiling or hugging
+        # the 0.1 floor (the slow-driving symptom).
+        self.max_accel=0
+        self.avg_accel=0
+        self.avg_accel_last_30=0
+        self.max_accel_last_30=0
         self.max_steps_per_goal=0
         self.avg_steps_per_goal=0
         self.avg_steps_per_goal_last_30=0
@@ -44,6 +53,7 @@ class DonutCourse (BaseCourse):
         self.steps_total=0
         self.num_episodes_total=0
         self.speeds_total=0
+        self.accel_total=0
         self.goals_per_episode_total=0
         self.steering_angle_ratio_total=0
         # shape=(2,) == [acceleration, steering_angle]
@@ -354,12 +364,20 @@ class DonutCourse (BaseCourse):
             self.steering_angle_ratio_total += steering_angle_ratio
         self.speeds_arr.append(data["car"]["speed"])
         self.speeds_total += data["car"]["speed"]
+        # Track the commanded acceleration/force (action[0]). pass_through
+        # mode drives a hand-coded accel, so only record the policy's own
+        # command when the agent is actually in control.
+        if not getattr(self.env, "pass_through_actions", False):
+            accel = float(action[0])
+            self.accel_arr.append(accel)
+            self.accel_total += accel
 
     def update_stats(self):
         #truncate arrays to last 100 elements
         self.steps_per_goal_arr=self.steps_per_goal_arr[-100:]
         self.avg_return_arr=self.avg_return_arr[-100:]
         self.speeds_arr=self.speeds_arr[-100:]
+        self.accel_arr=self.accel_arr[-100:]
         self.steering_angle_ratio_arr=self.steering_angle_ratio_arr[-100:]
         self.goals_per_episode_arr=self.goals_per_episode_arr[-100:]
         self.num_obstacles_arr=self.num_obstacles_arr[-100:]
@@ -372,6 +390,11 @@ class DonutCourse (BaseCourse):
         self.avg_speed=self.speeds_total / self.steps_total
         self.max_speed_last_30=0 if len(self.speeds_arr) <30 else np.max(self.speeds_arr[-30:])
         self.avg_speed_last_30=np.average(self.speeds_arr[-30:]) if len(self.speeds_arr) > 0 else 0.0
+        # commanded acceleration/force stats (action[0])
+        self.max_accel=0 if len(self.accel_arr) == 0 else max(np.max(self.accel_arr), self.max_accel)
+        self.avg_accel=self.accel_total / self.steps_total
+        self.max_accel_last_30=0 if len(self.accel_arr) <30 else np.max(self.accel_arr[-30:])
+        self.avg_accel_last_30=np.average(self.accel_arr[-30:]) if len(self.accel_arr) > 0 else 0.0
         # steps per goal stats
         self.max_steps_per_goal=0
         self.avg_steps_per_goal=0

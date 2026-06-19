@@ -100,6 +100,10 @@ class BaseCourse(ABC):
         'max_speed_last_30',
         'avg_speed',
         'avg_speed_last_30',
+        'max_accel',
+        'max_accel_last_30',
+        'avg_accel',
+        'avg_accel_last_30',
     )
 
     def get_metrics(self):
@@ -127,6 +131,7 @@ class BaseCourse(ABC):
         'steps_total',                # denominator for avg_speed / avg_steering_angle_ratio
         'num_episodes_total',         # denominator for avg_goals_per_episode
         'speeds_total',               # numerator for avg_speed
+        'accel_total',                # numerator for avg_accel (commanded force)
         'goals_per_episode_total',    # numerator for avg_goals_per_episode
         'steering_angle_ratio_total', # numerator for avg_steering_angle_ratio
     )
