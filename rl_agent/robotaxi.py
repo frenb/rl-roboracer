@@ -765,6 +765,18 @@ def main(
     demo_prefill_count_val=50000,
     demo_min_keep_val=0,
     demo_sample_ratio_val=0.0,
+    # ---- AWAC (advantage-weighted BC regularization) ----------------
+    # Off by default (awac_lambda_val=0.0 -> plain SAC, bit-identical).
+    # When >0 AND demo_min_keep_val>0, the actor loss gains an advantage-
+    # weighted BC term sampled from the protected demo table each step, so
+    # the demos shape the POLICY directly (not just the critic). See
+    # awac_sac_agent.AwacSacAgent. Lets the actor inherit the expert's
+    # survival without the one-shot BC-pretrain degradation, while the
+    # advantage weighting avoids copying the expert's slowness.
+    awac_lambda_val=0.0,
+    awac_beta_val=1.0,
+    awac_weight_clip_val=20.0,
+    awac_lambda_decay_steps_val=0,
     actor_fc_layer_params_x=512,
     actor_fc_layer_params_y=512,
     critic_joint_fc_layer_params_x=512,
@@ -1138,9 +1150,14 @@ def main(
     with strategy.scope():
         train_step = train_utils.create_train_step()
 
-        tf_agent = sac_agent.SacAgent(
-            time_step_spec,
-            action_spec,
+        # AWAC is opt-in via experiment-design config (awac_lambda_val>0) and
+        # requires the protected demo table (demo_min_keep>0) to sample expert
+        # transitions for the advantage-weighted BC term. Off => plain SacAgent
+        # (bit-identical to before). The demo iterator is attached AFTER
+        # make_local_replay builds the demo table (it needs collect_data_spec).
+        _awac_on = (awac_lambda_val is not None and float(awac_lambda_val) > 0.0
+                    and demo_min_keep > 0)
+        _agent_kwargs = dict(
             actor_network=actor_net,
             critic_network=critic_net,
             actor_optimizer=tf.compat.v1.train.AdamOptimizer(
@@ -1155,10 +1172,31 @@ def main(
             gamma=gamma,
             reward_scale_factor=reward_scale_factor,
             train_step_counter=train_step,
-            debug_summaries = True,
-            summarize_grads_and_vars = True
+            debug_summaries=True,
+            summarize_grads_and_vars=True,
         )
-        
+        if _awac_on:
+            from awac_sac_agent import AwacSacAgent
+            tf_agent = AwacSacAgent(
+                time_step_spec,
+                action_spec,
+                awac_lambda=float(awac_lambda_val),
+                awac_beta=float(awac_beta_val),
+                awac_weight_clip=float(awac_weight_clip_val),
+                awac_lambda_decay_steps=int(awac_lambda_decay_steps_val),
+                awac_lambda_min=0.0,
+                demo_iter=None,
+                **_agent_kwargs)
+            print(f"main: AWAC ENABLED (lambda={float(awac_lambda_val)}, "
+                  f"beta={float(awac_beta_val)}, "
+                  f"weight_clip={float(awac_weight_clip_val)}, "
+                  f"decay_steps={int(awac_lambda_decay_steps_val)})", flush=True)
+        else:
+            tf_agent = sac_agent.SacAgent(
+                time_step_spec,
+                action_spec,
+                **_agent_kwargs)
+
         tf_agent.initialize()
     _phase("reverb_setup")
     # Replay Buffer.
@@ -1183,6 +1221,18 @@ def main(
         demo_sample_ratio=demo_sample_ratio)
     table_name = 'uniform_table'
     experience_dataset_fn = lambda: dataset
+    # AWAC: attach a demo-only iterator so the agent can sample expert
+    # transitions for its advantage-weighted BC term. Independent of the
+    # mixed training `dataset` above (which stochastically blends demo/online
+    # at demo_sample_ratio); AWAC needs a clean expert-only stream. Attached
+    # here (after the demo table exists) and before the Learner first traces
+    # actor_loss. No-op unless AWAC is on and the demo table was built.
+    if _awac_on and demo_replay is not None:
+        _demo_only_ds = demo_replay.as_dataset(
+            sample_batch_size=batch_size, num_steps=2).prefetch(5)
+        tf_agent.set_demo_iter(iter(_demo_only_ds))
+        print("main: AWAC demo iterator attached (expert-only stream).",
+              flush=True)
     # Log the resolved buffer composition so robotaxi.out makes the
     # active mode explicit even when the experiment_design overlay
     # changed defaults silently.
