@@ -233,6 +233,49 @@ SCHEMA = {
         "paper_ref": None,
         "kwarg": "gamma_val",
     },
+    "awac_lambda": {
+        "type": "float",
+        "default": 0.0,
+        "min": 0.0, "max": 10.0,
+        "doc": ("AWAC advantage-weighted BC regularization weight on the SAC "
+                "actor loss. 0 = off (plain SAC). >0 adds, each step, an "
+                "advantage-weighted imitation term sampled from the protected "
+                "demo table so the demos shape the policy directly (not just "
+                "the critic) - inherits expert survival without the BC-pretrain "
+                "degradation. Requires demo_min_keep > 0."),
+        "paper_ref": "AWAC (Nair et al. 2020)",
+        "kwarg": "awac_lambda_val",
+    },
+    "awac_beta": {
+        "type": "float",
+        "default": 1.0,
+        "min": 0.01, "max": 100.0,
+        "doc": ("AWAC advantage temperature in exp(A/beta). Lower = sharper "
+                "preference for expert actions the critic rates above the "
+                "current policy. Only used when awac_lambda > 0."),
+        "paper_ref": None,
+        "kwarg": "awac_beta_val",
+    },
+    "awac_weight_clip": {
+        "type": "float",
+        "default": 20.0,
+        "min": 1.0, "max": 1000.0,
+        "doc": ("Upper clip on the AWAC weight exp(A/beta) for numerical "
+                "stability. Only used when awac_lambda > 0."),
+        "paper_ref": None,
+        "kwarg": "awac_weight_clip_val",
+    },
+    "awac_lambda_decay_steps": {
+        "type": "int",
+        "default": 0,
+        "min": 0, "max": 10_000_000,
+        "doc": ("If > 0, linearly decay awac_lambda to 0 over this many train "
+                "steps (strong demo-imitation early for survival, then let RL "
+                "refine speed). 0 = constant awac_lambda. Only used when "
+                "awac_lambda > 0."),
+        "paper_ref": None,
+        "kwarg": "awac_lambda_decay_steps_val",
+    },
     "reward_scale_factor": {
         "type": "float",
         "default": 1.0,
