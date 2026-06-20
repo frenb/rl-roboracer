@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en" class="dark h-full">
+<head>
+  <meta charset="utf-8">
+  <title>Weakness Map · rl-roboracer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/tailwind.init.js"></script>
+  <link rel="stylesheet" href="/styles.css">
+  <!-- Plotly for the 2D spatial heatmap (same pin as analysis.html). -->
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+  <style>
+    /* The slider track/thumb inherit the dark theme poorly on some
+       browsers; nudge them so the weight controls read clearly. */
+    input[type="range"] { accent-color: #38bdf8; }
+  </style>
+</head>
+<body class="h-full m-0 font-sans antialiased text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-[#0b1120]">
+  <div class="flex flex-col h-screen w-full">
+
+    <!-- Toolbar -->
+    <div class="flex flex-wrap items-center gap-3 px-5 py-3
+                bg-white dark:bg-slate-900
+                border-b border-slate-200 dark:border-slate-700
+                shadow-card relative z-[3] flex-shrink-0">
+      <h1 class="text-2xl font-semibold tracking-tight m-0 mr-2">Weakness Map</h1>
+      <span data-role="subtitle"
+            class="text-xs font-medium text-slate-500 dark:text-slate-400">
+        Per-location policy weakness from logged trajectories.
+      </span>
+
+      <div class="flex flex-wrap gap-2 ml-auto items-center">
+        <label class="text-xs text-slate-500 dark:text-slate-400">
+          Job
+          <select data-action="job"
+                  class="ml-1 appearance-none select-chevron pr-7 px-2 py-1 text-xs
+                         border border-slate-300 dark:border-slate-600
+                         bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100
+                         rounded-md shadow-card min-w-[16rem]"></select>
+        </label>
+        <label class="text-xs text-slate-500 dark:text-slate-400">
+          Layer
+          <select data-action="layer"
+                  class="ml-1 appearance-none select-chevron pr-7 px-2 py-1 text-xs
+                         border border-slate-300 dark:border-slate-600
+                         bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100
+                         rounded-md shadow-card">
+            <option value="weakness" selected>Weakness (blend)</option>
+            <option value="crash">Crash rate</option>
+            <option value="speed">Speed (slow = weak)</option>
+            <option value="risk">Risk (pre-crash)</option>
+            <option value="visits">Visit density</option>
+          </select>
+        </label>
+        <button data-action="refresh" class="btn-base btn-secondary"
+                title="Re-pull logs and rebuild the heatmap.">Refresh</button>
+        <label class="text-xs text-slate-500 dark:text-slate-400 inline-flex items-center gap-1">
+          <input type="checkbox" data-action="auto" class="align-middle">
+          Auto&nbsp;(10s)
+        </label>
+      </div>
+    </div>
+
+    <!-- Secondary controls: bins / limit / minVisits + blend weights -->
+    <div class="flex flex-wrap items-center gap-x-6 gap-y-2 px-5 py-2
+                bg-slate-50 dark:bg-slate-900/60
+                border-b border-slate-200 dark:border-slate-700
+                text-xs text-slate-500 dark:text-slate-400 flex-shrink-0">
+      <label class="inline-flex items-center gap-2">Bins
+        <input type="number" data-action="bins" value="48" min="8" max="200" step="4"
+               class="w-16 px-2 py-1 rounded-md border border-slate-300 dark:border-slate-600
+                      bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"></label>
+      <label class="inline-flex items-center gap-2">Episodes
+        <input type="number" data-action="limit" value="500" min="10" max="5000" step="50"
+               class="w-20 px-2 py-1 rounded-md border border-slate-300 dark:border-slate-600
+                      bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"></label>
+      <label class="inline-flex items-center gap-2">Min visits/cell
+        <input type="range" data-action="minvisits" min="1" max="30" value="3" class="w-28">
+        <span data-role="minvisits-val" class="tabular-nums w-6">3</span></label>
+
+      <span class="opacity-50">|</span>
+      <span class="font-medium">Blend weights:</span>
+      <label class="inline-flex items-center gap-2">Crash
+        <input type="range" data-action="w-crash" min="0" max="1" step="0.05" value="0.5" class="w-24">
+        <span data-role="w-crash-val" class="tabular-nums w-8">0.50</span></label>
+      <label class="inline-flex items-center gap-2">Slow
+        <input type="range" data-action="w-slow" min="0" max="1" step="0.05" value="0.3" class="w-24">
+        <span data-role="w-slow-val" class="tabular-nums w-8">0.30</span></label>
+      <label class="inline-flex items-center gap-2">Risk
+        <input type="range" data-action="w-risk" min="0" max="1" step="0.05" value="0.2" class="w-24">
+        <span data-role="w-risk-val" class="tabular-nums w-8">0.20</span></label>
+
+      <span data-role="status" class="ml-auto text-slate-400 dark:text-slate-500">idle</span>
+    </div>
+
+    <!-- Plot -->
+    <div class="flex-1 min-h-0 relative">
+      <div data-role="plot" class="absolute inset-0"></div>
+      <div data-role="empty"
+           class="absolute inset-0 hidden items-center justify-center text-sm text-slate-400">
+        No trajectory data for this job yet.
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    const $ = (sel) => document.querySelector(sel);
+    const plotEl = $('[data-role="plot"]');
+    const emptyEl = $('[data-role="empty"]');
+    const statusEl = $('[data-role="status"]');
+    const jobSel = $('[data-action="job"]');
+    const layerSel = $('[data-action="layer"]');
+
+    let lastData = null;     // last /weakness_map payload
+    let autoTimer = null;
+
+    const ctrl = {
+      bins: () => clampInt($('[data-action="bins"]').value, 8, 200, 48),
+      limit: () => clampInt($('[data-action="limit"]').value, 10, 5000, 500),
+      minVisits: () => clampInt($('[data-action="minvisits"]').value, 1, 30, 3),
+      wCrash: () => parseFloat($('[data-action="w-crash"]').value) || 0,
+      wSlow: () => parseFloat($('[data-action="w-slow"]').value) || 0,
+      wRisk: () => parseFloat($('[data-action="w-risk"]').value) || 0,
+      layer: () => layerSel.value,
+      jobId: () => jobSel.value || '',
+    };
+
+    function clampInt(v, lo, hi, dflt) {
+      const n = parseInt(v, 10);
+      if (!isFinite(n)) return dflt;
+      return Math.max(lo, Math.min(hi, n));
+    }
+
+    function setStatus(msg) { statusEl.textContent = msg; }
+
+    // ---- Job dropdown ------------------------------------------------
+    function jobIdOf(j) {
+      if (j && j._id && typeof j._id === 'object' && j._id.$oid) return j._id.$oid;
+      return j && j._id != null ? String(j._id) : '';
+    }
+    function jobLabel(j) {
+      const id = jobIdOf(j);
+      const short = id.slice(-6);
+      const name = j.experiment_design_name || j.reward_design_name || j.type || 'job';
+      const status = j.status ? ` · ${j.status}` : '';
+      return `${name} …${short}${status}`;
+    }
+    async function loadJobs() {
+      try {
+        const r = await fetch('/get_jobs?force=true');
+        if (!r.ok) return;
+        const txt = await r.text();
+        if (txt === 'NO_CHANGES') return;
+        const jobs = JSON.parse(txt);
+        if (!Array.isArray(jobs)) return;
+        // Most-recently-touched first: prefer a date field, else _id order reversed.
+        jobs.sort((a, b) => {
+          const ad = Date.parse(a.update_date || a.create_date || 0) || 0;
+          const bd = Date.parse(b.update_date || b.create_date || 0) || 0;
+          return bd - ad;
+        });
+        const prev = jobSel.value;
+        jobSel.innerHTML = '';
+        for (const j of jobs) {
+          const id = jobIdOf(j);
+          if (!id) continue;
+          const opt = document.createElement('option');
+          opt.value = id;
+          opt.textContent = jobLabel(j);
+          jobSel.appendChild(opt);
+        }
+        if (prev) jobSel.value = prev;
+        // Default to a RUNNING job if nothing chosen yet.
+        if (!jobSel.value) {
+          const running = jobs.find((j) => String(j.status).toUpperCase().includes('RUN'));
+          if (running) jobSel.value = jobIdOf(running);
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    // ---- Fetch + render ---------------------------------------------
+    async function fetchMap() {
+      const jobId = ctrl.jobId();
+      if (!jobId) { setStatus('select a job'); return; }
+      setStatus('loading…');
+      const url = `/weakness_map?job_id=${encodeURIComponent(jobId)}`
+        + `&bins=${ctrl.bins()}&limit=${ctrl.limit()}`;
+      try {
+        const r = await fetch(url);
+        const data = await r.json();
+        if (!data || !data.ok) { setStatus('error: ' + (data && data.error || r.status)); return; }
+        lastData = data;
+        render();
+        setStatus(`${data.episodes} episodes · ${data.cells.length} cells · ${new Date().toLocaleTimeString()}`);
+      } catch (e) {
+        setStatus('fetch failed: ' + e);
+      }
+    }
+
+    // Min-max normalize a sparse value map (object keyed by cell index)
+    // into [0,1]. Returns {norm, min, max}.
+    function normalize(values) {
+      let min = Infinity, max = -Infinity;
+      for (const k in values) {
+        const v = values[k];
+        if (!isFinite(v)) continue;
+        if (v < min) min = v; if (v > max) max = v;
+      }
+      const span = (max - min) || 1;
+      const norm = {};
+      for (const k in values) norm[k] = (values[k] - min) / span;
+      return { norm, min, max };
+    }
+
+    function render() {
+      if (!lastData) return;
+      const { nx, ny, cells, extent, axisNames } = lastData;
+      if (!cells.length) {
+        emptyEl.classList.remove('hidden'); emptyEl.classList.add('flex');
+        Plotly.purge(plotEl);
+        return;
+      }
+      emptyEl.classList.add('hidden'); emptyEl.classList.remove('flex');
+
+      const minV = ctrl.minVisits();
+      const layer = ctrl.layer();
+
+      // Build per-cell raw metrics over visited cells that clear the
+      // min-visits floor (suppresses single-sample noise).
+      const crashRate = {}, speed = {}, risk = {}, visits = {};
+      const keyed = [];
+      for (const c of cells) {
+        const k = c.iy * nx + c.ix;
+        visits[k] = c.v;
+        if (c.v < minV) continue;
+        keyed.push(c);
+        crashRate[k] = c.v > 0 ? c.cr / c.v : 0;
+        speed[k] = c.sc > 0 ? c.ss / c.sc : 0;
+        // Dense pre-crash risk: fraction of this cell's visits that occur
+        // within the hazard window before a crash (server-computed `hz`).
+        risk[k] = c.v > 0 ? (c.hz || 0) / c.v : 0;
+      }
+
+      // Normalize each component across cells to [0,1] so the three blend
+      // weights are directly comparable. Weakness = high crash + LOW speed
+      // + high pre-crash risk.
+      const nCrash = normalize(crashRate).norm;
+      const nSpeedRaw = normalize(speed);
+      const nRisk = normalize(risk).norm;
+
+      const wc = ctrl.wCrash(), ws = ctrl.wSlow(), wr = ctrl.wRisk();
+      const wsum = (wc + ws + wr) || 1;
+
+      // z-grid (row-major: z[iy][ix]); null => transparent gap.
+      const z = [];
+      for (let iy = 0; iy < ny; iy++) z.push(new Array(nx).fill(null));
+
+      let cmin = Infinity, cmax = -Infinity;
+      for (const c of keyed) {
+        const k = c.iy * nx + c.ix;
+        let val = null;
+        if (layer === 'visits') {
+          val = visits[k];
+        } else if (layer === 'crash') {
+          val = crashRate[k];
+        } else if (layer === 'speed') {
+          val = speed[k];
+        } else if (layer === 'risk') {
+          val = risk[k];
+        } else { // weakness blend
+          const slowTerm = (k in nSpeedRaw.norm) ? (1 - nSpeedRaw.norm[k]) : 0;
+          val = (wc * (nCrash[k] || 0) + ws * slowTerm + wr * (nRisk[k] || 0)) / wsum;
+        }
+        if (val == null || !isFinite(val)) continue;
+        z[c.iy][c.ix] = val;
+        if (val < cmin) cmin = val; if (val > cmax) cmax = val;
+      }
+
+      // Pin the blend to a fixed [0,1] so changing the weight sliders
+      // visibly shifts the colors instead of being auto-rescaled away.
+      // Raw single-metric layers keep auto-scaling for contrast.
+      if (layer === 'weakness') { cmin = 0; cmax = 1; }
+
+      // Axis tick coordinates (cell centers).
+      const xs = [], ys = [];
+      const cw = (extent.xmax - extent.xmin) / nx;
+      const ch = (extent.ymax - extent.ymin) / ny;
+      for (let ix = 0; ix < nx; ix++) xs.push(extent.xmin + (ix + 0.5) * cw);
+      for (let iy = 0; iy < ny; iy++) ys.push(extent.ymin + (iy + 0.5) * ch);
+
+      // For weakness/crash/return-as-weakness, hotter = worse → use a
+      // warm scale. For speed/visits, use Viridis (diagnostic, not
+      // "good/bad"). "Mean return" is a value, not a weakness, so use a
+      // diverging-ish scale.
+      const warm = (layer === 'weakness' || layer === 'crash' || layer === 'risk');
+      const colorscale = warm ? 'Hot' : 'Viridis';
+
+      const heat = {
+        type: 'heatmap',
+        x: xs, y: ys, z,
+        colorscale,
+        reversescale: warm,           // Hot reversed → dark=safe, bright=weak
+        zmin: isFinite(cmin) ? cmin : 0,
+        zmax: isFinite(cmax) ? cmax : 1,
+        hoverongaps: false,
+        colorbar: { title: layerTitle(layer), titleside: 'right',
+                    tickfont: { color: '#94a3b8' }, titlefont: { color: '#94a3b8' } },
+        hovertemplate: `${axisNames[0]}=%{x:.1f}<br>${axisNames[1]}=%{y:.1f}<br>${layerTitle(layer)}=%{z:.3f}<extra></extra>`,
+      };
+
+      // Overlay crash terminal points as a faint scatter on weakness/crash.
+      const traces = [heat];
+      if (layer === 'weakness' || layer === 'crash') {
+        const cxs = [], cys = [];
+        for (const c of cells) {
+          if (c.cr <= 0) continue;
+          cxs.push(extent.xmin + (c.ix + 0.5) * cw);
+          cys.push(extent.ymin + (c.iy + 0.5) * ch);
+        }
+        if (cxs.length) {
+          traces.push({
+            type: 'scattergl', mode: 'markers', x: cxs, y: cys,
+            marker: { size: 4, color: 'rgba(255,255,255,0.55)', symbol: 'x' },
+            name: 'crashes', hoverinfo: 'skip', showlegend: false,
+          });
+        }
+      }
+
+      const layout = {
+        paper_bgcolor: '#0b1120', plot_bgcolor: '#0b1120',
+        margin: { l: 50, r: 10, t: 10, b: 40 },
+        xaxis: { title: axisNames[0], color: '#94a3b8', gridcolor: '#1e293b',
+                 scaleanchor: 'y', scaleratio: 1, constrain: 'domain' },
+        yaxis: { title: axisNames[1], color: '#94a3b8', gridcolor: '#1e293b' },
+        font: { color: '#cbd5e1' },
+        showlegend: false,
+      };
+      Plotly.react(plotEl, traces, layout, { responsive: true, displaylogo: false });
+    }
+
+    function layerTitle(layer) {
+      return ({
+        weakness: 'weakness', crash: 'crash rate', speed: 'speed',
+        risk: 'pre-crash risk', visits: 'visits',
+      })[layer] || layer;
+    }
+
+    // ---- Auto-refresh ------------------------------------------------
+    function setAuto(on) {
+      if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+      if (on) autoTimer = setInterval(() => { loadJobs(); fetchMap(); }, 10000);
+    }
+
+    // ---- Wiring ------------------------------------------------------
+    $('[data-action="refresh"]').addEventListener('click', fetchMap);
+    jobSel.addEventListener('change', fetchMap);
+    layerSel.addEventListener('change', render);
+    $('[data-action="bins"]').addEventListener('change', fetchMap);
+    $('[data-action="limit"]').addEventListener('change', fetchMap);
+    $('[data-action="auto"]').addEventListener('change', (e) => setAuto(e.target.checked));
+
+    // Slider live-labels + re-render (client-side only, no refetch).
+    function bindSlider(action, fmt) {
+      const el = $(`[data-action="${action}"]`);
+      const lbl = $(`[data-role="${action}-val"]`);
+      const upd = () => { if (lbl) lbl.textContent = fmt(el.value); render(); };
+      el.addEventListener('input', upd);
+    }
+    bindSlider('minvisits', (v) => String(v));
+    bindSlider('w-crash', (v) => (parseFloat(v) || 0).toFixed(2));
+    bindSlider('w-slow', (v) => (parseFloat(v) || 0).toFixed(2));
+    bindSlider('w-risk', (v) => (parseFloat(v) || 0).toFixed(2));
+
+    // GoldenLayout posts this when the tab is shown/resized so Plotly
+    // recomputes its size after a display:none -> block transition.
+    window.addEventListener('message', (ev) => {
+      if (ev && ev.data && ev.data.type === 'roboracer:redraw') {
+        try { Plotly.Plots.resize(plotEl); } catch (e) { /* ignore */ }
+      }
+    });
+
+    // ---- Boot --------------------------------------------------------
+    (async function init() {
+      await loadJobs();
+      await fetchMap();
+    })();
+  })();
+  </script>
+</body>
+</html>

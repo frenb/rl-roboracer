@@ -199,6 +199,21 @@ var config = {
                     },
                     {
                       type: 'component',
+                      title: 'Weakness',
+                      componentName: 'iframeComponent',
+                      // Per-track-location weakness heatmap (Phase 1
+                      // diagnostic). Aggregates logs.position_history
+                      // into a 2D spatial grid colored by a blend of
+                      // crash rate / slowness / low return. Served by
+                      // express.static, so the same ".html" rationale as
+                      // Analysis applies: works the moment the file is on
+                      // disk, no dashboard image rebuild needed for the
+                      // page itself (the /weakness_map data endpoint does
+                      // need the server rebuilt).
+                      componentState: { src: "http://localhost/weakness.html?v=ws1", id: 'weakness' }
+                    },
+                    {
+                      type: 'component',
                       title: 'Reward Design',
                       componentName: 'iframeComponent',
                       // Same ".html" rationale as Analysis: served by

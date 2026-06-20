@@ -177,6 +177,20 @@ export const createServer = (config): express.Application => {
       broadcastChange('gyms', change);
     });
 
+    // Index for the Weakness Map (/weakness_map). The logs collection is
+    // dominated by per-step "did not fail" rows (no position_history), so
+    // an unindexed {job_id, position_history} query degrades to a full
+    // collection scan - which for a non-existent job_id never short-
+    // circuits and hangs the request. This compound index lets Mongo
+    // walk one job's rows newest-first directly. Idempotent / background.
+    dbo.collection("logs").createIndex(
+      { job_id: 1, _id: -1 },
+      { name: "weakness_job_recent", background: true }
+    ).then(
+      (n) => console.log('logs index ensured:', n),
+      (e) => console.warn('logs index create failed:', e && e.message)
+    );
+
   });
 
   if (config.logging != "none") {
@@ -255,6 +269,159 @@ export const createServer = (config): express.Application => {
     
     console.log(`No jobs retrieved`);
     res.status(200).send('NO_CHANGES');
+  });
+
+  // ----------------------------------------------------------------
+  // Weakness heatmap (Phase 1 diagnostic)
+  //
+  // Aggregates per-step car world positions (logs.position_history)
+  // for a single job into a 2D spatial grid and returns the per-cell
+  // counters the client blends into a "weakness" score:
+  //   * crash rate   = terminal cells of "has failed" episodes / visits
+  //   * slowness      = inverse mean per-step travel distance (speed)
+  //   * low return    = inverse mean terminal episode score
+  //
+  // Read-only: consumes data already written by log_reward() in
+  // rl_agent/environments/courses/utils/logging.py. position_history
+  // is stored as a Python list-repr joined by commas, e.g.
+  //   "[1.2, 3.4, 5.6],[1.3, 3.5, 5.7],..."
+  // Only "has succeeded" / "has failed - reward" docs carry a
+  // position_history (the per-step "did not fail" rows do not), so we
+  // filter on its presence to skip the high-volume per-step rows.
+  //
+  // The ground plane is auto-detected as the two of (x,y,z) with the
+  // largest spatial spread (Unity's up-axis is ~constant, so it falls
+  // out as the discarded third axis). Sorted newest-first + capped by
+  // `limit` so the map reflects RECENT policy behaviour, which matters
+  // because the policy drifts over a training run.
+  // ----------------------------------------------------------------
+  app.get('/weakness_map', (req, res) => {
+    const jobId = String(req.query.job_id || '');
+    const bins = Math.max(8, Math.min(200, parseInt(String(req.query.bins || '48'), 10) || 48));
+    const limit = Math.max(1, Math.min(5000, parseInt(String(req.query.limit || '500'), 10) || 500));
+    if (!jobId) { res.status(400).json({ ok: false, error: 'job_id required' }); return; }
+
+    // logs.job_id is written by the trainer as an ObjectId (not the hex
+    // string the dashboard passes around), so match on the ObjectId form
+    // and keep a string branch for any legacy/string-typed rows. The
+    // equality on job_id lets the {job_id:1,_id:-1} index seek directly
+    // instead of falling back to a full-collection _id scan.
+    const jobOr: any[] = [{ job_id: jobId }];
+    try { jobOr.push({ job_id: new ObjectID(jobId) }); } catch (e) { /* not a valid ObjectId */ }
+    const jobFilter = { $and: [{ $or: jobOr }, { position_history: { $ne: null } }] };
+
+    dbo.collection('logs')
+      .find(jobFilter)
+      .project({ type: 1, score: 1, position_history: 1 })
+      .sort({ _id: -1 })
+      .limit(limit)
+      .maxTimeMS(20000)
+      .toArray(function (err, docs) {
+        if (err) { res.status(500).json({ ok: false, error: String(err) }); return; }
+        docs = docs || [];
+
+        // Parse each doc's position_history string into [x,y,z] points.
+        const trajs: Array<{ pts: number[][], type: string, score: number }> = [];
+        for (const d of docs) {
+          const s: string = d.position_history;
+          if (!s) continue;
+          const toks = s.match(/\[[^\]]*\]/g) || [];
+          const pts: number[][] = [];
+          for (const tok of toks) {
+            const parts = tok.slice(1, -1).split(',');
+            if (parts.length < 3) continue;
+            const x = parseFloat(parts[0]), y = parseFloat(parts[1]), z = parseFloat(parts[2]);
+            if (!isFinite(x) || !isFinite(y) || !isFinite(z)) continue;
+            pts.push([x, y, z]);
+          }
+          if (pts.length) trajs.push({ pts, type: String(d.type || ''), score: Number(d.score) });
+        }
+
+        if (!trajs.length) {
+          res.json({ ok: true, job_id: jobId, episodes: 0, cells: [] });
+          return;
+        }
+
+        // Auto-pick the two highest-spread axes as the ground plane.
+        const mins = [Infinity, Infinity, Infinity];
+        const maxs = [-Infinity, -Infinity, -Infinity];
+        for (const t of trajs) for (const p of t.pts) for (let k = 0; k < 3; k++) {
+          if (p[k] < mins[k]) mins[k] = p[k];
+          if (p[k] > maxs[k]) maxs[k] = p[k];
+        }
+        const ranges = [maxs[0] - mins[0], maxs[1] - mins[1], maxs[2] - mins[2]];
+        const order = [0, 1, 2].sort((a, b) => ranges[b] - ranges[a]);
+        const ax = order[0], ay = order[1];
+        let xmin = mins[ax], xmax = maxs[ax], ymin = mins[ay], ymax = maxs[ay];
+        if (!(xmax > xmin)) xmax = xmin + 1;
+        if (!(ymax > ymin)) ymax = ymin + 1;
+
+        const nx = bins, ny = bins;
+        const cw = (xmax - xmin) / nx, ch = (ymax - ymin) / ny;
+        const binOf = (x: number, y: number) => {
+          let ix = Math.floor((x - xmin) / cw); if (ix < 0) ix = 0; if (ix >= nx) ix = nx - 1;
+          let iy = Math.floor((y - ymin) / ch); if (iy < 0) iy = 0; if (iy >= ny) iy = ny - 1;
+          return iy * nx + ix;
+        };
+
+        const N = nx * ny;
+        const visits = new Float64Array(N), speedSum = new Float64Array(N), speedCnt = new Float64Array(N);
+        const crash = new Float64Array(N), goal = new Float64Array(N);
+        const scoreSum = new Float64Array(N), scoreCnt = new Float64Array(N);
+        // Dense "pre-crash risk" field: counts step-visits that fall within
+        // the last HAZARD_WINDOW steps before a crash. Unlike `crash` (which
+        // only marks the exact terminal cell), this lights up the whole
+        // approach a trajectory takes into its demise, so the signal is
+        // dense across visited cells and spatially meaningful ("cars that
+        // pass through here tend to die soon after").
+        const hazard = new Float64Array(N);
+        const HAZARD_WINDOW = 30;
+
+        for (const t of trajs) {
+          const P = t.pts;
+          for (let i = 0; i < P.length; i++) {
+            const b = binOf(P[i][ax], P[i][ay]);
+            visits[b] += 1;
+            if (i > 0) {
+              const dx = P[i][ax] - P[i - 1][ax], dy = P[i][ay] - P[i - 1][ay];
+              speedSum[b] += Math.sqrt(dx * dx + dy * dy);
+              speedCnt[b] += 1;
+            }
+          }
+          const last = P[P.length - 1];
+          const lb = binOf(last[ax], last[ay]);
+          const isFail = t.type.indexOf('fail') >= 0;
+          if (isFail) {
+            crash[lb] += 1;
+            const start = Math.max(0, P.length - HAZARD_WINDOW);
+            for (let i = start; i < P.length; i++) {
+              hazard[binOf(P[i][ax], P[i][ay])] += 1;
+            }
+          } else if (t.type.indexOf('succeed') >= 0) {
+            goal[lb] += 1;
+          }
+          if (isFinite(t.score)) { scoreSum[lb] += t.score; scoreCnt[lb] += 1; }
+        }
+
+        // Sparse emission: only cells that were actually visited.
+        const cells: any[] = [];
+        for (let b = 0; b < N; b++) {
+          if (visits[b] <= 0) continue;
+          cells.push({
+            ix: b % nx, iy: Math.floor(b / nx),
+            v: visits[b], ss: speedSum[b], sc: speedCnt[b],
+            cr: crash[b], gl: goal[b], scs: scoreSum[b], scc: scoreCnt[b],
+            hz: hazard[b],
+          });
+        }
+
+        const axisNames = ['x', 'y', 'z'];
+        res.json({
+          ok: true, job_id: jobId, episodes: trajs.length,
+          axes: [ax, ay], axisNames: [axisNames[ax], axisNames[ay]],
+          extent: { xmin, xmax, ymin, ymax }, nx, ny, cells,
+        });
+      });
   });
 
   app.get('/jobs', (req, res) => {
