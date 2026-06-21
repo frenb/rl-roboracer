@@ -147,6 +147,9 @@
     }
     async function loadJobs() {
       try {
+        // Always force: /get_jobs is change-gated and would otherwise
+        // return NO_CHANGES, leaving job statuses (NOT_STARTED -> RUNNING
+        // -> DONE) stale in the dropdown.
         const r = await fetch('/get_jobs?force=true');
         if (!r.ok) return;
         const txt = await r.text();
@@ -159,19 +162,26 @@
           const bd = Date.parse(b.update_date || b.create_date || 0) || 0;
           return bd - ad;
         });
-        const prev = jobSel.value;
-        jobSel.innerHTML = '';
+
+        const firstBuild = jobSel.options.length === 0;
+        // Update labels IN PLACE (don't tear down the <select>) so a status
+        // change is reflected without dropping the user's current selection
+        // or collapsing an open dropdown.
         for (const j of jobs) {
           const id = jobIdOf(j);
           if (!id) continue;
-          const opt = document.createElement('option');
-          opt.value = id;
-          opt.textContent = jobLabel(j);
-          jobSel.appendChild(opt);
+          let opt = jobSel.querySelector('option[value="' + id + '"]');
+          if (!opt) {
+            opt = document.createElement('option');
+            opt.value = id;
+            jobSel.appendChild(opt);
+          }
+          const lbl = jobLabel(j);
+          if (opt.textContent !== lbl) opt.textContent = lbl;
         }
-        if (prev) jobSel.value = prev;
-        // Default to a RUNNING job if nothing chosen yet.
-        if (!jobSel.value) {
+
+        // Default to a RUNNING job on the first build only.
+        if (firstBuild && !jobSel.value) {
           const running = jobs.find((j) => String(j.status).toUpperCase().includes('RUN'));
           if (running) jobSel.value = jobIdOf(running);
         }
@@ -383,6 +393,10 @@
     (async function init() {
       await loadJobs();
       await fetchMap();
+      // Keep job statuses fresh even when the heatmap auto-refresh is off.
+      // Cheap: /get_jobs hits the small jobs collection and only repaints
+      // changed option labels.
+      setInterval(loadJobs, 8000);
     })();
   })();
   </script>
