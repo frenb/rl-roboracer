@@ -1441,12 +1441,24 @@
       this.ws = null;
       this.connected = false;
       this.reconnectTimer = null;
+      // Staleness watchdog. The server pushes {type:'heartbeat'} every
+      // ~30s and also pings at the protocol level; if we don't see ANY
+      // message (data or heartbeat) for staleTimeout ms the socket is
+      // presumed half-open (slept laptop / dropped network that never
+      // fired onclose) and we force a reconnect. Without this a half-
+      // open socket leaves readyState===OPEN forever and the UI
+      // silently goes stale.
+      this.staleTimeout = this.opts.staleTimeout || 75000;
+      this.lastMessageAt = 0;
+      this.staleTimer = null;
+      this.livenessInstalled = false;
     }
 
     connect() {
       if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
         return;
       }
+      this._installLivenessHandlers();
 
       const wsUrl = `ws://${window.location.hostname}:${this.opts.port}`;
       console.log('[WS] Connecting to', wsUrl);
@@ -1455,6 +1467,8 @@
       this.ws.onopen = () => {
         console.log('[WS] Connected');
         this.connected = true;
+        this.lastMessageAt = Date.now();
+        this._armStaleTimer();
         // Subscribe to collections
         if (this.opts.collections.length > 0) {
           this.ws.send(JSON.stringify({ type: 'subscribe', collections: this.opts.collections }));
@@ -1463,6 +1477,8 @@
       };
 
       this.ws.onmessage = (event) => {
+        // ANY inbound frame proves the link is alive.
+        this.lastMessageAt = Date.now();
         try {
           const msg = JSON.parse(event.data);
           if (msg.type === 'change') {
@@ -1470,7 +1486,7 @@
             this.opts.onChange(msg.collection, msg);
           } else if (msg.type === 'subscribed') {
             console.log('[WS] Subscribed to:', msg.collections);
-          }
+          } // msg.type === 'heartbeat' falls through: liveness only.
         } catch (e) {
           console.error('[WS] Parse error:', e);
         }
@@ -1480,14 +1496,9 @@
         console.log('[WS] Disconnected');
         this.connected = false;
         this.ws = null;
+        this._clearStaleTimer();
         this.opts.onDisconnect();
-        // Schedule reconnect
-        if (!this.reconnectTimer) {
-          this.reconnectTimer = setTimeout(() => {
-            this.reconnectTimer = null;
-            this.connect();
-          }, this.opts.reconnectDelay);
-        }
+        this._scheduleReconnect();
       };
 
       this.ws.onerror = (err) => {
@@ -1495,11 +1506,62 @@
       };
     }
 
+    _scheduleReconnect() {
+      if (this.reconnectTimer) return;
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null;
+        this.connect();
+      }, this.opts.reconnectDelay);
+    }
+
+    _armStaleTimer() {
+      this._clearStaleTimer();
+      this.staleTimer = setInterval(() => {
+        if (this.lastMessageAt && Date.now() - this.lastMessageAt > this.staleTimeout) {
+          console.warn('[WS] No traffic for', this.staleTimeout, 'ms; assuming half-open, reconnecting');
+          // Drop the dead socket and reconnect immediately.
+          try { if (this.ws) this.ws.close(); } catch (e) { /* noop */ }
+          this.ws = null;
+          this.connected = false;
+          this._clearStaleTimer();
+          if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+          this.connect();
+        }
+      }, Math.max(5000, Math.floor(this.staleTimeout / 3)));
+    }
+
+    _clearStaleTimer() {
+      if (this.staleTimer) { clearInterval(this.staleTimer); this.staleTimer = null; }
+    }
+
+    // Reconnect promptly when the tab is re-shown or the network comes
+    // back (covers wake-from-sleep where onclose may never have fired).
+    _installLivenessHandlers() {
+      if (this.livenessInstalled) return;
+      this.livenessInstalled = true;
+      const revive = () => {
+        if (!this.ws || this.ws.readyState === WebSocket.CLOSED || this.ws.readyState === WebSocket.CLOSING) {
+          if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+          this.connect();
+        } else {
+          // Possibly half-open: nudge the stale check to run now.
+          this.lastMessageAt = Math.min(this.lastMessageAt, Date.now() - this.staleTimeout - 1);
+        }
+      };
+      try {
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') revive();
+        });
+        window.addEventListener('online', revive);
+      } catch (e) { /* non-browser context */ }
+    }
+
     close() {
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
       }
+      this._clearStaleTimer();
       if (this.ws) {
         this.ws.close();
         this.ws = null;
