@@ -1156,7 +1156,11 @@
       let ws = null;
       let wsConnected = false;
       let wsReconnectTimer = null;
+      let wsLastMessageAt = 0;
+      let wsStaleTimer = null;
+      let wsLivenessInstalled = false;
       const WS_RECONNECT_DELAY = 3000;
+      const WS_STALE_TIMEOUT = 75000;         // No frame for this long => half-open
       const POLL_INTERVAL_WITH_WS = 30000;    // Slow fallback when WS connected
       const POLL_INTERVAL_WITHOUT_WS = 5000;  // Fast polling when WS disconnected
 
@@ -1230,6 +1234,7 @@
         if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
           return; // Already connected or connecting
         }
+        installWsLivenessHandlers();
 
         const wsUrl = `ws://${window.location.hostname}:8082`;
         console.log('[WS] Connecting to', wsUrl);
@@ -1238,6 +1243,8 @@
         ws.onopen = () => {
           console.log('[WS] Connected');
           wsConnected = true;
+          wsLastMessageAt = Date.now();
+          armWsStaleTimer();
           // Subscribe to jobs collection
           ws.send(JSON.stringify({ type: 'subscribe', collections: ['jobs'] }));
           // Switch to slower polling as fallback
@@ -1245,6 +1252,7 @@
         };
 
         ws.onmessage = (event) => {
+          wsLastMessageAt = Date.now();   // any frame proves liveness
           try {
             const msg = JSON.parse(event.data);
             console.log('[WS] Received:', msg.type, msg.collection || '');
@@ -1252,7 +1260,7 @@
               handleWsChange(msg);
             } else if (msg.type === 'subscribed') {
               console.log('[WS] Subscribed to:', msg.collections);
-            }
+            } // 'heartbeat' falls through: liveness only.
           } catch (e) {
             console.error('[WS] Parse error:', e);
           }
@@ -1262,6 +1270,7 @@
           console.log('[WS] Disconnected');
           wsConnected = false;
           ws = null;
+          clearWsStaleTimer();
           updatePollInterval();
           // Schedule reconnect
           if (!wsReconnectTimer) {
@@ -1275,6 +1284,50 @@
         ws.onerror = (err) => {
           console.error('[WS] Error:', err);
         };
+      }
+
+      // Staleness watchdog: the server heartbeats every ~30s, so no frame
+      // for WS_STALE_TIMEOUT means the socket is half-open (slept laptop /
+      // dropped network that never fired onclose). Force a reconnect; the
+      // poll fallback keeps data flowing meanwhile.
+      function armWsStaleTimer() {
+        clearWsStaleTimer();
+        wsStaleTimer = setInterval(() => {
+          if (wsLastMessageAt && Date.now() - wsLastMessageAt > WS_STALE_TIMEOUT) {
+            console.warn('[WS] No traffic for', WS_STALE_TIMEOUT, 'ms; reconnecting');
+            clearWsStaleTimer();
+            try { if (ws) ws.close(); } catch (e) { /* noop */ }
+            ws = null;
+            wsConnected = false;
+            if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+            updatePollInterval();
+            connectWebSocket();
+          }
+        }, Math.max(5000, Math.floor(WS_STALE_TIMEOUT / 3)));
+      }
+      function clearWsStaleTimer() {
+        if (wsStaleTimer) { clearInterval(wsStaleTimer); wsStaleTimer = null; }
+      }
+
+      // Reconnect promptly on tab re-show / network restore (wake-from-
+      // sleep often never fires onclose).
+      function installWsLivenessHandlers() {
+        if (wsLivenessInstalled) return;
+        wsLivenessInstalled = true;
+        const revive = () => {
+          if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+            if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+            connectWebSocket();
+          } else {
+            wsLastMessageAt = Math.min(wsLastMessageAt, Date.now() - WS_STALE_TIMEOUT - 1);
+          }
+        };
+        try {
+          document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') revive();
+          });
+          window.addEventListener('online', revive);
+        } catch (e) { /* noop */ }
       }
 
       // Update polling interval based on WebSocket connection state

@@ -43,9 +43,81 @@ function broadcastChange(collection: string, change: any) {
   });
 }
 
+// ----------------------------------------------------------------
+// Resilient change-stream supervisor.
+//
+// A MongoDB change stream is a long-lived tailable cursor. When its
+// underlying pooled connection is reset (idle-connection reaping, a
+// single-node-RS blip, the mongo container bouncing) the stream goes
+// inert. The original code attached only a `change` listener, so a
+// dead stream was never noticed or recreated - and because the same
+// handler both pushes over WebSocket AND flips the `*Changed` flag the
+// REST poll path is gated on, a single dead stream froze the entire
+// dashboard until the container was restarted (the classic "freeze
+// after hours of inactivity").
+//
+// This supervisor (re)creates a stream and, on ANY error/close,
+// schedules a recreate with capped exponential backoff. On every
+// (re)open it fires `markChanged()` so the REST poll path re-syncs the
+// data that may have changed while the stream was down (change streams
+// can't replay missed events without a stored resume token, and the
+// poll fallback is the cheap, correct catch-up path here).
+// ----------------------------------------------------------------
+function superviseChangeStream(
+  collName: string,
+  collection: any,
+  markChanged: () => void,
+): void {
+  let backoff = 1000;
+  const MAX_BACKOFF = 30000;
+
+  const open = () => {
+    let stream: any = null;
+    let reopened = false;
+
+    const scheduleReopen = (why: string, info?: any) => {
+      if (reopened) return;          // error+close both fire; recreate once
+      reopened = true;
+      console.error(`[stream:${collName}] ${why}; recreating in ${backoff}ms`,
+        info != null ? info : '');
+      if (stream) { try { Promise.resolve(stream.close()).catch(() => {}); } catch (e) { /* noop */ } }
+      const delay = backoff;
+      backoff = Math.min(MAX_BACKOFF, backoff * 2);
+      setTimeout(open, delay);
+    };
+
+    try {
+      stream = collection.watch([], { fullDocument: 'updateLookup' });
+    } catch (e: any) {
+      scheduleReopen('watch() threw', e && (e.message || e));
+      return;
+    }
+
+    // Re-sync the REST poll path on every (re)open.
+    markChanged();
+
+    stream.on('change', (change: any) => {
+      backoff = 1000;                // healthy traffic resets the backoff
+      console.log(`Change detected (${collName}):`, change.operationType, change.documentKey?._id);
+      markChanged();
+      broadcastChange(collName, change);
+    });
+    stream.on('error', (err: any) => scheduleReopen('stream error', err && (err.message || err)));
+    stream.on('close', () => scheduleReopen('stream closed'));
+  };
+
+  open();
+}
+
+function heartbeat(this: any) { this.isAlive = true; }
+
 dataWss.on('connection', (ws) => {
   console.log('[DataWS] Client connected');
   dataClients.set(ws, new Set());
+  // Liveness flag, flipped back true whenever the client answers a
+  // protocol-level ping (browsers auto-reply to ping frames).
+  (ws as any).isAlive = true;
+  ws.on('pong', heartbeat);
 
   ws.on('message', (data: string) => {
     try {
@@ -71,6 +143,30 @@ dataWss.on('connection', (ws) => {
     dataClients.delete(ws);
   });
 });
+
+// Heartbeat: every 30s ping each client and reap any that didn't pong
+// since the last tick (a half-open socket from a slept laptop / dropped
+// network never fires 'close', so without this it lingers in
+// dataClients forever and the client UI silently goes stale). We also
+// push an application-level {type:'heartbeat'} so the browser side can
+// run its own staleness watchdog even when the subscribed collections
+// are quiet (no 'change' traffic to prove the link is alive).
+const WS_HEARTBEAT_MS = 30000;
+const wsHeartbeat = setInterval(() => {
+  dataWss.clients.forEach((ws: any) => {
+    if (ws.isAlive === false) {
+      dataClients.delete(ws);
+      try { ws.terminate(); } catch (e) { /* noop */ }
+      return;
+    }
+    ws.isAlive = false;
+    try { ws.ping(); } catch (e) { /* noop */ }
+    if (ws.readyState === WebSocket.OPEN) {
+      try { ws.send(JSON.stringify({ type: 'heartbeat', t: Date.now() })); } catch (e) { /* noop */ }
+    }
+  });
+}, WS_HEARTBEAT_MS);
+dataWss.on('close', () => clearInterval(wsHeartbeat));
 
 console.log('[DataWS] WebSocket server for data updates listening on port 8082');
 
@@ -119,63 +215,18 @@ export const createServer = (config): express.Application => {
     //     // handle the change event here
     //   });
     // });
-    const jobs = dbo.collection("jobs");
-    const models = dbo.collection("models");
-    const leaderboardScores = dbo.collection("leaderboard_scores");
-    const envSpecs = dbo.collection("env_specs");
-    
-    // Watch with fullDocument option so inserts/replaces include the full doc
-    const jobsChangeStream = jobs.watch([], { fullDocument: 'updateLookup' });
-    jobsChangeStream.on('change', (change) => {
-      console.log('Change detected (jobs):', change.operationType, change.documentKey?._id);
-      jobsChanged=true;
-      broadcastChange('jobs', change);
-    });
-
-    const modelsChangeStream = models.watch([], { fullDocument: 'updateLookup' });
-    modelsChangeStream.on('change', (change) => {
-      console.log('Change detected (models):', change.operationType, change.documentKey?._id);
-      modelsChanged=true;
-      broadcastChange('models', change);
-    });
-
-    const leaderboardScoresChangeStream = leaderboardScores.watch([], { fullDocument: 'updateLookup' });
-    leaderboardScoresChangeStream.on('change', (change) => {
-      console.log('Change detected (leaderboard_scores):', change.operationType, change.documentKey?._id);
-      leaderboardScoresChanged=true;
-      broadcastChange('leaderboard_scores', change);
-    });
-
-    const envSpecsChangeStream = envSpecs.watch([], { fullDocument: 'updateLookup' });
-    envSpecsChangeStream.on('change', (change) => {
-      console.log('Change detected (env_specs):', change.operationType, change.documentKey?._id);
-      envSpecsChanged=true;
-      broadcastChange('env_specs', change);
-    });
-
-    const rewardDesigns = dbo.collection("reward_designs");
-    const rewardDesignsChangeStream = rewardDesigns.watch([], { fullDocument: 'updateLookup' });
-    rewardDesignsChangeStream.on('change', (change) => {
-      console.log('Change detected (reward_designs):', change.operationType, change.documentKey?._id);
-      rewardDesignsChanged=true;
-      broadcastChange('reward_designs', change);
-    });
-
-    const experimentDesigns = dbo.collection("experiment_designs");
-    const experimentDesignsChangeStream = experimentDesigns.watch([], { fullDocument: 'updateLookup' });
-    experimentDesignsChangeStream.on('change', (change) => {
-      console.log('Change detected (experiment_designs):', change.operationType, change.documentKey?._id);
-      experimentDesignsChanged=true;
-      broadcastChange('experiment_designs', change);
-    });
-
-    const gyms = dbo.collection("gyms");
-    const gymsChangeStream = gyms.watch([], { fullDocument: 'updateLookup' });
-    gymsChangeStream.on('change', (change) => {
-      console.log('Change detected (gyms):', change.operationType, change.documentKey?._id);
-      gymsChanged=true;
-      broadcastChange('gyms', change);
-    });
+    // Each collection gets a self-healing change stream (see
+    // superviseChangeStream). The markChanged callback flips the same
+    // `*Changed` flag the matching REST route is gated on, so both the
+    // WebSocket push and the poll fallback recover after a stream
+    // recreate.
+    superviseChangeStream('jobs', dbo.collection("jobs"), () => { jobsChanged = true; });
+    superviseChangeStream('models', dbo.collection("models"), () => { modelsChanged = true; });
+    superviseChangeStream('leaderboard_scores', dbo.collection("leaderboard_scores"), () => { leaderboardScoresChanged = true; });
+    superviseChangeStream('env_specs', dbo.collection("env_specs"), () => { envSpecsChanged = true; });
+    superviseChangeStream('reward_designs', dbo.collection("reward_designs"), () => { rewardDesignsChanged = true; });
+    superviseChangeStream('experiment_designs', dbo.collection("experiment_designs"), () => { experimentDesignsChanged = true; });
+    superviseChangeStream('gyms', dbo.collection("gyms"), () => { gymsChanged = true; });
 
     // Index for the Weakness Map (/weakness_map). The logs collection is
     // dominated by per-step "did not fail" rows (no position_history), so
