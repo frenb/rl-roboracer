@@ -210,7 +210,7 @@ var config = {
                       // disk, no dashboard image rebuild needed for the
                       // page itself (the /weakness_map data endpoint does
                       // need the server rebuilt).
-                      componentState: { src: "http://localhost/weakness.html?v=ws1", id: 'weakness' }
+                      componentState: { src: "http://localhost/weakness.html?v=ws2", id: 'weakness' }
                     },
                     {
                       type: 'component',
