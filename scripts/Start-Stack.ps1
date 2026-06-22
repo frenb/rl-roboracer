@@ -51,6 +51,11 @@
     you want to control Unity timing manually (e.g. to debug a single
     instance).
 
+.PARAMETER SkipWatchdog
+    Skip launching the Watchdog. Useful for one-off manual runs where
+    you don't want the auto-recovery loop interfering, or if you're
+    starting the Watchdog separately with custom parameters.
+
 .EXAMPLE
     .\scripts\Start-Stack.ps1
 
@@ -59,6 +64,9 @@
 
 .EXAMPLE
     .\scripts\Start-Stack.ps1 -SkipUnity
+
+.EXAMPLE
+    .\scripts\Start-Stack.ps1 -SkipWatchdog
 #>
 [CmdletBinding()]
 param(
@@ -66,7 +74,8 @@ param(
     [double]$StaggerSeconds = 15,
     [switch]$Popup,
     [int]$WaitForRosServersSeconds = 8,
-    [switch]$SkipUnity
+    [switch]$SkipUnity,
+    [switch]$SkipWatchdog
 )
 
 $ErrorActionPreference = 'Stop'
@@ -110,6 +119,32 @@ $invokeArgs = @{
 }
 if ($Popup) { $invokeArgs.Popup = $true }
 & $startClients @invokeArgs
+
+# ---- Watchdog --------------------------------------------------------
+# Kill any stale Watchdog from a previous run first, then start a fresh
+# one. Idempotent: safe to re-run if the stack is already up.
+# The Watchdog handles a not-yet-created robotaxi.out gracefully - it
+# just waits until the trainer starts writing.
+if (-not $SkipWatchdog) {
+    $watchdogScript = Join-Path $PSScriptRoot 'Watchdog.ps1'
+    if (Test-Path -LiteralPath $watchdogScript) {
+        # Kill any existing Watchdog processes to avoid duplicates.
+        Get-Process -Name powershell, pwsh -ErrorAction SilentlyContinue |
+            Where-Object {
+                try { (Get-WmiObject Win32_Process -Filter "ProcessId=$($_.Id)" -ErrorAction SilentlyContinue).CommandLine -like "*Watchdog.ps1*" }
+                catch { $false }
+            } |
+            ForEach-Object {
+                Write-Host "  killing stale Watchdog PID=$($_.Id)"
+                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+            }
+        Write-Host "Starting Watchdog (auto-recovery)..."
+        Start-Process powershell -ArgumentList "-NoExit -File `"$watchdogScript`"" -WindowStyle Minimized
+        Write-Host "  Watchdog started (minimized). It monitors robotaxi.out and auto-restarts on wedge detection."
+    } else {
+        Write-Host "  WARNING: Watchdog.ps1 not found at $watchdogScript — skipping auto-recovery."
+    }
+}
 
 Write-Host ""
 Write-Host "Stack up. Multi-env training can now be started with:"
