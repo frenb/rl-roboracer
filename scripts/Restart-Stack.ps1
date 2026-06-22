@@ -48,7 +48,8 @@ param(
     [double]$StaggerSeconds = 15,
     [switch]$Popup,
     [int]$WaitForRosServersSeconds = 8,
-    [switch]$SkipUnity
+    [switch]$SkipUnity,
+    [switch]$SkipWatchdog
 )
 
 $ErrorActionPreference = 'Stop'
@@ -69,6 +70,7 @@ $startArgs = @{
     StaggerSeconds           = $StaggerSeconds
     WaitForRosServersSeconds = $WaitForRosServersSeconds
 }
-if ($Popup)     { $startArgs.Popup     = $true }
-if ($SkipUnity) { $startArgs.SkipUnity = $true }
+if ($Popup)        { $startArgs.Popup        = $true }
+if ($SkipUnity)    { $startArgs.SkipUnity    = $true }
+if ($SkipWatchdog) { $startArgs.SkipWatchdog = $true }
 & $start @startArgs
