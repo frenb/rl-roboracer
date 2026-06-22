@@ -1803,7 +1803,6 @@ def main(
                 update_job(job_id, "PAUSED", "status")
             except Exception as _e:  # noqa: BLE001
                 print(f"main: pause status write failed: {_e}", flush=True)
-            break
         if _lifecycle == 'cancel':
             print(
                 f"main: job {job_id} status changed externally; "
@@ -2054,7 +2053,7 @@ class _EvalCancelled(Exception):
 
 def _build_eval_result(returns, episode_lengths, avg_speeds,
                        avg_goals_per_episode, avg_steering_angle_ratios,
-                       partial=False):
+                       partial=False, episode_counts=None):
     """Package run_policy's per-trial metric arrays into the dict
     save_results_to_db consumes.
 
@@ -2065,6 +2064,11 @@ def _build_eval_result(returns, episode_lengths, avg_speeds,
     care about distinguishing complete-eval from cancelled-eval can
     branch on it (currently save_results_to_db treats both the
     same - records whatever data we have).
+
+    ``episode_counts``: per-trial count of episodes (= crashes, since
+    every donut-course episode ends on a collision). Stored alongside
+    the ratio metrics so the Leaderboard tab can show raw crash counts
+    and compute steps-per-goal without needing to re-derive them.
     """
     return {
         "returns": returns,
@@ -2072,6 +2076,7 @@ def _build_eval_result(returns, episode_lengths, avg_speeds,
         "avg_speeds": avg_speeds,
         "avg_goals_per_episode": avg_goals_per_episode,
         "avg_steering_angle_ratios": avg_steering_angle_ratios,
+        "episode_counts": episode_counts or [],
         "partial": partial,
     }
 
@@ -2314,6 +2319,7 @@ def run_policy(saved_policy, tf_env, job_id="",
     avg_speeds = []
     avg_goals_per_episode_arr = []
     avg_steering_angle_ratios = []
+    episode_counts = []   # raw crash count per trial (num_episodes_total delta)
 
     def _safe_div(num, den):
         """Treat 0/0 (no episodes / no steps in this trial) as None.
@@ -2362,6 +2368,7 @@ def run_policy(saved_policy, tf_env, job_id="",
                 _safe_div(goals_delta, episodes_delta))
             avg_steering_angle_ratios.append(
                 _safe_div(steering_delta, steps_delta))
+            episode_counts.append(int(episodes_delta))
             print(
                 f"trial {curr_trial + 1} unbiased: "
                 f"episode_length={episode_lengths[-1]} "
@@ -2387,7 +2394,7 @@ def run_policy(saved_policy, tf_env, job_id="",
         return _build_eval_result(
             returns, episode_lengths, avg_speeds,
             avg_goals_per_episode_arr, avg_steering_angle_ratios,
-            partial=True)
+            partial=True, episode_counts=episode_counts)
     finally:
         # Re-enable immediate reset for any subsequent training on this env.
         set_immediate_reset_on_failure(tf_env, True)
@@ -2404,7 +2411,7 @@ def run_policy(saved_policy, tf_env, job_id="",
     return _build_eval_result(
         returns, episode_lengths, avg_speeds,
         avg_goals_per_episode_arr, avg_steering_angle_ratios,
-        partial=False)
+        partial=False, episode_counts=episode_counts)
 
 def get_saved_model(policy_type, version=None, path_arg=None):
     if path_arg is not None:
@@ -2938,12 +2945,14 @@ def save_results_to_db(path, results):
         avg_speeds = results.get("avg_speeds") or []
         avg_goals = results.get("avg_goals_per_episode") or []
         avg_steering = results.get("avg_steering_angle_ratios") or []
+        episode_counts = results.get("episode_counts") or []
     else:
         returns = list(results or [])
         episode_lengths = []
         avg_speeds = []
         avg_goals = []
         avg_steering = []
+        episode_counts = []
 
     if not returns:
         print("Warning: No results to save. Skipping DB insert.", flush=True)
@@ -2979,6 +2988,11 @@ def save_results_to_db(path, results):
             "avg_speeds": list(avg_speeds),
             "avg_goals_per_episode": list(avg_goals),
             "avg_steering_angle_ratios": list(avg_steering),
+            # Raw per-trial crash count (num_episodes_total delta). One
+            # episode = one crash in the donut course. Stored so the
+            # Leaderboard tab can show crash frequency and steps-per-goal
+            # without re-deriving them from the ratio fields.
+            "episode_counts": list(episode_counts),
         })
 
 def log_reward(job_id, type, score, diff=None, extra_data=None, step_costs=[], position_history=[],stat_array=[]):
