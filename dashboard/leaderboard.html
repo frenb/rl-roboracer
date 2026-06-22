@@ -23,9 +23,7 @@
             class="text-xs font-medium text-slate-500 dark:text-slate-400"
             aria-live="polite"></span>
 
-      <!-- Freshness pill - see RoboracerUI.FreshnessIndicator in
-           components.js. Green = within one 5s poll cycle, amber =
-           one cycle missed, red = polling appears broken. -->
+      <!-- Freshness pill -->
       <span data-role="freshness"
             class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400"
             aria-live="polite"
@@ -34,6 +32,26 @@
               class="inline-block w-1.5 h-1.5 rounded-full bg-slate-500"></span>
         <span data-role="freshness-text">connecting…</span>
       </span>
+
+      <div class="flex items-center gap-2 ml-auto">
+        <label class="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+          Sort by
+          <select data-action="sort-by"
+                  class="appearance-none select-chevron pr-7 px-2 py-1 text-xs
+                         border border-slate-300 dark:border-slate-600
+                         bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100
+                         rounded-md shadow-card"
+                  title="Primary sort metric. All invariant metrics are reward-design independent.">
+            <option value="mean_goals"     selected>Goals / ep      (invariant ↓)</option>
+            <option value="steps_per_goal"       >Steps / goal    (invariant ↑)</option>
+            <option value="mean_crashes"         >Crashes / trial (invariant ↑)</option>
+            <option value="mean_speed"           >Speed           (invariant ↓)</option>
+            <option value="mean_ep_len"          >Episode len     (invariant ↓)</option>
+            <option value="mean_score"           >Return          (reward-shaped ↓)</option>
+            <option value="create_date"          >Eval date       (newest first)</option>
+          </select>
+        </label>
+      </div>
     </div>
 
     <div class="flex-1 overflow-hidden flex flex-col p-4 gap-4 bg-slate-50 dark:bg-[#0b1120]">
@@ -48,23 +66,151 @@
     (function () {
       const { TableView, formatters, showToast } = window.RoboracerUI;
 
+      // Compute the mean of a per-trial array, skipping null/NaN entries.
+      // Returns null when the array is absent or all entries are null.
+      function arrMean(arr) {
+        if (!Array.isArray(arr) || arr.length === 0) return null;
+        const vals = arr.filter(v => v != null && isFinite(v));
+        return vals.length === 0 ? null : vals.reduce((a, b) => a + b, 0) / vals.length;
+      }
+      function arrSum(arr) {
+        if (!Array.isArray(arr) || arr.length === 0) return null;
+        const vals = arr.filter(v => v != null && isFinite(v));
+        return vals.length === 0 ? null : vals.reduce((a, b) => a + b, 0);
+      }
+
+      // Model metadata cache: model _id (string) -> {job_id, reward_design_name,
+      // experiment_design_name, training_iterations}.
+      let modelMap = {};
+      async function loadModels() {
+        try {
+          const r = await fetch('/get_models?force=true');
+          if (!r.ok) return;
+          const txt = await r.text();
+          if (txt === 'NO_CHANGES') return;
+          const models = JSON.parse(txt);
+          if (!Array.isArray(models)) return;
+          modelMap = {};
+          for (const m of models) {
+            const id = m._id && (m._id.$oid || String(m._id));
+            if (!id) continue;
+            modelMap[id] = {
+              job_id: m.job_id ? String(m.job_id) : null,
+              reward: m.reward_design_name || null,
+              exp: m.experiment_design_name || null,
+              iters: m.training_iterations != null ? Number(m.training_iterations) : null,
+            };
+          }
+        } catch (e) { /* leave stale map */ }
+      }
+
+      // Enrich each score doc with computed invariant means + model metadata
+      // so we can sort and render without re-computing on every render pass.
+      function enrich(s) {
+        s._mean_goals   = arrMean(s.avg_goals_per_episode);
+        s._mean_speed   = arrMean(s.avg_speeds);
+        s._mean_ep_len  = arrMean(s.episode_lengths);
+        s._n_trials     = Array.isArray(s.scores) ? s.scores.length : null;
+        // Crash count: sum of per-trial episode_counts (one episode = one crash)
+        s._total_crashes = arrSum(s.episode_counts);
+        s._mean_crashes  = arrMean(s.episode_counts);
+        // Steps per goal: episode_length / goals_per_episode.
+        // Computed per-trial then averaged to avoid divide-by-zero trials
+        // skewing the aggregate.
+        if (Array.isArray(s.episode_lengths) && Array.isArray(s.avg_goals_per_episode)) {
+          const spg = s.episode_lengths.map((l, i) => {
+            const g = (s.avg_goals_per_episode || [])[i];
+            return (l != null && g != null && isFinite(l) && isFinite(g) && g > 0)
+              ? l / g : null;
+          }).filter(v => v != null && isFinite(v));
+          s._steps_per_goal = spg.length > 0 ? spg.reduce((a, b) => a + b, 0) / spg.length : null;
+        } else {
+          s._steps_per_goal = null;
+        }
+        // Join model metadata
+        const mid = s.model_id && (s.model_id.$oid || String(s.model_id));
+        const meta = mid ? (modelMap[mid] || {}) : {};
+        s._job_id = meta.job_id || null;
+        s._job_id_short = s._job_id ? '…' + s._job_id.slice(-8) : '–';
+        s._reward = meta.reward || null;
+        s._exp = meta.exp || null;
+        s._iters = meta.iters || null;
+        return s;
+      }
+
+      function enrichAll() {
+        for (const s of scoresCache) enrich(s);
+      }
+
       const tableHost = document.querySelector('[data-role="table"]');
       const table = new TableView(tableHost, {
         selectable: false,
-        // Leaderboard rows have no single-field id surfaced by the API;
-        // composite key keeps row identity stable across polls.
         rowKey: (row) => `${row.path || ''}|${row.create_date || ''}`,
         pageSize: 25,
         emptyMessage: 'No leaderboard scores yet — finished EVAL jobs will publish their mean scores here.',
         columns: [
-          { key: 'create_date', label: 'Created',        sortable: true, filter: false,
+          // ---- Identity (first column) ------------------------------------
+          { key: '_job_id_short', label: 'Job',
+            sortable: true, filter: true,
+            sortValue: (r) => r._job_id || '',
+            render: (v, r) => {
+              if (!r._job_id) return '–';
+              return `<span class="font-mono tabular-nums text-right text-slate-900 dark:text-slate-100 text-xs" title="${r._job_id}">${v}</span>`;
+            },
+            title: 'Training job that produced this model.' },
+          // ---- Reward-design INVARIANT columns (primary ranking signals) ----
+          { key: '_mean_goals',  label: 'Goals / ep',
+            sortable: true, filter: false,
+            sortValue: (r) => r._mean_goals ?? -Infinity,
+            render: (v) => v == null ? '–' : formatters.number(v, { decimals: 2 }),
+            cellClass: 'text-right font-medium',
+            title: 'Mean goals reached per episode across eval trials. Reward-design invariant.' },
+          { key: '_steps_per_goal', label: 'Steps / goal',
+            sortable: true, filter: false,
+            sortValue: (r) => r._steps_per_goal == null ? Infinity : r._steps_per_goal,
+            render: (v) => v == null ? '–' : formatters.number(v, { decimals: 0 }),
+            cellClass: 'text-right',
+            title: 'Mean steps needed to reach each goal (episode_length ÷ goals_per_ep). Lower is better. Reward-design invariant.' },
+          { key: '_mean_crashes', label: 'Crashes / trial',
+            sortable: true, filter: false,
+            sortValue: (r) => r._mean_crashes ?? Infinity,
+            render: (v, r) => {
+              if (v == null) return '–';
+              const total = r._total_crashes;
+              return `${formatters.number(v, { decimals: 1 })}<span class="text-slate-400 dark:text-slate-500 text-xs ml-1">(${total ?? '?'})</span>`;
+            },
+            title: 'Mean crash count per eval trial (one crash = one episode reset). Lower is better. Total in parentheses.' },
+          { key: '_mean_speed',  label: 'Avg speed',
+            sortable: true, filter: false,
+            sortValue: (r) => r._mean_speed ?? -Infinity,
+            render: (v) => v == null ? '–' : formatters.number(v, { decimals: 2 }),
+            cellClass: 'text-right',
+            title: 'Mean speed across eval trials. Reward-design invariant.' },
+          { key: '_mean_ep_len', label: 'Ep length',
+            sortable: true, filter: false,
+            sortValue: (r) => r._mean_ep_len ?? -Infinity,
+            render: (v) => v == null ? '–' : formatters.number(v, { decimals: 0 }),
+            cellClass: 'text-right',
+            title: 'Mean episode length (steps). Longer = survives longer before crashing. Reward-design invariant.' },
+          // ---- Reward-shaped score (kept for reference) --------------------
+          { key: 'mean_score',   label: 'Return',
+            sortable: true, filter: false,
+            sortValue: (r) => Number(r.mean_score),
+            render: (v) => formatters.number(v, { decimals: 2 }),
+            cellClass: 'text-right text-slate-400 dark:text-slate-500',
+            title: 'Mean eval return. Reward-design dependent — not comparable across reward designs.' },
+          // ---- Meta --------------------------------------------------------
+          { key: '_n_trials',    label: 'N',
+            sortable: false, filter: false,
+            render: (v) => v == null ? '–' : String(v),
+            cellClass: 'text-right text-xs text-slate-400 dark:text-slate-500',
+            title: 'Number of eval trials.' },
+          { key: 'create_date',  label: 'Eval date',
+            sortable: true, filter: false,
             sortValue: (r) => r.create_date ? Date.parse(r.create_date) : 0,
             render: (v) => formatters.relativeTime(v) },
-          { key: 'mean_score',  label: 'Mean score',     sortable: true, filter: false,
-            sortValue: (r) => Number(r.mean_score),
-            render: (v) => formatters.number(v, { decimals: 4 }),
-            cellClass: 'text-right' },
-          { key: 'path',        label: 'Model location', sortable: true, filter: true,
+          { key: 'path',         label: 'Model',
+            sortable: true, filter: true,
             render: (v) => formatters.truncatePath(v) },
         ],
       });
@@ -85,10 +231,27 @@
       /* ---------- WebSocket + Polling ----------------------------------- */
       const POLL_INTERVAL_WITH_WS = 30000;
       const POLL_INTERVAL_WITHOUT_WS = 5000;
+      const sortSel = document.querySelector('[data-action="sort-by"]');
+
+      // Sort comparators keyed by the dropdown option values.
+      // All metrics sort descending (higher = better) except create_date
+      // which also sorts descending (newest first).
+      const SORTERS = {
+        mean_goals:     (a, b) => (b._mean_goals    ?? -Infinity) - (a._mean_goals    ?? -Infinity),
+        steps_per_goal: (a, b) => (a._steps_per_goal ??  Infinity) - (b._steps_per_goal ??  Infinity),
+        mean_crashes:   (a, b) => (a._mean_crashes   ??  Infinity) - (b._mean_crashes   ??  Infinity),
+        mean_speed:     (a, b) => (b._mean_speed    ?? -Infinity) - (a._mean_speed    ?? -Infinity),
+        mean_ep_len:    (a, b) => (b._mean_ep_len   ?? -Infinity) - (a._mean_ep_len   ?? -Infinity),
+        mean_score:     (a, b) => (Number(b.mean_score) || 0)  - (Number(a.mean_score) || 0),
+        create_date:    (a, b) => Date.parse(b.create_date) - Date.parse(a.create_date),
+      };
+
       let pollHandle = null;
       let pollInFlight = false;
       let dataWs = null;
       let scoresCache = [];
+
+      sortSel.addEventListener('change', renderTable);
 
       async function pollOnce(force) {
         if (pollInFlight) return;
@@ -102,8 +265,13 @@
           if (text === 'NO_CHANGES') return;
           const json = JSON.parse(text);
           if (!Array.isArray(json)) throw new Error('Unexpected response shape');
-          scoresCache = json;
+          scoresCache = json.map(enrich);
           renderTable();
+          // Trigger a re-enrich (for job_id join) once models arrive if
+          // they finish after the first scores paint.
+          if (Object.keys(modelMap).length === 0) {
+            loadModels().then(() => { enrichAll(); renderTable(); });
+          }
         } catch (err) {
           console.error(err);
           if (table._rows.length === 0) table.setError(String(err.message || err));
@@ -114,9 +282,8 @@
       }
 
       function renderTable() {
-        const rows = scoresCache.slice().sort(
-          (a, b) => Date.parse(b.create_date) - Date.parse(a.create_date)
-        );
+        const sorter = SORTERS[sortSel.value] || SORTERS.mean_goals;
+        const rows = scoresCache.slice().sort(sorter);
         table.setData(rows);
         updateCounts(rows);
       }
@@ -129,12 +296,12 @@
         freshness.markSuccess();
 
         if (operationType === 'insert' && fullDocument) {
-          scoresCache.push(fullDocument);
+          scoresCache.push(enrich(fullDocument));
           renderTable();
         } else if (operationType === 'update' && fullDocument) {
           const idx = scoresCache.findIndex(s => String(s._id) === String(id));
-          if (idx >= 0) scoresCache[idx] = fullDocument;
-          else scoresCache.push(fullDocument);
+          if (idx >= 0) scoresCache[idx] = enrich(fullDocument);
+          else scoresCache.push(enrich(fullDocument));
           renderTable();
         } else if (operationType === 'delete') {
           scoresCache = scoresCache.filter(s => String(s._id) !== String(id));
@@ -155,9 +322,12 @@
         onChange: handleWsChange,
       });
 
-      pollOnce(true);
-      dataWs.connect();
-      updatePollInterval();
+      // Load models first so the join is ready before scores render.
+      loadModels().then(() => {
+        pollOnce(true);
+        dataWs.connect();
+        updatePollInterval();
+      });
 
       window.addEventListener('beforeunload', () => {
         if (pollHandle) clearInterval(pollHandle);
