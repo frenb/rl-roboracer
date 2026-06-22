@@ -159,7 +159,7 @@ var config = {
                       type: 'component',
                       title: 'Jobs',
                       componentName: 'iframeComponent',
-                      componentState: { src: 'http://localhost/jobs?v=ws2', id: 'jobs' }
+                      componentState: { src: 'http://localhost/jobs?v=ws3', id: 'jobs' }
                     },
                     {
                       type: 'component',
@@ -171,7 +171,7 @@ var config = {
                       type: 'component',
                       title: 'Leaderboard',
                       componentName: 'iframeComponent',
-                      componentState: { src: "http://localhost/leaderboard?v=ws1", id: 'leaderboard' }
+                      componentState: { src: "http://localhost/leaderboard?v=ws3", id: 'leaderboard' }
                     },
                     {
                       type: 'component',

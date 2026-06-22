@@ -70,6 +70,9 @@
         <button data-action="set-done" disabled
                 class="btn-base btn-secondary"
                 title="Mark selected jobs as DONE without running them">Set to done</button>
+        <button data-action="cancel" disabled
+                class="btn-base btn-secondary"
+                title="Mark selected queued jobs as CANCELLED so the trainer skips them">Cancel</button>
         <button data-action="delete" disabled
                 class="btn-base btn-danger">Delete</button>
         <button data-action="create" class="btn-base btn-primary">+ New job</button>
@@ -492,6 +495,7 @@
       const pauseBtn   = document.querySelector('[data-action="pause"]');
       const resumeBtn  = document.querySelector('[data-action="resume"]');
       const doneBtn    = document.querySelector('[data-action="set-done"]');
+      const cancelBtn  = document.querySelector('[data-action="cancel"]');
       const deleteBtn  = document.querySelector('[data-action="delete"]');
       const createBtn  = document.querySelector('[data-action="create"]');
 
@@ -510,6 +514,12 @@
         const hasPaused = selected.some(r => r && r.status === 'PAUSED');
         pauseBtn.disabled  = !hasInProg;
         resumeBtn.disabled = !hasPaused;
+        // Cancel is meaningful for any queued (non-terminal) job: those
+        // that haven't started yet or are waiting. Terminal statuses
+        // (DONE, FAILED, CANCELLED, PAUSED) are not eligible.
+        const CANCELLABLE = new Set(['NOT_STARTED', 'IN_PROGRESS', 'PAUSE_REQUESTED']);
+        const hasCancellable = selected.some(r => r && CANCELLABLE.has(r.status));
+        cancelBtn.disabled = !hasCancellable;
       }
       table.onSelectionChange(refreshButtons);
 
@@ -621,6 +631,23 @@
         });
         if (!ok) return;
         await bulkUpdateStatus(sel, 'DONE', 'marked done');
+      });
+
+      cancelBtn.addEventListener('click', async () => {
+        const CANCELLABLE = new Set(['NOT_STARTED', 'IN_PROGRESS', 'PAUSE_REQUESTED']);
+        const sel = table.getSelectedRows().filter(r => r && CANCELLABLE.has(r.status));
+        if (!sel.length) {
+          showToast({ type: 'info', message: 'No cancellable jobs in selection.' });
+          return;
+        }
+        const ok = await confirmDialog({
+          title: `Cancel ${sel.length} job${sel.length === 1 ? '' : 's'}?`,
+          message: 'These jobs will be marked CANCELLED and the trainer will skip them. This cannot be undone from the dashboard (use Restart to re-queue).',
+          confirmLabel: 'Cancel jobs',
+          confirmVariant: 'primary',
+        });
+        if (!ok) return;
+        await bulkUpdateStatus(sel, 'CANCELLED', 'cancelled');
       });
 
       deleteBtn.addEventListener('click', async () => {
