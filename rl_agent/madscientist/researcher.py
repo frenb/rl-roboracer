@@ -732,6 +732,7 @@ def research_one_cycle(
     *,
     monthly_budget_usd: float = 250.0,
     max_proposals_per_day: int = 1,
+    max_queued_jobs: int = constants.DEFAULT_MAX_QUEUED_JOBS,
     max_revisions: int = DEFAULT_MAX_REVISIONS,
     research_query: str = DEFAULT_RESEARCH_QUERY,
     days_back: int = DEFAULT_RESEARCH_DAYS_BACK,
@@ -770,6 +771,29 @@ def research_one_cycle(
             f"next month rollover.",
             flush=True)
         return None
+
+    # ---- Step 1b: job-queue depth gate ------------------------------------
+    # Don't pile up more proposals when the trainer already has a backlog.
+    # We count NOT_STARTED jobs (anything the trainer will pick up next).
+    # This is a cheap read and prevents the researcher from generating
+    # experiments faster than the GPU can run them.
+    if max_queued_jobs > 0:
+        try:
+            queued = db.jobs.count_documents({"status": "NOT_STARTED"})
+        except Exception as _e:  # noqa: BLE001
+            print(
+                f"researcher: job-queue depth check failed (non-fatal): {_e}. "
+                f"Continuing cycle.",
+                flush=True)
+            queued = 0
+        if queued >= max_queued_jobs:
+            print(
+                f"researcher: cycle skipped - NOT_STARTED job queue depth "
+                f"({queued}) >= max_queued_jobs={max_queued_jobs}. "
+                f"Waiting for the trainer to drain the queue before adding "
+                f"new proposals.",
+                flush=True)
+            return None
 
     # ---- Step 2: fetch arxiv papers -----------------------------------
     try:
@@ -934,15 +958,17 @@ def research_loop(
     poll_interval_seconds: int = constants.DEFAULT_RESEARCH_CYCLE_INTERVAL_SECONDS,
     monthly_budget_usd: float = 250.0,
     max_proposals_per_day: int = 1,
+    max_queued_jobs: int = constants.DEFAULT_MAX_QUEUED_JOBS,
     research_query: str = DEFAULT_RESEARCH_QUERY,
     should_stop_fn=None,
 ):
     """Periodic cycle runner. One proposal at most per cycle; gated
-    by the daily + monthly caps in research_one_cycle."""
+    by the daily + monthly caps + job-queue depth in research_one_cycle."""
     print(
         f"researcher: starting loop, cycle interval = "
         f"{poll_interval_seconds}s, max_proposals_per_day = "
-        f"{max_proposals_per_day}, monthly_budget = ${monthly_budget_usd:.2f}",
+        f"{max_proposals_per_day}, monthly_budget = ${monthly_budget_usd:.2f}, "
+        f"max_queued_jobs = {max_queued_jobs}",
         flush=True)
     while True:
         if should_stop_fn is not None and should_stop_fn():
@@ -953,6 +979,7 @@ def research_loop(
                 db, anthropic_client,
                 monthly_budget_usd=monthly_budget_usd,
                 max_proposals_per_day=max_proposals_per_day,
+                max_queued_jobs=max_queued_jobs,
                 research_query=research_query)
         except Exception as e:  # noqa: BLE001
             tb = traceback.format_exc()

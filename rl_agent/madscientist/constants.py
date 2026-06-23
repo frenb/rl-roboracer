@@ -120,6 +120,10 @@ DEFAULT_BUDGET_USD_PER_MONTH = 250.0
 DEFAULT_RESEARCH_CYCLE_INTERVAL_SECONDS = 6 * 60 * 60  # 6h
 DEFAULT_OUTCOME_POLL_INTERVAL_SECONDS = 5 * 60          # 5min
 DEFAULT_AUTO_REJECT_AFTER_HOURS = 96                    # 4 days
+# Maximum number of NOT_STARTED jobs allowed in the queue before the
+# researcher skips a proposal cycle. Prevents the agent from piling up
+# more experiments than the trainer can realistically run.
+DEFAULT_MAX_QUEUED_JOBS = 3
 
 # Hard guardrails - the worker REFUSES to start a cycle if any of these
 # would be exceeded by the cycle. Mostly a backstop against budget bugs.
