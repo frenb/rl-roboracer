@@ -129,6 +129,9 @@ def main():
     max_jobs_per_proposal = int(os.environ.get(
         "MAX_JOBS_PER_PROPOSAL",
         orchestrator.DEFAULT_MAX_JOBS_PER_PROPOSAL))
+    max_queued_jobs = int(os.environ.get(
+        "MAX_QUEUED_JOBS",
+        constants.DEFAULT_MAX_QUEUED_JOBS))
     research_cycle_interval = int(os.environ.get(
         "RESEARCH_CYCLE_INTERVAL_SECONDS",
         constants.DEFAULT_RESEARCH_CYCLE_INTERVAL_SECONDS))
@@ -159,6 +162,7 @@ def main():
         f"orchestrator_poll_seconds={orchestrator_poll}, "
         f"notify_poll_seconds={notify_poll}, "
         f"max_jobs_per_proposal={max_jobs_per_proposal}, "
+        f"max_queued_jobs={max_queued_jobs}, "
         f"research_cycle_interval_seconds={research_cycle_interval}, "
         f"dashboard_public_url={dashboard_public_url!r}, "
         f"email_buttons={'on' if token_secret else 'off'}, "
@@ -201,6 +205,7 @@ def main():
             "poll_interval_seconds": research_cycle_interval,
             "monthly_budget_usd": budget_usd_per_month,
             "max_proposals_per_day": max_proposals_per_day,
+            "max_queued_jobs": max_queued_jobs,
             "research_query": research_query,
             "should_stop_fn": lambda: _should_exit,
         },
