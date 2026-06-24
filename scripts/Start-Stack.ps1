@@ -129,20 +129,19 @@ if (-not $SkipWatchdog) {
     $watchdogScript = Join-Path $PSScriptRoot 'Watchdog.ps1'
     if (Test-Path -LiteralPath $watchdogScript) {
         # Kill any existing Watchdog processes to avoid duplicates.
-        Get-Process -Name powershell, pwsh -ErrorAction SilentlyContinue |
-            Where-Object {
-                try { (Get-WmiObject Win32_Process -Filter "ProcessId=$($_.Id)" -ErrorAction SilentlyContinue).CommandLine -like "*Watchdog.ps1*" }
-                catch { $false }
-            } |
-            ForEach-Object {
-                Write-Host "  killing stale Watchdog PID=$($_.Id)"
-                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-            }
+        $staleWatchdogs = Get-Process -Name powershell, pwsh -ErrorAction SilentlyContinue | Where-Object {
+            $cmdLine = (Get-WmiObject Win32_Process -Filter "ProcessId=$($_.Id)" -ErrorAction SilentlyContinue).CommandLine
+            $cmdLine -like '*Watchdog.ps1*'
+        }
+        foreach ($proc in $staleWatchdogs) {
+            Write-Host "  killing stale Watchdog PID=$($proc.Id)"
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        }
         Write-Host "Starting Watchdog (auto-recovery)..."
-        Start-Process powershell -ArgumentList "-NoExit -File `"$watchdogScript`"" -WindowStyle Minimized
-        Write-Host "  Watchdog started (minimized). It monitors robotaxi.out and auto-restarts on wedge detection."
+        Start-Process powershell -ArgumentList @('-NoExit', '-File', $watchdogScript) -WindowStyle Minimized
+        Write-Host "  Watchdog started (minimized). Monitors robotaxi.out and auto-restarts on wedge detection."
     } else {
-        Write-Host "  WARNING: Watchdog.ps1 not found at $watchdogScript — skipping auto-recovery."
+        Write-Host "  WARNING: Watchdog.ps1 not found at $watchdogScript - skipping auto-recovery."
     }
 }
 
