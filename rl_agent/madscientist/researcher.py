@@ -772,26 +772,33 @@ def research_one_cycle(
             flush=True)
         return None
 
-    # ---- Step 1b: job-queue depth gate ------------------------------------
-    # Don't pile up more proposals when the trainer already has a backlog.
-    # We count NOT_STARTED jobs (anything the trainer will pick up next).
-    # This is a cheap read and prevents the researcher from generating
-    # experiments faster than the GPU can run them.
+    # ---- Step 1b: unapproved-proposal depth gate --------------------------
+    # Don't generate another proposal while there are already unapproved
+    # ones waiting. "Unapproved" means pending_judge, pending_user, or
+    # deferred - proposals that have not yet been approved (or rejected)
+    # by the judge + operator. This prevents the researcher from piling
+    # up more experiments than the operator can review.
     if max_queued_jobs > 0:
+        _unapproved_statuses = [
+            constants.STATUS_PENDING_JUDGE,
+            constants.STATUS_PENDING_USER,
+            constants.STATUS_DEFERRED,
+        ]
         try:
-            queued = db.jobs.count_documents({"status": "NOT_STARTED"})
+            queued = db[constants.COLL_PROPOSALS].count_documents(
+                {"status": {"$in": _unapproved_statuses}})
         except Exception as _e:  # noqa: BLE001
             print(
-                f"researcher: job-queue depth check failed (non-fatal): {_e}. "
-                f"Continuing cycle.",
+                f"researcher: unapproved-proposal depth check failed "
+                f"(non-fatal): {_e}. Continuing cycle.",
                 flush=True)
             queued = 0
         if queued >= max_queued_jobs:
             print(
-                f"researcher: cycle skipped - NOT_STARTED job queue depth "
-                f"({queued}) >= max_queued_jobs={max_queued_jobs}. "
-                f"Waiting for the trainer to drain the queue before adding "
-                f"new proposals.",
+                f"researcher: cycle skipped - {queued} unapproved proposal(s) "
+                f"already in queue (pending_judge / pending_user / deferred) "
+                f">= max_queued_jobs={max_queued_jobs}. "
+                f"Review or reject existing proposals before new ones are added.",
                 flush=True)
             return None
 
