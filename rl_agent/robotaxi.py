@@ -2084,7 +2084,8 @@ def _build_eval_result(returns, episode_lengths, avg_speeds,
 def run_policy(saved_policy, tf_env, job_id="",
                                   max_episodes=3,
                                   num_eval_episodes=5,
-                                  log_interval=10):
+                                  log_interval=10,
+                                  max_steps_per_episode=2000):
     """Run an EVAL job for ``saved_policy`` and report the metrics.
 
     Args:
@@ -2115,6 +2116,12 @@ def run_policy(saved_policy, tf_env, job_id="",
         steps before printing one progress line; the trial loop keeps
         calling ``.run()`` until ``num_eval_episodes`` have completed.
         Default 10.
+      max_steps_per_episode: maximum env-steps allowed in a single
+        episode before it is forcibly truncated. Prevents strong
+        policies (that rarely crash) from running forever during eval;
+        when the cap is hit the current episode is counted as done and
+        the env is reset. Set to 0 or None to disable (unlimited).
+        Default 2000 (~33 seconds at 60 Hz).
     """
     print("run policy")
     tempdir = "/tmp/active/"
@@ -2233,7 +2240,10 @@ def run_policy(saved_policy, tf_env, job_id="",
             counters_before = {}
 
         step = 0
-        while int(episodes_metric.result()) < num_eval_episodes:
+        _steps_this_episode = 0   # steps since last episode boundary
+        _truncated_episodes = 0   # episodes ended by max_steps cap, not crash
+        _ep_cap = int(max_steps_per_episode) if max_steps_per_episode else 0
+        while (int(episodes_metric.result()) + _truncated_episodes) < num_eval_episodes:
             # Cooperative cancellation, same pattern as main()'s TRAIN
             # loop. Lets the dashboard's "Set to done" button stop a
             # multi-trial EVAL run within one env-chunk (~2-5s) rather
@@ -2251,8 +2261,34 @@ def run_policy(saved_policy, tf_env, job_id="",
                 # return-tuple-shape change just for this case.
                 raise _EvalCancelled()
 
+            _ep_before = int(episodes_metric.result())
             eval_actor.run()
             step += log_interval
+            _steps_this_episode += log_interval
+            # If a real episode ended (crash), reset the per-episode step counter.
+            if int(episodes_metric.result()) > _ep_before:
+                _steps_this_episode = 0
+            # Episode truncation: if the policy hasn't crashed yet and
+            # the per-episode step count exceeds the cap, force a Unity
+            # reset and count one more "completed" episode via our own
+            # counter. tf-agents' episodes_metric only increments on a
+            # terminal time-step (crash), so we bypass it here and use
+            # _truncated_episodes as an additional offset in the while
+            # condition. This lets strong (non-crashing) policies finish
+            # the eval in bounded time while still accumulating accurate
+            # course counter deltas (goals, speed, steps).
+            elif _ep_cap > 0 and _steps_this_episode >= _ep_cap:
+                print(
+                    f"run_one_trial: episode truncated at "
+                    f"{_steps_this_episode} steps (max_steps_per_episode="
+                    f"{_ep_cap}); counting as done and resetting env.",
+                    flush=True)
+                try:
+                    tf_env.reset()
+                except Exception:  # noqa: BLE001
+                    pass
+                _truncated_episodes += 1
+                _steps_this_episode = 0
             # Rollout-viz fan (throttled; no-op unless ROLLOUT_VIZ_ENABLED).
             # ts from the batched eval env, publish via the RobotaxiEnv.
             eval_rollout_viz.maybe_publish(saved_policy, step, batch_tf_env, tf_env)
@@ -2426,6 +2462,7 @@ def get_saved_model(policy_type, version=None, path_arg=None):
 
 def load_saved_model(policy_type, version=None, path=None, job_id="",
                      num_trials=None, num_eval_episodes=None,
+                     max_steps_per_episode=None,
                      corner_radius=10.0, curvature_difficulty=0.0):
     """Build an env, load the policy at ``path`` (or by version), run an
     EVAL through it, persist the resulting per-trial means to MongoDB.
@@ -2535,6 +2572,8 @@ def load_saved_model(policy_type, version=None, path=None, job_id="",
         run_kwargs["max_episodes"] = int(num_trials)
     if num_eval_episodes is not None:
         run_kwargs["num_eval_episodes"] = int(num_eval_episodes)
+    if max_steps_per_episode is not None:
+        run_kwargs["max_steps_per_episode"] = int(max_steps_per_episode)
 
     # Runtime safety net (stage 2 above). tf's
     # restored_function_body raises ValueError with the wording
@@ -3489,6 +3528,7 @@ def do_job(job, num_envs=1):
                 return default
         num_trials = _opt_int(job.get("num_trials"))
         num_eval_episodes = _opt_int(job.get("num_eval_episodes"))
+        max_steps_per_episode = _opt_int(job.get("max_steps_per_episode"))
         # Mirror the TRAIN path: forward the same track-curriculum knobs
         # that main() reads from experiment_designs so the eval track
         # matches the training track geometry.  Defaults match Unity's
@@ -3517,6 +3557,7 @@ def do_job(job, num_envs=1):
                     model_type, path=location, job_id=job["_id"],
                     num_trials=num_trials,
                     num_eval_episodes=num_eval_episodes,
+                    max_steps_per_episode=max_steps_per_episode,
                     corner_radius=eval_corner_radius,
                     curvature_difficulty=eval_curvature_difficulty)
         except EvalSpecMismatchError as e:
