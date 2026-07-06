@@ -205,3 +205,80 @@ pip install grpcio-tools
 - The Unity gym binary, MongoDB data, saved models, tfrecords, and tensorboard
   scratch all live as siblings of this repo so they can be regenerated, swapped,
   or wiped without touching git history.
+
+---
+
+## Developer notes
+
+### Testing Reverb buffer save/restore on pause-resume
+
+The trainer saves the Learner checkpoint (actor + critic + optimizer state) on
+pause but **not** the Reverb replay buffer. On resume the buffer refills from
+demo prefill + initial_collect, which creates a brief demo-heavy distributional
+shift. A future improvement is to snapshot and restore the Reverb table too.
+The test procedure below validates that change once implemented.
+
+#### Layer 1 — File existence (2 minutes)
+
+After pausing a job, verify the Reverb snapshot file was written:
+
+```bash
+docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller \
+  bash -c "ls -lh /tmp/active/<job_id>/learner/reverb_ckpt_path.txt && \
+           cat /tmp/active/<job_id>/learner/reverb_ckpt_path.txt"
+```
+
+**Pass:** file exists and contains a path.
+**Fail:** file missing — the save didn't fire (check logs for the `Reverb checkpoint save failed` warning).
+
+#### Layer 2 — Buffer size on first TRAIN line after resume (10 minutes)
+
+Compare `buffer_size=X/300000` on the very first `TRAIN end:` line after the
+job is resumed:
+
+```bash
+docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller \
+  bash -c "grep 'TRAIN end' /python_ws/src/robotaxi.out | head -3"
+```
+
+| Code version | Expected first buffer_size |
+|---|---|
+| Without Reverb restore | ~300 (demo prefill warmup only) |
+| With Reverb restore | ≈ pre-pause value (e.g. 250,000) |
+
+Also check the trainer log for these lines in order:
+
+```
+main: Reverb table restored from /tmp/active/.../learner/reverb_checkpoint
+main: Skipping initial_collect — Reverb buffer already warm (size=250000)
+TRAIN begin: iter=X/...
+```
+
+**Pass:** buffer_size on first TRAIN ≈ pre-pause value, `initial_collect` skipped.
+**Fail:** buffer_size starts at ~300 and initial_collect runs — restore didn't fire.
+
+#### Layer 3 — Return trajectory continuity (1–2 hours)
+
+Inspect `eval_curve.csv` around the pause step:
+
+```bash
+docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller \
+  bash -c "cat /tmp/active/<job_id>/eval_curve.csv"
+```
+
+**Pass:** no visible dip in `avg_return` immediately after the resume step — the
+policy continues smoothly from its pre-pause level.
+**Fail (old behaviour):** a dip of 10–30% in the eval return for 2–3 eval cycles
+after resume, caused by the critic adapting to the temporarily demo-heavy buffer.
+
+#### Recommended test sequence
+
+1. Start any queued training job.
+2. Wait for ~5,000 iterations (`buffer_size` should be 50,000+).
+3. Click **Pause** on the Jobs tab.
+4. Run the Layer 1 check — confirm the snapshot file was written.
+5. Set the job back to `NOT_STARTED` (click **Resume** in the Jobs tab).
+6. Check the first `TRAIN end:` line (Layer 2) — confirm `buffer_size` ≈ pre-pause value.
+7. Let it reach the next eval cycle and inspect `eval_curve.csv` (Layer 3) for a smooth return trajectory.
+
+Total wall time: ~15–20 minutes once the implementation is in place.
