@@ -94,7 +94,8 @@ class _FanoutTrajectoryObserver:
 
 def make_local_replay(collect_data_spec, capacity, sample_batch_size,
                       sequence_length=2, stride_length=1, num_envs=1,
-                      demo_capacity=0, demo_sample_ratio=0.0):
+                      demo_capacity=0, demo_sample_ratio=0.0,
+                      checkpointing_dir=None):
     """Build an in-process Reverb table + server + buffer + dataset + observer(s).
 
     Two operating modes, selected by ``demo_capacity``:
@@ -156,9 +157,17 @@ def make_local_replay(collect_data_spec, capacity, sample_batch_size,
         feeds expert demos through ``demo_observer`` when it exists,
         falling back to ``expert_observer`` (single-table mode).
 
+      checkpointing_dir: optional path for the Reverb server's on-disk
+        checkpoint directory. When set, ``reverb.checkpointers.DefaultCheckpointer``
+        is used so that ``server.localhost_client().checkpoint()`` always
+        writes to this directory (enabling deterministic save/restore across
+        pause/resume cycles). When None (default), Reverb uses a random
+        temp dir and checkpointing is not used.
+
       Caller is responsible for keeping ``server`` alive until training
       ends.
     """
+    import os  # noqa: PLC0415 (local import is fine; module is stdlib)
     online_table = reverb.Table(
         ONLINE_TABLE_NAME,
         max_size=capacity,
@@ -186,7 +195,15 @@ def make_local_replay(collect_data_spec, capacity, sample_batch_size,
             rate_limiter=reverb.rate_limiters.MinSize(1))
         tables.append(demo_table)
 
-    server = reverb.Server(tables)
+    # Build the server with a fixed checkpointing directory when requested
+    # so pause-time checkpoint() calls always write to the same path.
+    if checkpointing_dir:
+        os.makedirs(checkpointing_dir, exist_ok=True)
+        _checkpointer = reverb.checkpointers.DefaultCheckpointer(
+            path=checkpointing_dir)
+        server = reverb.Server(tables, checkpointer=_checkpointer)
+    else:
+        server = reverb.Server(tables)
 
     online_replay = reverb_replay_buffer.ReverbReplayBuffer(
         collect_data_spec,

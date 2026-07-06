@@ -1212,6 +1212,11 @@ def main(
     # per-env writes. expert_observer is always plain-unbatched and is
     # what the offline expert-demo loop below feeds directly. In
     # single-env mode the two are the same instance.
+    # Reverb checkpointing directory: a fixed path inside the Learner dir
+    # so pause/resume can save and restore the replay table contents
+    # without searching for a random temp path. The directory is created
+    # by make_local_replay when checkpointing_dir is set.
+    _reverb_ckpt_dir = os.path.join(learner_dir, "reverb_checkpoint")
     (reverb_server, reverb_replay, dataset,
      rb_observer, expert_observer,
      demo_replay, demo_observer) = make_local_replay(
@@ -1225,7 +1230,8 @@ def main(
         # Otherwise demo_capacity=0 keeps the original single-table
         # behavior bit-identical (demo prefill into the online table).
         demo_capacity=demo_min_keep,
-        demo_sample_ratio=demo_sample_ratio)
+        demo_sample_ratio=demo_sample_ratio,
+        checkpointing_dir=_reverb_ckpt_dir)
     table_name = 'uniform_table'
     experience_dataset_fn = lambda: dataset
     # AWAC: attach a demo-only iterator so the agent can sample expert
@@ -1388,17 +1394,63 @@ def main(
             f"shortly).",
             flush=True)
 
+    # ---- Reverb table restore (resume path) --------------------------------
+    # On a clean pause the trainer calls reverb_server.localhost_client()
+    # .checkpoint() which writes the full online table to _reverb_ckpt_dir.
+    # On resume, if that checkpoint exists, restore it so the online buffer
+    # picks up exactly where it left off rather than restarting empty.
+    # This eliminates the demo-heavy distributional shift that would otherwise
+    # affect the first ~5k training steps after every pause.
+    _reverb_restored = False
+    if is_resume_val:
+        try:
+            _ckpt_entries = [
+                f for f in os.listdir(_reverb_ckpt_dir)
+                if os.path.isdir(os.path.join(_reverb_ckpt_dir, f))
+            ] if os.path.isdir(_reverb_ckpt_dir) else []
+            if _ckpt_entries:
+                # Restore the latest checkpoint (alphabetically last = newest).
+                _latest = os.path.join(
+                    _reverb_ckpt_dir, sorted(_ckpt_entries)[-1])
+                reverb_server.localhost_client().set_checkpoint(_latest)
+                # Read current online table size after restore.
+                _restored_size = reverb_replay.py_client.server_info()[
+                    'uniform_table'].current_size
+                print(
+                    f"main: RESUME - Reverb online table restored from "
+                    f"{_latest} ({_restored_size} items).",
+                    flush=True)
+                _reverb_restored = True
+            else:
+                print(
+                    "main: RESUME - no Reverb checkpoint found in "
+                    f"{_reverb_ckpt_dir}; will run initial_collect.",
+                    flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(
+                f"main: RESUME - Reverb restore failed ({_e}); "
+                "falling back to initial_collect.",
+                flush=True)
+
     _phase("initial_collect")
-    initial_collect_actor = actor.Actor(
-        env,
-        random_policy,
-        train_step,
-        steps_per_run=initial_collect_steps,
-        observers=[rb_observer])
-        
-    print("initial_collect_actor.run() :)")
-    initial_collect_actor.run()
-    print("Initial collection done")
+    if _reverb_restored:
+        # Buffer already warm from restored checkpoint — skip initial_collect.
+        # The restored online table is large enough that Reverb's MinSize(1)
+        # rate-limiter is satisfied and SAC sampling starts immediately.
+        print(
+            "main: Skipping initial_collect — Reverb online table already "
+            f"warm from restored checkpoint.",
+            flush=True)
+    else:
+        initial_collect_actor = actor.Actor(
+            env,
+            random_policy,
+            train_step,
+            steps_per_run=initial_collect_steps,
+            observers=[rb_observer])
+        print("initial_collect_actor.run() :)")
+        initial_collect_actor.run()
+        print("Initial collection done")
 
     env_step_metric = py_metrics.EnvironmentSteps()
     print("number of steps: " + str(env_step_metric.result()))
@@ -1764,17 +1816,33 @@ def main(
             # so we just call .save(...) here and the resume side is
             # transparent.
             #
-            # The Reverb replay buffer is NOT serialised here -
-            # restoring it would add another 10+ MB and isn't needed
-            # for policy continuity. On resume, the buffer is empty
-            # and gets re-filled by the demo prefill + initial_collect
-            # path. SAC's actor + critic weights are what matters for
-            # policy quality; an empty buffer just costs ~5 seconds of
-            # warmup on resume.
+            # Saves both the Learner checkpoint (actor + critic + target_critic
+            # + optimizers + train_step counter) AND, on success, a Reverb
+            # online-table snapshot so resume can restore the buffer without
+            # re-running initial_collect (eliminating the demo-heavy warmup
+            # bias that previously caused a distributional shift for ~5k steps).
             try:
                 _ckpt_step = int(train_step.numpy())
                 agent_learner._checkpointer.save(_ckpt_step)
             except Exception as _e:  # noqa: BLE001
+                pass  # handled below
+            else:
+                # Learner checkpoint succeeded — also snapshot the Reverb
+                # online table so resume can restore it without re-running
+                # initial_collect and eliminates the demo-heavy warmup bias.
+                # Non-fatal: a Reverb checkpoint failure is logged but doesn't
+                # block the pause (the Learner checkpoint is already safe).
+                try:
+                    _rv_path = reverb_server.localhost_client().checkpoint()
+                    print(
+                        f"main: Reverb online table checkpointed to {_rv_path}",
+                        flush=True)
+                except Exception as _rv_e:  # noqa: BLE001
+                    print(
+                        f"main: Reverb checkpoint failed (non-fatal): {_rv_e}",
+                        flush=True)
+                _e = None  # checkpoint succeeded; clear sentinel
+            if _e is not None:
                 # If the checkpoint write fails (disk full, weird
                 # tf-agents version mismatch on _checkpointer access)
                 # we still want to record the pause attempt rather than
