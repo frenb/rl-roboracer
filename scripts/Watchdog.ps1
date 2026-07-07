@@ -37,11 +37,14 @@
 
 .PARAMETER TimeoutThreshold
     Per-actor "timed out" line count (over the last TailLines) that signals a
-    wedged actor. Default 40. (Healthy is ~0; a real wedge produces hundreds.)
+    wedged actor. Default 20. Lowered from 40 because symmetric two-actor wedges
+    produce ~15-20 per actor (not 40+) in 600 lines. Healthy is ~0.
 
 .PARAMETER SlowCollectThreshold
     Number of recent TRAIN-end lines with collect_sec >= 5s that signals a
-    stall. Default 3. (Healthy collect_sec is ~0.1-0.3s.)
+    stall. Default 2. Lowered from 3 as belt-and-suspenders for wedges where
+    per-actor timeouts are spread symmetrically and each stays below the
+    TimeoutThreshold. Healthy collect_sec is ~0.1-0.3s.
 
 .PARAMETER SilentHangPolls
     Consecutive polls with byte-identical log tail (no new output at all)
@@ -64,8 +67,8 @@ param(
     [int]$PollSeconds = 30,
     [int]$CooldownSeconds = 600,
     [int]$MaxRestartsPerHour = 4,
-    [int]$TimeoutThreshold = 40,
-    [int]$SlowCollectThreshold = 3,
+    [int]$TimeoutThreshold = 20,
+    [int]$SlowCollectThreshold = 2,
     [int]$SilentHangPolls = 6,
     [int]$TailLines = 600,
     [int]$NumEnvs = 2,
