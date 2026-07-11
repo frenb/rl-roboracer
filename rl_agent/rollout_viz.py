@@ -289,7 +289,12 @@ class _DirectPublisher:
         from virtual_endpoint.proto import ros_service_pb2
         from virtual_endpoint.proto import ros_service_pb2_grpc
         self._pb2 = ros_service_pb2
-        self._channel = grpc.insecure_channel(self._addr)
+        self._channel = grpc.insecure_channel(self._addr, options=[
+            ('grpc.keepalive_time_ms', 30_000),
+            ('grpc.keepalive_timeout_ms', 30_000),
+            ('grpc.keepalive_permit_without_calls', 1),
+            ('grpc.http2.max_pings_without_data', 0),
+        ])
         self._stub = ros_service_pb2_grpc.RosNodeStub(self._channel)
         self._fail_count = 0
 
