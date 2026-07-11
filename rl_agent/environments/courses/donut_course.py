@@ -56,6 +56,9 @@ class DonutCourse (BaseCourse):
         self.accel_total=0
         self.goals_per_episode_total=0
         self.steering_angle_ratio_total=0
+        # Crash-rate and episode-length metrics (populated in update_stats)
+        self.crashes_per_1k_steps=0.0
+        self.avg_steps_per_episode=0.0
         # shape=(2,) == [acceleration, steering_angle]
         self.action_spec = array_spec.BoundedArraySpec(
             shape=(2, ), dtype=np.float32, 
@@ -413,6 +416,20 @@ class DonutCourse (BaseCourse):
             self.avg_steering_angle_ratio_last_30=np.average(steering_angle_ratio_arr_no_nan[-30:]) if len(steering_angle_ratio_arr_no_nan) > 0 else 0.0
         else:
             self.avg_steering_angle_ratio_last_30=0.0
+        # Crash-rate and episode-length metrics.
+        # crashes_per_1k_steps: how often the car crashes per 1000 env steps.
+        #   Low values during a gym wedge (gym stops responding → no episodes
+        #   complete) or a very good policy. High values = frequent crashes.
+        # avg_steps_per_episode: mean steps between crashes (reciprocal of
+        #   crash rate). Longer = car survives longer per episode.
+        if self.steps_total > 0 and self.num_episodes_total > 0:
+            self.avg_steps_per_episode = (
+                self.steps_total / self.num_episodes_total)
+            self.crashes_per_1k_steps = (
+                self.num_episodes_total / self.steps_total * 1000)
+        else:
+            self.avg_steps_per_episode = 0.0
+            self.crashes_per_1k_steps = 0.0
     
     def do_reset_blocking(self):
         num_obstacles = self.get_num_obstacles()

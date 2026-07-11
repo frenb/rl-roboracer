@@ -104,6 +104,15 @@ class BaseCourse(ABC):
         'max_accel_last_30',
         'avg_accel',
         'avg_accel_last_30',
+        # Crash-rate and episode-length metrics.
+        # crashes_per_1k_steps: episodes (crashes) per 1000 env steps.
+        #   Higher = more frequent crashes. Useful for spotting policy
+        #   degradation (rate rises) and gym wedges (drops to ~0 when
+        #   the gym stops responding and no episodes complete).
+        # avg_steps_per_episode: mean env steps between crashes.
+        #   Longer = car survives longer. Complement to goals/ep.
+        'crashes_per_1k_steps',
+        'avg_steps_per_episode',
     )
 
     def get_metrics(self):
