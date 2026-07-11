@@ -39,44 +39,29 @@ class RpcClient:
         # detect the dead peer within ~10-11 min and transparently
         # reconnect before the next RPC.
         #
-        # WHY 600s AND NOT SOMETHING TIGHTER (e.g., 60s)?
-        # ----------------------------------------------
-        # The interval MUST cooperate with the SERVER's
-        # `grpc.http2.min_ping_interval_without_data_ms`. gRPC's
-        # DEFAULT server min is 300_000 (5 min) and the server counts
-        # any earlier ping as a "strike"; after `max_ping_strikes`
-        # (default 2) the server kills the channel with GOAWAY
-        # ENHANCE_YOUR_CALM / "too many pings". We hit this on
-        # 2026-05-25 with the previous 10_000ms value - every actor
-        # Subscribe stream died after ~30s.
+        # WHY 30s (previously 600s)?
+        # -----------------------------------------------
+        # The interval must stay ABOVE the server's min_ping_interval
+        # to avoid GOAWAY ENHANCE_YOUR_CALM errors. The server-side
+        # fix in virtual.py (min_ping_interval=10s, max_ping_strikes=0)
+        # is confirmed live in the catkin-built container
+        # (/catkin_ws/src/virtual_endpoint/src/virtual_endpoint/virtual.py)
+        # so 30s is safely above the 10s server minimum and gives
+        # fast dead-channel detection (~30s to detect + 30s timeout =
+        # ~60s worst case) instead of the original ~10-11 minute window.
         #
-        # We DO ship a server-side fix (see
-        # docker/ros_server/ROS/src/virtual_endpoint/src/virtual_endpoint/virtual.py
-        # which sets server min=10s + max_strikes=0), but that
-        # requires a ros-server IMAGE REBUILD to take effect since
-        # virtual.py is COPYed into the image at build time, not
-        # bind-mounted. Until the operator rebuilds, the server is
-        # still at the gRPC default of 5 min.
-        #
-        # 600s is safely above the default 5 min minimum (so works
-        # with stock ros-server) AND works with our tuned server
-        # (which tolerates any rate). When the rebuild lands, this
-        # value can be tightened to 60s for faster dead-channel
-        # detection - but doing so is optional.
+        # Context: we used 600s previously because we weren't sure the
+        # server fix was actually running in the image. Confirmed on
+        # 2026-07-10 that the fix IS live; lowered accordingly.
         #
         # permit_without_calls=1: send keepalive pings even when no
-        # RPCs are in flight (default would only ping with active
-        # streams). Required for our case because BC pretraining has
-        # no in-flight RPCs.
+        # RPCs are in flight (required for idle channels during eval).
         #
         # max_pings_without_data=0: disable gRPC's default cap of 2
-        # consecutive pings without data. With permit_without_calls=1
-        # we WILL send pings without data; without this override the
-        # peer would close the channel after 2 pings, defeating the
-        # purpose.
+        # consecutive pings without data.
         options = [
-            ('grpc.keepalive_time_ms', 600000),
-            ('grpc.keepalive_timeout_ms', 30000),
+            ('grpc.keepalive_time_ms', 30_000),     # ping every 30s when idle
+            ('grpc.keepalive_timeout_ms', 30_000),  # consider dead if no ack in 30s
             ('grpc.keepalive_permit_without_calls', 1),
             ('grpc.http2.max_pings_without_data', 0),
         ]
