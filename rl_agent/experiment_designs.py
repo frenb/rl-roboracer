@@ -320,6 +320,27 @@ SCHEMA = {
     },
 
     "_section_env": "Track / environment (curriculum)",
+    "curriculum_stages": {
+        "type": "json",
+        "default": None,
+        "doc": (
+            "[Curriculum] Optional list of track-difficulty stages the trainer "
+            "advances through automatically based on policy performance. Each "
+            "entry is a dict with keys: corner_radius (float), "
+            "curvature_difficulty (float, default 0.0), advance_goals (float, "
+            "goals/ep threshold to advance), and consecutive (int, number of "
+            "consecutive eval cycles above the threshold before advancing). "
+            "The last stage has no advance_goals (terminal). "
+            "None = fixed track (current behaviour, fully back-compat). "
+            "Example: [{\"corner_radius\": 14, \"curvature_difficulty\": 0.0, "
+            "\"advance_goals\": 20, \"consecutive\": 3}, "
+            "{\"corner_radius\": 10, \"curvature_difficulty\": 0.0, "
+            "\"advance_goals\": 40, \"consecutive\": 3}, "
+            "{\"corner_radius\": 5, \"curvature_difficulty\": 1.0}]"
+        ),
+        "paper_ref": None,
+        "kwarg": "curriculum_stages_val",
+    },
     "corner_radius": {
         "type": "float",
         "default": 10.0,

@@ -724,6 +724,88 @@ def _append_eval_curve(job_id, step, avg_return, avg_ep_len):
         pass
 
 
+class CurriculumScheduler:
+    """Performance-gated track-difficulty scheduler for curriculum training.
+
+    Advances through a sequence of (corner_radius, curvature_difficulty) stages
+    based on the agent's avg_goals_per_episode at each eval cycle.
+
+    Each stage dict:
+        corner_radius (float):       track turn radius in metres
+        curvature_difficulty (float): chicane density [0, 1], default 0.0
+        advance_goals (float):       goals/ep threshold to advance
+        consecutive (int):           consecutive evals above threshold, default 1
+
+    The last stage has no advance_goals (terminal; training continues on it).
+
+    Usage:
+        sched = CurriculumScheduler(stages, env)
+        # at each eval cycle:
+        advanced = sched.update(avg_goals_per_episode, train_step)
+    """
+
+    def __init__(self, stages, env):
+        if not stages:
+            raise ValueError("CurriculumScheduler requires at least one stage")
+        self.stages = stages
+        self.env = env
+        self.stage_idx = 0
+        self._consecutive_above = 0
+        self._apply_stage(train_step=0)
+
+    def _apply_stage(self, train_step):
+        s = self.stages[self.stage_idx]
+        cr = float(s.get('corner_radius', 10.0))
+        cd = float(s.get('curvature_difficulty', 0.0))
+        configure_env(self.env, corner_radius=cr, curvature_difficulty=cd)
+        print(
+            f"[curriculum] stage {self.stage_idx}/{len(self.stages)-1}: "
+            f"corner_radius={cr}, curvature_difficulty={cd} "
+            f"(train_step={train_step})",
+            flush=True)
+        try:
+            tf.summary.scalar('curriculum/stage', data=self.stage_idx,
+                              step=train_step)
+            tf.summary.scalar('curriculum/corner_radius', data=cr,
+                              step=train_step)
+            tf.summary.scalar('curriculum/curvature_difficulty', data=cd,
+                              step=train_step)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def update(self, avg_goals_per_episode, train_step):
+        """Call at each eval cycle. Returns True if stage advanced."""
+        s = self.stages[self.stage_idx]
+        if 'advance_goals' not in s:
+            return False  # terminal stage — nothing to check
+        threshold = float(s['advance_goals'])
+        required = int(s.get('consecutive', 1))
+        if avg_goals_per_episode >= threshold:
+            self._consecutive_above += 1
+            print(
+                f"[curriculum] stage {self.stage_idx}: "
+                f"goals/ep={avg_goals_per_episode:.2f} >= {threshold} "
+                f"({self._consecutive_above}/{required} consecutive)",
+                flush=True)
+        else:
+            if self._consecutive_above > 0:
+                print(
+                    f"[curriculum] stage {self.stage_idx}: "
+                    f"goals/ep={avg_goals_per_episode:.2f} < {threshold}, "
+                    f"resetting consecutive counter",
+                    flush=True)
+            self._consecutive_above = 0
+        if self._consecutive_above >= required:
+            self.stage_idx = min(self.stage_idx + 1, len(self.stages) - 1)
+            self._consecutive_above = 0
+            print(
+                f"[curriculum] ADVANCING to stage {self.stage_idx}",
+                flush=True)
+            self._apply_stage(train_step)
+            return True
+        return False
+
+
 def main(
     job_id="",
     num_envs=1,
@@ -847,6 +929,7 @@ def main(
     # thread these into the env reset. Accepting the kwargs now keeps
     # designs/jobs that carry these fields from raising a TypeError
     # when main() is invoked.
+    curriculum_stages_val=None,
     corner_radius_val=10.0,
     curvature_difficulty_val=0.0,
     # Per-step env discount returned by the course on non-terminal steps;
@@ -1008,9 +1091,34 @@ def main(
     # Existing code unconditionally overwrote pass_through_actions to False
     # immediately after assigning the requested value, so the requested
     # value never took effect. Preserve that here by passing False directly.
+    # Resolve initial track geometry. If curriculum_stages_val is provided,
+    # use the first stage's geometry; otherwise use the fixed design values.
+    _curriculum_stages = None
+    if curriculum_stages_val:
+        try:
+            import json as _json
+            if isinstance(curriculum_stages_val, str):
+                _curriculum_stages = _json.loads(curriculum_stages_val)
+            else:
+                _curriculum_stages = list(curriculum_stages_val)
+            _init_cr = float(_curriculum_stages[0].get('corner_radius', corner_radius_val))
+            _init_cd = float(_curriculum_stages[0].get('curvature_difficulty', curvature_difficulty_val))
+            print(f"[curriculum] enabled: {len(_curriculum_stages)} stages, "
+                  f"starting at corner_radius={_init_cr}, "
+                  f"curvature_difficulty={_init_cd}", flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[curriculum] failed to parse curriculum_stages_val: {_e}; "
+                  f"falling back to fixed track geometry.", flush=True)
+            _curriculum_stages = None
+    if _curriculum_stages:
+        _init_cr = float(_curriculum_stages[0].get('corner_radius', corner_radius_val))
+        _init_cd = float(_curriculum_stages[0].get('curvature_difficulty', curvature_difficulty_val))
+    else:
+        _init_cr = corner_radius_val
+        _init_cd = curvature_difficulty_val
     configure_env(env, job_id=job_id, pass_through_actions=False,
-                  corner_radius=corner_radius_val,
-                  curvature_difficulty=curvature_difficulty_val,
+                  corner_radius=_init_cr,
+                  curvature_difficulty=_init_cd,
                   env_discount=env_discount_val)
     print(f"pass_through_actions: False")
     print(f"env_discount={env_discount_val} (effective gamma*env_discount "
@@ -1765,6 +1873,12 @@ def main(
               f"(start_step={start_step}, target={num_iterations}).",
               flush=True)
 
+    # Curriculum scheduler (None when curriculum_stages_val is unset).
+    _curriculum = (
+        CurriculumScheduler(_curriculum_stages, env)
+        if _curriculum_stages else None
+    )
+
     # Optional policy trajectory-rollout visualization (off unless
     # ROLLOUT_VIZ_ENABLED). A shared background thread samples action sequences
     # from the live policy at ~20Hz and publishes them to Unity for the
@@ -2008,6 +2122,12 @@ def main(
             course_metrics = read_course_metrics(env)
             for name, value in course_metrics.items():
                 tf.summary.scalar(name, data=value, step=step)
+            # Curriculum update: check whether the agent has met the
+            # advancement threshold and step to the next stage if so.
+            if _curriculum is not None:
+                _curriculum.update(
+                    course_metrics.get('avg_goals_per_episode', 0.0),
+                    train_step=step)
             # Cumulative asyncio.TimeoutError counts per category,
             # summed across actors. Each value is monotonically non-
             # decreasing across the training run, so the TensorBoard
