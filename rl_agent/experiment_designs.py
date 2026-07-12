@@ -344,7 +344,7 @@ SCHEMA = {
     "corner_radius": {
         "type": "float",
         "default": 10.0,
-        "min": 2.0, "max": 12.0,
+        "min": 2.0, "max": 20.0,  # raised from 12 to 20 to accommodate easy curriculum stages (e.g. 14m)
         "doc": (
             "[Curriculum / track geometry] Centreline turn radius (m) of the "
             "procedurally-generated track corners. Smaller = tighter, harder "
