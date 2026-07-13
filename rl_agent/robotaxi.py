@@ -4768,9 +4768,116 @@ def run_jobs_loop(num_envs=1):
         time.sleep(5)
 
 
+# Fixed path for the trainer singleton lock. Held for the life of the main
+# process; auto-released by the kernel if we crash, so a dead predecessor never
+# wedges startup.
+_TRAINER_LOCK_PATH = "/tmp/robotaxi_trainer.lock"
+# Module-level ref keeps the locked fd (and thus the flock) alive for the whole
+# process; letting it be garbage-collected would release the lock.
+_trainer_lock_fh = None
+
+
+def _reap_straggler_trainers():
+    """SIGKILL orphaned robotaxi.py worker processes left by a dead main.
+
+    Only called AFTER we win the singleton lock, so there is no live sibling
+    main — any remaining robotaxi.py *python* process is an env worker orphaned
+    by a previously crashed/killed main. Leaving them alive keeps them attached
+    to the shared ros-server endpoints and re-introduces the cmd_id contention
+    (scene-data timeouts / glitchy pauses) we are guarding against.
+
+    Best-effort /proc scan (Linux container only). Skips self and skips the
+    bash launcher (its argv0 is `bash`, not a python interpreter). Our own env
+    workers don't exist yet at call time, so they are never targeted.
+    """
+    me = os.getpid()
+    killed = []
+    try:
+        for pid_str in os.listdir("/proc"):
+            if not pid_str.isdigit():
+                continue
+            pid = int(pid_str)
+            if pid == me:
+                continue
+            try:
+                with open(f"/proc/{pid}/cmdline", "rb") as c:
+                    parts = c.read().split(b"\x00")
+            except (FileNotFoundError, ProcessLookupError, PermissionError):
+                continue
+            if not parts:
+                continue
+            argv0 = parts[0].decode("utf-8", "replace")
+            cmd = b" ".join(parts).decode("utf-8", "replace")
+            # Only kill actual python interpreters running robotaxi.py, never
+            # the bash `-c ... robotaxi.py ...` launcher (argv0 == bash).
+            if "robotaxi.py" in cmd and "python" in os.path.basename(argv0):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    killed.append(pid)
+                except (ProcessLookupError, PermissionError):
+                    pass
+    except Exception as e:  # noqa: BLE001
+        print(f"_reap_straggler_trainers: scan failed (non-fatal): {e}",
+              flush=True)
+    if killed:
+        print(f"_reap_straggler_trainers: reaped {len(killed)} orphaned "
+              f"robotaxi.py worker(s) from a previous run: {killed}",
+              flush=True)
+
+
+def _acquire_singleton_lock_or_exit():
+    """Guarantee exactly ONE trainer main runs at a time.
+
+    Running a second `python robotaxi.py` while one is already alive was the
+    root cause of the "glitchy pause" incident: two mains publish sim_command
+    to the same ros-server-0/1 endpoints and race each other's car_scene_data
+    replies, so each blocks the full 5s scene-data timeout every few steps.
+
+    We take a non-blocking advisory flock on a fixed path. If a live main holds
+    it we REFUSE to start (never kill a healthy running trainer). If it is free
+    we take it, record our pid, and reap any orphaned workers from a crashed
+    predecessor. The lock releases automatically when this process exits.
+    """
+    global _trainer_lock_fh
+    import fcntl  # Linux-only; entrypoint always runs in the sim-controller container.
+    fh = open(_TRAINER_LOCK_PATH, "w")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        holder = ""
+        try:
+            with open(_TRAINER_LOCK_PATH) as r:
+                holder = r.read().strip()
+        except Exception:  # noqa: BLE001
+            pass
+        fh.close()
+        print(
+            "FATAL: another robotaxi.py trainer main is already running"
+            + (f" (pid {holder})" if holder else "")
+            + ". Refusing to start a second trainer: duplicate mains contend "
+            "over the shared ros-server endpoints and cause scene-data "
+            "timeouts / glitchy pauses. Stop the existing trainer first, e.g.:\n"
+            "  pkill -9 -f robotaxi.py",
+            flush=True)
+        sys.exit(1)
+    fh.seek(0)
+    fh.truncate()
+    fh.write(str(os.getpid()))
+    fh.flush()
+    _trainer_lock_fh = fh  # keep alive for the process lifetime
+    print(f"trainer singleton lock acquired (pid {os.getpid()}, "
+          f"{_TRAINER_LOCK_PATH}).", flush=True)
+    _reap_straggler_trainers()
+
+
 if __name__ == "__main__":
     import argparse
     import sys
+    # Enforce single-trainer BEFORE spawning any env workers so a stray
+    # duplicate command exits immediately instead of stacking up on the
+    # shared ros-server endpoints. Env workers spawned later never run
+    # __main__, so they don't touch this lock.
+    _acquire_singleton_lock_or_exit()
     # tf-agents' ParallelPyEnvironment refuses to start unless the
     # multiprocessing 'spawn' context has been initialized at the program
     # entrypoint via system_multiprocessing.handle_main. The single-env
