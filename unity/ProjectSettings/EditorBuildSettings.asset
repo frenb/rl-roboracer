@@ -11,7 +11,7 @@ EditorBuildSettings:
   - enabled: 0
     path: Assets/Scenes/donut-course.unity
     guid: 7f649cc0c200fe84d87b38201b0702bc
-  - enabled: 1
+  - enabled: 0
     path: Assets/Scenes/w-course.unity
     guid: 21d41d7e9b754d347acf871f5a7b68bc
   - enabled: 0
@@ -20,7 +20,7 @@ EditorBuildSettings:
   - enabled: 0
     path: Assets/Scenes/straight-course.unity
     guid: a8540729f9e20be459c142854fe13016
-  - enabled: 0
+  - enabled: 1
     path: Assets/Scenes/generated-course.unity
     guid: 90b04f809f51b7a4e9f7e6de09b00ffe
   m_configObjects: {}
