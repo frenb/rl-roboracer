@@ -118,6 +118,12 @@ public class SimController : MonoBehaviour
         GameObject spherePrefabClone = GameObject.Find("SpherePrefab(Clone)");
         if(spherePrefabClone != null)
             DestroyImmediate(spherePrefabClone);
+        // The "next goal" marker sphere (owned by CarController.UpdateGoalMarker)
+        // is a root object, so destroying the car above orphans it. Remove it
+        // explicitly; the freshly instantiated car recreates one next frame.
+        GameObject goalMarker = GameObject.Find("GoalMarkerSphere");
+        if(goalMarker != null)
+            DestroyImmediate(goalMarker);
         DestroyPerceptionObject();
         DestroyObstacles();
         //DestroyGoals();

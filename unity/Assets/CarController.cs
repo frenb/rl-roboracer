@@ -228,6 +228,13 @@ public class CarController : MonoBehaviour {
     }
     public void UpdateGoalStates()
     {
+        // The single "next goal" the car is currently driving toward. A null
+        // (or Unity-destroyed) entry during a track regeneration is treated as
+        // "no next goal" so we neither colour nor mark anything this frame.
+        GameObject nextGoal = (goals != null && goals.Count > 0)
+            ? goals[(goalIndex + 1) % goals.Count]
+            : null;
+
         foreach(GameObject go in goals)
         {
             // Skip goals destroyed by a track regeneration; go.name would throw
@@ -236,23 +243,50 @@ public class CarController : MonoBehaviour {
             // re-instantiates the car + SetUpGoalsArray).
             if (go == null)
                 continue;
-            if (IsNextGoal(go.name))
-            {
-                Renderer r = go.GetComponent<Renderer>();
-                //Call SetColor using the shader property name "_Color" and setting the color to red
-                if(r==null)
-                    return;
-                r.material.SetColor("_Color", Color.green);
-            }
-            else
-            {
-                Renderer r = go.GetComponent<Renderer>();
-                //Call SetColor using the shader property name "_Color" and setting the color to red
-                if(r==null)
-                    return;
-                r.material.SetColor("_Color", Color.grey);
-            }
+            Renderer r = go.GetComponent<Renderer>();
+            if (r == null)
+                continue;
+            // Only the next goal is green; every other goal reverts to grey.
+            r.material.SetColor("_Color", (go == nextGoal) ? Color.green : Color.grey);
+        }
 
+        // The marker sphere renders ONLY on the current next goal. A single
+        // instance is repositioned each frame and hidden when there is no valid
+        // next goal, so a goal the car has already driven through never keeps a
+        // lingering sphere.
+        UpdateGoalMarker(nextGoal);
+    }
+
+    // Sole owner of the "next goal" marker sphere. Lazily creates exactly one
+    // sphere, parks it on the next goal, and hides it when none exists. This
+    // replaces the previous scheme where SceneDataPublisher instantiated the
+    // marker as a side effect of computing the angle-to-goal, which could leave
+    // orphaned spheres behind.
+    private void UpdateGoalMarker(GameObject nextGoal)
+    {
+        if (nextGoal == null)
+        {
+            if (sphere != null) sphere.SetActive(false);
+            return;
+        }
+        if (sphere == null && spherePrefab != null)
+        {
+            sphere = Instantiate(spherePrefab);
+            sphere.name = "GoalMarkerSphere";
+            // Layer 2 = Ignore Raycast so the marker is transparent to the
+            // car's perception SphereCasts (otherwise it reads as an obstacle
+            // parked on the goal).
+            sphere.layer = 2;
+            sphere.transform.localScale = new Vector3(2, 2, 2);
+            SphereController sc = sphere.GetComponent<SphereController>();
+            // animate=true would fade + self-destroy the sphere after 5s; the
+            // marker must persist for as long as its goal is the target.
+            if (sc != null) sc.animate = false;
+        }
+        if (sphere != null)
+        {
+            sphere.transform.position = nextGoal.transform.position;
+            if (!sphere.activeSelf) sphere.SetActive(true);
         }
     }
 
