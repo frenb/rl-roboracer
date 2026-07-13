@@ -30,6 +30,12 @@ rl_agent/robotaxi.out
 rl_agent/robotaxi copy.py
 rl_agent/tmp/
 
+# Watchdog / script runtime logs
+scripts/*.log
+
+# Stray scratch note occasionally created at repo root
+/Untitled
+
 # Unity (https://github.com/github/gitignore/blob/main/Unity.gitignore)
 unity/[Ll]ibrary/
 unity/[Tt]emp/
