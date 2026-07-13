@@ -222,10 +222,8 @@ The test procedure below validates that change once implemented.
 
 After pausing a job, verify the Reverb snapshot file was written:
 
-```bash
-docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller \
-  bash -c "ls -lh /tmp/active/<job_id>/learner/reverb_ckpt_path.txt && \
-           cat /tmp/active/<job_id>/learner/reverb_ckpt_path.txt"
+```powershell
+docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller bash -c "ls -lh /tmp/active/<job_id>/learner/reverb_checkpoint/ 2>/dev/null || echo NOT_FOUND"
 ```
 
 **Pass:** file exists and contains a path.
@@ -236,9 +234,8 @@ docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller \
 Compare `buffer_size=X/300000` on the very first `TRAIN end:` line after the
 job is resumed:
 
-```bash
-docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller \
-  bash -c "grep 'TRAIN end' /python_ws/src/robotaxi.out | head -3"
+```powershell
+docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller bash -c "grep 'TRAIN end' /python_ws/src/robotaxi.out | head -3"
 ```
 
 | Code version | Expected first buffer_size |
@@ -261,9 +258,8 @@ TRAIN begin: iter=X/...
 
 Inspect `eval_curve.csv` around the pause step:
 
-```bash
-docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller \
-  bash -c "cat /tmp/active/<job_id>/eval_curve.csv"
+```powershell
+docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller bash -c "cat /tmp/active/<job_id>/eval_curve.csv"
 ```
 
 **Pass:** no visible dip in `avg_return` immediately after the resume step — the
