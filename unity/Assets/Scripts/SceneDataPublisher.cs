@@ -261,15 +261,11 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
             targetOnNextGoal[cc.goalIndex]=closestPoint;
         }
 
-        if(!cc.sphere)
-            cc.sphere = Instantiate(cc.spherePrefab);
-        cc.sphere.transform.position = closestPoint;
-        // Layer 2 = Ignore Raycast: this trajectory debug sphere sits at the
-        // next goal's position. If left on Default (layer 0) it is hit by the
-        // car's SphereCast (layerMask=1), creating a cluster of perception
-        // spheres at the goal and making the car "crash" into an invisible wall.
-        cc.sphere.layer = 2;
-        cc.sphere.transform.localScale = new Vector3(2,2,2);     
+        // NOTE: the visible "next goal" marker sphere is owned exclusively by
+        // CarController.UpdateGoalStates (see cc.sphere there). This method only
+        // computes the target point used for the angle-to-goal observation and
+        // must NOT instantiate or move a sphere, otherwise two owners fight over
+        // the marker and passed goals keep lingering spheres.
         return closestPoint;
     }
    private float GetAngleToGoal(){
