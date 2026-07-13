@@ -454,7 +454,7 @@
             // exists only to delegate to that formatter - kept in place
             // so the file's structure mirrors the older code that
             // hand-rolled the cell.
-            render: (_v, row) => formatters.rewardDesignBadge(row) },
+            render: (_v, row) => formatters.rewardDesignBadge(row, { noTruncate: true }) },
           // Experiment design: training-loop hyperparameters (BC pretrain,
           // replay capacity, SAC learning rates, network sizes). Stamped
           // on the model doc by add_model() alongside the reward design
@@ -463,7 +463,7 @@
           { key: 'experiment_design_name', label: 'Experiment design', sortable: true,
             filter: true,
             sortValue: (r) => r.experiment_design_name || '',
-            render: (_v, row) => formatters.experimentDesignBadge(row) },
+            render: (_v, row) => formatters.experimentDesignBadge(row, { noTruncate: true }) },
           // -------- eval-history columns ------------------------------
           // Derived client-side from /leaderboard_scores (one row per
           // EVAL job, joined by model_id with fallback path==location).
