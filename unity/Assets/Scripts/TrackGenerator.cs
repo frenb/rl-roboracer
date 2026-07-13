@@ -103,12 +103,12 @@ public class TrackGenerator : MonoBehaviour
     [Header("Goals (built as a gate ACROSS the road)")]
     [Tooltip("Place a Goal-N every this many tiles along the path.")]
     public int goalEveryNTiles = 1;
-    [Tooltip("Place a goal gate at each rounded-corner TANGENCY point (where the " +
-             "straight meets the arc). Exactly two per corner: arc entry (T1) and " +
-             "arc exit (T2). Each gate is oriented perpendicular to the local " +
-             "tangent, which is C1-continuous with the straight so the gate sits " +
-             "flush without overlapping the curve. Fills the straight->corner->straight " +
-             "goal gap without over-populating the arc interior.")]
+    [Tooltip("Place ONE goal gate per rounded corner, at the arc's 45-degree " +
+             "apex. The gate's inner end is flush with the outer face of the " +
+             "inner rail (the Inner Point of Tangency) and its longitudinal " +
+             "axis is the radial normal there (perpendicular to the arc " +
+             "tangent = arc-centre-outward). Fills the corner goal gap without " +
+             "over-populating the arc interior.")]
     public bool placeCornerTangentGoals = true;
     [Tooltip("Height above the road the goal gate's CENTER sits at.")]
     public float goalHeight = 1.5f;
@@ -826,20 +826,18 @@ public class TrackGenerator : MonoBehaviour
             PlaceFlankingWalls(parent, T2, E2, wallLayer);
         }
 
-        // Goal gates at the two points of tangency (T1 = arc entry, T2 = arc
-        // exit). By definition of the tangent point the arc's tangent equals
-        // the straight's heading there (C1-continuous), so orienting each gate
-        // perpendicular to that heading (inDir at T1, outDir at T2) makes the
-        // gate span the track width flush with the boundary - it does not
-        // overlap into the curve. PlaceGoal treats inDir == outDir as a
-        // "straight" gate: no arc-position offset, position = the passed point,
-        // rotation = perpendicular to the (single) heading = the track normal.
+        // Single goal gate at the corner apex. Passing inDir != outDir routes
+        // PlaceGoal through its rounded-corner branch, which anchors the gate
+        // at the arc's 45-degree apex with its INNER end flush against the
+        // outer face of the inner rail (the Inner Point of Tangency), and sets
+        // the cylinder's longitudinal axis to the radial normal there
+        // (perpendicular to the arc tangent = the direction from the arc centre
+        // outward through that inner contact point). Passing the cell `center`
+        // lets PlaceGoal reconstruct the same arc centre computed here.
         if (placeCornerTangentGoals)
         {
             goalCounter++;
-            PlaceGoal(parent, T1, goalCounter, inDir, inDir);   // entry tangency
-            goalCounter++;
-            PlaceGoal(parent, T2, goalCounter, outDir, outDir); // exit tangency
+            PlaceGoal(parent, center, goalCounter, inDir, outDir);
         }
 
         // Faceted arc: centreline radius r, inner r-roadHalfWidth, outer r+roadHalfWidth.
