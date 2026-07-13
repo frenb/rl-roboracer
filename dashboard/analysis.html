@@ -57,6 +57,8 @@
             <option value="avg_goals_per_episode">Avg goals per episode</option>
             <option value="avg_speeds">Avg speed</option>
             <option value="avg_steering_angle_ratios">Avg steering ratio</option>
+            <option value="steps_per_goal">Steps / goal (invariant ↓)</option>
+            <option value="goal_efficiency">Goal efficiency (invariant ↑)</option>
           </select>
         </label>
         <label class="text-xs text-slate-500 dark:text-slate-400 mr-1">
@@ -543,6 +545,29 @@
           biased: false,
           help: 'Course-level: steering_angle_ratio_total / steps_total. Lower = smoother driving; high values mean lots of corrective steering.',
         },
+        // ---- Derived / computed metrics (synthesized per-trial in buildBundles) ----
+        steps_per_goal: {
+          label: 'Steps / goal',
+          axisTitle: 'Per-trial mean steps per goal reached',
+          units: 'steps/goal',
+          biased: false,
+          derived: true,
+          higherIsBetter: false,
+          help: 'Computed per trial as episode_length / goals_per_episode. Lower = more efficient navigation. Reward-design invariant. Null trials (0 goals) are excluded.',
+        },
+        goal_efficiency: {
+          label: 'Goal efficiency',
+          axisTitle: 'Per-trial goal efficiency score (0–1 normalised blend)',
+          units: '',
+          biased: false,
+          derived: true,
+          higherIsBetter: true,
+          help: 'Hybrid metric: 0.5 × norm(goals/ep) + 0.5 × norm(1/steps_per_goal). ' +
+               'Rewards policies that reach many goals AND do so efficiently (fewer steps each). ' +
+               'Normalised across all models in the current comparison so values are relative, ' +
+               'not absolute — compare models against each other, not across separate sessions. ' +
+               'Reward-design invariant.',
+        },
       };
 
       function currentMetric() {
@@ -681,6 +706,34 @@
           // is currently selected before re-running.
           const scores = samplesByMetric.returns.slice();
 
+          // ---- Derived per-trial metrics ---------------------------------
+          // steps_per_goal: episode_length / goals_per_episode, per trial.
+          // We zip episode_lengths and avg_goals_per_episode from each run
+          // (they are parallel arrays with one value per trial) to produce
+          // a per-trial steps/goal value. Trials with 0 goals are excluded
+          // (division by zero and semantically undefined).
+          samplesByMetric.steps_per_goal = [];
+          for (const r of runs) {
+            const epArr = r.episode_lengths;
+            const gArr  = r.avg_goals_per_episode;
+            if (!Array.isArray(epArr) || !Array.isArray(gArr)) continue;
+            const len = Math.min(epArr.length, gArr.length);
+            for (let t = 0; t < len; t++) {
+              const ep = Number(epArr[t]);
+              const g  = Number(gArr[t]);
+              if (Number.isFinite(ep) && Number.isFinite(g) && g > 0) {
+                samplesByMetric.steps_per_goal.push(ep / g);
+              }
+            }
+          }
+          // goal_efficiency is normalised across all bundles so it can't be
+          // computed here (we don't yet have the other bundles). Store the
+          // raw (goals, spg) pairs so _refreshBundleScoresForMetric can
+          // normalise after all bundles are built.
+          samplesByMetric._raw_goals_for_eff = samplesByMetric.avg_goals_per_episode.slice();
+          samplesByMetric._raw_spg_for_eff   = samplesByMetric.steps_per_goal.slice();
+          samplesByMetric.goal_efficiency = []; // filled by _refreshBundleScoresForMetric
+
           // Warn-out logic considers ANY metric having data, not just
           // returns, because a user who selects a non-returns metric
           // shouldn't see "no scores yet" if their eval did produce
@@ -763,6 +816,49 @@
       // on metricKey individually.
       function _refreshBundleScoresForMetric() {
         const key = state.metricKey;
+
+        // goal_efficiency requires cross-bundle min-max normalization so
+        // the 0.5*goals + 0.5*efficiency scores are meaningful relative
+        // to each other. Recompute whenever this metric is selected.
+        if (key === 'goal_efficiency') {
+          // Collect all per-trial goals and steps/goal across all bundles
+          // to build a shared normalization range.
+          const allGoals = state.bundles.flatMap(
+            (b) => (b && b.samplesByMetric && b.samplesByMetric._raw_goals_for_eff) || []);
+          const allSpg = state.bundles.flatMap(
+            (b) => (b && b.samplesByMetric && b.samplesByMetric._raw_spg_for_eff) || []);
+          const finite = (arr) => arr.filter((x) => Number.isFinite(x));
+          const gArr = finite(allGoals), spgArr = finite(allSpg);
+          const gMin = gArr.length ? Math.min(...gArr) : 0;
+          const gMax = gArr.length ? Math.max(...gArr) : 1;
+          // For steps/goal: lower is better, so normalise as 1 - norm(spg).
+          const spgMin = spgArr.length ? Math.min(...spgArr) : 0;
+          const spgMax = spgArr.length ? Math.max(...spgArr) : 1;
+          const gSpan   = gMax   - gMin   || 1;
+          const spgSpan = spgMax - spgMin || 1;
+
+          for (const b of state.bundles) {
+            if (!b || !b.samplesByMetric) { b.scores = []; continue; }
+            const goals = b.samplesByMetric._raw_goals_for_eff || [];
+            const spg   = b.samplesByMetric._raw_spg_for_eff   || [];
+            // Zip — both arrays have one value per trial from the same runs,
+            // so they share indices. Use the shorter length.
+            const n = Math.min(goals.length, spg.length);
+            const eff = [];
+            for (let i = 0; i < n; i++) {
+              const g  = Number(goals[i]);
+              const s  = Number(spg[i]);
+              if (!Number.isFinite(g) || !Number.isFinite(s)) continue;
+              const normG   = (g - gMin)   / gSpan;           // 0–1, higher = better
+              const normSpg = 1 - (s - spgMin) / spgSpan;     // 0–1, higher = fewer steps/goal
+              eff.push(0.5 * normG + 0.5 * normSpg);
+            }
+            b.samplesByMetric.goal_efficiency = eff;
+            b.scores = eff;
+          }
+          return;
+        }
+
         for (const b of state.bundles) {
           if (b && b.samplesByMetric && Array.isArray(b.samplesByMetric[key])) {
             b.scores = b.samplesByMetric[key];
@@ -1153,6 +1249,28 @@
                     title="Pick which model fills this slot. Selecting a model that's currently in another slot swaps them, so each model only appears in one slot at a time.">
               ${dropdownOptions}
             </select>`;
+          // Experiment + reward design lines. The model doc carries these
+          // as name strings written at checkpoint-save time.
+          const rewardName = b.model && b.model.reward_design_name;
+          const expName    = b.model && b.model.experiment_design_name;
+          const designHtml = (rewardName || expName) ? `
+            <div class="mt-2 flex flex-col gap-0.5">
+              ${expName ? `
+                <div class="flex items-baseline gap-1.5 min-w-0">
+                  <span class="shrink-0 text-[10px] font-semibold uppercase tracking-wide
+                               text-slate-400 dark:text-slate-500">Exp</span>
+                  <span class="text-xs text-slate-200 dark:text-slate-200 leading-snug"
+                        title="${escapeHtml(expName)}">${escapeHtml(expName)}</span>
+                </div>` : ''}
+              ${rewardName ? `
+                <div class="flex items-baseline gap-1.5 min-w-0">
+                  <span class="shrink-0 text-[10px] font-semibold uppercase tracking-wide
+                               text-slate-400 dark:text-slate-500">Rew</span>
+                  <span class="text-xs text-slate-200 dark:text-slate-200 leading-snug"
+                        title="${escapeHtml(rewardName)}">${escapeHtml(rewardName)}</span>
+                </div>` : ''}
+            </div>` : '';
+
           return `
             <div class="card-surface p-4">
               <div class="flex items-center gap-2">
@@ -1163,6 +1281,7 @@
                 ${role}
               </div>
               ${dropdown}
+              ${designHtml}
               <div class="text-xs text-slate-500 dark:text-slate-400 mt-2 truncate">
                 ${detailHtml}
               </div>
