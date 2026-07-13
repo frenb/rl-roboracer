@@ -416,7 +416,10 @@
         emptyMessage: 'No jobs yet — create one to start training, evaluation, or demo collection.',
         columns: [
           { key: '_id',              label: 'ID',       sortable: true,  filter: true,
-            render: (v) => formatters.shortId(v) },
+            render: (v) => {
+              const s = String(v && (v.$oid || v));
+              return `<span class="font-mono text-xs tabular-nums text-slate-200 dark:text-slate-200 whitespace-nowrap select-all" title="${s}">${s}</span>`;
+            } },
           { key: 'job_type',         label: 'Type',     sortable: true,  filter: true,
             render: (v) => formatters.jobTypeBadge(v) },
           // Reward / Experiment design columns. Both names are stamped
@@ -462,6 +465,34 @@
               // Activity Feed Tabulator override in madscientist.html.
               return '<span class="font-mono text-xs tabular-nums text-slate-50">' +
                 n.toLocaleString() + '</span>';
+            } },
+          // EVAL-specific config fields. Show for EVAL jobs; em-dash for TRAIN.
+          { key: 'num_trials',       label: 'Trials',   sortable: true,  filter: false,
+            sortValue: (row) => Number(row.num_trials) || 0,
+            render: (v, row) => {
+              if (row.job_type !== 'EVAL') return '—';
+              const n = Number(v);
+              return Number.isFinite(n) && n > 0
+                ? '<span class="font-mono text-xs tabular-nums text-slate-50">' + n + '</span>'
+                : '<span class="text-slate-500 dark:text-slate-400 text-xs">def</span>';
+            } },
+          { key: 'num_eval_episodes', label: 'Eps/trial', sortable: true, filter: false,
+            sortValue: (row) => Number(row.num_eval_episodes) || 0,
+            render: (v, row) => {
+              if (row.job_type !== 'EVAL') return '—';
+              const n = Number(v);
+              return Number.isFinite(n) && n > 0
+                ? '<span class="font-mono text-xs tabular-nums text-slate-50">' + n + '</span>'
+                : '<span class="text-slate-500 dark:text-slate-400 text-xs">def</span>';
+            } },
+          { key: 'max_goals_per_episode', label: 'Goal cap', sortable: true, filter: false,
+            sortValue: (row) => Number(row.max_goals_per_episode) || 0,
+            render: (v, row) => {
+              if (row.job_type !== 'EVAL') return '—';
+              const n = Number(v);
+              return Number.isFinite(n) && n > 0
+                ? '<span class="font-mono text-xs tabular-nums text-slate-50">' + n + '</span>'
+                : '<span class="text-slate-500 dark:text-slate-400 text-xs">∞</span>';
             } },
           { key: 'started_at',       label: 'Duration', sortable: true,  filter: false,
             // Sort by computed duration (ms). Null sorts last so

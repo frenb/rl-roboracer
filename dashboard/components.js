@@ -176,9 +176,10 @@
         : '';
       const safeDesignId = String(designId == null ? '' : designId).replace(/"/g, '&quot;');
       if (!designId) {
-        // Case 2: name without id - non-clickable.
+        // Case 2: name without id - non-clickable. Use the same color
+        // as the clickable button path so EVAL and TRAIN rows match.
         return '<span class="inline-flex items-center gap-1 whitespace-nowrap">' +
-               '<span class="' + nameClamp + '">' + safeName + '</span>' +
+               '<span class="' + nameClamp + 'text-slate-200 dark:text-slate-200">' + safeName + '</span>' +
                verPill + canonicalTag + '</span>';
       }
       // model-id-aware: when the row has a `_id` (i.e. it's a Model

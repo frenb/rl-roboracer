@@ -284,6 +284,11 @@
       function renderTable() {
         const sorter = SORTERS[sortSel.value] || SORTERS.mean_goals;
         const rows = scoresCache.slice().sort(sorter);
+        // Clear Tabulator's internal column sort BEFORE loading data so it
+        // doesn't re-apply a stale column sort on top of our custom order.
+        // Column-header clicks still work — Tabulator re-acquires its own
+        // sort state on the next header click, which is fine.
+        try { if (table._tabulator) table._tabulator.clearSort(); } catch (e) { /* noop */ }
         table.setData(rows);
         updateCounts(rows);
       }
