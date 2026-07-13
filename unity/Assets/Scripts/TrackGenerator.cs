@@ -103,12 +103,13 @@ public class TrackGenerator : MonoBehaviour
     [Header("Goals (built as a gate ACROSS the road)")]
     [Tooltip("Place a Goal-N every this many tiles along the path.")]
     public int goalEveryNTiles = 1;
-    [Tooltip("Place a Goal-N every this many arc FACETS inside rounded corners. " +
-             "1 = one goal per facet (fills the gap between straights). " +
-             "0 = no corner goals (old behaviour). " +
-             "With cornerFacets=5 and goalEveryNCornerFacets=1 you get 5 goals " +
-             "spread evenly through each 90-degree arc.")]
-    public int goalEveryNCornerFacets = 1;
+    [Tooltip("Place a goal gate at each rounded-corner TANGENCY point (where the " +
+             "straight meets the arc). Exactly two per corner: arc entry (T1) and " +
+             "arc exit (T2). Each gate is oriented perpendicular to the local " +
+             "tangent, which is C1-continuous with the straight so the gate sits " +
+             "flush without overlapping the curve. Fills the straight->corner->straight " +
+             "goal gap without over-populating the arc interior.")]
+    public bool placeCornerTangentGoals = true;
     [Tooltip("Height above the road the goal gate's CENTER sits at.")]
     public float goalHeight = 1.5f;
     [Tooltip("Gate width - spans ACROSS the road (make it ~ the corridor width 2*roadHalfWidth).")]
@@ -825,6 +826,22 @@ public class TrackGenerator : MonoBehaviour
             PlaceFlankingWalls(parent, T2, E2, wallLayer);
         }
 
+        // Goal gates at the two points of tangency (T1 = arc entry, T2 = arc
+        // exit). By definition of the tangent point the arc's tangent equals
+        // the straight's heading there (C1-continuous), so orienting each gate
+        // perpendicular to that heading (inDir at T1, outDir at T2) makes the
+        // gate span the track width flush with the boundary - it does not
+        // overlap into the curve. PlaceGoal treats inDir == outDir as a
+        // "straight" gate: no arc-position offset, position = the passed point,
+        // rotation = perpendicular to the (single) heading = the track normal.
+        if (placeCornerTangentGoals)
+        {
+            goalCounter++;
+            PlaceGoal(parent, T1, goalCounter, inDir, inDir);   // entry tangency
+            goalCounter++;
+            PlaceGoal(parent, T2, goalCounter, outDir, outDir); // exit tangency
+        }
+
         // Faceted arc: centreline radius r, inner r-roadHalfWidth, outer r+roadHalfWidth.
         float ri = Mathf.Max(0.1f, r - roadHalfWidth);
         float ro = r + roadHalfWidth;
@@ -832,12 +849,6 @@ public class TrackGenerator : MonoBehaviour
         float th2 = Mathf.Atan2((T2 - arcC).x, (T2 - arcC).z) * Mathf.Rad2Deg;
         float delta = Mathf.DeltaAngle(th1, th2); // shortest signed sweep (+/-90)
         int n = Mathf.Max(2, cornerFacets);
-
-        // Goal placement inside the arc: one gate per goalEveryNCornerFacets facets,
-        // positioned at the midpoint of each eligible facet's centreline chord and
-        // oriented perpendicular to the local travel direction (the chord tangent).
-        // goalEveryNCornerFacets = 0 disables corner goals (old behaviour).
-        int gStep = (goalEveryNCornerFacets > 0) ? goalEveryNCornerFacets : int.MaxValue;
 
         Vector3 prevC = Vector3.zero, prevI = Vector3.zero, prevO = Vector3.zero;
         for (int i = 0; i <= n; i++)
@@ -852,41 +863,9 @@ public class TrackGenerator : MonoBehaviour
                 PlaceRoadSegment(parent, prevC, pc, corridor);
                 PlaceWallSegment(parent, prevI, pi, wallLayer, isInner: true);
                 PlaceWallSegment(parent, prevO, po, wallLayer, isInner: false);
-
-                // Place a goal gate at the midpoint of this arc facet.
-                if (gStep < int.MaxValue && (i % gStep == 0))
-                {
-                    Vector3 facetMid = (prevC + pc) * 0.5f;
-                    // Chord direction = travel direction through this facet.
-                    Vector3 chordDir = (pc - prevC).normalized;
-                    // Gate must span ACROSS the road, so we need a direction
-                    // perpendicular to chordDir in the horizontal plane.
-                    Vector3 acrossDir = Vector3.Cross(Vector3.up, chordDir).normalized;
-                    // Build inDir/outDir proxies as the integer grid directions
-                    // nearest the chord heading (used by PlaceGoal for orientation).
-                    // Since PlaceGoal uses inDir==outDir as "straight" (no arc offset),
-                    // we pass a synthetic straight cell by converting chordDir to the
-                    // closest cardinal/diagonal Vector2Int; for gate placement we only
-                    // need the yaw, which PlaceGoal derives from (inDir + outDir).
-                    // Simplest: call PlaceGoal with inDir=outDir = chordDir snapped.
-                    Vector2Int synDir = SnapToCardinal(chordDir);
-                    goalCounter++;
-                    PlaceGoal(parent, facetMid, goalCounter, synDir, synDir);
-                }
             }
             prevC = pc; prevI = pi; prevO = po;
         }
-    }
-
-    // Snap a world-space direction vector to the nearest cardinal direction
-    // (±X or ±Z) as a Vector2Int in grid space. Used to synthesise a
-    // straight-cell inDir/outDir for goals placed inside arc facets.
-    private static Vector2Int SnapToCardinal(Vector3 dir)
-    {
-        float ax = Mathf.Abs(dir.x), az = Mathf.Abs(dir.z);
-        if (ax >= az)
-            return new Vector2Int(dir.x >= 0f ? 1 : -1, 0);
-        return new Vector2Int(0, dir.z >= 0f ? 1 : -1);
     }
 
     /// <summary>
