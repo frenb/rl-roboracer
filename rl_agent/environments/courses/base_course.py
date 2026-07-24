@@ -113,6 +113,25 @@ class BaseCourse(ABC):
         #   Longer = car survives longer. Complement to goals/ep.
         'crashes_per_1k_steps',
         'avg_steps_per_episode',
+        # Per-location traversal/crash counters (added 2026-07-19). Raw
+        # cumulative counts, not rates - across multiple parallel actors
+        # these get MEAN-aggregated (see read_course_metrics in
+        # robotaxi.py), same as every other non-'max_' key here, which
+        # dilutes the absolute total but preserves the RATIO between the
+        # 5 counters (all actors run the same course logic, so the mean
+        # divides each by the same actor count) - that ratio, not the
+        # absolute total, is the signal this was added to track. See
+        # track_zones.py for the position -> zone classifier.
+        'easy_corner_traversals',
+        'hard_corner_traversals',
+        'crashes_easy_corner',
+        'crashes_hard_corner',
+        'crashes_straight',
+        # Crash-only total (2026-07-20) - see donut_course.py's
+        # crashes_per_1k_steps comment for why this had to be split out
+        # from num_episodes_total once GOALS_PER_EPISODE_CAP gave episodes
+        # a second, non-crash way to end.
+        'crashes_total',
     )
 
     def get_metrics(self):
@@ -163,11 +182,27 @@ class BaseCourse(ABC):
         return {k: float(getattr(self, k, 0)) for k in self.RAW_COUNTER_KEYS}
 
     def check_if_moving(self, arr):
-        """Helper method to check if robot is moving"""
+        """Helper method to check if robot is moving.
+
+        Window widened 6 -> 200 (2026-07-19): compares the CURRENT position
+        against each of the last WINDOW-1 recorded positions (one entry
+        appended per env step - see robotaxi_env.py._step), returning True
+        (moving) the moment ANY of them differ by >= the threshold. With a
+        6-step window a car that's legitimately slowed way down (e.g. easing
+        through a chicane per the goal-proximity/curvature braking in
+        collect_expert_demos) could go net-stationary across those 6 samples
+        and get flagged is_stuck=True - i.e. treated as a crash/failure and
+        reset - even though it was still crawling forward and would have
+        recovered given a bit more time. 200 steps gives it a much longer
+        runway (order of several seconds at typical step rate) to
+        accumulate enough net displacement to prove it's still making
+        progress before this gives up on it as truly wedged.
+        """
         last_position = len(arr)-1
-        if len(arr) < 6:
+        window = 200
+        if len(arr) < window:
             return True
-        for i in reversed(range(last_position-5, last_position)):
+        for i in reversed(range(last_position-(window-1), last_position)):
             dist = math.dist(arr[last_position], arr[i])
             if dist >= 0.0001:
                 return True

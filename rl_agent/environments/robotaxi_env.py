@@ -49,6 +49,14 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         # unconfigured env reproduces the baseline track.
         self.corner_radius = 10.0
         self.curvature_difficulty = 0.0
+        # Per-edge absolute chicane counts (2026-07-18), forwarded alongside
+        # corner_radius/curvature_difficulty. Replaces curvature_difficulty
+        # as the actual chicane-count driver (see TrackGenerator.cs);
+        # curvature_difficulty is retained above for logging/back-compat.
+        self.chicanes_north = 0
+        self.chicanes_east = 0
+        self.chicanes_south = 0
+        self.chicanes_west = 0
         self.data = {}
 
     def action_spec(self):
@@ -93,7 +101,8 @@ class RobotaxiEnv(py_environment.PyEnvironment):
 
     def configure(self, job_id="", pass_through_actions=False,
                   corner_radius=10.0, curvature_difficulty=0.0,
-                  env_discount=None):
+                  chicanes_north=0, chicanes_east=0, chicanes_south=0,
+                  chicanes_west=0, env_discount=None):
         """Apply per-job configuration to this env.
 
         Exposed as a method (rather than direct attribute writes) so the
@@ -103,7 +112,10 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         ``corner_radius`` / ``curvature_difficulty`` are the procedural-track
         curriculum knobs; they're stored here and read by the course's
         do_reset_blocking() so each Unity reset regenerates the track at the
-        requested difficulty.
+        requested difficulty. ``chicanes_north/east/south/west`` (2026-07-18)
+        are the per-edge ABSOLUTE chicane counts that actually drive chicane
+        placement (curvature_difficulty is kept for logging/back-compat
+        only - see TrackGenerator.cs).
         """
         self.job_id = job_id
         self.pass_through_actions = pass_through_actions
@@ -111,6 +123,10 @@ class RobotaxiEnv(py_environment.PyEnvironment):
             self.corner_radius = float(corner_radius)
         if curvature_difficulty is not None:
             self.curvature_difficulty = float(curvature_difficulty)
+        self.chicanes_north = int(chicanes_north or 0)
+        self.chicanes_east = int(chicanes_east or 0)
+        self.chicanes_south = int(chicanes_south or 0)
+        self.chicanes_west = int(chicanes_west or 0)
         # Per-step env discount (see DonutCourse.env_discount). None -> keep
         # the course's default; a value overrides it for this job's course.
         if env_discount is not None:
