@@ -159,7 +159,7 @@ var config = {
                       type: 'component',
                       title: 'Jobs',
                       componentName: 'iframeComponent',
-                      componentState: { src: 'http://localhost/jobs?v=ws3', id: 'jobs' }
+                      componentState: { src: 'http://localhost/jobs?v=ws4', id: 'jobs' }
                     },
                     {
                       type: 'component',
