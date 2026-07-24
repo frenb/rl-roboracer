@@ -123,7 +123,7 @@ if ($Popup) { $invokeArgs.Popup = $true }
 # ---- Watchdog --------------------------------------------------------
 # Kill any stale Watchdog from a previous run first, then start a fresh
 # one. Idempotent: safe to re-run if the stack is already up.
-# The Watchdog handles a not-yet-created robotaxi.out gracefully - it
+# The Watchdog handles a not-yet-created /tmp/trainer.log gracefully - it
 # just waits until the trainer starts writing.
 if (-not $SkipWatchdog) {
     $watchdogScript = Join-Path $PSScriptRoot 'Watchdog.ps1'
@@ -139,7 +139,7 @@ if (-not $SkipWatchdog) {
         }
         Write-Host "Starting Watchdog (auto-recovery)..."
         Start-Process powershell -ArgumentList @('-NoExit', '-File', $watchdogScript) -WindowStyle Minimized
-        Write-Host "  Watchdog started (minimized). Monitors robotaxi.out and auto-restarts on wedge detection."
+        Write-Host "  Watchdog started (minimized). Monitors /tmp/trainer.log and auto-restarts on wedge detection."
     } else {
         Write-Host "  WARNING: Watchdog.ps1 not found at $watchdogScript - skipping auto-recovery."
     }
@@ -156,10 +156,12 @@ $composeArgs = "docker compose -f docker-compose.yml -f compose/scale.yml"
 # seconds at a time. -u disables that so the dashboard log view and
 # the user's terminal both see lines as they're emitted.
 #
-# `| tee robotaxi.out`: the dashboard log panel
-# (dashboard/src/server.ts) tails /python_ws/src/robotaxi.out over a
-# WebSocket; without `tee`, the file stays stale and the panel shows
-# old data because the scale-overlay sim-controller no longer writes
-# to it from its default command (the auto-run trainer is disabled in
-# overlay mode - see compose/scale.yml).
-Write-Host "  $composeArgs exec sim-controller bash -c 'cd /python_ws/src && python -u robotaxi.py --num-envs $N 2>&1 | tee robotaxi.out'"
+# `| tee /tmp/trainer.log`: the dashboard log panel
+# (dashboard/src/server.ts) tails /tmp/trainer.log over a WebSocket, and
+# Monitor-Job.ps1 / analyze_video.py read the same path. Writing there
+# directly (rather than the old /python_ws/src/robotaxi.out) keeps every
+# consumer pointed at one canonical file so the log viewer never goes
+# blank after a manual restart. `tee` (vs a plain `>`) also keeps the
+# spawned window showing live output. Truncates per launch, which is the
+# intended fresh-session semantics.
+Write-Host "  $composeArgs exec sim-controller bash -c 'cd /python_ws/src && python -u robotaxi.py --num-envs $N 2>&1 | tee /tmp/trainer.log'"
