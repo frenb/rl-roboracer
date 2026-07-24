@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Runs in its own terminal alongside the trainer. Polls the trainer's
-    robotaxi.out for the wedge signature (one actor producing a flood of
+    /tmp/trainer.log for the wedge signature (one actor producing a flood of
     "timed out" messages and/or collect_sec stuck high, or the log going
     silent), and on detection performs the SAME graceful recovery we do by
     hand:
@@ -23,6 +23,34 @@
     Guardrails: a cooldown between restarts and a per-hour circuit breaker
     that STOPS the watchdog (rather than loop forever) if the wedge recurs
     too often - that means something deeper than a transient gym is wrong.
+
+    SEPARATELY (added 2026-07-22, after a fork+CUDA worker-subprocess
+    segfault killed a 70%-complete TRAIN job and left it sitting in FAILED
+    with nobody noticing for hours), every poll also scans for TRAIN jobs
+    with status=FAILED that still have an on-disk Learner checkpoint under
+    /tmp/active/<job_id>/learner/train/checkpoints/. If found, the watchdog
+    auto-resumes that job by:
+
+      1. Finding the LATEST checkpoint's step number from the checkpoint
+         filenames (ckpt-<step>.index).
+      2. Setting the job doc's paused_at_step to that step (CRITICAL: this
+         is the exact field _restore_paused_active_dir() in robotaxi.py
+         checks to decide "resume, don't archive /tmp/active away" - a
+         manual recovery done the same day this feature was added
+         forgot to set it and the trainer archived a 177K-step checkpoint
+         out from under itself, treating the job as fresh. Do not repeat
+         that mistake here) and status back to NOT_STARTED.
+      3. Relaunching the trainer only if it isn't already running (a
+         worker-subprocess segfault or an uncaught do_job exception both
+         leave the main trainer process alive and polling - most FAILED
+         jobs need only the Mongo update, not a process restart).
+
+    This path is capped per-job by MaxAutoResumesPerJob (tracked via the
+    job doc's watchdog_resume_count field, which persists across watchdog
+    restarts) so a job that's failing for a REAL, non-transient reason
+    (e.g. a genuine NaN/inf loss divergence) doesn't get auto-resumed
+    forever - once the cap is hit it's left FAILED for a human to
+    investigate, with an ALERT line in the log.
 
 .PARAMETER PollSeconds
     Seconds between health checks. Default 30.
@@ -53,6 +81,12 @@
 .PARAMETER NumEnvs
     --num-envs for the relaunched trainer. Default 2.
 
+.PARAMETER MaxAutoResumesPerJob
+    Per-job cap on FAILED-with-checkpoint auto-resumes (see DESCRIPTION).
+    Default 2 - i.e. a job gets one automatic second chance; if it fails a
+    second time it's left FAILED for manual investigation rather than
+    looping forever on a job that's failing for a real reason.
+
 .PARAMETER DryRun
     Detect and log only; do NOT actually recover. Useful for tuning
     thresholds against a live trainer before arming it.
@@ -72,6 +106,7 @@ param(
     [int]$SilentHangPolls = 6,
     [int]$TailLines = 600,
     [int]$NumEnvs = 2,
+    [int]$MaxAutoResumesPerJob = 2,
     [switch]$DryRun
 )
 
@@ -98,8 +133,84 @@ function Get-RunningJobId {
     (Invoke-Mongo "var j=db.jobs.findOne({status:'IN_PROGRESS'}); print(j?String(j._id):'')").Trim()
 }
 
+function Get-LatestCheckpointStep([string]$jobId) {
+    # Prints the highest ckpt-<N>.index step number under this job's
+    # /tmp/active/ Learner checkpoint dir, or nothing if none exists (job
+    # never got far enough to checkpoint, or its /tmp/active was already
+    # archived away - either way, not safely auto-resumable).
+    $out = (& docker @ComposeArgs exec -T sim-controller bash -c `
+        "ls /tmp/active/$jobId/learner/train/checkpoints/*.index 2>/dev/null | sed -E 's/.*ckpt-([0-9]+)\.index/\1/' | sort -n | tail -1") 2>$null
+    $out = ($out | Out-String).Trim()
+    if ($out -match '^\d+$') { return [int]$out }
+    return $null
+}
+
+function Test-TrainerProcessAlive {
+    $out = (& docker @ComposeArgs exec -T sim-controller bash -c `
+        "pgrep -f 'python -u robotaxi.py' >/dev/null 2>&1 && echo yes || echo no") 2>$null
+    return (($out | Out-String).Trim() -eq 'yes')
+}
+
+function Invoke-FailedJobAutoResume {
+    # Separate from the wedge path above: this handles TRAIN jobs that
+    # already reached a terminal FAILED status (e.g. the do_job uncaught-
+    # exception path from a worker-subprocess segfault) rather than a
+    # currently-IN_PROGRESS wedge. See DESCRIPTION for the full rationale
+    # and the paused_at_step gotcha this must get right.
+    $raw = Invoke-Mongo @'
+db.jobs.find({status:'FAILED', job_type:'TRAIN'}, {_id:1, watchdog_resume_count:1})
+  .forEach(j => print(String(j._id) + '|' + (j.watchdog_resume_count || 0)));
+'@
+    foreach ($line in ($raw -split "`n")) {
+        $line = $line.Trim()
+        if (-not $line -or $line -notmatch '\|') { continue }
+        $parts = $line -split '\|'
+        $jobId = $parts[0].Trim()
+        $resumeCount = 0
+        [int]::TryParse($parts[1].Trim(), [ref]$resumeCount) | Out-Null
+
+        if ($resumeCount -ge $MaxAutoResumesPerJob) { continue }  # already alerted; leave for a human
+
+        $step = Get-LatestCheckpointStep $jobId
+        if ($null -eq $step) {
+            Write-WdLog "FAILED job $jobId has no on-disk checkpoint; not auto-resumable. Marking so we stop re-checking it."
+            Invoke-Mongo "db.jobs.updateOne({_id:ObjectId('$jobId')},{`$set:{watchdog_resume_count:$MaxAutoResumesPerJob}})" | Out-Null
+            continue
+        }
+
+        $newCount = $resumeCount + 1
+        if ($DryRun) {
+            Write-WdLog "DRYRUN would auto-resume FAILED job $jobId from checkpoint step=$step (attempt $newCount/$MaxAutoResumesPerJob)"
+            continue
+        }
+
+        Write-WdLog "AUTO-RESUME: FAILED job $jobId has checkpoint at step=$step (attempt $newCount/$MaxAutoResumesPerJob)"
+        # paused_at_step MUST be set together with status in the SAME update -
+        # see the DESCRIPTION note on why a status-only update archives the
+        # checkpoint away instead of resuming from it.
+        Invoke-Mongo "db.jobs.updateOne({_id:ObjectId('$jobId')},{`$set:{status:'NOT_STARTED',paused_at_step:$step,watchdog_resume_count:$newCount},`$unset:{eval_error:''}})" | Out-Null
+
+        if (Test-TrainerProcessAlive) {
+            Write-WdLog "  trainer process already running; it will pick up the resumed job on its next poll."
+        } else {
+            Write-WdLog "  trainer process not running; relaunching."
+            $trainerCmd = "docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller bash -c 'cd /python_ws/src && python -u robotaxi.py --num-envs $NumEnvs 2>&1 | tee /tmp/trainer.log'"
+            Start-Process powershell -WorkingDirectory $RepoRoot -ArgumentList '-NoExit', '-Command', $trainerCmd
+        }
+
+        if ($newCount -ge $MaxAutoResumesPerJob) {
+            Write-WdLog "NOTE: job $jobId has now used its auto-resume budget ($newCount/$MaxAutoResumesPerJob). If it fails again it will NOT be auto-resumed - investigate manually."
+        }
+    }
+}
+
 function Get-Tail {
-    (& docker @ComposeArgs exec -T sim-controller bash -c "tail -n $TailLines /python_ws/src/robotaxi.out" 2>$null) -join "`n"
+    # Reads the SAME canonical log the trainer now writes via
+    # `| tee /tmp/trainer.log` (see the relaunch commands above and
+    # Start-Stack.ps1). Previously /python_ws/src/robotaxi.out, which
+    # drifted out of sync with the dashboard/Monitor-Job path and left
+    # wedge detection scanning a stale file after a manual restart.
+    (& docker @ComposeArgs exec -T sim-controller bash -c "tail -n $TailLines /tmp/trainer.log" 2>$null) -join "`n"
 }
 
 function Test-Wedged([string]$tail) {
@@ -144,7 +255,7 @@ function Invoke-Recovery([string]$jobId, [string]$sig) {
     Invoke-Mongo "db.jobs.updateOne({_id:ObjectId('$jobId')},{`$set:{status:'NOT_STARTED'}})" | Out-Null
 
     # 5. relaunch the trainer (viz-off) in a new window
-    $trainerCmd = "docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller bash -c 'cd /python_ws/src && python -u robotaxi.py --num-envs $NumEnvs 2>&1 | tee robotaxi.out'"
+    $trainerCmd = "docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller bash -c 'cd /python_ws/src && python -u robotaxi.py --num-envs $NumEnvs 2>&1 | tee /tmp/trainer.log'"
     Start-Process powershell -WorkingDirectory $RepoRoot -ArgumentList '-NoExit', '-Command', $trainerCmd
     Write-WdLog "  trainer relaunched; job set NOT_STARTED to resume."
 
@@ -158,10 +269,17 @@ $script:LastRestart = [DateTime]::MinValue
 $prevTail = ''
 $silentCount = 0
 
-Write-WdLog "Watchdog started (poll=${PollSeconds}s cooldown=${CooldownSeconds}s max/hr=$MaxRestartsPerHour timeoutThresh=$TimeoutThreshold dryRun=$DryRun). Logging to $LogFile"
+Write-WdLog "Watchdog started (poll=${PollSeconds}s cooldown=${CooldownSeconds}s max/hr=$MaxRestartsPerHour timeoutThresh=$TimeoutThreshold maxAutoResumes=$MaxAutoResumesPerJob dryRun=$DryRun). Logging to $LogFile"
 
 while ($true) {
     Start-Sleep -Seconds $PollSeconds
+
+    # FAILED-with-checkpoint auto-resume runs every poll regardless of the
+    # wedge cooldown below - it's a much lighter-weight action (a Mongo
+    # update, not a full stack restart) and a FAILED job sitting idle for
+    # the remainder of a CooldownSeconds window is exactly the "nobody
+    # noticed for hours" failure mode this was added to close.
+    Invoke-FailedJobAutoResume
 
     if (((Get-Date) - $script:LastRestart).TotalSeconds -lt $CooldownSeconds) { continue }
 
