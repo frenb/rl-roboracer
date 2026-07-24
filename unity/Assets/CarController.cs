@@ -399,8 +399,43 @@ public class CarController : MonoBehaviour {
 
     
     public float GetSpeed(){
+        // Signed forward speed (2026-07-19): dot product of world-space
+        // velocity with the car's own forward axis, NOT rb.velocity.magnitude
+        // (always >= 0). Needed because reversing is now physically possible
+        // - the acceleration action range was widened from [0.1,2.0]
+        // (drive-only) to [-1,1] so the car can apply genuine braking torque
+        // (see FixedUpdate's motor-torque clamp below) - and an unsigned
+        // magnitude can't distinguish "rolling backward" from "rolling
+        // forward", which would silently corrupt both this heuristic demo
+        // driver's speed-tracking control loop and the RL observation
+        // (scene_data["car"]["speed"] -> obs[1], whose spec bound was
+        // already [-10,10] in donut_course.py in anticipation of this).
         Rigidbody rb = GetComponent<Rigidbody>();
-        return rb.velocity.magnitude;
+        return Vector3.Dot(rb.velocity, transform.forward);
+    }
+
+    // How close to zero forward speed counts as "stopped" for the
+    // reverse-prevention clamp below - not exactly 0 because physics/floating
+    // point noise means a car sitting still rarely reads EXACTLY 0.0.
+    private const float STOPPED_SPEED_EPSILON = 0.05f;
+
+    // Prevents commanding the car into reverse from a standstill (2026-07-19,
+    // added alongside the negative/braking acceleration range): braking
+    // torque is fine and intended while still rolling FORWARD (that's the
+    // whole point of allowing negative acceleration - see GetSpeed() above),
+    // but once forward speed has already decayed to ~0 there is nothing left
+    // to brake - a sustained negative command at that point would instead
+    // accelerate the car backward, which no caller (heuristic demo driving,
+    // random policy, or a trained RL policy) currently expects or accounts
+    // for. Only clamps the NEGATIVE case; positive (drive) commands are
+    // never touched, including at a standstill.
+    private float ClampAccelerationForStandstill(float requestedAccel)
+    {
+        if (requestedAccel < 0f && GetSpeed() <= STOPPED_SPEED_EPSILON)
+        {
+            return 0f;
+        }
+        return requestedAccel;
     }
     public float GetAngularVelocity()
     {
@@ -758,11 +793,17 @@ public class CarController : MonoBehaviour {
             acceleration = Input.GetAxis("Vertical");
             angle = Input.GetAxis("Horizontal");
             steering = maxSteeringAngle * angle;
-            motor = maxMotorTorque * acceleration;
+            motor = maxMotorTorque * ClampAccelerationForStandstill(acceleration);
         }
         if(!applyForceDone)
         {
-            motor = maxMotorTorque * acceleration;
+            // Clamp AFTER manualControlEnabled/`this.acceleration` is set but
+            // right before it's turned into motor torque - see
+            // ClampAccelerationForStandstill()'s comment: prevents a
+            // negative (braking) command from continuing to push the car
+            // into reverse once it's already stopped, while leaving braking
+            // while still rolling forward untouched.
+            motor = maxMotorTorque * ClampAccelerationForStandstill(acceleration);
             steering = maxSteeringAngle * angle;
        
 

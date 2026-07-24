@@ -4,3 +4,7 @@ int32 cmd_id
 int32 num_obstacles
 float64 corner_radius
 float64 curvature_difficulty
+int32 chicanes_north
+int32 chicanes_east
+int32 chicanes_south
+int32 chicanes_west

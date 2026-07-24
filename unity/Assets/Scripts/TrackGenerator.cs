@@ -64,8 +64,17 @@ public class TrackGenerator : MonoBehaviour
     public GameObject goalPrefab;
 
     [Header("Tile geometry / calibration")]
-    [Tooltip("Edge length of one square tile in metres. Kit pieces are 20m.")]
-    public float tileSize = 20f;
+    // Raised from 20 -> 24 (TrackGen-v7) specifically to widen the cornerRadius
+    // clamp ceiling (tileSize/2, see cornerRadius tooltip below) from 10 to 12,
+    // so the 5-stage curriculum's radius progression isn't squeezed into a
+    // ~2.5m band. This also increases the loop's overall footprint by 20%
+    // (same loopWidthTiles/loopHeightTiles tile COUNT, bigger tiles) - forward-
+    // clearance-based DEMO-driving thresholds tuned in collect_expert_demos()
+    // against the old 20m tiles (e.g. FORWARD_CLEAR_REF=26.0) may read
+    // proportionally "less urgent" now and should be re-checked/rescaled.
+    [Tooltip("Edge length of one square tile in metres. Kit pieces are 20m; " +
+             "raised to 24m (TrackGen-v7) to widen the cornerRadius clamp ceiling.")]
+    public float tileSize = 24f;
     [Tooltip("Yaw added to straight tiles after aligning to heading. Calibrate so the road points along travel.")]
     public float straightYawOffset = 0f;
     [Tooltip("Yaw added to curve tiles after the entry-edge alignment. Calibrate so curves connect cleanly.")]
@@ -80,6 +89,18 @@ public class TrackGenerator : MonoBehaviour
     [Tooltip("Centreline turn radius (m). Clamp range is [roadHalfWidth+0.5, tileSize/2]. " +
              "Smaller = tighter/harder corner; this is the curvature-difficulty lever.")]
     public float cornerRadius = 10f;
+    // Chicane corners (the 4-turn bump inserted per-edge, see
+    // BuildEdgeWithChicanes) are spaced only 1 tile apart - stacking 4
+    // turns at whatever the curriculum's cornerRadius happens to be (down to
+    // 7.5 at the tightest stages) left too little margin and was confirmed
+    // (2026-07-18) unnavigable. Decoupled from cornerRadius so chicane
+    // difficulty comes from the per-edge chicane counts (turn frequency)
+    // rather than compounding with the main corner-radius curriculum axis.
+    // Same clamp range as cornerRadius applies (see PlaceRoundedCorner/PlaceGoal).
+    [Tooltip("Centreline turn radius (m) used ONLY for chicane corners, independent of cornerRadius. " +
+             "Chicane corners are spaced close together, so keep this generous (near tileSize/2) " +
+             "regardless of what cornerRadius the curriculum is currently using.")]
+    public float chicaneCornerRadius = 10f;
     [Tooltip("Arc facets per corner (2 = two flat chord walls, 5 = smooth enough for raycasts). " +
              "Lower values reduce object count significantly: 5 facets × 2 walls × 4 corners = 40 objects " +
              "vs 80 at 10 facets. Invisible by default (showArcWallGeometry = false) so count is cosmetic, " +
@@ -92,28 +113,68 @@ public class TrackGenerator : MonoBehaviour
     [Header("Loop shape + difficulty")]
     [Tooltip("Base rectangle width in tiles (>=3).")]
     public int loopWidthTiles = 7;
+    // Raised 5 -> 8 (TrackGen-v7) so the west/east ends (the SHORT vertical
+    // edges, length = loopHeightTiles) have enough straight cells to survive
+    // the corner-adjacency goal skip (see the goal-placement block in
+    // Generate()) with 4 goals left over per side, not just 1. Each vertical
+    // edge has loopHeightTiles-2 straight cells; the 2 flanking the corners
+    // at each end are skipped, so goals-per-side = loopHeightTiles-4.
     [Tooltip("Base rectangle height in tiles (>=3).")]
-    public int loopHeightTiles = 5;
+    public int loopHeightTiles = 8;
+    // Legacy/logging only as of 2026-07-18 - no longer drives chicane count
+    // (see chicanesNorth/East/South/West below). Kept so old TensorBoard
+    // curriculum/curvature_difficulty logging and the ApplyForce wire field
+    // stay meaningful for anyone still reading it; TrackGenerator itself
+    // ignores this value now.
     [Range(0f, 1f)]
-    [Tooltip("0 = plain rectangle (4 corners). 1 = max chicanes on the long edges -> many tight turns.")]
+    [Tooltip("DEPRECATED - no longer drives chicane count, see chicanesNorth/East/South/West. " +
+             "Kept only for logging/back-compat.")]
     public float curvatureDifficulty = 0f;
+    // Per-edge ABSOLUTE chicane counts (2026-07-18), replacing the single
+    // curvatureDifficulty 0-1 knob (which only ever applied to the north/top
+    // edge). Lets a curriculum stage/experiment design place a specific,
+    // deterministic number of chicanes on each of the 4 edges independently
+    // (e.g. "stage 3 has 1 chicane on the south, 1 on the east, none on
+    // north/west") instead of a single difficulty ratio applied to one edge.
+    [Header("Chicanes (per-edge absolute counts)")]
+    [Tooltip("Number of chicane bumps on the NORTH edge (the top edge, larger Z / larger grid Y).")]
+    public int chicanesNorth = 0;
+    [Tooltip("Number of chicane bumps on the EAST edge (the right edge, larger X).")]
+    public int chicanesEast = 0;
+    [Tooltip("Number of chicane bumps on the SOUTH edge (the bottom edge, Z=0 / grid Y=0).")]
+    public int chicanesSouth = 0;
+    [Tooltip("Number of chicane bumps on the WEST edge (the left edge, X=0).")]
+    public int chicanesWest = 0;
     [Tooltip("Deterministic seed for chicane placement.")]
     public int seed = 12345;
 
     [Header("Goals (built as a gate ACROSS the road)")]
     [Tooltip("Place a Goal-N every this many tiles along the path.")]
     public int goalEveryNTiles = 1;
-    [Tooltip("Place ONE goal gate per rounded corner, at the arc's 45-degree " +
-             "apex. The gate's inner end is flush with the outer face of the " +
-             "inner rail (the Inner Point of Tangency) and its longitudinal " +
-             "axis is the radial normal there (perpendicular to the arc " +
-             "tangent = arc-centre-outward). Fills the corner goal gap without " +
-             "over-populating the arc interior.")]
+    [Tooltip("Place goal gate(s) along each rounded corner's arc. The gate's " +
+             "inner end is flush with the outer face of the inner rail (the " +
+             "Inner Point of Tangency) and its longitudinal axis is the " +
+             "radial normal there (perpendicular to the arc tangent = " +
+             "arc-centre-outward) at each gate's own position along the arc.")]
     public bool placeCornerTangentGoals = true;
+    [Tooltip("How many goal gates to place along EACH corner's arc sweep " +
+             "(evenly spaced, e.g. 3 -> 25%/50%/75% of the sweep), instead " +
+             "of just one at the 45-degree apex. Added 2026-07-19: a single " +
+             "apex goal is a single pursuit POINT, so a car steering " +
+             "straight at it (rather than following the curve) can cut the " +
+             "corner and run off the outer/inner pavement edge before or " +
+             "after reaching it - more, closer waypoints make the pursuit " +
+             "target track the actual curve instead of chording across it. " +
+             "1 reproduces the old single-apex-goal behaviour exactly.")]
+    public int goalsPerCorner = 3;
     [Tooltip("Height above the road the goal gate's CENTER sits at.")]
     public float goalHeight = 1.5f;
+    // Was 14 (matched the old corridor 2*7). roadHalfWidth dropped to 5.5
+    // (TrackGen-v7, see roadHalfWidth comment above) -> corridor is now
+    // 2*5.5=11, so this follows suit to stay flush with the new road edges
+    // instead of overhanging into the walls.
     [Tooltip("Gate width - spans ACROSS the road (make it ~ the corridor width 2*roadHalfWidth).")]
-    public float goalGateWidth = 14f;
+    public float goalGateWidth = 11f;
     [Tooltip("Gate vertical extent - tall enough to always catch the car driving through.")]
     public float goalTriggerHeight = 4f;
     [Tooltip("Gate thickness ALONG the road (thin, so it reads as a gate line).")]
@@ -147,8 +208,16 @@ public class TrackGenerator : MonoBehaviour
              "crash-triggering. The merged straight rails remain visible. Turning this ON reveals the " +
              "tick-mark arc segments at corners, which is useful for debugging arc geometry.")]
     public bool showArcWallGeometry = false;
+    // Lowered from 7 -> 5.5 (TrackGen-v7) to widen the cornerRadius clamp
+    // FLOOR (roadHalfWidth+0.5, see cornerRadius tooltip below) from 7.5 to
+    // 6.0, so tight-corner curriculum stages are actually achievable instead
+    // of clamping up to the same 7.5 as every other "tight" stage. Narrows
+    // the drivable corridor 14m -> 11m everywhere (not just corners) - the
+    // DEMO driver's corner-urgency/clearance signals are ratio-based
+    // (see curvature_asymmetry in collect_expert_demos()) so they should
+    // degrade gracefully, but absolute clearance readings will run smaller.
     [Tooltip("Half the drivable corridor width. Walls sit at +/- this from tile centre. Keep < tileSize/2.")]
-    public float roadHalfWidth = 7f;
+    public float roadHalfWidth = 5.5f;
     public float wallHeight = 2f;
     public float wallThickness = 0.5f;
 
@@ -219,6 +288,9 @@ public class TrackGenerator : MonoBehaviour
         }
 
         int n = path.Count;
+        // Mirrors BuildLoopCells' own w so we can identify west/east (x=0 /
+        // x=w-1) column cells below without changing loop shape.
+        int loopW = Mathf.Max(3, loopWidthTiles);
         int wallLayer = LayerMask.NameToLayer(wallLayerName);
         if (wallLayer < 0)
         {
@@ -262,6 +334,22 @@ public class TrackGenerator : MonoBehaviour
 
             bool isStraight = inDir == outDir;
 
+            // Is this corner part of a multi-corner (chicane) run, as opposed
+            // to one of the 4 isolated rectangle corners? Checked directly
+            // against neighbouring cells (rather than relying on
+            // consecutiveCornerCount, which isn't updated until below) so
+            // PlaceRoundedCorner can pick chicaneCornerRadius over
+            // cornerRadius before it needs the value.
+            bool isChicaneCorner = false;
+            if (!isStraight)
+            {
+                Vector2Int prevIn = Step(path[(i - 2 + n) % n], path[(i - 1 + n) % n]);
+                bool prevCellIsCorner = prevIn != inDir;
+                Vector2Int nextOut2 = Step(path[(i + 1) % n], path[(i + 2) % n]);
+                bool nextCellIsCorner = outDir != nextOut2;
+                isChicaneCorner = prevCellIsCorner || nextCellIsCorner;
+            }
+
             // Flat-geometry mode lays a corridor-width road (2*roadHalfWidth)
             // with flush flanking rails so the guard rails sit EXACTLY on the
             // road edges - matching the rounded corners. The old straight path
@@ -276,7 +364,8 @@ public class TrackGenerator : MonoBehaviour
                 }
                 else if (roundedCorners)
                 {
-                    PlaceRoundedCorner(root.transform, center, inDir, outDir, wallLayer, ref goalCounter);
+                    PlaceRoundedCorner(root.transform, center, inDir, outDir, wallLayer, ref goalCounter,
+                                       isChicaneCorner ? chicaneCornerRadius : cornerRadius);
                 }
                 else
                 {
@@ -298,7 +387,11 @@ public class TrackGenerator : MonoBehaviour
             // Goals along the path, every goalEveryNTiles, named in order.
             if (goalEveryNTiles < 1) goalEveryNTiles = 1;
 
-            // Track consecutive rounded-corner run depth.
+            // Track consecutive rounded-corner run depth. Captured BEFORE
+            // this cell's own update so it reflects the run-length ending at
+            // the PREVIOUS cell (used below to detect "am I straight-cell
+            // right after an isolated corner").
+            int prevConsecutiveCornerCount = consecutiveCornerCount;
             bool isCornerWithArc = !isStraight && roundedCorners && !useKitTiles;
             if (isCornerWithArc)
                 consecutiveCornerCount++;
@@ -310,7 +403,26 @@ public class TrackGenerator : MonoBehaviour
                 // ---------------------------------------------------------
                 // Goal placement rules:
                 //
-                //  Straight cell   → place goal (normal cadence)
+                //  Straight cell   → place goal (normal cadence), UNLESS it
+                //                    sits immediately before/after an
+                //                    ISOLATED (single-cell, non-chicane)
+                //                    corner - that corner already gets its
+                //                    own apex goal from PlaceRoundedCorner,
+                //                    so also placing the adjacent straight
+                //                    cells' goals crams 3 goals with 3
+                //                    different orientations (straight-cell
+                //                    cardinal -> corner-apex radial ->
+                //                    straight-cell cardinal) into a very
+                //                    short span - confirmed (2026-07-15) as
+                //                    the cause of persistent low-speed
+                //                    crashes at track corners: the target
+                //                    heading whipsaws through 3 sharply
+                //                    different orientations faster than any
+                //                    controller can settle between them.
+                //                    Chicane (multi-corner) runs are
+                //                    untouched - their own apex-goal logic
+                //                    below already produces a different,
+                //                    sparser density there.
                 //  Corner cell     → NO goal at the cell itself
                 //  Chicane middle  → if this is the FIRST of a consecutive-
                 //                    middle pair, place ONE apex goal at the
@@ -333,14 +445,36 @@ public class TrackGenerator : MonoBehaviour
                 bool nextIsCorner     = isCornerWithArc && (outDir != nextOutDir);
                 bool nextIsExitCorner = nextIsCorner && (nextOutDir == nextNextOut);
 
+                // Standalone (not gated on THIS cell being a corner) checks
+                // for "is the adjacent cell an ISOLATED corner" - used only
+                // by the straight-cell goal skip below.
+                bool prevWasIsolatedCorner = prevConsecutiveCornerCount == 1;
+                bool nextCellIsCorner = outDir != nextOutDir;
+                bool nextCellIsIsolatedCorner = nextCellIsCorner && (nextOutDir == nextNextOut);
+                bool adjacentToIsolatedCorner = prevWasIsolatedCorner || nextCellIsIsolatedCorner;
+
+                // West/east ends (the SHORT vertical edges, x=0 or x=loopW-1)
+                // only have loopHeightTiles-2 straight cells to begin with -
+                // too few to also lose 2 of them to the isolated-corner skip
+                // below and still read as "4 goals per side" (requested
+                // 2026-07-18; loopHeightTiles/track size explicitly NOT to be
+                // changed for this). The skip's original whiplash-crash
+                // rationale (see comment block above) was observed on the
+                // long north/south edges/chicanes, which keep the skip
+                // unchanged; west/east cells are exempted from it instead.
+                bool isVerticalSideCell = (cell.x == 0 || cell.x == loopW - 1);
+
                 // Goals only go on STRAIGHT cells. Corner cells are
                 // never given their own goal because PlaceGoal's arc-
                 // position offset for corners pulls the gate into the
                 // wall/arc junction, making it look like a phantom curb.
                 // Adjacent straight cells already carry goals naturally
-                // (every goalEveryNTiles tile). The one exception is the
-                // chicane apex goal placed below.
-                if (!isCornerWithArc)
+                // (every goalEveryNTiles tile), EXCEPT the ones immediately
+                // flanking an isolated corner (see comment block above) -
+                // UNLESS they're on a west/east vertical edge, which is
+                // exempted from that skip (see isVerticalSideCell above).
+                // The one exception is the chicane apex goal placed below.
+                if (!isCornerWithArc && (!adjacentToIsolatedCorner || isVerticalSideCell))
                 {
                     goalCounter++;
                     PlaceGoal(root.transform, center, goalCounter, inDir, outDir);
@@ -446,21 +580,45 @@ public class TrackGenerator : MonoBehaviour
         int h = Mathf.Max(3, loopHeightTiles);
 
         // Rectangle corners: (0,0) .. (w-1, h-1). Walk CCW:
-        //   bottom edge W->E, right edge S->N, top edge E->W, left edge N->S.
+        //   bottom(SOUTH) edge W->E, right(EAST) edge S->N,
+        //   top(NORTH) edge E->W, left(WEST) edge N->S.
+        // Each of the 4 straight runs below can now splice in per-edge
+        // chicane bumps (2026-07-18, see BuildEdgeWithChicanes) instead of
+        // only the north/top edge supporting them.
         var cells = new List<Vector2Int>();
 
-        // We build the top edge separately so chicanes can be spliced in.
-        // Bottom edge: y=0, x = 0..w-1
-        for (int x = 0; x < w; x++) cells.Add(new Vector2Int(x, 0));
-        // Right edge: x=w-1, y = 1..h-1
-        for (int y = 1; y < h; y++) cells.Add(new Vector2Int(w - 1, y));
+        // Bottom (SOUTH) edge, W->E: (0,0) .. (w-1,0). Both rectangle
+        // corners included (matches the original un-chicaned behaviour) -
+        // interior runs x=1..w-2, bump direction is southward (y decreasing).
+        cells.Add(new Vector2Int(0, 0));
+        cells.AddRange(BuildEdgeWithChicanes(
+            new Vector2Int(1, 0), new Vector2Int(1, 0), new Vector2Int(0, -1),
+            w - 2, chicanesSouth));
+        cells.Add(new Vector2Int(w - 1, 0));
 
-        // Top edge (E->W): y=h-1, x = w-2 .. 1, with optional chicanes.
-        var topEdge = BuildTopEdgeWithChicanes(w, h);
-        cells.AddRange(topEdge);
+        // Right (EAST) edge, S->N: excludes the SE corner (already added
+        // above), includes the NE corner at the end - interior runs
+        // y=1..h-2, bump direction is eastward (x increasing).
+        cells.AddRange(BuildEdgeWithChicanes(
+            new Vector2Int(w - 1, 1), new Vector2Int(0, 1), new Vector2Int(1, 0),
+            h - 2, chicanesEast));
+        cells.Add(new Vector2Int(w - 1, h - 1));
 
-        // Left edge: x=0, y = h-1 .. 1
-        for (int y = h - 1; y >= 1; y--) cells.Add(new Vector2Int(0, y));
+        // Top (NORTH) edge, E->W: excludes both corners (NE above, NW
+        // below) - interior runs x=w-2..1, bump direction is northward
+        // (y increasing).
+        cells.AddRange(BuildEdgeWithChicanes(
+            new Vector2Int(w - 2, h - 1), new Vector2Int(-1, 0), new Vector2Int(0, 1),
+            w - 2, chicanesNorth));
+
+        // Left (WEST) edge, N->S: includes the NW corner (missed by the top
+        // edge above), excludes the SW corner (already the very first cell
+        // of the whole path) - interior runs y=h-2..1, bump direction is
+        // westward (x decreasing).
+        cells.Add(new Vector2Int(0, h - 1));
+        cells.AddRange(BuildEdgeWithChicanes(
+            new Vector2Int(0, h - 2), new Vector2Int(0, -1), new Vector2Int(-1, 0),
+            h - 2, chicanesWest));
 
         // De-dupe consecutive duplicates defensively (shouldn't happen).
         var dedup = new List<Vector2Int>();
@@ -472,58 +630,106 @@ public class TrackGenerator : MonoBehaviour
     }
 
     /// <summary>
-    /// Top edge traversed East->West at y=h-1. For each chicane, the straight
-    /// pass is replaced by an outward (north) bump: up, across, back down.
+    /// Chooses up to <paramref name="count"/> evenly-spaced, DETERMINISTIC
+    /// trigger indices (0-based, along an interior run of <paramref
+    /// name="length"/> cells) at which a chicane bump should start. A bump
+    /// starting at index i consumes indices i, i+1, i+2 (3 cells - see
+    /// BuildEdgeWithChicanes).
+    ///
+    /// Reserves >=1 PLAIN buffer cell both BEFORE the first bump and AFTER
+    /// the last bump (so a chicane never sits flush against the adjacent
+    /// rectangle/edge corner with zero straight recovery - the vertical-edge
+    /// analogue of the "no straight recovery" defect fixed within a single
+    /// bump on 2026-07-18), and requires >=4 spacing between consecutive
+    /// trigger starts (3 for the bump + >=1 plain gap cell), so no two
+    /// bumps ever share a corner with zero straight recovery between them
+    /// either. Valid trigger range is therefore [1, length-4].
+    ///
+    /// Deterministic (no RNG) and purely a function of (count, length) - not
+    /// jittered - so a given edge's Nth chicane lands at roughly the same
+    /// place regardless of which curriculum stage is active, matching the
+    /// "stage 2 adds the first chicane... stage 5 adds a third" incremental
+    /// framing (count=1 -> centre of the usable range, by construction).
+    ///
+    /// If the full requested count doesn't fit at >=4 spacing within the
+    /// available range, silently drops chicanes (fewest-first is avoided -
+    /// we shrink the whole even-spread, not truncate one end) rather than
+    /// violating the buffer/spacing guarantees; callers should size
+    /// loopWidthTiles/loopHeightTiles so the requested counts actually fit.
+    /// Never throws.
     /// </summary>
-    private List<Vector2Int> BuildTopEdgeWithChicanes(int w, int h)
+    private List<int> ChooseChicaneTriggerIndices(int count, int length)
+    {
+        var result = new List<int>();
+        if (count <= 0) return result;
+        const int minSpacing = 4;
+        int lo = 1;
+        int hi = length - 4;
+        if (hi < lo) return result; // edge too short for even 1 buffered chicane
+
+        int span = hi - lo;
+        int fitCount = count;
+        while (fitCount > 1 && span < minSpacing * (fitCount - 1))
+            fitCount--;
+        if (fitCount <= 0) return result;
+
+        for (int k = 0; k < fitCount; k++)
+        {
+            int idx = (fitCount == 1)
+                ? lo + span / 2
+                : lo + Mathf.RoundToInt((float) k / (fitCount - 1) * span);
+            result.Add(idx);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Builds one straight edge's INTERIOR cells (excluding the rectangle
+    /// corners at either end - callers add those separately, see
+    /// BuildLoopCells), splicing in <paramref name="chicaneCount"/> outward
+    /// bumps distributed via ChooseChicaneTriggerIndices.
+    ///
+    /// <paramref name="start"/> is the first interior cell. <paramref
+    /// name="walkDir"/> is the unit step direction of travel along the edge
+    /// (e.g. (-1,0) walking west). <paramref name="bumpDir"/> is the unit
+    /// OUTWARD bump direction, perpendicular to walkDir (e.g. (0,1) = north,
+    /// for the top edge's bump). <paramref name="length"/> is the number of
+    /// interior cells along the edge (excluding both corners).
+    ///
+    /// A bump at walk-index i replaces the single interior cell with 5
+    /// cells: turn out, straight (1 recovery tile), turn back - generalizing
+    /// the north-edge bump shape confirmed navigable on 2026-07-18:
+    ///   p, p+bumpDir, p+bumpDir+walkDir, p+bumpDir+2*walkDir, p+2*walkDir
+    /// where p is the cell at that index. This consumes indices i, i+1, i+2
+    /// (3 interior cells -> 5 path cells), so the walk advances by 3 instead
+    /// of 1 whenever a bump triggers.
+    /// </summary>
+    private List<Vector2Int> BuildEdgeWithChicanes(
+        Vector2Int start, Vector2Int walkDir, Vector2Int bumpDir,
+        int length, int chicaneCount)
     {
         var edge = new List<Vector2Int>();
-        int topY = h - 1;
+        if (length <= 0) return edge;
 
-        // Candidate columns for chicanes: interior of the top edge, leaving a
-        // gap from the corners and >=2 spacing between chicanes.
-        // Guard: chicanes need at least w>=7 (minimum 3 interior columns for
-        // 1 chicane with 1-tile gaps on each side) and h>=5 (the chicane row
-        // topY+1 must not collide with rounded corner arcs on adjacent tiles).
-        // Below these thresholds, force chicanes off regardless of difficulty.
-        var rng = new System.Random(seed);
-        int maxChicanes = (w >= 7 && h >= 5) ? Mathf.Max(0, (w - 4) / 2) : 0;
-        int chicanes = Mathf.RoundToInt(Mathf.Clamp01(curvatureDifficulty) * maxChicanes);
+        var triggers = new HashSet<int>(ChooseChicaneTriggerIndices(chicaneCount, length));
 
-        // Evenly spread chicane columns across the interior, then jitter a bit.
-        var chicaneCols = new HashSet<int>();
-        if (chicanes > 0)
+        int i = 0;
+        while (i < length)
         {
-            for (int k = 0; k < chicanes; k++)
+            Vector2Int p = start + walkDir * i;
+            if (triggers.Contains(i) && i + 2 < length)
             {
-                int col = 2 + (int)((k + 0.5f) / chicanes * (w - 4));
-                // jitter +/-0 (kept deterministic + safe); ensure spacing.
-                if (!chicaneCols.Contains(col) && !chicaneCols.Contains(col - 1) &&
-                    !chicaneCols.Contains(col + 1))
-                {
-                    chicaneCols.Add(col);
-                }
-            }
-        }
-
-        // Walk East->West along the top edge. A chicane at column x bumps the
-        // path north by one tile across [x, x+1] before resuming.
-        for (int x = w - 2; x >= 1; x--)
-        {
-            if (chicaneCols.Contains(x))
-            {
-                // Going westward and hitting a chicane at x: detour north.
-                // Sequence (westward): (x+1,topY) already placed; add
-                // (x, topY) -> (x, topY+1) -> (x-1, topY+1) -> (x-1, topY)
-                edge.Add(new Vector2Int(x, topY));
-                edge.Add(new Vector2Int(x, topY + 1));
-                edge.Add(new Vector2Int(x - 1, topY + 1));
-                edge.Add(new Vector2Int(x - 1, topY));
-                x--; // we consumed x-1 as part of the bump
+                edge.Add(p);
+                edge.Add(p + bumpDir);
+                edge.Add(p + bumpDir + walkDir);
+                edge.Add(p + bumpDir + walkDir * 2);
+                edge.Add(p + walkDir * 2);
+                i += 3;
             }
             else
             {
-                edge.Add(new Vector2Int(x, topY));
+                edge.Add(p);
+                i += 1;
             }
         }
         return edge;
@@ -689,8 +895,12 @@ public class TrackGenerator : MonoBehaviour
         return Mathf.Atan2(dir.x, dir.y) * Mathf.Rad2Deg;
     }
 
+    // inDir/outDir are Vector2 (not Vector2Int) so callers placing goals at
+    // ARBITRARY points along a corner's arc (see goalsPerCorner) can pass a
+    // continuous tangent direction for orientation - grid cell callers keep
+    // passing Vector2Int as before, which implicitly converts to Vector2.
     private void PlaceGoal(Transform parent, Vector3 center, int number,
-                           Vector2Int inDir, Vector2Int outDir)
+                           Vector2 inDir, Vector2 outDir, float radiusOverride = -1f)
     {
         // Build a visible, ASYMMETRIC gate: wide ACROSS the road (local X),
         // thin ALONG it (local Z). The asymmetry is what makes the per-heading
@@ -709,7 +919,13 @@ public class TrackGenerator : MonoBehaviour
         if (inDir != outDir && roundedCorners && !useKitTiles)
         {
             float half = tileSize * 0.5f;
-            float r = Mathf.Clamp(cornerRadius, roadHalfWidth + 0.5f, half);
+            // radiusOverride (< 0 = "not supplied") lets chicane apex goals use
+            // the SAME chicaneCornerRadius as the arc PlaceRoundedCorner built
+            // for that cell, instead of the instance cornerRadius field -
+            // otherwise the goal would sit at the position for a DIFFERENT
+            // radius than the one actually drivable there.
+            float baseRadius = radiusOverride >= 0f ? radiusOverride : cornerRadius;
+            float r = Mathf.Clamp(baseRadius, roadHalfWidth + 0.5f, half);
             Vector3 inW = new Vector3(inDir.x, 0f, inDir.y);
             Vector3 outW = new Vector3(outDir.x, 0f, outDir.y);
             Vector3 arcC = center + (-inW + outW) * r;
@@ -796,10 +1012,10 @@ public class TrackGenerator : MonoBehaviour
     /// </summary>
     private void PlaceRoundedCorner(Transform parent, Vector3 center,
                                     Vector2Int inDir, Vector2Int outDir, int wallLayer,
-                                    ref int goalCounter)
+                                    ref int goalCounter, float radius)
     {
         float half = tileSize * 0.5f;
-        float r = Mathf.Clamp(cornerRadius, roadHalfWidth + 0.5f, half);
+        float r = Mathf.Clamp(radius, roadHalfWidth + 0.5f, half);
         float corridor = roadHalfWidth * 2f;
 
         Vector3 inW = new Vector3(inDir.x, 0f, inDir.y);
@@ -826,20 +1042,6 @@ public class TrackGenerator : MonoBehaviour
             PlaceFlankingWalls(parent, T2, E2, wallLayer);
         }
 
-        // Single goal gate at the corner apex. Passing inDir != outDir routes
-        // PlaceGoal through its rounded-corner branch, which anchors the gate
-        // at the arc's 45-degree apex with its INNER end flush against the
-        // outer face of the inner rail (the Inner Point of Tangency), and sets
-        // the cylinder's longitudinal axis to the radial normal there
-        // (perpendicular to the arc tangent = the direction from the arc centre
-        // outward through that inner contact point). Passing the cell `center`
-        // lets PlaceGoal reconstruct the same arc centre computed here.
-        if (placeCornerTangentGoals)
-        {
-            goalCounter++;
-            PlaceGoal(parent, center, goalCounter, inDir, outDir);
-        }
-
         // Faceted arc: centreline radius r, inner r-roadHalfWidth, outer r+roadHalfWidth.
         float ri = Mathf.Max(0.1f, r - roadHalfWidth);
         float ro = r + roadHalfWidth;
@@ -847,6 +1049,37 @@ public class TrackGenerator : MonoBehaviour
         float th2 = Mathf.Atan2((T2 - arcC).x, (T2 - arcC).z) * Mathf.Rad2Deg;
         float delta = Mathf.DeltaAngle(th1, th2); // shortest signed sweep (+/-90)
         int n = Mathf.Max(2, cornerFacets);
+
+        // Goal gate(s) along the arc, evenly spaced at goalsPerCorner points
+        // between T1 and T2 (goalsPerCorner=1 -> the 45-degree apex only,
+        // identical to the old single-goal behaviour). Placed directly at
+        // each point's OWN position/tangent (rather than routing through
+        // PlaceGoal's inDir!=outDir arc-reconstruction branch, which only
+        // knows how to anchor a SINGLE apex point) so the pursuit target the
+        // car steers toward advances along the curve instead of chording
+        // straight across it from one apex point to the next corner's apex -
+        // see the 2026-07-19 "car drifts off at corners" investigation.
+        // Each gate's inDir/outDir is the arc's own tangent direction at that
+        // point (a continuous Vector2, not a grid-aligned Vector2Int) so
+        // PlaceGoal orients the gate perpendicular to the ACTUAL direction of
+        // travel there, not the corner's overall entry/exit heading.
+        if (placeCornerTangentGoals)
+        {
+            float innerEdge = (r - roadHalfWidth) + wallThickness * 0.5f;
+            float travelSign = Mathf.Sign(delta);
+            int count = Mathf.Max(1, goalsPerCorner);
+            for (int k = 1; k <= count; k++)
+            {
+                float frac = k / (float)(count + 1);
+                float thG = (th1 + delta * frac) * Mathf.Deg2Rad;
+                Vector3 unitG = new Vector3(Mathf.Sin(thG), 0f, Mathf.Cos(thG));
+                Vector3 goalPosG = arcC + unitG * (innerEdge + goalGateWidth * 0.5f);
+                Vector3 tangent = new Vector3(Mathf.Cos(thG), 0f, -Mathf.Sin(thG)) * travelSign;
+                Vector2 tangent2 = new Vector2(tangent.x, tangent.z);
+                goalCounter++;
+                PlaceGoal(parent, goalPosG, goalCounter, tangent2, tangent2);
+            }
+        }
 
         Vector3 prevC = Vector3.zero, prevI = Vector3.zero, prevO = Vector3.zero;
         for (int i = 0; i <= n; i++)

@@ -65,7 +65,23 @@ public class HudOverlay : MonoBehaviour
         string m = _viz != null ? _viz.CurrentMode : "";
         if (m == "train") return "TRAINING";
         if (m == "eval") return "EVAL";
+        if (m == "demo") return "DEMO";
         return "(mode: waiting)";
+    }
+
+    // "stage: X/N" readout (1-indexed for display) for curriculum-training
+    // jobs, e.g. stage 3 of 5. Null when no curriculum info is available
+    // (non-curriculum job, or the mode payload hasn't arrived/gone stale -
+    // see TrajectoryRolloutViz.CurrentStage/CurrentNumStages), so the HUD
+    // caller can skip the line + its panel space entirely rather than show
+    // a confusing "stage: 0/0".
+    string StageText()
+    {
+        if (_viz == null) _viz = FindObjectOfType<TrajectoryRolloutViz>();
+        int stage = _viz != null ? _viz.CurrentStage : -1;
+        int numStages = _viz != null ? _viz.CurrentNumStages : -1;
+        if (stage < 0 || numStages <= 0) return null;
+        return "stage: " + (stage + 1) + "/" + numStages;
     }
 
     void Update()
@@ -100,21 +116,28 @@ public class HudOverlay : MonoBehaviour
         float headerH = 22f;
         float contentTop = top + headerH;
 
+        // Curriculum stage line (only present for curriculum jobs) grows the
+        // panel by one row instead of always reserving the space, so the HUD
+        // stays compact on the (more common) non-curriculum jobs.
+        string stageText = StageText();
+        float stageRowH = stageText != null ? 24f : 0f;
+
         // Background panel for readability.
         Rect panel = new Rect(cx - panelWidth * 0.5f, top - 6f,
-                              panelWidth, wheelSize + 104f + headerH);
+                              panelWidth, wheelSize + 104f + headerH + stageRowH);
         Color prevC = GUI.color;
         GUI.color = new Color(0f, 0f, 0f, 0.38f);
         GUI.DrawTexture(panel, _panelTex);
         GUI.color = prevC;
 
-        // Header: client name + explicit TRAINING / EVAL mode (word + color).
+        // Header: client name + explicit TRAINING / EVAL / DEMO mode (word + color).
         string mode = ModeText();
         string header = ClientName() + "    " + mode;
         _headerStyle.normal.textColor =
             mode == "EVAL" ? new Color(1f, 0.80f, 0.40f)          // amber
             : (mode == "TRAINING" ? new Color(0.55f, 1f, 0.65f)   // green
-            : new Color(0.72f, 0.72f, 0.78f));                    // gray waiting
+            : (mode == "DEMO" ? new Color(0.55f, 0.80f, 1f)       // blue
+            : new Color(0.72f, 0.72f, 0.78f)));                   // gray waiting
         GUI.Label(new Rect(cx - panelWidth * 0.5f, top - 2f, panelWidth, 20f),
                   header, _headerStyle);
 
@@ -145,6 +168,15 @@ public class HudOverlay : MonoBehaviour
                            panelWidth, 26f),
                   "force " + (force >= 0f ? "+" : "") + force.ToString("0.00"),
                   _forceStyle);
+
+        // Curriculum stage readout, e.g. "stage: 3/5" - only drawn when a
+        // curriculum-training job has reported stage info (see StageText).
+        if (stageText != null)
+        {
+            GUI.Label(new Rect(cx - panelWidth * 0.5f, contentTop + wheelSize + 86f,
+                               panelWidth, stageRowH),
+                      stageText, _labelStyle);
+        }
     }
 
     void EnsureAssets()
