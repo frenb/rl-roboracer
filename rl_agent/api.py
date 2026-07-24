@@ -255,9 +255,11 @@ class RobotApi:
                     f'{e.details()}',
                     flush=True)
 
-    def DoResetBlocking(self, num_obstacles=20, corner_radius=10.0, curvature_difficulty=0.0):
+    def DoResetBlocking(self, num_obstacles=20, corner_radius=10.0, curvature_difficulty=0.0,
+                        chicanes_north=0, chicanes_east=0, chicanes_south=0, chicanes_west=0):
         asyncio.run_coroutine_threadsafe(
-            self.DoReset(num_obstacles, corner_radius, curvature_difficulty),
+            self.DoReset(num_obstacles, corner_radius, curvature_difficulty,
+                         chicanes_north, chicanes_east, chicanes_south, chicanes_west),
             self.loop).result()
     
     def DoApplyForceBlocking(self, acceleration=100.0, steering_angle=30.0, num_obstacles=20):
@@ -310,20 +312,27 @@ class RobotApi:
             print(f'PublishRolloutsBlocking skipped: {e}', flush=True)
     
     
-    async def DoReset(self, num_obstacles=20, corner_radius=10.0, curvature_difficulty=0.0):
+    async def DoReset(self, num_obstacles=20, corner_radius=10.0, curvature_difficulty=0.0,
+                       chicanes_north=0, chicanes_east=0, chicanes_south=0, chicanes_west=0):
         #print(673236)
         self.reset_event.clear()
         # corner_radius / curvature_difficulty drive the procedural
         # TrackGenerator on the Unity side (regenerated on RESTART). The ROS
         # ApplyForce.msg declares both as float64, and the JSON->ROS converter
         # runs with check_types=True, so they MUST be floats here (an int
-        # would raise TypeError in message_converter).
+        # would raise TypeError in message_converter). chicanes_north/east/
+        # south/west (2026-07-18) are declared int32 in ApplyForce.msg and
+        # MUST be ints here for the same check_types=True reason.
         force_angle = {
             'acceleration': 0.0,
             'steering_angle': 0.0,
             'num_obstacles': num_obstacles,
             'corner_radius': float(corner_radius),
             'curvature_difficulty': float(curvature_difficulty),
+            'chicanes_north': int(chicanes_north),
+            'chicanes_east': int(chicanes_east),
+            'chicanes_south': int(chicanes_south),
+            'chicanes_west': int(chicanes_west),
         }
         await self._do_sim_command( { 'cmd' : 0 , 'ApplyForce': force_angle} )
         try:

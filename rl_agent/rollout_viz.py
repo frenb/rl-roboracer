@@ -361,6 +361,13 @@ class RolloutViz:
         # heartbeats are rate-limited; a mode CHANGE is sent immediately.
         self._last_mode_pub = 0.0
         self._last_mode_published = None
+        self._last_stage_published = None
+        # Last EXPLICITLY-provided stage/num_stages (persists across calls
+        # that pass stage=None, e.g. the eval-cycle heartbeat - see
+        # publish_mode's docstring). -1 = no curriculum info has ever been
+        # provided by any caller.
+        self._last_known_stage = -1
+        self._last_known_num_stages = -1
         self._mode_pub_min_interval = 1.0
         if self.cfg["enabled"]:
             self._start_background()
@@ -423,7 +430,7 @@ class RolloutViz:
                   f"backing off {self._reconnect_backoff}s", flush=True)
             return None
 
-    def publish_mode(self, mode, n_actors=1, step=None):
+    def publish_mode(self, mode, n_actors=1, step=None, stage=None, num_stages=None):
         """Publish a minimal mode-only payload so the Unity HUD's
         TRAINING/EVAL indicator stays live even when the heavy rollout fan is
         disabled.
@@ -436,16 +443,42 @@ class RolloutViz:
         (e.g. once per training iteration); steady-state heartbeats are
         throttled to ~1Hz here, but a mode CHANGE is published immediately.
         Never raises - the HUD must not disturb training.
+
+        ``stage`` / ``num_stages`` (0-indexed stage, total stage count) are
+        optional curriculum-progress info for the HUD's "stage: X/N" readout
+        (see CurriculumScheduler in robotaxi.py). Pass None (the default) to
+        REUSE whichever stage/num_stages was last explicitly provided (by any
+        caller) rather than resetting to "no curriculum" - this matters
+        because the periodic in-training EVAL cycle calls this method from a
+        different function scope than the TRAIN loop's CurriculumScheduler,
+        with no stage info of its own; without this reuse, the HUD's
+        "stage: X/N" would blink away every eval cycle and reappear once
+        training resumes. Only a non-curriculum job (which never passes
+        stage/num_stages from anywhere) actually shows no stage info. Unity
+        distinguishes "no curriculum" from "stage 0" via a -1 sentinel over
+        the wire, since JSON has no first-class "absent int" and JsonUtility
+        doesn't support nullable primitives.
         """
         try:
             now = time.time()
-            changed = (mode != self._last_mode_published)
+            if stage is not None:
+                self._last_known_stage = stage
+            if num_stages is not None:
+                self._last_known_num_stages = num_stages
+            eff_stage = self._last_known_stage
+            eff_num_stages = self._last_known_num_stages
+            # A stage CHANGE must also force an immediate publish, same as a
+            # mode change - otherwise the HUD's "stage: X/N" can lag up to
+            # _mode_pub_min_interval behind an actual curriculum advance.
+            stage_changed = (eff_stage != self._last_stage_published)
+            changed = (mode != self._last_mode_published) or stage_changed
             if (not changed
                     and (now - self._last_mode_pub)
                     < self._mode_pub_min_interval):
                 return
             self._last_mode_pub = now
             self._last_mode_published = mode
+            self._last_stage_published = eff_stage
             n = max(1, int(n_actors))
             indices = (list(range(n)) if self.cfg["all_actors"]
                        else [min(self.cfg["actor_index"], n - 1)])
@@ -461,6 +494,8 @@ class RolloutViz:
                 "accel": [],
                 "steer": [],
                 "weights": [],
+                "stage": int(eff_stage),
+                "numStages": int(eff_num_stages),
             }
             for i in indices:
                 pub = self._publisher_for(i)
@@ -471,14 +506,20 @@ class RolloutViz:
         except Exception:  # noqa: BLE001 - HUD mode must never break training
             pass
 
-    def update_context(self, policy, ts_env, step=None, mode="train"):
+    def update_context(self, policy, ts_env, step=None, mode="train",
+                       stage=None, num_stages=None):
         """Hand the background thread the latest policy + FULL batched obs.
 
         Stores every actor's observation (shape (num_actors, obs_dim)); the
         thread samples + publishes one fan per actor to its own ros-server.
         `mode` ("train"/"eval") is forwarded in the payload for the Unity HUD.
-        Cheap (a small numpy copy). Called from the main thread only, so
-        there's no concurrent env access. Never raises.
+        `stage`/`num_stages` (0-indexed curriculum stage, total stage count)
+        are optional and only OVERWRITE the stored value when provided (None
+        leaves the last-known stage untouched), so eval-path callers that
+        don't track curriculum state don't reset a training job's stage
+        display to "none" every time they publish. Cheap (a small numpy
+        copy). Called from the main thread only, so there's no concurrent
+        env access. Never raises.
         """
         if not self.cfg["enabled"] or self._thread is None:
             return
@@ -494,6 +535,13 @@ class RolloutViz:
             self._policy = policy
             self._obs = obs
             self._mode = mode
+            # Shared with publish_mode's "last known" stage state (see its
+            # docstring) so the full-fan path and the mode-only heartbeat
+            # never disagree/flicker against each other.
+            if stage is not None:
+                self._last_known_stage = int(stage)
+            if num_stages is not None:
+                self._last_known_num_stages = int(num_stages)
             if step is not None:
                 self._step = int(step)
 
@@ -522,6 +570,8 @@ class RolloutViz:
                     obs = self._obs
                     step = self._step
                     mode = self._mode
+                    stage = self._last_known_stage
+                    num_stages = self._last_known_num_stages
                 if policy is not None and obs is not None:
                     n = obs.shape[0]
                     # Which actors to publish for. During eval the batch is
@@ -547,6 +597,8 @@ class RolloutViz:
                                 samples_m[j], weights_m[j], step,
                                 self.cfg["dt"], self.cfg["H"], self.cfg)
                             payload["mode"] = mode     # train/eval, for the HUD
+                            payload["stage"] = int(stage)          # curriculum stage, for the HUD
+                            payload["numStages"] = int(num_stages)  # total stages, for the HUD
                             payload["actor"] = int(i)  # actor index (HUD x-ref)
                             try:
                                 pub.publish_rollout(json.dumps(payload))

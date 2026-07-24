@@ -327,16 +327,23 @@ SCHEMA = {
             "[Curriculum] Optional list of track-difficulty stages the trainer "
             "advances through automatically based on policy performance. Each "
             "entry is a dict with keys: corner_radius (float), "
-            "curvature_difficulty (float, default 0.0), advance_goals (float, "
-            "goals/ep threshold to advance), and consecutive (int, number of "
-            "consecutive eval cycles above the threshold before advancing). "
-            "The last stage has no advance_goals (terminal). "
-            "None = fixed track (current behaviour, fully back-compat). "
-            "Example: [{\"corner_radius\": 14, \"curvature_difficulty\": 0.0, "
-            "\"advance_goals\": 20, \"consecutive\": 3}, "
-            "{\"corner_radius\": 10, \"curvature_difficulty\": 0.0, "
+            "curvature_difficulty (float, DEPRECATED - logging/back-compat "
+            "only, default 0.0), chicanes_north/chicanes_east/"
+            "chicanes_south/chicanes_west (int, absolute chicane count on "
+            "each track edge for this stage, default 0 - these are what "
+            "actually drive chicane placement as of 2026-07-18), "
+            "advance_goals (float, goals/ep threshold to advance), and "
+            "consecutive (int, number of consecutive eval cycles above the "
+            "threshold before advancing). The last stage has no "
+            "advance_goals (terminal). None = fixed track (current "
+            "behaviour, fully back-compat). "
+            "Example: [{\"corner_radius\": 14, \"advance_goals\": 20, "
+            "\"consecutive\": 3}, "
+            "{\"corner_radius\": 10, \"chicanes_south\": 1, "
             "\"advance_goals\": 40, \"consecutive\": 3}, "
-            "{\"corner_radius\": 5, \"curvature_difficulty\": 1.0}]"
+            "{\"corner_radius\": 7.5, \"chicanes_north\": 1, "
+            "\"chicanes_east\": 1, \"chicanes_south\": 2, "
+            "\"chicanes_west\": 1}]"
         ),
         "paper_ref": None,
         "kwarg": "curriculum_stages_val",
@@ -362,15 +369,68 @@ SCHEMA = {
         "default": 0.0,
         "min": 0.0, "max": 1.0,
         "doc": (
-            "[Curriculum / track geometry] Chicane density on the track's long "
-            "edges, 0..1. 0 = plain rectangle (four gentle corners); 1 = many "
-            "tight chicanes. A second difficulty axis that pairs with "
-            "corner_radius. Applied live in the simulator: forwarded on every "
+            "DEPRECATED (2026-07-18) - no longer drives chicane count, kept "
+            "for logging/back-compat only. Use chicanes_north/chicanes_east/"
+            "chicanes_south/chicanes_west instead, which set an absolute "
+            "chicane count per edge instead of a single 0..1 density applied "
+            "to one edge."
+        ),
+        "paper_ref": None,
+        "kwarg": "curvature_difficulty_val",
+    },
+    "chicanes_north": {
+        "type": "int",
+        "default": 0,
+        "min": 0, "max": 5,
+        "doc": (
+            "[Curriculum / track geometry] Number of chicane bumps on the "
+            "NORTH edge (top edge) of the procedurally-generated track, for "
+            "a FIXED (non-curriculum) job. Curriculum jobs set this per-stage "
+            "via curriculum_stages instead. Applied live: forwarded on every "
             "episode reset and used by Unity's TrackGenerator to rebuild the "
             "track."
         ),
         "paper_ref": None,
-        "kwarg": "curvature_difficulty_val",
+        "kwarg": "chicanes_north_val",
+    },
+    "chicanes_east": {
+        "type": "int",
+        "default": 0,
+        "min": 0, "max": 5,
+        "doc": (
+            "[Curriculum / track geometry] Number of chicane bumps on the "
+            "EAST edge (right edge) of the procedurally-generated track, for "
+            "a FIXED (non-curriculum) job. Curriculum jobs set this per-stage "
+            "via curriculum_stages instead."
+        ),
+        "paper_ref": None,
+        "kwarg": "chicanes_east_val",
+    },
+    "chicanes_south": {
+        "type": "int",
+        "default": 0,
+        "min": 0, "max": 5,
+        "doc": (
+            "[Curriculum / track geometry] Number of chicane bumps on the "
+            "SOUTH edge (bottom edge) of the procedurally-generated track, "
+            "for a FIXED (non-curriculum) job. Curriculum jobs set this "
+            "per-stage via curriculum_stages instead."
+        ),
+        "paper_ref": None,
+        "kwarg": "chicanes_south_val",
+    },
+    "chicanes_west": {
+        "type": "int",
+        "default": 0,
+        "min": 0, "max": 5,
+        "doc": (
+            "[Curriculum / track geometry] Number of chicane bumps on the "
+            "WEST edge (left edge) of the procedurally-generated track, for "
+            "a FIXED (non-curriculum) job. Curriculum jobs set this per-stage "
+            "via curriculum_stages instead."
+        ),
+        "paper_ref": None,
+        "kwarg": "chicanes_west_val",
     },
 }
 

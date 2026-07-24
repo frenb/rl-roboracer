@@ -138,4 +138,10 @@ class SimpleCourse (BaseCourse):
         # getattr defaults keep older envs working.
         corner_radius = getattr(self.env, "corner_radius", 10.0)
         curvature_difficulty = getattr(self.env, "curvature_difficulty", 0.0)
-        self._api.DoResetBlocking(num_obstacles, corner_radius, curvature_difficulty)
+        chicanes_north = getattr(self.env, "chicanes_north", 0)
+        chicanes_east = getattr(self.env, "chicanes_east", 0)
+        chicanes_south = getattr(self.env, "chicanes_south", 0)
+        chicanes_west = getattr(self.env, "chicanes_west", 0)
+        self._api.DoResetBlocking(
+            num_obstacles, corner_radius, curvature_difficulty,
+            chicanes_north, chicanes_east, chicanes_south, chicanes_west)

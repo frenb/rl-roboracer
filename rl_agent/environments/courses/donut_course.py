@@ -5,8 +5,22 @@ from tf_agents.trajectories import time_step as ts
 
 from .base_course import BaseCourse
 from .utils.logging import log_blob, log_reward
+from . import track_zones
 
 class DonutCourse (BaseCourse):
+    # Second (non-crash) episode-termination criterion, added 2026-07-20:
+    # cap how many goals a single episode can accumulate before it ends
+    # "successfully" (see reward_success below), instead of only ever
+    # ending via has_failed (crash/stuck/flip/too-many-steps). Without this,
+    # a well-driving policy's episodes run indefinitely (up to the
+    # has_too_many_steps step cap) and pack in 100+ goals each, which makes
+    # every episode-shaped stat (avg_steps_per_episode, goals_per_episode,
+    # DEMO curriculum's goal_budget accounting, etc.) far lumpier / less
+    # frequent than intended - bounding episode length by goal count keeps
+    # episode boundaries (and the env.reset()/course-config refresh that
+    # comes with them) happening at a steady, predictable cadence.
+    GOALS_PER_EPISODE_CAP = 30
+
     def __init__(self, api, env):
         self.env = env
         self._api = api
@@ -29,10 +43,11 @@ class DonutCourse (BaseCourse):
         self.avg_speed=0
         self.avg_speed_last_30=0
         self.max_speed_last_30=0
-        # Commanded acceleration/force (action[0], range [0.1, 2.0]) stats.
-        # Surfaced to TensorBoard so we can track whether the policy is
-        # actually pushing the throttle toward the 2.0 ceiling or hugging
-        # the 0.1 floor (the slow-driving symptom).
+        # Commanded acceleration/force (action[0], range [-1, 1] as of
+        # 2026-07-19 - was [0.1, 2.0], drive-only) stats. Surfaced to
+        # TensorBoard so we can track whether the policy is actually pushing
+        # the throttle toward the ceiling or hugging the floor (the
+        # slow-driving symptom).
         self.max_accel=0
         self.avg_accel=0
         self.avg_accel_last_30=0
@@ -59,11 +74,49 @@ class DonutCourse (BaseCourse):
         # Crash-rate and episode-length metrics (populated in update_stats)
         self.crashes_per_1k_steps=0.0
         self.avg_steps_per_episode=0.0
+        # Per-location traversal/crash counters (added 2026-07-19 to answer
+        # "how well do we do on easy corners (the 4 base loop turns) vs hard
+        # corners (chicanes) vs straightaways" - see track_zones.py for the
+        # position -> zone classifier these feed off of. Cumulative for the
+        # life of this course instance (never reset per-episode), same
+        # convention as goals_per_episode_total etc.
+        self.easy_corner_traversals=0
+        self.hard_corner_traversals=0
+        self.crashes_easy_corner=0
+        self.crashes_hard_corner=0
+        self.crashes_straight=0
+        # Authoritative crash-only counter (2026-07-20), distinct from
+        # num_episodes_total: once episodes can ALSO end via the
+        # GOALS_PER_EPISODE_CAP success path below, num_episodes_total
+        # counts BOTH crash- and goal-cap-terminated episodes, so it can no
+        # longer stand in for "number of crashes" the way
+        # crashes_per_1k_steps (see update_stats) relies on. Incremented
+        # only in reward_failure - unlike crashes_easy/hard/straight above,
+        # this is never skipped for an 'unknown' zone classification, so
+        # it's always the true total.
+        self.crashes_total=0
         # shape=(2,) == [acceleration, steering_angle]
+        # acceleration range widened 0.1..2.0 -> -1..1 (2026-07-19): the old
+        # range was drive-only (minimum 0.1 => the motor could never apply
+        # negative/reverse torque), so the ONLY way to shed speed was to
+        # coast down toward the 0.1 floor and rely on rolling
+        # friction/drag - far too weak to bleed off overshoot speed (e.g.
+        # 5.6 m/s) in the ~10m of straight remaining before a corner, which
+        # is exactly what was causing "the car drives straight into the
+        # wall" crashes right after long straights (confirmed via
+        # video+[steer-diag]/[crash-pos] cross-referencing, see
+        # scripts/analyze_video.py). Negative acceleration now maps to
+        # negative motorTorque in CarController.cs, i.e. genuine active
+        # braking (and, past zero speed, reverse) instead of coast-only.
+        #
+        # acceleration minimum -1 -> -0.01 (2026-07-22): full -1 active
+        # braking proved too strong, so the acceleration floor is pulled
+        # back to a near-coast -0.01 (barely-negative torque) while the
+        # +1 drive ceiling and the full [-1, 1] steering range are kept.
         self.action_spec = array_spec.BoundedArraySpec(
             shape=(2, ), dtype=np.float32, 
-                minimum=[0.1,-1], 
-                maximum=[2, 1], name='action')
+                minimum=[-0.01,-1], 
+                maximum=[1, 1], name='action')
         self.observation_spec = array_spec.BoundedArraySpec(
             shape=(32,), dtype=np.float32,
             minimum=[
@@ -164,6 +217,25 @@ class DonutCourse (BaseCourse):
             "is_too_slow": str(is_too_slow)})
         return has_fallen or has_flipped or is_stuck or has_crashed or has_too_many_steps # or is_too_slow
     
+    def _classify_car_zone(self, data):
+        """Best-effort track_zones.classify_zone() lookup for the car's
+        CURRENT position, using this course's live chicane configuration
+        (set per curriculum stage via env.configure - see do_reset_blocking
+        below for the same getattr pattern). Never raises - returns
+        'unknown' on any lookup failure so a stats hiccup can't break
+        reward/termination handling.
+        """
+        try:
+            car = data.get("car", {})
+            return track_zones.classify_zone(
+                car.get("location_x"), car.get("location_z"),
+                chicanes_north=getattr(self.env, "chicanes_north", 0),
+                chicanes_east=getattr(self.env, "chicanes_east", 0),
+                chicanes_south=getattr(self.env, "chicanes_south", 0),
+                chicanes_west=getattr(self.env, "chicanes_west", 0))
+        except Exception:  # noqa: BLE001 - stats must never break the env
+            return "unknown"
+
     def has_succeeded(self, data, data_arr):
         
         #print(f"has reached goal {self._api.has_reached_goal} current goal {data['car']['current_goal']}")
@@ -286,9 +358,17 @@ class DonutCourse (BaseCourse):
         return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=self.env_discount)
 
     def reward_success(self, curr_step_cost, job_id, data, data_arr, step_costs, position_history):
-        self.env._episode_ended = False
         self.steps_since_last_goal += 1
         self.steps_per_goal_arr.append(self.steps_since_last_goal)
+        # Per-location traversal counters (see _classify_car_zone) - only
+        # corners count as a "traversal" here (straightaway goal-reaches
+        # aren't the interesting signal the easy-vs-hard-corner tracking is
+        # for), so 'straight'/'unknown' zones are intentionally not tallied.
+        _zone = self._classify_car_zone(data)
+        if _zone == "easy_corner":
+            self.easy_corner_traversals += 1
+        elif _zone == "hard_corner":
+            self.hard_corner_traversals += 1
         # Compute reward AFTER incrementing steps_since_last_goal so a
         # reward design that reads it via the `course` proxy sees the
         # same value the legacy formula did (which uses the post-
@@ -297,12 +377,48 @@ class DonutCourse (BaseCourse):
         print("goal reached: " + str(reward))
         log_reward(self.env.job_id, "has succeeded", reward, extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
         self.reset_after_goal_reached()
+        # Second episode-termination criterion (2026-07-20, see
+        # GOALS_PER_EPISODE_CAP docstring): once this episode has banked
+        # enough goals, end it "successfully" here rather than only ever
+        # via has_failed. reset_after_goal_reached() above already bumped
+        # self.goals_reached, so this check sees the post-increment count.
+        if self.goals_reached >= self.GOALS_PER_EPISODE_CAP:
+            self.env._episode_ended = True
+            self.reset_after_episode()
+            # Same reasoning as reward_failure's immediate-reset block: get
+            # Unity resetting right away during TRAINING instead of sitting
+            # idle for a learner update; skip during EVAL (steps quickly,
+            # a blocking reset here just slows it down).
+            if getattr(self.env, '_immediate_reset_on_failure', True):
+                try:
+                    api = self._api
+                    timeouts_before = getattr(api, 'reset_timeouts', 0)
+                    self.do_reset_blocking()
+                    timeouts_after = getattr(api, 'reset_timeouts', 0)
+                    if timeouts_after == timeouts_before:
+                        self.env._reset_pending = True
+                except Exception as e:
+                    print(f"[donut_course] immediate reset after goal cap: {e}", flush=True)
+            return ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
+        self.env._episode_ended = False
         return ts.transition(np.array(data_arr, dtype=np.float32), reward=reward, discount=self.env_discount)
 
     def reward_failure(self, job_id, step_costs, data, data_arr, position_history):
         self.env._episode_ended = True
         reward = float(self._compute_failure_reward(data, data_arr, step_costs, position_history))
         log_reward(self.env.job_id, "has failed - reward", reward, extra_data=data, step_costs=step_costs, position_history=position_history, stat_array=data_arr)
+        # Per-location crash counters (see _classify_car_zone / track_zones.py).
+        # 'unknown' (lookup failure, e.g. missing location data) is
+        # deliberately not tallied into any bucket rather than guessed as
+        # 'straight', so these three always sum to <= total crash count.
+        _zone = self._classify_car_zone(data)
+        if _zone == "easy_corner":
+            self.crashes_easy_corner += 1
+        elif _zone == "hard_corner":
+            self.crashes_hard_corner += 1
+        elif _zone == "straight":
+            self.crashes_straight += 1
+        self.crashes_total += 1
         self.reset_after_episode()
         # Trigger Unity reset IMMEDIATELY during TRAINING so the car doesn't
         # sit dead for 10+ seconds waiting for the learner. Skip during EVAL
@@ -420,15 +536,21 @@ class DonutCourse (BaseCourse):
         # crashes_per_1k_steps: how often the car crashes per 1000 env steps.
         #   Low values during a gym wedge (gym stops responding → no episodes
         #   complete) or a very good policy. High values = frequent crashes.
-        # avg_steps_per_episode: mean steps between crashes (reciprocal of
-        #   crash rate). Longer = car survives longer per episode.
+        #   Uses crashes_total (crash-only), NOT num_episodes_total, since
+        #   2026-07-20 added a second, non-crash way for an episode to end
+        #   (GOALS_PER_EPISODE_CAP) - num_episodes_total now counts BOTH, so
+        #   it would understate the actual crash rate if used here.
+        # avg_steps_per_episode: mean steps per episode (crash- or
+        #   goal-cap-terminated alike). Longer = car survives longer per
+        #   episode before EITHER kind of ending.
         if self.steps_total > 0 and self.num_episodes_total > 0:
             self.avg_steps_per_episode = (
                 self.steps_total / self.num_episodes_total)
-            self.crashes_per_1k_steps = (
-                self.num_episodes_total / self.steps_total * 1000)
         else:
             self.avg_steps_per_episode = 0.0
+        if self.steps_total > 0:
+            self.crashes_per_1k_steps = self.crashes_total / self.steps_total * 1000
+        else:
             self.crashes_per_1k_steps = 0.0
     
     def do_reset_blocking(self):
@@ -439,4 +561,10 @@ class DonutCourse (BaseCourse):
         # difficulty on this reset. getattr defaults keep older envs working.
         corner_radius = getattr(self.env, "corner_radius", 10.0)
         curvature_difficulty = getattr(self.env, "curvature_difficulty", 0.0)
-        self._api.DoResetBlocking(num_obstacles, corner_radius, curvature_difficulty)
+        chicanes_north = getattr(self.env, "chicanes_north", 0)
+        chicanes_east = getattr(self.env, "chicanes_east", 0)
+        chicanes_south = getattr(self.env, "chicanes_south", 0)
+        chicanes_west = getattr(self.env, "chicanes_west", 0)
+        self._api.DoResetBlocking(
+            num_obstacles, corner_radius, curvature_difficulty,
+            chicanes_north, chicanes_east, chicanes_south, chicanes_west)
