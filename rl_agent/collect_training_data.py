@@ -43,10 +43,16 @@ action_size = 2
 
 class robotaxi():
     def __init__(self):
+        # Kept in sync with DonutCourse.action_spec (see
+        # environments/courses/donut_course.py). This was stale at the
+        # pre-2026-07-19 drive-only range [0.001, 2] until 2026-07-22, when
+        # it was updated to match the course's [-0.01, 1] acceleration /
+        # [-1, 1] steering range (acceleration floor -0.01 = near-coast,
+        # full -1 active braking having proved too strong).
         self._action_spec = tensor_spec.BoundedTensorSpec( #BoundedArraySpec(
             shape=(2, ), dtype=np.float32, 
-            minimum=[0.001,-1], 
-            maximum=[2, 1],
+            minimum=[-0.01,-1], 
+            maximum=[1, 1],
             name='action')
         # self._observation_spec = tensor_spec.BoundedTensorSpec( #BoundedArraySpec(
         #     shape=(32,), dtype=np.float32,
@@ -555,7 +561,15 @@ def get_save_dir_name(policy):
 client = MongoClient('mongo:27017', 
     username='root',
     password='example')
-db = client.local
+# `local` is a MongoDB-reserved, unreplicated system database (oplog etc.) -
+# writes to it fail with "retryable writes is not supported for unreplicated
+# ns: local.models" once retryable writes are enforced. robotaxi.py's own
+# MongoClient setup uses `client.robotaxi` (see its `db = client.robotaxi`);
+# this module's standalone connection was never updated to match, so any
+# DEMO/BC job that reaches add_model() here (via save_policy() at the end of
+# train_agent()) fails at that point even though the actual data
+# collection/training leading up to it succeeded.
+db = client.robotaxi
 
 def add_model(path, robot_type, model_type, training_iterations, avg_return=None, path_docker=""):
     # "_id": ObjectID(),

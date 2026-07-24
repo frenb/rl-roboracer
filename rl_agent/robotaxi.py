@@ -164,6 +164,26 @@ import sys
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
 
+def _ts():
+    """Millisecond-precision local wall-clock timestamp for log/print lines.
+
+    Added 2026-07-19 so diagnostic prints (steer-diag, crash-pos, stage
+    transitions, etc.) can be correlated after the fact against screen
+    recordings of the car driving - see scripts/analyze_video.py. NOTE: this
+    is the sim-controller CONTAINER's local clock, not necessarily the
+    recording machine's (e.g. the container runs UTC while the Windows host
+    recording the video is UTC-7) - analyze_video.py auto-detects and
+    corrects for that offset, so don't assume this timestamp is directly
+    comparable to a wall-clock time you read off the host. Plain
+    HH:MM:SS.mmm (no date) since correlation windows are always a few
+    minutes within a single session; kept out of the standard `logging`
+    formatter (which only prefixes logger.info/etc, not the many raw
+    print() diagnostics here) so this is a single opt-in call site per
+    print rather than a global format change.
+    """
+    return datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
+
 # Trainer-wide state visible to the SIGTERM emergency-pause handler.
 # Populated by main() right after the Learner is constructed; reset
 # back to {} when main() exits cleanly. The handler reads this to
@@ -521,7 +541,8 @@ def build_train_env(num_envs, course_type='donut'):
 
 def configure_env(env, job_id="", pass_through_actions=False,
                   corner_radius=10.0, curvature_difficulty=0.0,
-                  env_discount=None):
+                  chicanes_north=0, chicanes_east=0, chicanes_south=0,
+                  chicanes_west=0, env_discount=None):
     """Apply per-job config to a single env or all parallel subprocess envs.
 
     tf-agents 0.11 doesn't put a public `call()` proxy on
@@ -535,19 +556,26 @@ def configure_env(env, job_id="", pass_through_actions=False,
     ``corner_radius`` / ``curvature_difficulty`` are the procedural-track
     curriculum knobs; they're constant across a job, so every actor gets the
     same values and the shared Unity scene regenerates one consistent track.
+    ``chicanes_north/east/south/west`` (2026-07-18) are the per-edge absolute
+    chicane counts that actually drive chicane placement (curvature_difficulty
+    is kept for logging/back-compat only - see TrackGenerator.cs).
     """
     from tf_agents.environments import parallel_py_environment
     if isinstance(env, parallel_py_environment.ParallelPyEnvironment):
         promises = [
             proc_env.call('configure', job_id, pass_through_actions,
-                          corner_radius, curvature_difficulty, env_discount)
+                          corner_radius, curvature_difficulty,
+                          chicanes_north, chicanes_east, chicanes_south,
+                          chicanes_west, env_discount)
             for proc_env in env._envs
         ]
         for promise in promises:
             promise()
     else:
         env.configure(job_id, pass_through_actions,
-                      corner_radius, curvature_difficulty, env_discount)
+                      corner_radius, curvature_difficulty,
+                      chicanes_north, chicanes_east, chicanes_south,
+                      chicanes_west, env_discount)
 
 
 def set_immediate_reset_on_failure(env, enabled):
@@ -732,7 +760,12 @@ class CurriculumScheduler:
 
     Each stage dict:
         corner_radius (float):       track turn radius in metres
-        curvature_difficulty (float): chicane density [0, 1], default 0.0
+        curvature_difficulty (float): DEPRECATED chicane density [0, 1],
+                                      default 0.0 - logging/back-compat only,
+                                      no longer drives chicane count (see
+                                      chicanes_north/east/south/west below).
+        chicanes_north/east/south/west (int): absolute chicane count on
+                                      each edge for this stage, default 0.
         advance_goals (float):       goals/ep threshold to advance
         consecutive (int):           consecutive evals above threshold, default 1
 
@@ -757,10 +790,17 @@ class CurriculumScheduler:
         s = self.stages[self.stage_idx]
         cr = float(s.get('corner_radius', 10.0))
         cd = float(s.get('curvature_difficulty', 0.0))
-        configure_env(self.env, corner_radius=cr, curvature_difficulty=cd)
+        ch_n = int(s.get('chicanes_north', 0))
+        ch_e = int(s.get('chicanes_east', 0))
+        ch_s = int(s.get('chicanes_south', 0))
+        ch_w = int(s.get('chicanes_west', 0))
+        configure_env(self.env, corner_radius=cr, curvature_difficulty=cd,
+                      chicanes_north=ch_n, chicanes_east=ch_e,
+                      chicanes_south=ch_s, chicanes_west=ch_w)
         print(
             f"[curriculum] stage {self.stage_idx}/{len(self.stages)-1}: "
-            f"corner_radius={cr}, curvature_difficulty={cd} "
+            f"corner_radius={cr}, curvature_difficulty={cd}, "
+            f"chicanes(N/E/S/W)={ch_n}/{ch_e}/{ch_s}/{ch_w} "
             f"(train_step={train_step})",
             flush=True)
         try:
@@ -769,6 +809,9 @@ class CurriculumScheduler:
             tf.summary.scalar('curriculum/corner_radius', data=cr,
                               step=train_step)
             tf.summary.scalar('curriculum/curvature_difficulty', data=cd,
+                              step=train_step)
+            tf.summary.scalar('curriculum/chicanes_total',
+                              data=ch_n + ch_e + ch_s + ch_w,
                               step=train_step)
         except Exception:  # noqa: BLE001
             pass
@@ -854,6 +897,27 @@ def main(
     demo_prefill_count_val=50000,
     demo_min_keep_val=0,
     demo_sample_ratio_val=0.0,
+    # List of /tfrecords/job_<id> directories to load expert demonstrations
+    # from, all concatenated into ONE combined expert dataset before prefill
+    # + BC pretrain (see the expert_tfrecord_load phase below). None (the
+    # default) preserves the original single-hardcoded-job behavior. Added
+    # 2026-07-20 so a TRAIN job can combine multiple DEMO collection runs
+    # (e.g. the long-standing default expert set alongside a fresh,
+    # verified-clean post-bugfix collection) rather than being limited to
+    # exactly one job's data.
+    demo_record_dirs_val=None,
+    # Optional list of EXACT per-source target step counts, parallel to
+    # demo_record_dirs_val (same order/length). Overrides the default
+    # behavior of using every source's full row count proportionally
+    # (see the _source_ids comment in expert_tfrecord_load below) -
+    # instead each source is resampled to exactly its target count, with
+    # replacement (oversampling) if the source has fewer real rows than
+    # the target. Added 2026-07-21 to let e.g. a small 33,512-step
+    # post-fix demo collection be balanced 50/50 against a much larger
+    # 500,001-step default set rather than being drowned out
+    # proportionally. None (default) preserves the original
+    # proportional-to-availability behavior.
+    demo_source_counts_val=None,
     # ---- AWAC (advantage-weighted BC regularization) ----------------
     # Off by default (awac_lambda_val=0.0 -> plain SAC, bit-identical).
     # When >0 AND demo_min_keep_val>0, the actor loss gains an advantage-
@@ -932,6 +996,15 @@ def main(
     curriculum_stages_val=None,
     corner_radius_val=10.0,
     curvature_difficulty_val=0.0,
+    # Per-edge absolute chicane counts (2026-07-18), applied when there is
+    # no curriculum_stages_val (a fixed-geometry job) - the curriculum path
+    # below reads these same fields per-stage from curriculum_stages_val
+    # instead. curvature_difficulty_val above is retained for logging/
+    # back-compat only; these are what actually drive chicane placement.
+    chicanes_north_val=0,
+    chicanes_east_val=0,
+    chicanes_south_val=0,
+    chicanes_west_val=0,
     # Per-step env discount returned by the course on non-terminal steps;
     # compounds with gamma_val (effective discount = gamma * env_discount).
     # Default 0.90 preserves legacy behavior; set 1.0 (via an experiment
@@ -981,7 +1054,9 @@ def main(
     # provenance (a non-default value here = a non-default procedural track).
     print(
         f"[track-curriculum] corner_radius={corner_radius_val}, "
-        f"curvature_difficulty={curvature_difficulty_val} "
+        f"curvature_difficulty={curvature_difficulty_val}, "
+        f"chicanes(N/E/S/W)={chicanes_north_val}/{chicanes_east_val}/"
+        f"{chicanes_south_val}/{chicanes_west_val} "
         f"(applied on each Unity reset by TrackGenerator).",
         flush=True)
     # ---- Startup phase timing (measurement only) --------------------
@@ -1103,9 +1178,15 @@ def main(
                 _curriculum_stages = list(curriculum_stages_val)
             _init_cr = float(_curriculum_stages[0].get('corner_radius', corner_radius_val))
             _init_cd = float(_curriculum_stages[0].get('curvature_difficulty', curvature_difficulty_val))
+            _init_ch_n = int(_curriculum_stages[0].get('chicanes_north', chicanes_north_val))
+            _init_ch_e = int(_curriculum_stages[0].get('chicanes_east', chicanes_east_val))
+            _init_ch_s = int(_curriculum_stages[0].get('chicanes_south', chicanes_south_val))
+            _init_ch_w = int(_curriculum_stages[0].get('chicanes_west', chicanes_west_val))
             print(f"[curriculum] enabled: {len(_curriculum_stages)} stages, "
                   f"starting at corner_radius={_init_cr}, "
-                  f"curvature_difficulty={_init_cd}", flush=True)
+                  f"curvature_difficulty={_init_cd}, "
+                  f"chicanes(N/E/S/W)={_init_ch_n}/{_init_ch_e}/{_init_ch_s}/{_init_ch_w}",
+                  flush=True)
         except Exception as _e:  # noqa: BLE001
             print(f"[curriculum] failed to parse curriculum_stages_val: {_e}; "
                   f"falling back to fixed track geometry.", flush=True)
@@ -1113,12 +1194,22 @@ def main(
     if _curriculum_stages:
         _init_cr = float(_curriculum_stages[0].get('corner_radius', corner_radius_val))
         _init_cd = float(_curriculum_stages[0].get('curvature_difficulty', curvature_difficulty_val))
+        _init_ch_n = int(_curriculum_stages[0].get('chicanes_north', chicanes_north_val))
+        _init_ch_e = int(_curriculum_stages[0].get('chicanes_east', chicanes_east_val))
+        _init_ch_s = int(_curriculum_stages[0].get('chicanes_south', chicanes_south_val))
+        _init_ch_w = int(_curriculum_stages[0].get('chicanes_west', chicanes_west_val))
     else:
         _init_cr = corner_radius_val
         _init_cd = curvature_difficulty_val
+        _init_ch_n = chicanes_north_val
+        _init_ch_e = chicanes_east_val
+        _init_ch_s = chicanes_south_val
+        _init_ch_w = chicanes_west_val
     configure_env(env, job_id=job_id, pass_through_actions=False,
                   corner_radius=_init_cr,
                   curvature_difficulty=_init_cd,
+                  chicanes_north=_init_ch_n, chicanes_east=_init_ch_e,
+                  chicanes_south=_init_ch_s, chicanes_west=_init_ch_w,
                   env_discount=env_discount_val)
     print(f"pass_through_actions: False")
     print(f"env_discount={env_discount_val} (effective gamma*env_discount "
@@ -1218,11 +1309,162 @@ def main(
                 tanh_normal_projection_network.TanhNormalProjectionNetwork))
 
     _phase("expert_tfrecord_load (500k records)")
-    record_dir = '/tfrecords/job_64168c1b58d4d8ccdb76e721'
-    # 1. You already loaded the expert demos into memory as a Trajectory object
-    # (Renaming the variable from 'files' to 'expert_trajectories' for clarity)
-    expert_trajectories = collect_training_data.read_files_from_directory(record_dir)
+    # demo_record_dirs_val lets a job combine MULTIPLE DEMO collections into
+    # one expert dataset (see the kwarg's docstring above); None falls back
+    # to the single long-standing default job's directory, unchanged from
+    # the original hardcoded behavior.
+    record_dirs = demo_record_dirs_val or ['/tfrecords/job_64168c1b58d4d8ccdb76e721']
+    # 1. Load each directory's demos separately, then concatenate into ONE
+    # Trajectory object. Only `observation`/`action` actually vary by
+    # source - `step_type`/`next_step_type`/`reward`/`discount` are the
+    # same synthetic length-1 constants read_files_from_directory always
+    # produces (see collect_training_data.convert_tfrecord_to_trajectory),
+    # so it's safe to keep just one copy of those and stretch later via
+    # match_length below.
+    # Acceleration-floor for expert demos: drop every transition whose
+    # commanded acceleration (action[:, 0] - the force channel, see
+    # collect_expert_demos' `np.array([action_apply_force,
+    # action_steering_angle])`) is below the current action_spec minimum.
+    # Added 2026-07-22 alongside pulling the acceleration floor from -1.0
+    # to -0.01: the TrackGen demo collection (job 6a5ec0d1...) was recorded
+    # while min_force was -1.0, so it contains hard active-braking
+    # transitions down to -1.0 that are now OUTSIDE the policy's action
+    # range - feeding them into prefill/BC would train the actor toward
+    # targets it can no longer emit. The long-standing default w-course set
+    # was collected drive-only (>= 0.001), so this drops 0 rows there; the
+    # per-source "dropped N" log below makes which source was affected
+    # explicit. Keep in sync with DonutCourse.action_spec's minimum[0].
+    _DEMO_MIN_ACCEL = -0.01
+    _per_dir_trajectories = []
+    _per_dir_counts = []
+    for _record_dir in record_dirs:
+        _traj = collect_training_data.read_files_from_directory(_record_dir)
+        _n_loaded = int(tf.shape(_traj.observation)[0])
+        # .numpy() so the boolean mask below works whether
+        # read_files_from_directory handed back tf.Tensors or numpy arrays
+        # (same reason the resampling block downstream does this).
+        _obs_np = (_traj.observation.numpy()
+                   if hasattr(_traj.observation, "numpy")
+                   else _traj.observation)
+        _act_np = (_traj.action.numpy()
+                   if hasattr(_traj.action, "numpy")
+                   else _traj.action)
+        _keep_mask = _act_np[:, 0] >= _DEMO_MIN_ACCEL
+        _n_steps = int(_keep_mask.sum())
+        _n_dropped = _n_loaded - _n_steps
+        if _n_dropped > 0:
+            # Only reconstruct (and only touch observation/action) when we
+            # actually drop rows. step_type/next_step_type/reward/discount
+            # are the synthetic length-constants read_files_from_directory
+            # produces and are stretched to length downstream via
+            # match_length - NOT per-row arrays - so they're passed through
+            # unchanged, exactly like the resampling block below does.
+            _traj = trajectory.Trajectory(
+                step_type=_traj.step_type,
+                observation=_obs_np[_keep_mask],
+                action=_act_np[_keep_mask],
+                policy_info=(),
+                next_step_type=_traj.next_step_type,
+                reward=_traj.reward,
+                discount=_traj.discount,
+            )
+        print(f"Loaded {_n_steps} expert steps from {_record_dir} "
+              f"(dropped {_n_dropped} of {_n_loaded} with acceleration < "
+              f"{_DEMO_MIN_ACCEL})", flush=True)
+        _per_dir_trajectories.append(_traj)
+        _per_dir_counts.append(_n_steps)
+
+    # Optional balanced/oversampled per-source resampling (2026-07-21): see
+    # demo_source_counts_val's docstring above. Runs BEFORE concatenation so
+    # every source is independently resampled to its own EXACT target count
+    # (fixed seed per-source index for reproducibility) - sources with fewer
+    # real rows than their target are oversampled WITH replacement, sources
+    # with more are subsampled WITHOUT replacement. Everything downstream
+    # (concatenation, _source_ids, the full shuffle, the prefill loop's
+    # demo_prefill_count cap) is unchanged and just sees the resampled
+    # per-dir trajectories/counts as if that's how many rows always existed.
+    if demo_source_counts_val:
+        if len(demo_source_counts_val) != len(record_dirs):
+            raise ValueError(
+                f"demo_source_counts_val has {len(demo_source_counts_val)} "
+                f"entries but there are {len(record_dirs)} record_dirs: "
+                f"{record_dirs}")
+        _resample_rng = np.random.RandomState(42)
+        for _i, _target_n in enumerate(demo_source_counts_val):
+            _avail_n = _per_dir_counts[_i]
+            _target_n = int(_target_n)
+            _with_replacement = _target_n > _avail_n
+            if _with_replacement:
+                print(
+                    f"Oversampling {record_dirs[_i]}: {_avail_n} real steps "
+                    f"-> {_target_n} target (WITH replacement, "
+                    f"{_target_n / _avail_n:.2f}x)", flush=True)
+            else:
+                print(
+                    f"Subsampling {record_dirs[_i]}: {_avail_n} real steps "
+                    f"-> {_target_n} target (without replacement)",
+                    flush=True)
+            _idx = _resample_rng.choice(
+                _avail_n, size=_target_n, replace=_with_replacement)
+            _src_traj = _per_dir_trajectories[_i]
+            # trajectory.first() (inside read_files_from_directory) converts
+            # the numpy observation/action arrays into tf.Tensors, which do
+            # NOT support numpy-style fancy indexing with an arbitrary int
+            # array via `[...]` (only slices/scalars) - must go through
+            # .numpy() first (no-op if already a numpy array) so the
+            # fancy-index gather below works regardless of which type
+            # read_files_from_directory happened to hand back.
+            _obs_np = (_src_traj.observation.numpy()
+                       if hasattr(_src_traj.observation, "numpy")
+                       else _src_traj.observation)
+            _act_np = (_src_traj.action.numpy()
+                       if hasattr(_src_traj.action, "numpy")
+                       else _src_traj.action)
+            _per_dir_trajectories[_i] = trajectory.Trajectory(
+                step_type=_src_traj.step_type,
+                observation=_obs_np[_idx],
+                action=_act_np[_idx],
+                policy_info=(),
+                next_step_type=_src_traj.next_step_type,
+                reward=_src_traj.reward,
+                discount=_src_traj.discount,
+            )
+            _per_dir_counts[_i] = _target_n
+
+    expert_trajectories = trajectory.Trajectory(
+        step_type=_per_dir_trajectories[0].step_type,
+        observation=np.concatenate(
+            [t.observation for t in _per_dir_trajectories], axis=0),
+        action=np.concatenate(
+            [t.action for t in _per_dir_trajectories], axis=0),
+        policy_info=(),
+        next_step_type=_per_dir_trajectories[0].next_step_type,
+        reward=_per_dir_trajectories[0].reward,
+        discount=_per_dir_trajectories[0].discount,
+    )
+    print(f"Combined {len(record_dirs)} demo source(s) into "
+          f"{expert_trajectories.observation.shape[0]} total expert steps: "
+          f"{record_dirs}", flush=True)
     print(f"Loaded trajectories shape: {expert_trajectories.step_type.shape}")
+    # Per-row source attribution (2026-07-21): remembers which record_dir
+    # each concatenated row came from, so downstream consumers - chiefly the
+    # demo_prefill loop below - can report a verifiable per-source
+    # breakdown of what actually ended up in Reverb, not just what was
+    # loaded into memory. THE BUG THIS FIXES: demo_prefill_count (e.g.
+    # 50000) is almost always far smaller than the first source's row
+    # count (e.g. 500001), and trajectory_dataset was previously consumed
+    # in raw concatenation order with NO shuffle - so with 2+ sources
+    # concatenated one-after-another, the prefill loop's `break` after
+    # demo_prefill_count items would exhaust its budget entirely within
+    # source #1 and NEVER reach source #2's rows at all. The combined
+    # "loaded" log above was accurate, but the ACTUAL Reverb demo table
+    # silently contained 100% source #1 / 0% every other source. Shuffling
+    # below (with source ids carried alongside) fixes this by making the
+    # first demo_prefill_count items an unbiased random draw across ALL
+    # sources instead of a prefix of source #1.
+    _source_ids = np.concatenate([
+        np.full(_n, _i, dtype=np.int32)
+        for _i, _n in enumerate(_per_dir_counts)])
 
     # 2. Find our target length (e.g., 500001) based on the observation tensor
     num_steps = tf.shape(expert_trajectories.observation)[0]
@@ -1245,6 +1487,31 @@ def main(
 
     # 4. Now slice the perfectly aligned trajectories!
     trajectory_dataset = tf.data.Dataset.from_tensor_slices(aligned_trajectories)
+
+    # Zip in the per-row source id and shuffle BOTH together (same
+    # permutation applied to each, since zip keeps them aligned element-
+    # for-element) - see the _source_ids comment above for why this must
+    # happen before anything takes only a prefix of this dataset.
+    # buffer_size = the full row count so this is a true full-dataset
+    # shuffle, not a sliding-window approximation - the underlying arrays
+    # are already fully materialized in memory (they came from
+    # np.concatenate above), so this costs no extra I/O, just an
+    # index permutation. Fixed seed => reproducible prefill/BC-pretrain
+    # composition across runs of the same job for easier debugging.
+    # reshuffle_each_iteration=False so multiple full passes (e.g. BC
+    # pretrain's many epochs over this same dataset) see a STABLE order
+    # rather than re-shuffling every epoch, matching this dataset's
+    # original (unshuffled-but-fixed-order) semantics as closely as
+    # possible while still fixing the source-starvation bug.
+    _dataset_with_source = tf.data.Dataset.zip((
+        trajectory_dataset, tf.data.Dataset.from_tensor_slices(_source_ids)
+    )).shuffle(buffer_size=int(num_steps), seed=42, reshuffle_each_iteration=False)
+    # Downstream consumers that only want the Trajectory (BC pretrain, the
+    # AWAC demo iterator, etc.) get a plain projection that preserves the
+    # SAME shuffled order - so every consumer of `trajectory_dataset` from
+    # this point on is implicitly drawing from the same shuffled pool the
+    # prefill loop below verifies against.
+    trajectory_dataset = _dataset_with_source.map(lambda traj, _sid: traj)
 
     # 5. Add a batch dimension of 1 for Reverb
     #batched_parsed_dataset = trajectory_dataset.batch(1)
@@ -1325,6 +1592,21 @@ def main(
     # without searching for a random temp path. The directory is created
     # by make_local_replay when checkpointing_dir is set.
     _reverb_ckpt_dir = os.path.join(learner_dir, "reverb_checkpoint")
+    # Periodic (not just on-pause) Reverb online-table checkpoint cadence.
+    # Added 2026-07-22: previously the ONLY time the online replay buffer
+    # was snapshotted was a graceful dashboard pause (see the
+    # _lifecycle == 'pause' branch below); any ungraceful crash (a worker-
+    # subprocess segfault, OOM-kill, host reboot) lost the entire online
+    # buffer even though the Learner's own checkpoint_interval=100 kept
+    # the network weights/train_step safe - discovered when job
+    # 6a601d44a8350bdc89d19a60 crashed at train_step=177057 and resumed
+    # with weights intact but buffer_size back near 0. 1000 matches
+    # StepPerSecondLogTrigger's cadence and is cheap relative to a
+    # 250k-step job; REVERB_PERIODIC_CHECKPOINT_KEEP bounds disk usage
+    # since Reverb's checkpointer never prunes on its own (see
+    # _prune_reverb_checkpoints).
+    REVERB_PERIODIC_CHECKPOINT_INTERVAL = 1000
+    REVERB_PERIODIC_CHECKPOINT_KEEP = 2
     (reverb_server, reverb_replay, dataset,
      rb_observer, expert_observer,
      demo_replay, demo_observer) = make_local_replay(
@@ -1440,16 +1722,32 @@ def main(
     else:
         print(f"Loading expert demonstrations into Reverb -> {prefill_label} (cap={demo_prefill_count})...")
         items_added = 0
+        # Tallies which record_dir (source) each PREFILLED row actually
+        # came from - the verifiable, ground-truth answer to "does the
+        # replay buffer really contain both sources", as opposed to just
+        # trusting the "Combined N demo source(s)..." load-time log above
+        # (which only proves the sources were concatenated in memory, not
+        # that any given one survived the demo_prefill_count cutoff - see
+        # the _source_ids comment above for the bug this closed).
+        _prefill_source_counts = {i: 0 for i in range(len(record_dirs))}
         if demo_prefill_count > 0:
-            for unbatched_traj in trajectory_dataset:
+            for unbatched_traj, _source_id in _dataset_with_source:
                 prefill_target(unbatched_traj)
                 items_added += 1
+                _prefill_source_counts[int(_source_id.numpy())] += 1
                 if items_added >= demo_prefill_count:
                     break
                 if items_added % 10000 == 0:
                     print(f"Batch trajectory {items_added} added")
 
         print(f"Successfully loaded {items_added} expert steps into Reverb ({prefill_label}).")
+        if items_added > 0:
+            _breakdown = ", ".join(
+                f"{record_dirs[_i]}={_prefill_source_counts[_i]} "
+                f"({100.0 * _prefill_source_counts[_i] / items_added:.1f}%)"
+                for _i in range(len(record_dirs)))
+            print(f"Prefill source breakdown ({prefill_label}): {_breakdown}",
+                  flush=True)
 
     print_replay_buffer_size(reverb_replay,table_name,replay_buffer_capacity)
     # If we're in two-table mode, also log the demo table's size so
@@ -1505,10 +1803,31 @@ def main(
     # ---- Reverb table restore (resume path) --------------------------------
     # On a clean pause the trainer calls reverb_server.localhost_client()
     # .checkpoint() which writes the full online table to _reverb_ckpt_dir.
-    # On resume, if that checkpoint exists, restore it so the online buffer
-    # picks up exactly where it left off rather than restarting empty.
-    # This eliminates the demo-heavy distributional shift that would otherwise
-    # affect the first ~5k training steps after every pause.
+    #
+    # IMPORTANT (fixed 2026-07-22): the actual restore-from-disk already
+    # happened (or didn't) automatically back at make_local_replay()'s
+    # ``reverb.Server(tables, checkpointer=DefaultCheckpointer(path=
+    # _reverb_ckpt_dir))`` call, several dozen lines above this point.
+    # reverb's DefaultCheckpointer loads the latest valid checkpoint found
+    # under its ``path`` at SERVER CONSTRUCTION time - there is no separate
+    # "restore into an already-running server" step, and none is possible:
+    # reverb.Client's actual methods are just checkpoint/insert/
+    # mutate_priorities/reset/sample/server_address/server_info/
+    # trajectory_writer/writer - `checkpoint()` is write-only, nothing
+    # named set_checkpoint or similar exists to trigger a read. (Verified
+    # empirically: constructing two Reverb servers back-to-back against the
+    # same checkpoint dir, the second one's table already contains the
+    # first's data immediately after construction, no extra call needed.)
+    #
+    # The previous version of this block called
+    # ``reverb_server.localhost_client().set_checkpoint(_latest)``, which
+    # always raised ``AttributeError: 'Client' object has no attribute
+    # 'set_checkpoint'`` - meaning every resume, graceful pause or crash,
+    # silently landed in the except branch and fell back to
+    # initial_collect, since the day this restore feature was first added.
+    # The block below is therefore pure DETECTION + LOGGING of whatever the
+    # server already did at construction, using current_size as the only
+    # reliable signal, rather than an action that triggers restoration.
     _reverb_restored = False
     if is_resume_val:
         try:
@@ -1517,18 +1836,28 @@ def main(
                 if os.path.isdir(os.path.join(_reverb_ckpt_dir, f))
             ] if os.path.isdir(_reverb_ckpt_dir) else []
             if _ckpt_entries:
-                # Restore the latest checkpoint (alphabetically last = newest).
-                _latest = os.path.join(
-                    _reverb_ckpt_dir, sorted(_ckpt_entries)[-1])
-                reverb_server.localhost_client().set_checkpoint(_latest)
-                # Read current online table size after restore.
                 _restored_size = reverb_replay.py_client.server_info()[
                     'uniform_table'].current_size
-                print(
-                    f"main: RESUME - Reverb online table restored from "
-                    f"{_latest} ({_restored_size} items).",
-                    flush=True)
-                _reverb_restored = True
+                if _restored_size > 0:
+                    print(
+                        f"main: RESUME - Reverb online table auto-restored "
+                        f"at server construction from "
+                        f"{sorted(_ckpt_entries)[-1]} "
+                        f"({_restored_size} items).",
+                        flush=True)
+                    _reverb_restored = True
+                else:
+                    # Checkpoint entries exist on disk but current_size is 0
+                    # - the auto-restore-at-construction above didn't pick
+                    # them up (e.g. a table config/schema mismatch between
+                    # write time and this run). Report this explicitly
+                    # rather than claiming success with an empty buffer.
+                    print(
+                        f"main: RESUME - Reverb checkpoint entries exist in "
+                        f"{_reverb_ckpt_dir} but the online table is empty "
+                        f"after server construction (auto-restore didn't "
+                        f"take); falling back to initial_collect.",
+                        flush=True)
             else:
                 print(
                     "main: RESUME - no Reverb checkpoint found in "
@@ -1536,7 +1865,7 @@ def main(
                     flush=True)
         except Exception as _e:  # noqa: BLE001
             print(
-                f"main: RESUME - Reverb restore failed ({_e}); "
+                f"main: RESUME - Reverb restore check failed ({_e}); "
                 "falling back to initial_collect.",
                 flush=True)
 
@@ -2054,7 +2383,12 @@ def main(
         # Keep the Unity HUD's TRAINING indicator live regardless of the fan:
         # publish_mode is independent of ROLLOUT_VIZ_ENABLED and does no TF
         # inference, so the HUD shows "TRAINING" even when the fan is off.
-        rollout_viz.publish_mode("train", num_envs, step)
+        # Also forward the current curriculum stage (None for non-curriculum
+        # jobs) so the HUD can show "stage: X/N".
+        rollout_viz.publish_mode(
+            "train", num_envs, step,
+            stage=_curriculum.stage_idx if _curriculum is not None else None,
+            num_stages=len(_curriculum.stages) if _curriculum is not None else None)
 
         # Buffer-size readout via Reverb's server_info gRPC (same query
         # print_replay_buffer_size used to do). One round-trip per
@@ -2074,7 +2408,27 @@ def main(
               f"loss={loss_value:.4f} "
               f"buffer_size={buffer_size}/{replay_buffer_capacity}",
               flush=True)
-        
+
+        # Periodic Reverb online-table checkpoint - see
+        # REVERB_PERIODIC_CHECKPOINT_INTERVAL's docstring above for why
+        # this exists alongside (not instead of) the on-pause checkpoint
+        # in the _lifecycle == 'pause' branch. Non-fatal on failure: a
+        # missed periodic snapshot just means a future resume falls back
+        # to initial_collect, exactly like before this was added.
+        if step > 0 and step % REVERB_PERIODIC_CHECKPOINT_INTERVAL == 0:
+            try:
+                _rv_path = reverb_server.localhost_client().checkpoint()
+                print(
+                    f"main: periodic Reverb online-table checkpoint "
+                    f"written to {_rv_path} (train_step={step})",
+                    flush=True)
+                _prune_reverb_checkpoints(
+                    _reverb_ckpt_dir, keep=REVERB_PERIODIC_CHECKPOINT_KEEP)
+            except Exception as _rv_periodic_e:  # noqa: BLE001
+                print(
+                    f"main: periodic Reverb checkpoint failed "
+                    f"(non-fatal): {_rv_periodic_e}", flush=True)
+
         # Time-budgeted eval gate (see pre-loop setup): once an initial eval
         # duration is known, eval only after train_time_since_eval reaches
         # _eval_train_ratio x that duration (keeps eval ~eval_time_fraction of
@@ -2124,10 +2478,19 @@ def main(
                 tf.summary.scalar(name, data=value, step=step)
             # Curriculum update: check whether the agent has met the
             # advancement threshold and step to the next stage if so.
+            # Gate on the ROLLING last-30-episode mean (2026-07-22), NOT
+            # the lifetime-cumulative avg_goals_per_episode: the cumulative
+            # value is permanently dragged down by every early exploration/
+            # crash episode, so a policy that has recently become competent
+            # stays blocked forever. _last_30 reflects current competence
+            # and rises/falls with the policy, which is what an advancement
+            # gate wants. Falls back to the cumulative key if the last-30
+            # metric is somehow absent, then 0.0.
             if _curriculum is not None:
-                _curriculum.update(
-                    course_metrics.get('avg_goals_per_episode', 0.0),
-                    train_step=step)
+                _advance_metric = course_metrics.get(
+                    'avg_goals_per_episode_last_30',
+                    course_metrics.get('avg_goals_per_episode', 0.0))
+                _curriculum.update(_advance_metric, train_step=step)
             # Cumulative asyncio.TimeoutError counts per category,
             # summed across actors. Each value is monotonically non-
             # decreasing across the training run, so the TensorBoard
@@ -2682,7 +3045,9 @@ def load_saved_model(policy_type, version=None, path=None, job_id="",
                      num_trials=None, num_eval_episodes=None,
                      max_steps_per_episode=None,
                      max_goals_per_episode=None,
-                     corner_radius=10.0, curvature_difficulty=0.0):
+                     corner_radius=10.0, curvature_difficulty=0.0,
+                     chicanes_north=0, chicanes_east=0,
+                     chicanes_south=0, chicanes_west=0):
     """Build an env, load the policy at ``path`` (or by version), run an
     EVAL through it, persist the resulting per-trial means to MongoDB.
 
@@ -2706,8 +3071,12 @@ def load_saved_model(policy_type, version=None, path=None, job_id="",
       corner_radius: procedural-track corner tightness forwarded to
         Unity's TrackGenerator on every episode reset (matches the
         same-named TRAIN kwarg so eval geometry equals training geometry).
-      curvature_difficulty: 0..1 chicane density forwarded to
-        Unity's TrackGenerator on every episode reset.
+      curvature_difficulty: DEPRECATED, logging/back-compat only - see
+        chicanes_north/east/south/west below.
+      chicanes_north/east/south/west: per-edge absolute chicane counts
+        forwarded to Unity's TrackGenerator on every episode reset (matches
+        the same-named TRAIN kwargs so eval geometry equals training
+        geometry).
     """
     env = make_env('ros-server-0:50051')
     env.job_id = job_id
@@ -2717,7 +3086,9 @@ def load_saved_model(policy_type, version=None, path=None, job_id="",
     # the job doc (or the Unity Inspector) specifies.
     configure_env(env, job_id=job_id, pass_through_actions=False,
                   corner_radius=corner_radius,
-                  curvature_difficulty=curvature_difficulty)
+                  curvature_difficulty=curvature_difficulty,
+                  chicanes_north=chicanes_north, chicanes_east=chicanes_east,
+                  chicanes_south=chicanes_south, chicanes_west=chicanes_west)
     # Publish the current env's specs to MongoDB so the Models-tab
     # "Compat" column has up-to-date data for every robot_type the
     # sim-controller has touched. Cheap (one Mongo upsert), runs
@@ -3443,12 +3814,190 @@ def do_job(job, num_envs=1):
     _signal_gym_switch(job)
 
     if job_type == "DEMO":
-        num_iterations=job["num_iterations"] if job["num_iterations"] != "" else 50000
-        print(job)
+        # Robust against every shape the New-job form (or a hand-written
+        # queue script) can send: field omitted entirely (KeyError on plain
+        # dict indexing), empty string, explicit 0/None - all fall back to
+        # the same defaults do_job has always advertised for DEMO jobs.
+        def _demo_int_field(name, default):
+            v = job.get(name)
+            if v is None or v == "":
+                return default
+            try:
+                v = int(v)
+            except (TypeError, ValueError):
+                return default
+            return v if v > 0 else default
+        num_iterations = _demo_int_field("num_iterations", 50000)
+        demo_training_steps = _demo_int_field("training_steps", 20000)
+        # Optional job-level override to skip straight to a later curriculum
+        # stage instead of always starting collection at stage 0 - added
+        # 2026-07-19 to let a cloned validation job re-test just the stage
+        # that was crashing (e.g. stage 1, the first one with a chicane)
+        # without re-collecting the easy stage(s) before it every time.
+        # Default 0 preserves the original "always start at stage 0" behavior.
+        demo_start_stage = _demo_int_field("demo_start_stage", 0)
+        # Number of Unity gym instances to collect from IN PARALLEL (added
+        # 2026-07-21). Each gym runs its own independent
+        # collect_expert_demos() loop (own env, own course/goal state, own
+        # sub-batch tfrecord files - see gym_index param) on a background
+        # thread; do_job blocks until every gym finishes the current
+        # stage/geometry before moving on. Threads (not processes) are fine
+        # here: almost all of collect_expert_demos' per-step time is spent
+        # blocked on gRPC calls to Unity, which release the GIL, so N
+        # threads collecting concurrently scale close to linearly despite
+        # the GIL. Default 1 preserves the original single-gym behavior for
+        # every job that doesn't opt in.
+        demo_num_gyms = max(1, _demo_int_field("demo_num_gyms", 1))
         env = make_env('ros-server-0:50051')
-        collect_expert_demos(env, num_iterations, job["_id"])
+        _demo_envs = [env] + [
+            make_env(f'ros-server-{_i}:50051', actor_index=_i)
+            for _i in range(1, demo_num_gyms)]
+        if demo_num_gyms > 1:
+            print(f"do_job: DEMO collecting across {demo_num_gyms} parallel "
+                  f"Unity gyms (ros-server-0..{demo_num_gyms - 1})",
+                  flush=True)
+
+        def _collect_on_all_gyms(num_episodes, batch_number, stage=None,
+                                  num_stages=None, goal_budget=None):
+            """Run collect_expert_demos on every gym env concurrently.
+
+            Each gym independently targets the FULL goal_budget/num_episodes
+            (not a split share), so demo_num_gyms>1 multiplies total demo
+            volume collected per stage in roughly the SAME wall-clock time
+            as a single gym, rather than trading volume for speed.
+            """
+            if len(_demo_envs) == 1:
+                collect_expert_demos(
+                    _demo_envs[0], num_episodes, job["_id"],
+                    batch_number=batch_number, stage=stage,
+                    num_stages=num_stages, goal_budget=goal_budget,
+                    gym_index=0)
+                return
+            _threads = [
+                threading.Thread(
+                    target=collect_expert_demos,
+                    args=(_gym_env, num_episodes, job["_id"]),
+                    kwargs=dict(
+                        batch_number=batch_number, stage=stage,
+                        num_stages=num_stages, goal_budget=goal_budget,
+                        gym_index=_gi),
+                    name=f"demo-gym-{_gi}",
+                    daemon=True)
+                for _gi, _gym_env in enumerate(_demo_envs)]
+            for _t in _threads:
+                _t.start()
+            for _t in _threads:
+                _t.join()
+
+        # Optional curriculum-spread collection: if the job references an
+        # experiment_design with curriculum_stages (the same field TRAIN jobs
+        # use), split num_iterations evenly across every stage and reconfigure
+        # the env's corner_radius/curvature_difficulty between chunks, instead
+        # of collecting entirely on RobotaxiEnv's fixed default geometry. This
+        # gives the demo buffer real examples at every difficulty level a
+        # curriculum TRAIN job will traverse, rather than only the easiest one.
+        _demo_curriculum_stages = None
+        _demo_ed_id_raw = job.get("experiment_design_id")
+        if _demo_ed_id_raw:
+            from bson import ObjectId
+            _demo_ed_doc = None
+            try:
+                _demo_ed_doc = db.experiment_designs.find_one(
+                    {"_id": ObjectId(str(_demo_ed_id_raw))})
+            except Exception:
+                _demo_ed_doc = None
+            if _demo_ed_doc is None:
+                _demo_ed_doc = db.experiment_designs.find_one(
+                    {"_id": str(_demo_ed_id_raw)})
+            if _demo_ed_doc and _demo_ed_doc.get("curriculum_stages"):
+                _demo_curriculum_stages = _demo_ed_doc["curriculum_stages"]
+
+        if _demo_curriculum_stages:
+            n_stages = len(_demo_curriculum_stages)
+            _start_stage = min(max(demo_start_stage, 0), n_stages - 1)
+            _stages_to_run = n_stages - _start_stage
+            # Budget is GOALS REACHED per stage, not raw episode count
+            # (changed 2026-07-20 - see collect_expert_demos' goal_budget
+            # docstring). A fixed episode count made per-stage wall-clock
+            # time wildly unpredictable once episode length became
+            # policy-dependent: a well-driving car can now survive
+            # thousands of steps/episode instead of crashing quickly, so
+            # "12,500 episodes" that used to take a few hours could take
+            # months at the new, much healthier episode-survival rate.
+            # Goals reached is a direct measure of how much useful demo
+            # data was actually collected, independent of how long each
+            # episode happens to last.
+            #
+            # Fixed per-stage goal target (2026-07-20, same day): was
+            # `num_iterations // _stages_to_run` (e.g. 12,500/stage from a
+            # 50,000 total) - at the observed ~800-850 goals/hour collection
+            # rate that meant ~14.5 hours per stage, far longer than
+            # intended. Replaced with a flat GOALS_PER_STAGE constant so
+            # stage transitions happen at a predictable, short cadence
+            # (~100 goals / ~800/hr =~ 7-8 minutes/stage) regardless of
+            # num_iterations, which no longer has any effect on DEMO
+            # curriculum timing.
+            GOALS_PER_STAGE = 100
+            # Episode-count safety cap so a policy that can't reach goals
+            # at all (or only very rarely) can't collect forever - see
+            # collect_expert_demos' goal_budget docstring. Generous: at
+            # even a very poor ~50 steps/episode this still allows 5M+
+            # steps before the cap alone would stop a stage.
+            _episode_safety_cap = 100000
+            print(
+                f"do_job: DEMO collecting across {n_stages} curriculum "
+                f"stages from experiment design {_demo_ed_id_raw!r} "
+                f"({GOALS_PER_STAGE} goals/stage, "
+                f"starting at stage {_start_stage}/{n_stages - 1})",
+                flush=True)
+            for _stage_idx, _stage in enumerate(_demo_curriculum_stages):
+                if _stage_idx < _start_stage:
+                    continue
+                _cr = float(_stage.get("corner_radius", 10.0))
+                _cd = float(_stage.get("curvature_difficulty", 0.0))
+                _ch_n = int(_stage.get("chicanes_north", 0))
+                _ch_e = int(_stage.get("chicanes_east", 0))
+                _ch_s = int(_stage.get("chicanes_south", 0))
+                _ch_w = int(_stage.get("chicanes_west", 0))
+                _n_goals = GOALS_PER_STAGE
+                for _gym_env in _demo_envs:
+                    configure_env(_gym_env, corner_radius=_cr, curvature_difficulty=_cd,
+                                 chicanes_north=_ch_n, chicanes_east=_ch_e,
+                                 chicanes_south=_ch_s, chicanes_west=_ch_w)
+                print(
+                    f"[demo-curriculum] t={_ts()} stage {_stage_idx}/{n_stages - 1}: "
+                    f"corner_radius={_cr}, curvature_difficulty={_cd}, "
+                    f"chicanes(N/E/S/W)={_ch_n}/{_ch_e}/{_ch_s}/{_ch_w}, "
+                    f"goal_budget={_n_goals}/gym x {demo_num_gyms} gym(s)", flush=True)
+                _collect_on_all_gyms(
+                    _episode_safety_cap, batch_number=_stage_idx,
+                    stage=_stage_idx, num_stages=n_stages, goal_budget=_n_goals)
+        else:
+            # No curriculum on the referenced experiment design (or none
+            # referenced at all) - fall back to a single fixed geometry from
+            # the job's own corner_radius_val/curvature_difficulty_val
+            # fields (the New-job form's "Corner radius"/"Curvature
+            # difficulty" inputs), defaulting to RobotaxiEnv's own defaults
+            # (10.0 / 0.0) if the job doesn't set them either.
+            _demo_cr = float(job.get("corner_radius_val") or 10.0)
+            _demo_cd = float(job.get("curvature_difficulty_val") or 0.0)
+            _demo_ch_n = int(job.get("chicanes_north_val") or 0)
+            _demo_ch_e = int(job.get("chicanes_east_val") or 0)
+            _demo_ch_s = int(job.get("chicanes_south_val") or 0)
+            _demo_ch_w = int(job.get("chicanes_west_val") or 0)
+            for _gym_env in _demo_envs:
+                configure_env(_gym_env, corner_radius=_demo_cr, curvature_difficulty=_demo_cd,
+                             chicanes_north=_demo_ch_n, chicanes_east=_demo_ch_e,
+                             chicanes_south=_demo_ch_s, chicanes_west=_demo_ch_w)
+            print(
+                f"do_job: DEMO collecting on fixed geometry "
+                f"corner_radius={_demo_cr}, curvature_difficulty={_demo_cd}, "
+                f"chicanes(N/E/S/W)={_demo_ch_n}/{_demo_ch_e}/{_demo_ch_s}/{_demo_ch_w} "
+                f"({num_iterations} episodes/gym x {demo_num_gyms} gym(s))", flush=True)
+            _collect_on_all_gyms(num_iterations, batch_number=0)
+
         root_dir = "/tfrecords/job_" + str(job["_id"])
-        collect_training_data.train_agent(root_dir, int(job["training_steps"]))
+        collect_training_data.train_agent(root_dir, demo_training_steps)
         print("after collect_expert_demos")
     elif job_type == "BC_TRAINING_ONLY":
         root_dir = "/tfrecords/job_" + str(job["demo_job_id"])
@@ -3667,7 +4216,59 @@ def do_job(job, num_envs=1):
             except (TypeError, ValueError):
                 return default
 
+        def _job_int(key, default):
+            """Read an int from the job doc, falling back to default."""
+            v = job.get(key)
+            if v is None or v == "":
+                return default
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return default
+
+        # demo_job_ids (optional, job-doc field): extra DEMO-job ids whose
+        # /tfrecords/job_<id> directories get ADDED to the long-standing
+        # default expert-demo job, all concatenated into one combined
+        # expert dataset for prefill + BC pretrain (see main()'s
+        # demo_record_dirs_val). Additive rather than a replacement so the
+        # default set is never silently dropped just because a job wants to
+        # supplement it with a fresh collection.
+        _DEFAULT_DEMO_JOB_ID = "64168c1b58d4d8ccdb76e721"
+        _extra_demo_job_ids = job.get("demo_job_ids") or []
+        if isinstance(_extra_demo_job_ids, str):
+            _extra_demo_job_ids = [
+                s.strip() for s in _extra_demo_job_ids.split(",") if s.strip()]
+        _demo_job_ids = [_DEFAULT_DEMO_JOB_ID] + [
+            j for j in _extra_demo_job_ids if j and j != _DEFAULT_DEMO_JOB_ID]
+        demo_record_dirs_val = [
+            f"/tfrecords/job_{_jid}" for _jid in _demo_job_ids]
+        if len(_demo_job_ids) > 1:
+            print(f"do_job: TRAIN combining {len(_demo_job_ids)} expert-demo "
+                  f"sources: {_demo_job_ids}", flush=True)
+
+        # demo_source_counts (optional, job-doc field): exact per-source
+        # target step counts, parallel to _demo_job_ids/demo_record_dirs_val
+        # above (same order - index 0 is always the default job). See
+        # main()'s demo_source_counts_val docstring. None/absent preserves
+        # the default proportional-to-availability behavior.
+        _demo_source_counts = job.get("demo_source_counts") or None
+        if _demo_source_counts is not None:
+            if len(_demo_source_counts) != len(demo_record_dirs_val):
+                print(
+                    f"do_job: WARNING demo_source_counts has "
+                    f"{len(_demo_source_counts)} entries but there are "
+                    f"{len(demo_record_dirs_val)} demo sources "
+                    f"{demo_record_dirs_val}; ignoring demo_source_counts.",
+                    flush=True)
+                _demo_source_counts = None
+            else:
+                print(f"do_job: TRAIN using explicit per-source demo "
+                      f"counts {_demo_source_counts} for sources "
+                      f"{_demo_job_ids}", flush=True)
+
         base_kwargs = dict(
+            demo_record_dirs_val=demo_record_dirs_val,
+            demo_source_counts_val=_demo_source_counts,
             job_id=job["_id"],
             num_envs=num_envs,
             num_iterations_val=num_iterations,
@@ -3688,6 +4289,10 @@ def do_job(job, num_envs=1):
             # preserves the "design is authoritative" precedence everywhere else.
             corner_radius_val=_job_float("corner_radius_val", 10.0),
             curvature_difficulty_val=_job_float("curvature_difficulty_val", 0.0),
+            chicanes_north_val=_job_int("chicanes_north_val", 0),
+            chicanes_east_val=_job_int("chicanes_east_val", 0),
+            chicanes_south_val=_job_int("chicanes_south_val", 0),
+            chicanes_west_val=_job_int("chicanes_west_val", 0),
         )
         if is_resume:
             print(
@@ -3758,6 +4363,10 @@ def do_job(job, num_envs=1):
         # job doc is safe.
         eval_corner_radius = _opt_float(job.get("corner_radius_val"), 10.0)
         eval_curvature_difficulty = _opt_float(job.get("curvature_difficulty_val"), 0.0)
+        eval_chicanes_north = _opt_int(job.get("chicanes_north_val")) or 0
+        eval_chicanes_east = _opt_int(job.get("chicanes_east_val")) or 0
+        eval_chicanes_south = _opt_int(job.get("chicanes_south_val")) or 0
+        eval_chicanes_west = _opt_int(job.get("chicanes_west_val")) or 0
         # Wrap the EVAL dispatch in an EvalSpecMismatchError catch so a
         # model with stale observation/action specs against the current
         # env reports cleanly instead of tearing down the whole
@@ -3773,7 +4382,11 @@ def do_job(job, num_envs=1):
                     num_trials=num_trials,
                     num_eval_episodes=num_eval_episodes,
                     corner_radius=eval_corner_radius,
-                    curvature_difficulty=eval_curvature_difficulty)
+                    curvature_difficulty=eval_curvature_difficulty,
+                    chicanes_north=eval_chicanes_north,
+                    chicanes_east=eval_chicanes_east,
+                    chicanes_south=eval_chicanes_south,
+                    chicanes_west=eval_chicanes_west)
             else:
                 load_saved_model(
                     model_type, path=location, job_id=job["_id"],
@@ -3782,7 +4395,11 @@ def do_job(job, num_envs=1):
                     max_steps_per_episode=max_steps_per_episode,
                     max_goals_per_episode=max_goals_per_episode,
                     corner_radius=eval_corner_radius,
-                    curvature_difficulty=eval_curvature_difficulty)
+                    curvature_difficulty=eval_curvature_difficulty,
+                    chicanes_north=eval_chicanes_north,
+                    chicanes_east=eval_chicanes_east,
+                    chicanes_south=eval_chicanes_south,
+                    chicanes_west=eval_chicanes_west)
         except EvalSpecMismatchError as e:
             # Record the precise reason on the job doc so the dashboard
             # (Jobs tab and, eventually, the Models tab Compat column)
@@ -4083,6 +4700,36 @@ def _detect_and_restore_resume_state(job_id_str):
     return _restore_paused_active_dir(job_id_str)
 
 
+def _prune_reverb_checkpoints(reverb_ckpt_dir, keep):
+    """Delete all but the ``keep`` newest entries under reverb_ckpt_dir.
+
+    Reverb's DefaultCheckpointer writes each ``.checkpoint()`` call to a
+    NEW timestamped subdirectory under reverb_ckpt_dir and never prunes
+    old ones itself. Added 2026-07-22 alongside periodic (not just
+    on-pause) Reverb checkpointing in the training loop - without this,
+    a 250k-iteration job checkpointing every
+    REVERB_PERIODIC_CHECKPOINT_INTERVAL steps would accumulate ~250
+    full online-table snapshots (each up to replay_buffer_capacity
+    items) over its lifetime. Only the newest is ever read on resume
+    (see _restore_paused_active_dir's ``sorted(_ckpt_entries)[-1]``), so
+    older ones are pure waste once a newer one lands successfully.
+
+    Best-effort: failures here must never break training, since the
+    checkpoint write itself already succeeded by the time this runs.
+    """
+    try:
+        entries = sorted(
+            f for f in os.listdir(reverb_ckpt_dir)
+            if os.path.isdir(os.path.join(reverb_ckpt_dir, f)))
+        for stale in entries[:-keep] if keep > 0 else entries:
+            try:
+                shutil.rmtree(os.path.join(reverb_ckpt_dir, stale))
+            except OSError:
+                pass
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def move_all_jobs_data(id, skip_current_cleanup=False):
     """Archive every /tmp/active/ entry that isn't the current job's.
 
@@ -4339,7 +4986,9 @@ def _is_job_cancelled(job_id):
     return _get_job_lifecycle_state(job_id) == 'cancel'
 
 def run_randompolicy(job_id="", num_trials=None, num_eval_episodes=None,
-                     corner_radius=10.0, curvature_difficulty=0.0):
+                     corner_radius=10.0, curvature_difficulty=0.0,
+                     chicanes_north=0, chicanes_east=0,
+                     chicanes_south=0, chicanes_west=0):
     """Run a uniformly-random-action EVAL job as a baseline benchmark.
 
     Mirrors load_saved_model's pattern: builds a single env on
@@ -4375,7 +5024,9 @@ def run_randompolicy(job_id="", num_trials=None, num_eval_episodes=None,
     env.job_id = job_id
     configure_env(env, job_id=job_id, pass_through_actions=False,
                   corner_radius=corner_radius,
-                  curvature_difficulty=curvature_difficulty)
+                  curvature_difficulty=curvature_difficulty,
+                  chicanes_north=chicanes_north, chicanes_east=chicanes_east,
+                  chicanes_south=chicanes_south, chicanes_west=chicanes_west)
     # Same publication step as load_saved_model so the RandomPyPolicy
     # baseline path also keeps the dashboard's env_specs current.
     publish_env_spec(env)
@@ -4406,41 +5057,356 @@ def create_traj(
     )
     return traj
 
-def collect_expert_demos(environment, num_episodes, job_id=0):
-    """Collects expert demonstrations and returns a dataset of trajectories."""
+def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
+                         stage=None, num_stages=None, goal_budget=None,
+                         flush_every_n_steps=5000, gym_index=0):
+    """Collects expert demonstrations and returns a dataset of trajectories.
+
+    ``batch_number`` picks the output filename prefix
+    (``<batch_number zero-padded>_<sub-batch zero-padded>trajectories.tfrecord``
+    - see ``flush_every_n_steps`` below). Callers that invoke this multiple
+    times for the SAME job_id (e.g. once per curriculum stage, see the DEMO
+    branch in do_job) MUST pass distinct batch_number values -
+    collect_training_data.read_files_from_directory() reads every file in the
+    job's /tfrecords directory, so distinct filenames make each stage's demos
+    additive; reusing batch_number=0 would silently overwrite the prior
+    stage's trajectories instead.
+
+    ``stage`` / ``num_stages`` (0-indexed stage, total stage count) are
+    forwarded to the Unity HUD's "stage: X/N" readout via
+    rollout_viz.publish_mode (mode="demo") - see the DEMO branch in do_job,
+    which passes the current curriculum stage when collecting across a
+    curriculum-bearing experiment design. None for a non-curriculum
+    collection (the fallback single-geometry path), in which case the HUD
+    just shows "DEMO" with no stage line.
+
+    ``goal_budget`` (2026-07-20): when set, this stage stops once the car
+    has reached this many goals SINCE THIS CALL STARTED (checked only at
+    episode boundaries - never mid-episode, matching the num_trajectories
+    units-confusion fix from 2026-07-19), rather than after a fixed
+    ``num_episodes``. Added because a fixed episode count made per-stage
+    collection time wildly unpredictable once episode length itself became
+    policy-dependent (a car that drives well now often survives 5,000+
+    steps/episode instead of crashing in a few hundred) - goals reached is
+    a much more direct proxy for "how much useful demonstration data did we
+    actually collect" than either raw episode count or raw step count.
+    ``num_episodes`` still applies as a hard safety cap alongside
+    goal_budget (whichever bound is hit first stops the loop), so a policy
+    that can't reach goals at all can't spin forever.
+
+    ``flush_every_n_steps`` (2026-07-20): periodically writes the
+    in-progress ``trajectories`` buffer to its own numbered tfrecord file
+    and clears it, instead of only writing once at the very end of the
+    entire call. Previously a single stage's ENTIRE collection (which can
+    now run for many hours - see goal_budget above) lived only in this
+    function's local `trajectories` list until the very last line, so
+    killing/restarting the trainer at any point mid-stage (a wedge, a code
+    deploy, anything) silently discarded ALL of that stage's data with
+    nothing on disk to show for it - confirmed 2026-07-20 when a restart
+    would have discarded ~10.5 hours / ~590k steps of stage-1 collection.
+    Set to 0 to disable (write only once at the end, the old behavior).
+
+    ``gym_index`` (2026-07-21): identifies which of N concurrently-running
+    Unity gym instances this call is driving - see do_job's
+    ``_collect_on_all_gyms`` helper, which spawns one collect_expert_demos()
+    call per gym on its own thread when a DEMO job's ``demo_num_gyms`` > 1.
+    Two roles: (1) every log line from this call is prefixed ``[gym-N]`` so
+    interleaved output from concurrent gyms stays attributable, and (2) it's
+    baked into the flushed tfrecord filenames so N concurrent calls sharing
+    the same job_id/batch_number (writing to the same /tfrecords/job_<id>/
+    directory at the same time) can never collide on a filename - without
+    this, two gyms' flushes at the same batch_number/sub_batch would race
+    and one would silently clobber the other's steps on disk.
+    """
+    # Prefix every print() in this function (including the nested
+    # _flush_trajectories_to_disk below, which resolves `print` from this
+    # enclosing scope) with [gym-N] - see gym_index docstring above. This
+    # local reassignment shadows the builtin for the whole function body
+    # regardless of where it's placed textually, since Python resolves
+    # locals at compile time; placing it up front just keeps every call
+    # site below unmodified individually. MUST fetch the real builtin via
+    # the `builtins` module rather than the bare name `print` - the `def
+    # print(...)` below makes `print` a local variable for the WHOLE
+    # function scope the moment Python compiles it (regardless of where the
+    # def appears), so `_builtin_print = print` would raise
+    # UnboundLocalError (reading a local before its first assignment).
+    import builtins as _builtins_module
+    _builtin_print = _builtins_module.print
+    def print(*args, **kwargs):  # noqa: A001 - intentional shadow, see above
+        _builtin_print(f"[gym-{gym_index}]", *args, **kwargs)
+
     folder_name = "/tfrecords/job_"+str(job_id)
     create_folder(folder_name=folder_name)
     action_steering_angle = np.float32(0)
     action_apply_force = np.float32(1)
     trajectories = []
-    max_trajectories=num_episodes
-    max_batch_size=1e3
     num_trajectories=0
-    reset_every_n_episodes=1000
     crashes=0
-    batch_number=0
-    base_force=0.2
-    min_force=0.001
-    for _ in range(num_episodes):
+    goal_cap_ends=0
+    sub_batch=0
+
+    def _flush_trajectories_to_disk():
+        """Writes the current in-memory `trajectories` buffer to its own
+        numbered file and clears it - see flush_every_n_steps docstring
+        above. No-op on an empty buffer (nothing to write, e.g. called at
+        the end of a stage that just flushed on its last step already)."""
+        nonlocal trajectories, sub_batch
+        if not trajectories:
+            return
+        path = (folder_name + "/" + zero_pad_integer(batch_number, 6) + "_g"
+                + str(gym_index) + "_" + zero_pad_integer(sub_batch, 4)
+                + "trajectories.tfrecord")
+        print(f"t={_ts()} flushing {len(trajectories)} steps to {path}", flush=True)
+        write_trajectories_to_file(trajectories, path)
+        trajectories = []
+        sub_batch += 1
+    # NOTE: do NOT reassign `batch_number` here - it's a parameter (the
+    # output-file index for multi-stage/curriculum demo collection). This used
+    # to shadow the argument with a local 0, so every call silently wrote to
+    # 000000trajectories.tfrecord regardless of what the caller passed.
+    # base_force: 0.2 -> 0.8 (2026-07-19, target-speed increase to 5 m/s) ->
+    # 0.25 (2026-07-19, same day): 0.8 turned out to be too aggressive once
+    # MAX_SPEED/GOAL_BRAKE_ZONE_DIST below were also raised - video+log
+    # cross-referencing (scripts/analyze_video.py) showed the car
+    # overshooting MAX_SPEED by 15-20% (up to 5.8 m/s against a 5.0 m/s cap)
+    # on long straights before the goal-proximity brake had enough distance
+    # to react, causing corner crashes. Capped back down to 0.25 alongside
+    # MAX_SPEED 5.0 -> 3.5 to reduce both how fast the car can ramp up AND
+    # how much speed the braking logic ever has to shed before a corner.
+    base_force=0.25
+    # min_force widened 0.001 -> -1.0 (2026-07-19, same day as the
+    # action_spec range change above from [0.1,2.0] to [-1,1]): 0.001 was
+    # effectively "coast at ~0 drive torque", the ONLY deceleration
+    # available being passive rolling friction/drag - confirmed via
+    # video+log cross-referencing (scripts/analyze_video.py) that this was
+    # far too weak to shed overshoot speed (e.g. 5.6 m/s) before a corner,
+    # producing "drives straight into the wall" crashes right after long
+    # straights. -1.0 lets the decel branch below command genuine negative
+    # motorTorque (active braking, see CarController.cs Accelerate()) once
+    # coasting alone isn't cutting it fast enough.
+    #
+    # -1.0 -> -0.01 (2026-07-22): full -1.0 active braking was too strong,
+    # so the decel floor is pulled back to a near-coast -0.01 (barely
+    # negative torque) rather than hard reverse braking.
+    min_force=-0.01
+    # Simple curvature-scaled heuristic (2026-07-18 rewrite, replacing the
+    # previous corner_urgency/clearance-cone/curvature-asymmetry/force-cap
+    # system - see git history for that version). That system's extra
+    # anticipatory signals turned out not to prevent the car getting
+    # physically wedged against track geometry (confirmed via per-step
+    # logging: forward clearance reading a literal 0.000m while corner
+    # urgency + force cap both maxed out, i.e. touching a wall, not just
+    # cornering hard), so replacing it with two independent, easy-to-reason-
+    # about proportional controllers instead:
+    #
+    #   * steering: a plain P-controller on the heading-error-to-goal signal
+    #     (obs[0], normalized to [-1,1] = angle_deg/180), scaled by
+    #     K_STEERING and clamped to [-1,1] so a clamped output is exactly a
+    #     full-lock action of +-1.0. See the UNIT MISMATCH note below for why
+    #     K_STEERING is 4.0 rather than 1.0.
+    #
+    #   * velocity: target speed backs off with the CURRENT steering
+    #     command's own magnitude (the normalized action we just computed
+    #     above, not a separate multi-ray urgency score) - straight-ahead
+    #     cruises at MAX_SPEED, full-lock caps at MIN_SPEED. The falloff is
+    #     QUADRATIC in (1 - steer_frac) rather than linear (2026-07-19, target
+    #     speed raised 2.0 -> 5.0 m/s): the straight-vs-corner speed spread
+    #     went from 1.2 m/s to 4.2 m/s, and a linear ramp only sheds
+    #     meaningful speed once steer_frac is already large (i.e. already
+    #     mid-turn) - too late at the new higher cruise speed. Quadratic
+    #     falloff cuts speed much more aggressively as soon as ANY real
+    #     steering is commanded, well before full lock, so "slow down as
+    #     necessary to make the turn" starts happening early into the turn
+    #     instead of only at its sharpest point.
+    # UNIT MISMATCH FOUND (2026-07-19): obs[0] (raw_steer) and the
+    # steering_angle action do NOT share a normalization, despite both living
+    # in [-1,1] - obs[0] = GetAngleToGoal()/180 (SceneDataPublisher.cs) i.e.
+    # normalized against a 180-degree span, while the action is applied as
+    # `steerAngle = maxSteeringAngle * angle` with maxSteeringAngle=45
+    # (CarController.cs) i.e. normalized against a 45-degree span. Those are
+    # 4x apart (180/45), so the previous K_STEERING=1.0 only ever commanded
+    # 25% of the wheel angle the heading error actually called for - the car
+    # could only reach full lock if pointed nearly backwards from the goal
+    # (~180 deg off), which never happens in practice. This silently capped
+    # every turn to a shallow ~11 degrees of real wheel angle even when
+    # heading error was 40-90+ degrees approaching a corner - confirmed via
+    # the [steer-diag]/[crash-pos] logs (e.g. heading error -47 deg producing
+    # only an actual -0.263 action = -11.8 deg of wheel angle at the moment
+    # of a crash). K_STEERING=4.0 below cancels that mismatch so a real
+    # heading error of +-45 degrees now correctly commands +-1.0 (full lock);
+    # the clamp is reintroduced since heading error can exceed 45 degrees
+    # (e.g. hairpins, right after a reset) and the resulting scaled value can
+    # now exceed the [-1,1] action range.
+    K_STEERING = 4.0           # proportional gain: heading-error -> steer command (compensates the 180 vs 45 degree normalization mismatch above)
+    MAX_SPEED = 3.5            # m/s target when steering command ~ 0 (straight) - 2.0 -> 5.0 -> 3.5 (2026-07-19): 5.0 let the car overshoot up to 5.8 m/s on long straights (video+log cross-reference via scripts/analyze_video.py) faster than the goal-proximity brake below could react; 3.5 leaves less speed to shed per corner in the first place. Still not a hard cap - see base_force/ClampAccelerationForStandstill (CarController.cs) for the actual physical limits.
+    MIN_SPEED = 0.8            # m/s target at full-lock steering command (unchanged - this is the tight-corner floor and was already working)
+    ACCEL_STEP = 4e-3          # per-step force increase toward target speed (unchanged - braking authority matters more for safety than acceleration authority)
+    DECEL_STEP = 2e-2          # per-step force decrease toward target speed - raised from 8e-3 (2026-07-19): more speed to shed per corner now (up to 4.2 m/s vs 1.2 m/s before), needs more braking authority to actually shed it in time
+    # GOAL-PROXIMITY BRAKING (added 2026-07-19): the curvature-based target_speed
+    # above only reacts to the CURRENT heading error, which is a purely reactive,
+    # zero-lookahead signal - on a long straight it stays ~0 the whole way (there's
+    # nothing to correct), so the car ramps all the way up to MAX_SPEED with no
+    # warning that a turn is coming. The instant the car reaches the goal marking
+    # the end of the straight, `next_goal` snaps to a sharp-turn waypoint, but by
+    # then there's no distance left to both turn and shed speed - confirmed via
+    # [crash-pos] logs showing repeat crashes at the SAME straight-to-corner
+    # transition point (e.g. 9x at one location) at 3-5 m/s with near-zero steer,
+    # some immediately after a logged "has_reached_goal: True". Since this is a
+    # blind spot in principle (not just under-tuning), adding a second, independent
+    # speed constraint based on dist_from_goal (already published per-step in
+    # environment.data, see SceneDataPublisher.cs car.dist_from_goal - not part of
+    # the 32-element observation vector) - the car eases toward MIN_SPEED as it
+    # nears ANY goal, regardless of current heading error, since reaching a goal is
+    # exactly when the required heading can suddenly change. Once past a goal with
+    # dist_from_goal large again for the new next-goal, it re-accelerates - so on a
+    # long straight with sparse goals this shows up as a brief slow-down "pulse" at
+    # each goal crossing rather than one continuous cruise, trading a bit of
+    # average speed for a real safety margin at the one place blind reactive
+    # control can't see coming. Final target_speed is whichever constraint (this
+    # one, or the existing curvature-based one) is more restrictive right now.
+    GOAL_BRAKE_ZONE_DIST = 12.0  # meters - distance-to-goal at which proximity braking starts kicking in
+    # SECOND units-confusion bug found alongside the reset_every_n_episodes
+    # one below (2026-07-19): this loop used to ALSO break out of both the
+    # inner while AND this outer for loop once `num_trajectories` (a per-STEP
+    # counter - it's incremented once per environment._step() call below,
+    # since one "trajectory" = one step's (obs,action,reward,discount) tuple
+    # written to the tfrecord) exceeded `max_trajectories`, which was set to
+    # `num_episodes` - a value the DEMO branch in do_job computes as an
+    # EPISODE budget (e.g. num_iterations // num_curriculum_stages, commonly
+    # in the thousands). Comparing a step count against an episode-sized
+    # budget meant the entire function - and whatever episode happened to be
+    # mid-flight at that instant - exited abruptly, with NO crash, after only
+    # a handful of REAL episodes (a few hundred steps each) rather than the
+    # `num_episodes` actually requested; the very next collect_expert_demos()
+    # call (next curriculum stage, or a fresh call for the same stage) then
+    # did its own environment.reset() - visible in Unity as a car reset with
+    # no crash. This `for` loop already correctly bounds real episode count
+    # (one full iteration = one environment.reset() + drive-until-episode-
+    # ended), so the extra step-based break was pure liability. Removed.
+    #
+    # goal_budget support (2026-07-20, see docstring): `num_episodes` remains
+    # a hard safety cap either way (rewritten as `while episode_idx <
+    # num_episodes` below, equivalent to the old `for` when goal_budget is
+    # None); the goal check only ever runs BETWEEN episodes, same principle
+    # as removing the old mid-episode step-based break above - an episode
+    # in progress always finishes naturally.
+    _course = getattr(environment, 'course', None)
+    _goals_at_call_start = getattr(_course, 'goals_per_episode_total', 0)
+    episode_idx = 0
+    while episode_idx < num_episodes:
+        if goal_budget is not None:
+            _goals_so_far = (
+                getattr(_course, 'goals_per_episode_total', 0)
+                - _goals_at_call_start)
+            if _goals_so_far >= goal_budget:
+                print(
+                    f"t={_ts()} goal_budget {goal_budget} reached "
+                    f"({_goals_so_far} goals since stage start) - "
+                    f"advancing", flush=True)
+                break
+        episode_idx += 1
         environment.reset()
         action_apply_force = 0.2
+        # Neutral start value; overwritten unconditionally by obs[0] the
+        # instant the first step() call returns an observation below, so
+        # this only matters for the very first action sent each episode
+        # (before any observation exists).
+        action_steering_angle = np.float32(0)
         while not environment._episode_ended:
-            if num_trajectories % reset_every_n_episodes == 0:
-                environment.reset()
-                action_apply_force = base_force
+            # NOTE (2026-07-19): this loop used to force an unconditional
+            # environment.reset() every 1000 STEPS (a stale "reset_every_n_
+            # episodes" counter that was actually checked against a
+            # cumulative step count, not an episode count - see git history
+            # of this function). That silently cut off any episode that
+            # survived past 1000 steps and reset the car with no crash
+            # logged, which is exactly the "car position resetting without
+            # collisions" behavior reported once the steering-gain fix (see
+            # K_STEERING above) started letting episodes actually survive
+            # that long. Removed - episodes now end only via the natural
+            # environment._episode_ended signal (crash, see donut_course.py
+            # has_failed()).
             numpy_action = np.array([action_apply_force, action_steering_angle])
             action = tf.constant(numpy_action)
             next_time_step=environment._step(action)
             # data = environment._do_action(action)
             # print(f"data: {data}")
-            action_steering_angle = next_time_step.observation[0]
-            
-            if next_time_step.observation[1] < 4:
-                action_apply_force = action_apply_force + 1e-4
-                action_apply_force = min(base_force, action_apply_force)
-            else: 
-                action_apply_force = max(min_force,action_apply_force - 1e-3)
-            
+            obs = next_time_step.observation
+            raw_steer = float(obs[0])
+            speed = float(obs[1])
+
+            # Steering: proportional controller on the heading-error signal.
+            # Clamped to [-1,1] (see comment above) since K_STEERING=4.0
+            # compensates the 180-vs-45-degree normalization gap between
+            # obs[0] and the action, so heading errors beyond +-45 degrees
+            # now legitimately overshoot the raw action range and must be
+            # capped at full lock rather than sent through uncapped.
+            action_steering_angle = max(-1.0, min(1.0, K_STEERING * raw_steer))
+
+            # Velocity: curvature-scaled directly off THIS step's own
+            # steering command magnitude - no separate clearance/asymmetry
+            # cones (see comment block above). Quadratic (not linear) falloff
+            # - see MAX_SPEED comment above for why.
+            steer_frac = min(1.0, abs(float(action_steering_angle)))
+            curvature_target_speed = MIN_SPEED + (MAX_SPEED - MIN_SPEED) * (1.0 - steer_frac) ** 2
+
+            # Goal-proximity braking - see GOAL_BRAKE_ZONE_DIST comment above.
+            # Independent of steer_frac: eases toward MIN_SPEED as the car
+            # nears ANY goal (a turn may follow), regardless of current
+            # heading error. Falls back to "far away" (no constraint) if
+            # dist_from_goal is ever unavailable, so a lookup failure can only
+            # make this step behave like the braking zone didn't exist yet,
+            # never force an unwanted stop.
+            try:
+                dist_from_goal = float(environment.data.get("car", {}).get("dist_from_goal"))
+            except (TypeError, ValueError, AttributeError):
+                dist_from_goal = GOAL_BRAKE_ZONE_DIST
+            proximity_frac = 1.0 - min(1.0, max(0.0, dist_from_goal / GOAL_BRAKE_ZONE_DIST))
+            proximity_target_speed = MIN_SPEED + (MAX_SPEED - MIN_SPEED) * (1.0 - proximity_frac) ** 2
+
+            target_speed = min(curvature_target_speed, proximity_target_speed)
+            if speed < target_speed:
+                action_apply_force = min(base_force, action_apply_force + ACCEL_STEP)
+            else:
+                action_apply_force = max(min_force, action_apply_force - DECEL_STEP)
+
+            if num_trajectories % 15 == 0:
+                # next_goal_name: pulled from environment.data (refreshed by
+                # every _step() call - see RobotaxiEnv._step) rather than
+                # `obs`, since the goal NAME isn't part of the 32-element
+                # observation vector. NOTE: despite the Unity-side field/
+                # method being called "current_goal"/GetCurrentGoalName(),
+                # it actually holds goals[(goalIndex+1) % count].name - i.e.
+                # the NEXT goal the car is steering toward right now (see
+                # SceneDataPublisher.cs) - which is what obs[0] (below) is
+                # the bearing to.
+                try:
+                    next_goal_name = environment.data.get("car", {}).get("current_goal")
+                except Exception:  # noqa: BLE001 - diagnostic print must never break collection
+                    next_goal_name = "?"
+                print(
+                    f"[steer-diag] t={_ts()} next_goal={next_goal_name} "
+                    f"obs[0](raw_steer)={raw_steer:+.3f} "
+                    f"action_steer(actual)={float(action_steering_angle):+.3f} "
+                    f"action_force={float(action_apply_force):.4f} "
+                    f"speed={speed:.3f} target_speed={target_speed:.3f} "
+                    f"(curv={curvature_target_speed:.3f} prox={proximity_target_speed:.3f} "
+                    f"dist_from_goal={dist_from_goal:.2f})",
+                    flush=True)
+
+            # Keep the Unity HUD's "DEMO" indicator + "stage: X/N" readout
+            # live during heuristic demo collection - this is the only place
+            # in this function's per-step loop, and publish_mode's own
+            # internal ~1Hz throttle (see rollout_viz.py) makes calling it
+            # every step cheap/safe. stage/num_stages are None for a
+            # non-curriculum collection, so the HUD just shows "DEMO" with
+            # no stage line in that case.
+            try:
+                get_viz().publish_mode(
+                    "demo", 1, num_trajectories,
+                    stage=stage, num_stages=num_stages)
+            except Exception:  # noqa: BLE001 - HUD must never break collection
+                pass
+
             traj = create_traj(
                 next_time_step.observation,
                 action,
@@ -4451,32 +5417,80 @@ def collect_expert_demos(environment, num_episodes, job_id=0):
             num_trajectories+=1
             
             if environment._episode_ended:
-                crashes=crashes+1
-            print(f"num_trajectories: {num_trajectories} vs {max_batch_size}, crashes: {crashes}")
-            # if len(trajectories) >= max_batch_size:
-            #     path = folder_name + "/" + zero_pad_integer(batch_number,6) + "trajectories.tfrecord"
-            #     print(f"writing to {path}")
-            #     write_trajectories_to_file(trajectories, path)
-            #     trajectories=[]
-            #     batch_number+=1
-            if num_trajectories > max_trajectories:
-                break
-        if num_trajectories > max_trajectories:
-                break
-    path = folder_name + "/" + zero_pad_integer(batch_number,6) + "trajectories.tfrecord"
-    print(f"writing to {path}")
-    write_trajectories_to_file(trajectories, path)
-    # trajectories=[]
-    # batch_number+=1
+                # Distinguish a genuine crash-ending from the new
+                # GOALS_PER_EPISODE_CAP success-ending (2026-07-20) - both
+                # set environment._episode_ended, but only one is actually
+                # a crash. `has_crashed` is the same field donut_course's
+                # has_failed() reads, so it's authoritative here too.
+                _is_crash = bool(environment.data.get("car", {}).get("has_crashed"))
+                if _is_crash:
+                    crashes=crashes+1
+                else:
+                    goal_cap_ends=goal_cap_ends+1
+                # Log the actual world position at every episode end so we
+                # can empirically check WHERE crashes cluster on the track,
+                # instead of relying on subjective visual impression. Cheap:
+                # environment.data is refreshed every _step() call regardless
+                # (see RobotaxiEnv._step), this just reads it. Greppable via
+                # "[crash-pos]" - x/z are TrackGenerator world coords (tile
+                # grid * tileSize), so they can be checked against the 4
+                # known corner positions for this loop
+                # (loopWidthTiles x loopHeightTiles, tileSize=20).
+                try:
+                    _car_pos = environment.data.get("car", {})
+                    # zone / easy-hard-straight crash tallies (2026-07-19):
+                    # read straight off environment.course, which
+                    # reward_failure() already incremented for THIS crash a
+                    # moment ago (see donut_course.py _classify_car_zone) -
+                    # no need to reclassify here, and DEMO jobs never hit
+                    # the TRAIN loop's periodic TensorBoard course_metrics
+                    # write (read_course_metrics), so this print is
+                    # currently the only live visibility into these
+                    # counters during DEMO collection.
+                    _course = getattr(environment, 'course', None)
+                    _tag = "[crash-pos]" if _is_crash else "[goal-cap-end]"
+                    print(
+                        f"{_tag} t={_ts()} x={_car_pos.get('location_x')} "
+                        f"z={_car_pos.get('location_z')} "
+                        f"speed={_car_pos.get('speed')} "
+                        f"next_goal={_car_pos.get('current_goal')} "
+                        f"steer={float(action_steering_angle):+.3f} "
+                        f"step={num_trajectories} "
+                        f"crashes(easy/hard/straight)="
+                        f"{getattr(_course, 'crashes_easy_corner', '?')}/"
+                        f"{getattr(_course, 'crashes_hard_corner', '?')}/"
+                        f"{getattr(_course, 'crashes_straight', '?')} "
+                        f"traversals(easy/hard)="
+                        f"{getattr(_course, 'easy_corner_traversals', '?')}/"
+                        f"{getattr(_course, 'hard_corner_traversals', '?')}",
+                        flush=True)
+                except Exception as _e:  # noqa: BLE001 - logging must never break collection
+                    print(f"[crash-pos] logging failed (non-fatal): {_e}", flush=True)
+            print(f"t={_ts()} num_trajectories(steps): {num_trajectories}, crashes: {crashes}, goal_cap_ends: {goal_cap_ends}")
+        # Periodic crash-safe flush (see flush_every_n_steps docstring) -
+        # checked at the episode boundary we're at right now (the inner
+        # while loop above just exited via environment._episode_ended, or
+        # this is the very start before any episode has run), never
+        # mid-episode.
+        if flush_every_n_steps and len(trajectories) >= flush_every_n_steps:
+            _flush_trajectories_to_disk()
+    _flush_trajectories_to_disk()  # final remainder, no-op if already empty
 
 def zero_pad_integer(integer, length):
     """Pads an integer with zeros to a given length."""
     return str(integer).zfill(length)
 
 def create_folder(folder_name):
-    """Creates a folder if it doesn't already exist."""
-    if not os.path.exists(folder_name):
-        os.makedirs(folder_name)        
+    """Creates a folder if it doesn't already exist.
+
+    exist_ok=True (rather than an exists-check-then-makedirs) because
+    demo_num_gyms>1 (2026-07-21) has multiple collect_expert_demos() threads
+    racing to create the SAME job folder at near-identical startup time -
+    a naive check-then-create has a TOCTOU window where both threads pass
+    the `not exists` check before either creates it, and the loser's
+    makedirs() raises FileExistsError.
+    """
+    os.makedirs(folder_name, exist_ok=True)
  
 def write_trajectories_to_file(trajectories, output_file):
     """Writes a list of trajectories to a TFRecord file."""
