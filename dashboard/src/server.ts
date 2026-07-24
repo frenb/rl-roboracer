@@ -2189,7 +2189,24 @@ export const createServer = (config): express.Application => {
 const wss = new WebSocket.Server({ port: 8080 });
 
 wss.on('connection', (ws) => {
-  const dockerLogs = spawn('tail', ['-f', '-n', '100', '/python_ws/src/robotaxi.out']);
+  // Was '/python_ws/src/robotaxi.out' (2026-07-19 fix): that path is only
+  // ever written when sim-controller runs its ORIGINAL compose-declared
+  // command (`python -u robotaxi.py | tee robotaxi.out`). Every ad hoc
+  // trainer restart this project does in practice (killing + relaunching
+  // robotaxi.py by hand after a code change, a wedge, a gym swap, etc. -
+  // see scripts/Monitor-Job.ps1 and the README's manual-restart section)
+  // instead runs `python -u robotaxi.py > /tmp/trainer.log 2>&1` directly,
+  // which never touches robotaxi.out again - so the log viewer tab was
+  // silently tailing an abandoned file that stopped updating the moment
+  // anyone did their first manual restart. /tmp/trainer.log lives on the
+  // `tmpdata` named volume both sim-controller and dashboard already share
+  // (see docker-compose.yml), so it's visible here regardless of whether
+  // the trainer was started via compose's default command or a manual
+  // exec - use that instead. `-F` (vs `-f`) also retries opening the file
+  // by name rather than by file descriptor, so a manual restart that
+  // recreates the file out from under an already-open log tab doesn't
+  // leave that tab stuck tailing a dead handle.
+  const dockerLogs = spawn('tail', ['-F', '-n', '100', '/tmp/trainer.log']);
 
   dockerLogs.stdout.on('data', (data) => {
     ws.send(data.toString());
