@@ -49,6 +49,24 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
         {
             idealTrajectory = SimController.instance.idealTrajectory.gameObject;
         }
+        // SimController.Restart() destroys + regenerates the ENTIRE track
+        // (new Goal-N GameObjects at new positions) before calling
+        // UpdateWorldRefs() on every single episode reset - not just on
+        // curriculum stage transitions (see SimController.Restart/
+        // ApplyTrackConfig). targetOnNextGoal caches GetAngleToGoal's
+        // closest-point calculation keyed by the raw (unwrapped) goalIndex,
+        // and was never invalidated across resets, so any goalIndex value
+        // reused after a regen silently returned a stale Vector3 pointing at
+        // a goal from the PREVIOUS (now-destroyed) track layout - corrupting
+        // dist_from_traj/GetAngleToGoal (obs[0], the sole signal every
+        // steering command is derived from) without any error. Longer runs
+        // accumulate more stale entries (more resets => more goalIndex
+        // collisions), which matches the "steering ignored" / progressively
+        // worse crash symptom seen most severely on later curriculum stages.
+        // Clearing here - the one choke point every reset path already
+        // passes through post-regen - guarantees the cache never outlives
+        // the goal objects it was computed against.
+        targetOnNextGoal.Clear();
         // So one fresh scene_data before reset done signal sent.
         Publish();
     }

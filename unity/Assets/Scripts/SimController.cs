@@ -93,6 +93,11 @@ public class SimController : MonoBehaviour
         // reads the local car each frame and draws an OnGUI overlay; toggle
         // with the H key. No scene setup required.
         gameObject.AddComponent(typeof(HudOverlay));
+        // Auto-attach the manual curriculum-stage picker (one button per
+        // stage; regenerates the track + respawns the car at that stage's
+        // geometry directly, without needing a Python trainer connected).
+        // Toggle with the C key. No scene setup required.
+        gameObject.AddComponent(typeof(CurriculumStageButtons));
         // // Publish camera frames for computer vision.
         // if (publishedCamera != null)
         // {
@@ -311,9 +316,21 @@ public class SimController : MonoBehaviour
         if (af.corner_radius <= 0.0) return;
         trackGenerator.cornerRadius = (float) af.corner_radius;
         trackGenerator.curvatureDifficulty = (float) af.curvature_difficulty;
+        // Per-edge chicane counts (2026-07-18) - replace curvatureDifficulty
+        // as the actual chicane driver (kept above for logging/back-compat
+        // only). Negative/absent values never occur (ints default to 0 on
+        // both the .msg wire format and TrackGenerator's own fields), so no
+        // "carried no params" sentinel is needed here the way corner_radius
+        // uses <= 0.0 above.
+        trackGenerator.chicanesNorth = af.chicanes_north;
+        trackGenerator.chicanesEast = af.chicanes_east;
+        trackGenerator.chicanesSouth = af.chicanes_south;
+        trackGenerator.chicanesWest = af.chicanes_west;
         trackGenerator.Generate();
         Debug.Log($"SimController::regenerated track cornerRadius={af.corner_radius} " +
-                  $"curvatureDifficulty={af.curvature_difficulty}");
+                  $"curvatureDifficulty={af.curvature_difficulty} " +
+                  $"chicanes(N/E/S/W)={af.chicanes_north}/{af.chicanes_east}/" +
+                  $"{af.chicanes_south}/{af.chicanes_west}");
     }
     public void ApplyForce(ApplyForce af)
     {

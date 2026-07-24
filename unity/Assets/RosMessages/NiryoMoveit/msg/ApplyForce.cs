@@ -21,6 +21,15 @@ namespace RosMessageTypes.NiryoMoveit
         // order as niryo_moveit/ApplyForce.msg.
         public double corner_radius;
         public double curvature_difficulty;
+        // Per-edge chicane counts (2026-07-18): replaces curvature_difficulty
+        // as the actual chicane-count driver (curvature_difficulty is kept
+        // for backward-compat/logging only - see TrackGenerator). Appended
+        // AFTER curvature_difficulty for the same binary-layout-stability
+        // reason as above.
+        public int chicanes_north;
+        public int chicanes_east;
+        public int chicanes_south;
+        public int chicanes_west;
 
         public ApplyForce()
         {
@@ -30,9 +39,13 @@ namespace RosMessageTypes.NiryoMoveit
             this.num_obstacles = 0;
             this.corner_radius = 0.0;
             this.curvature_difficulty = 0.0;
+            this.chicanes_north = 0;
+            this.chicanes_east = 0;
+            this.chicanes_south = 0;
+            this.chicanes_west = 0;
         }
 
-        public ApplyForce(double acceleration, double steering_angle, int cmd_id, int num_obstacles, double corner_radius, double curvature_difficulty)
+        public ApplyForce(double acceleration, double steering_angle, int cmd_id, int num_obstacles, double corner_radius, double curvature_difficulty, int chicanes_north, int chicanes_east, int chicanes_south, int chicanes_west)
         {
             this.acceleration = acceleration;
             this.steering_angle = steering_angle;
@@ -40,6 +53,10 @@ namespace RosMessageTypes.NiryoMoveit
             this.num_obstacles = num_obstacles;
             this.corner_radius = corner_radius;
             this.curvature_difficulty = curvature_difficulty;
+            this.chicanes_north = chicanes_north;
+            this.chicanes_east = chicanes_east;
+            this.chicanes_south = chicanes_south;
+            this.chicanes_west = chicanes_west;
         }
         public override List<byte[]> SerializationStatements()
         {
@@ -50,6 +67,10 @@ namespace RosMessageTypes.NiryoMoveit
             listOfSerializations.Add(BitConverter.GetBytes(this.num_obstacles));
             listOfSerializations.Add(BitConverter.GetBytes(this.corner_radius));
             listOfSerializations.Add(BitConverter.GetBytes(this.curvature_difficulty));
+            listOfSerializations.Add(BitConverter.GetBytes(this.chicanes_north));
+            listOfSerializations.Add(BitConverter.GetBytes(this.chicanes_east));
+            listOfSerializations.Add(BitConverter.GetBytes(this.chicanes_south));
+            listOfSerializations.Add(BitConverter.GetBytes(this.chicanes_west));
 
             return listOfSerializations;
         }
@@ -68,6 +89,14 @@ namespace RosMessageTypes.NiryoMoveit
             offset += 8;
             this.curvature_difficulty = BitConverter.ToDouble(data, offset);
             offset += 8;
+            this.chicanes_north = BitConverter.ToInt32(data, offset);
+            offset += 4;
+            this.chicanes_east = BitConverter.ToInt32(data, offset);
+            offset += 4;
+            this.chicanes_south = BitConverter.ToInt32(data, offset);
+            offset += 4;
+            this.chicanes_west = BitConverter.ToInt32(data, offset);
+            offset += 4;
 
             return offset;
         }
@@ -80,7 +109,11 @@ namespace RosMessageTypes.NiryoMoveit
             "\ncmd_id: " + cmd_id.ToString() +
             "\nnum_obstacles: " + num_obstacles.ToString() +
             "\ncorner_radius: " + corner_radius.ToString() +
-            "\ncurvature_difficulty: " + curvature_difficulty.ToString();
+            "\ncurvature_difficulty: " + curvature_difficulty.ToString() +
+            "\nchicanes_north: " + chicanes_north.ToString() +
+            "\nchicanes_east: " + chicanes_east.ToString() +
+            "\nchicanes_south: " + chicanes_south.ToString() +
+            "\nchicanes_west: " + chicanes_west.ToString();
         }
     }
 }

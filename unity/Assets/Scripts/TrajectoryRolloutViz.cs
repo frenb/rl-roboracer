@@ -122,6 +122,8 @@ public class TrajectoryRolloutViz : MonoBehaviour
         public float maxWidth;
         public string mode;   // "train" / "eval" (for the HUD)
         public int actor;     // actor index (for the HUD cross-check)
+        public int stage;      // 0-indexed curriculum stage; -1 = no curriculum (for the HUD)
+        public int numStages;  // total curriculum stages; -1 = no curriculum (for the HUD)
     }
 
     // Latest train/eval mode reported by the trainer (consumed by HudOverlay).
@@ -130,6 +132,19 @@ public class TrajectoryRolloutViz : MonoBehaviour
     private float _lastModeTime = -999f;
     public string CurrentMode =>
         (Time.time - _lastModeTime) < 5f ? _lastMode : "";
+
+    // Latest curriculum stage reported by the trainer (consumed by HudOverlay
+    // for the "stage: X/N" readout). Shares the same staleness window/
+    // timestamp as CurrentMode, since both fields arrive on the same
+    // payload. -1/-1 (CurrentStage/CurrentNumStages) means "no curriculum
+    // info" - either stale, or a non-curriculum job (see robotaxi.py's
+    // publish_mode: stage/num_stages default to -1 when not applicable).
+    private int _lastStage = -1;
+    private int _lastNumStages = -1;
+    public int CurrentStage =>
+        (Time.time - _lastModeTime) < 5f ? _lastStage : -1;
+    public int CurrentNumStages =>
+        (Time.time - _lastModeTime) < 5f ? _lastNumStages : -1;
 
     private readonly List<LineRenderer> _pool = new List<LineRenderer>();
     private Material _lineMaterial;
@@ -207,6 +222,8 @@ public class TrajectoryRolloutViz : MonoBehaviour
             _active = fresh;
             _lastDataTime = Time.time;
             _lastMode = fresh.mode ?? "";
+            _lastStage = fresh.stage;
+            _lastNumStages = fresh.numStages;
             _lastModeTime = Time.time;
             Debug.Log($"[TrajectoryRolloutViz] new payload step={fresh.step} "
                       + $"K={fresh.k} H={fresh.horizon} "
