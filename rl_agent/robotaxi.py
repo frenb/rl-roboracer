@@ -954,6 +954,14 @@ def main(
     # most of their time in the collect phase where the rollout-viz fans
     # render. Set <=0 or >=1 to fall back to the old step%eval_interval gate.
     eval_time_fraction_val=0.25,
+    # Fixed TRAINING wall-clock (seconds) between evals. When > 0 this takes
+    # precedence over eval_time_fraction: an eval fires after every
+    # eval_train_interval_sec of training time, independent of how long each
+    # eval takes. Unlike the time-fraction budget (which scales the train gap
+    # with eval duration), this stays a fixed cadence even as long-episode
+    # evals lengthen - "eval every N minutes". 0 disables (use the fraction /
+    # step gates). Overridden at runtime by the EVAL_TRAIN_INTERVAL_SEC env var.
+    eval_train_interval_sec_val=0,
     policy_save_interval_val=50,
     model_type="SacAgent",
     # ---- Reward-design plumbing -------------------------------------
@@ -2242,7 +2250,26 @@ def main(
                          if _eval_time_budgeted else 0.0)
     train_time_since_eval = 0.0
     last_eval_duration = None
-    if _eval_time_budgeted:
+    # Fixed training-time eval interval (seconds). When > 0 it takes precedence
+    # over the time-fraction budget: eval fires after this many seconds of
+    # TRAINING wall-clock (train_time_since_eval), giving a constant "eval every
+    # N minutes" cadence regardless of eval duration. Env override for quick
+    # tuning without touching the job/experiment-design config.
+    eval_train_interval_sec = eval_train_interval_sec_val
+    try:
+        _env_eti = os.environ.get("EVAL_TRAIN_INTERVAL_SEC")
+        if _env_eti is not None:
+            eval_train_interval_sec = float(_env_eti)
+    except (TypeError, ValueError):
+        pass
+    _eval_fixed_interval = (eval_train_interval_sec is not None
+                            and eval_train_interval_sec > 0)
+    if _eval_fixed_interval:
+        print(f"Eval cadence: fixed {eval_train_interval_sec:.0f}s "
+              f"(~{eval_train_interval_sec / 60.0:.1f} min) of TRAINING "
+              f"wall-clock between evals (overrides time-fraction budget)",
+              flush=True)
+    elif _eval_time_budgeted:
         print(f"Eval time budget: ~{eval_time_fraction * 100:.0f}% eval / "
               f"{(1 - eval_time_fraction) * 100:.0f}% train (train "
               f"{_eval_train_ratio:.1f}x each eval's wall-clock)", flush=True)
@@ -2499,7 +2526,15 @@ def main(
         # wall-clock). Before the first eval, and when budgeting is disabled,
         # fall back to the classic step%eval_interval cadence.
         _do_eval = False
-        if eval_interval:
+        if _eval_fixed_interval:
+            # Fixed training-time cadence (2026-07-26): eval after every
+            # eval_train_interval_sec of TRAINING wall-clock, regardless of eval
+            # duration or step count. train_time_since_eval is reset to 0 after
+            # each eval (below), so this fires cleanly every interval and also
+            # avoids the resume-time eval burst the step%eval_interval bootstrap
+            # caused (eval_interval is small = 10 just to bootstrap the budget).
+            _do_eval = (train_time_since_eval >= eval_train_interval_sec)
+        elif eval_interval:
             if _eval_time_budgeted and last_eval_duration is not None:
                 _do_eval = (train_time_since_eval
                             >= _eval_train_ratio * last_eval_duration)
@@ -2540,20 +2575,36 @@ def main(
             course_metrics = read_course_metrics(env)
             for name, value in course_metrics.items():
                 tf.summary.scalar(name, data=value, step=step)
+            # Also snapshot the EVAL env's course metrics (dedicated single-gym
+            # eval env in multi-env runs; the shared env in single-env runs).
+            # These reflect the GREEDY eval rollouts, not the exploration-noisy
+            # collect rollouts, and drive the curriculum gate below. Logged
+            # under an 'eval/' namespace so TB shows the eval-rollout goals/ep
+            # alongside the training-rollout one.
+            eval_course_metrics = read_course_metrics(eval_env)
+            for name, value in eval_course_metrics.items():
+                tf.summary.scalar('eval/' + name, data=value, step=step)
             # Curriculum update: check whether the agent has met the
             # advancement threshold and step to the next stage if so.
-            # Gate on the ROLLING last-30-episode mean (2026-07-22), NOT
-            # the lifetime-cumulative avg_goals_per_episode: the cumulative
-            # value is permanently dragged down by every early exploration/
-            # crash episode, so a policy that has recently become competent
-            # stays blocked forever. _last_30 reflects current competence
-            # and rises/falls with the policy, which is what an advancement
-            # gate wants. Falls back to the cumulative key if the last-30
-            # metric is somehow absent, then 0.0.
+            # Gate on the EVAL rollouts' ROLLING last-30-episode goals/ep mean
+            # (2026-07-26), NOT the collect env's training rollouts. Rationale:
+            #   * EVAL rollouts use the GREEDY policy on a single clean gym, so
+            #     goals/ep reflects the policy's learned competence rather than
+            #     its exploration variance (the collect env samples the noisy
+            #     stochastic policy across N gyms). Advancement should track what
+            #     the policy can actually DO, which is what eval measures.
+            #   * The eval env's course keeps its own goals_per_episode_arr that
+            #     accumulates ONLY eval episodes, so avg_goals_per_episode_last_30
+            #     here is the mean goals over the last 30 EVAL episodes (~3 eval
+            #     cycles at num_eval_episodes=10 each) - a low-variance,
+            #     multi-cycle-stable signal.
+            # Still uses the ROLLING last-30 (not lifetime-cumulative) mean so a
+            # recently-competent policy isn't permanently dragged down by early
+            # crash episodes. Falls back to the cumulative key, then 0.0.
             if _curriculum is not None:
-                _advance_metric = course_metrics.get(
+                _advance_metric = eval_course_metrics.get(
                     'avg_goals_per_episode_last_30',
-                    course_metrics.get('avg_goals_per_episode', 0.0))
+                    eval_course_metrics.get('avg_goals_per_episode', 0.0))
                 _curriculum.update(_advance_metric, train_step=step)
             # Cumulative asyncio.TimeoutError counts per category,
             # summed across actors. Each value is monotonically non-
