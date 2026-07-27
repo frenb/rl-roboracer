@@ -2571,6 +2571,17 @@ def main(
             # earlier expert-demo-routing investigation. Pure SAC
             # without periodic BC anchoring will start strong (BC-
             # pretrained actor) and drift as the buffer dilutes.
+            # Snapshot the EVAL env's cumulative goal/episode counters BEFORE
+            # the eval so the curriculum gate can isolate THIS eval cycle's
+            # episodes (goals_per_episode_total / num_episodes_total accumulate
+            # over the course's lifetime; the post-eval delta gives exactly the
+            # episodes of the most recently completed eval). Only the eval env
+            # drives Unity between these two reads (collection is paused during
+            # eval), so the delta is eval-only even in single-env runs.
+            try:
+                _eval_ctr_before = read_course_raw_counters(eval_env)
+            except Exception:  # noqa: BLE001
+                _eval_ctr_before = {}
             metrics = get_eval_metrics()
             course_metrics = read_course_metrics(env)
             for name, value in course_metrics.items():
@@ -2578,34 +2589,47 @@ def main(
             # Also snapshot the EVAL env's course metrics (dedicated single-gym
             # eval env in multi-env runs; the shared env in single-env runs).
             # These reflect the GREEDY eval rollouts, not the exploration-noisy
-            # collect rollouts, and drive the curriculum gate below. Logged
-            # under an 'eval/' namespace so TB shows the eval-rollout goals/ep
-            # alongside the training-rollout one.
+            # collect rollouts. Logged under an 'eval/' namespace so TB shows the
+            # eval-rollout goals/ep (rolling last-30, cumulative, etc.) for
+            # reference; the curriculum GATE below uses the per-eval delta.
             eval_course_metrics = read_course_metrics(eval_env)
             for name, value in eval_course_metrics.items():
                 tf.summary.scalar('eval/' + name, data=value, step=step)
-            # Curriculum update: check whether the agent has met the
-            # advancement threshold and step to the next stage if so.
-            # Gate on the EVAL rollouts' ROLLING last-30-episode goals/ep mean
-            # (2026-07-26), NOT the collect env's training rollouts. Rationale:
-            #   * EVAL rollouts use the GREEDY policy on a single clean gym, so
-            #     goals/ep reflects the policy's learned competence rather than
-            #     its exploration variance (the collect env samples the noisy
-            #     stochastic policy across N gyms). Advancement should track what
-            #     the policy can actually DO, which is what eval measures.
-            #   * The eval env's course keeps its own goals_per_episode_arr that
-            #     accumulates ONLY eval episodes, so avg_goals_per_episode_last_30
-            #     here is the mean goals over the last 30 EVAL episodes (~3 eval
-            #     cycles at num_eval_episodes=10 each) - a low-variance,
-            #     multi-cycle-stable signal.
-            # Still uses the ROLLING last-30 (not lifetime-cumulative) mean so a
-            # recently-competent policy isn't permanently dragged down by early
-            # crash episodes. Falls back to the cumulative key, then 0.0.
+            # Per-eval-cycle goals/ep: goals and episodes banked by the EVAL env
+            # during THIS eval only, via the raw-counter delta.
+            try:
+                _eval_ctr_after = read_course_raw_counters(eval_env)
+            except Exception:  # noqa: BLE001
+                _eval_ctr_after = {}
+            _eval_goals_delta = (
+                _eval_ctr_after.get('goals_per_episode_total', 0.0)
+                - _eval_ctr_before.get('goals_per_episode_total', 0.0))
+            _eval_eps_delta = (
+                _eval_ctr_after.get('num_episodes_total', 0.0)
+                - _eval_ctr_before.get('num_episodes_total', 0.0))
+            _eval_goals_per_ep_this_eval = (
+                _eval_goals_delta / _eval_eps_delta if _eval_eps_delta > 0
+                else 0.0)
+            tf.summary.scalar('eval/goals_per_episode_this_eval',
+                              data=_eval_goals_per_ep_this_eval, step=step)
+            print(f"EVAL goals/ep (this eval only): "
+                  f"{_eval_goals_per_ep_this_eval:.2f} "
+                  f"(goals={_eval_goals_delta:.0f} over "
+                  f"{_eval_eps_delta:.0f} episodes)", flush=True)
+            # Curriculum update: gate advancement on the avg goals/ep over ONLY
+            # the episodes of the MOST RECENTLY COMPLETED eval (2026-07-27), not
+            # a rolling last-30 window spanning multiple eval cycles. Rationale:
+            #   * Still an EVAL (greedy, single clean gym) signal, so it reflects
+            #     learned competence, not the collect env's exploration variance.
+            #   * Using ONLY the latest eval's episodes means the gate responds
+            #     immediately to the current policy - it is not diluted or lagged
+            #     by episodes from earlier, weaker eval cycles (the rolling-30
+            #     window took ~6 cycles to shed early near-zero episodes). The
+            #     trade-off is higher per-eval variance (num_eval_episodes
+            #     samples), which the stage 'consecutive' requirement absorbs by
+            #     demanding the bar be cleared on several evals in a row.
             if _curriculum is not None:
-                _advance_metric = eval_course_metrics.get(
-                    'avg_goals_per_episode_last_30',
-                    eval_course_metrics.get('avg_goals_per_episode', 0.0))
-                _curriculum.update(_advance_metric, train_step=step)
+                _curriculum.update(_eval_goals_per_ep_this_eval, train_step=step)
             # Cumulative asyncio.TimeoutError counts per category,
             # summed across actors. Each value is monotonically non-
             # decreasing across the training run, so the TensorBoard
