@@ -181,6 +181,22 @@ class BaseCourse(ABC):
         """
         return {k: float(getattr(self, k, 0)) for k in self.RAW_COUNTER_KEYS}
 
+    def recent_goals_per_episode(self, n):
+        """Return the goal counts of the most recent ``n`` completed episodes.
+
+        Reads the tail of ``goals_per_episode_arr`` (one entry appended per
+        episode in ``reset_after_episode``). Used by the trainer's curriculum
+        gate to isolate a single eval cycle's per-episode goal counts (so it
+        can, e.g., average the top-K episodes) rather than only the running
+        aggregates ``get_metrics()`` exposes. Courses that don't track the
+        array (SimpleCourse) return an empty list.
+        """
+        arr = getattr(self, 'goals_per_episode_arr', None)
+        if not arr:
+            return []
+        n = int(n)
+        return [float(x) for x in (arr[-n:] if n > 0 else arr)]
+
     def check_if_moving(self, arr):
         """Helper method to check if robot is moving.
 

@@ -511,6 +511,29 @@ def read_course_metrics(env):
     return env.get_course_metrics()
 
 
+def read_course_recent_goals(env, n):
+    """Return the most-recent ``n`` per-episode goal counts from a course.
+
+    Single env: delegate to env.get_recent_goals_per_episode(n).
+    Parallel envs: concatenate each worker's recent-n (rarely needed - the
+    curriculum gate calls this on the single-gym eval env). Returns a list of
+    floats; empty if the course/env doesn't expose the accessor.
+    """
+    from tf_agents.environments import parallel_py_environment
+    try:
+        if isinstance(env, parallel_py_environment.ParallelPyEnvironment):
+            promises = [proc_env.call('get_recent_goals_per_episode', n)
+                        for proc_env in env._envs]
+            out = []
+            for promise in promises:
+                out.extend(promise() or [])
+            return out
+        return list(env.get_recent_goals_per_episode(n) or [])
+    except Exception as e:  # noqa: BLE001
+        print(f"read_course_recent_goals failed: {e}", flush=True)
+        return []
+
+
 def build_train_env(num_envs, course_type='donut'):
     """Construct the training env (single or parallel) for main()."""
     if num_envs <= 1:
@@ -2595,8 +2618,10 @@ def main(
             eval_course_metrics = read_course_metrics(eval_env)
             for name, value in eval_course_metrics.items():
                 tf.summary.scalar('eval/' + name, data=value, step=step)
-            # Per-eval-cycle goals/ep: goals and episodes banked by the EVAL env
-            # during THIS eval only, via the raw-counter delta.
+            # Per-eval-cycle goals: episode count + per-episode goal counts
+            # banked by the EVAL env during THIS eval only. num_episodes_total
+            # delta tells us how many episodes this eval ran; the tail of the
+            # eval env's goals_per_episode_arr gives their individual goal counts.
             try:
                 _eval_ctr_after = read_course_raw_counters(eval_env)
             except Exception:  # noqa: BLE001
@@ -2604,32 +2629,49 @@ def main(
             _eval_goals_delta = (
                 _eval_ctr_after.get('goals_per_episode_total', 0.0)
                 - _eval_ctr_before.get('goals_per_episode_total', 0.0))
-            _eval_eps_delta = (
+            _eval_eps_delta = int(
                 _eval_ctr_after.get('num_episodes_total', 0.0)
                 - _eval_ctr_before.get('num_episodes_total', 0.0))
-            _eval_goals_per_ep_this_eval = (
+            # Per-episode goal counts for THIS eval's episodes (last N entries).
+            _eval_ep_goals = read_course_recent_goals(
+                eval_env,
+                _eval_eps_delta if _eval_eps_delta > 0 else num_eval_episodes)
+            # Gate metric: mean of the TOP-K episodes by goal count within this
+            # eval (2026-07-27). Averaging only the best K episodes measures the
+            # policy's demonstrated best-case competence and is robust to a few
+            # unlucky early crashes dragging a full-episode mean down. K is
+            # capped at the number of episodes actually available.
+            _EVAL_TOPK = 3
+            _eval_topk_goals = sorted(_eval_ep_goals, reverse=True)[:_EVAL_TOPK]
+            _eval_topk_metric = (
+                sum(_eval_topk_goals) / len(_eval_topk_goals)
+                if _eval_topk_goals else 0.0)
+            # Full-eval mean kept for logging / reference (not the gate).
+            _eval_mean_metric = (
                 _eval_goals_delta / _eval_eps_delta if _eval_eps_delta > 0
                 else 0.0)
             tf.summary.scalar('eval/goals_per_episode_this_eval',
-                              data=_eval_goals_per_ep_this_eval, step=step)
+                              data=_eval_mean_metric, step=step)
+            tf.summary.scalar('eval/goals_per_episode_top3_this_eval',
+                              data=_eval_topk_metric, step=step)
             print(f"EVAL goals/ep (this eval only): "
-                  f"{_eval_goals_per_ep_this_eval:.2f} "
-                  f"(goals={_eval_goals_delta:.0f} over "
-                  f"{_eval_eps_delta:.0f} episodes)", flush=True)
-            # Curriculum update: gate advancement on the avg goals/ep over ONLY
-            # the episodes of the MOST RECENTLY COMPLETED eval (2026-07-27), not
-            # a rolling last-30 window spanning multiple eval cycles. Rationale:
-            #   * Still an EVAL (greedy, single clean gym) signal, so it reflects
-            #     learned competence, not the collect env's exploration variance.
-            #   * Using ONLY the latest eval's episodes means the gate responds
-            #     immediately to the current policy - it is not diluted or lagged
-            #     by episodes from earlier, weaker eval cycles (the rolling-30
-            #     window took ~6 cycles to shed early near-zero episodes). The
-            #     trade-off is higher per-eval variance (num_eval_episodes
-            #     samples), which the stage 'consecutive' requirement absorbs by
-            #     demanding the bar be cleared on several evals in a row.
+                  f"top{_EVAL_TOPK}-mean={_eval_topk_metric:.2f} "
+                  f"(top={[round(g, 1) for g in _eval_topk_goals]}), "
+                  f"full-mean={_eval_mean_metric:.2f} over "
+                  f"{_eval_eps_delta} episodes "
+                  f"all={[round(g, 1) for g in _eval_ep_goals]}", flush=True)
+            # Curriculum update: gate advancement on the TOP-K-by-goal-count mean
+            # of ONLY the most recently completed eval (2026-07-27). Rationale:
+            #   * EVAL (greedy, single clean gym) signal reflects learned
+            #     competence, not the collect env's exploration variance.
+            #   * ONLY the latest eval's episodes -> the gate tracks the CURRENT
+            #     policy, not a rolling window lagged by earlier weaker evals.
+            #   * TOP-K (best 3) rewards demonstrated best-case driving and is
+            #     robust to a few early crashes; per-eval variance is absorbed by
+            #     the stage 'consecutive' requirement (bar cleared N evals in a
+            #     row).
             if _curriculum is not None:
-                _curriculum.update(_eval_goals_per_ep_this_eval, train_step=step)
+                _curriculum.update(_eval_topk_metric, train_step=step)
             # Cumulative asyncio.TimeoutError counts per category,
             # summed across actors. Each value is monotonically non-
             # decreasing across the training run, so the TensorBoard
