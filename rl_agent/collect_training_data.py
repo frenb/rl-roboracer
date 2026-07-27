@@ -47,11 +47,14 @@ class robotaxi():
         # environments/courses/donut_course.py). This was stale at the
         # pre-2026-07-19 drive-only range [0.001, 2] until 2026-07-22, when
         # it was updated to match the course's [-0.01, 1] acceleration /
-        # [-1, 1] steering range (acceleration floor -0.01 = near-coast,
-        # full -1 active braking having proved too strong).
+        # [-1, 1] steering range. On 2026-07-24 the acceleration floor was
+        # raised again to a POSITIVE 0.05 (max kept at 1.0) to force
+        # always-forward driving and kill the ~0.5 m/s crawl the [-0.01, 1]
+        # range allowed - see DonutCourse.action_spec's comment for the full
+        # rationale. Range is now [0.05, 1.0] accel / [-1, 1] steering.
         self._action_spec = tensor_spec.BoundedTensorSpec( #BoundedArraySpec(
             shape=(2, ), dtype=np.float32, 
-            minimum=[-0.01,-1], 
+            minimum=[0.05,-1], 
             maximum=[1, 1],
             name='action')
         # self._observation_spec = tensor_spec.BoundedTensorSpec( #BoundedArraySpec(

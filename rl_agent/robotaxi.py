@@ -777,11 +777,18 @@ class CurriculumScheduler:
         advanced = sched.update(avg_goals_per_episode, train_step)
     """
 
-    def __init__(self, stages, env):
+    def __init__(self, stages, env, eval_env=None):
         if not stages:
             raise ValueError("CurriculumScheduler requires at least one stage")
         self.stages = stages
         self.env = env
+        # Dedicated single-gym eval env (multi-env runs). When present and
+        # distinct from the collect env, each stage change must reconfigure it
+        # too so eval measures performance on the CURRENT stage geometry rather
+        # than whatever stage the eval env was built at. None (or the same
+        # object as env) in single-env runs where collect and eval share one env.
+        self.eval_env = eval_env if (eval_env is not None
+                                     and eval_env is not env) else None
         self.stage_idx = 0
         self._consecutive_above = 0
         self._apply_stage(train_step=0)
@@ -797,6 +804,11 @@ class CurriculumScheduler:
         configure_env(self.env, corner_radius=cr, curvature_difficulty=cd,
                       chicanes_north=ch_n, chicanes_east=ch_e,
                       chicanes_south=ch_s, chicanes_west=ch_w)
+        if self.eval_env is not None:
+            configure_env(self.eval_env, corner_radius=cr,
+                          curvature_difficulty=cd,
+                          chicanes_north=ch_n, chicanes_east=ch_e,
+                          chicanes_south=ch_s, chicanes_west=ch_w)
         print(
             f"[curriculum] stage {self.stage_idx}/{len(self.stages)-1}: "
             f"corner_radius={cr}, curvature_difficulty={cd}, "
@@ -1095,8 +1107,27 @@ def main(
               f"{total:8.2f}s  (100.0%)\n", flush=True)
 
     _phase("env_spawn (Unity handshake)")
-    # Environment. Use same for eval and collection, though this does not seem standard?
+    # Environment. Single-env runs use one env for both collect and eval.
     env = build_train_env(num_envs, course_type="donut")
+    # Dedicated single-gym EVAL env (option-a, 2026-07-25). In multi-env runs
+    # the collect env is a ParallelPyEnvironment that steps ALL gyms in
+    # lockstep; reusing it for eval meant the eval phase hammered every client
+    # at max rate (no learner delay between steps) through that lockstep
+    # barrier, so any single client's hiccup stalled them all -> the pauses and
+    # crashes that biased eval metrics (spuriously short episodes). Eval is a
+    # measurement, not a throughput task, so we run it on ONE client
+    # (ros-server-0) while the collect ParallelPyEnvironment keeps BOTH gyms for
+    # throughput. Two RobotApi connections to ros-server-0 (this eval env +
+    # collect worker-0) coexist fine: ROS pub/sub allows multiple
+    # subscribers/publishers and collection is PAUSED during eval, so only one
+    # side drives Unity at a time. Caveat: right after an eval, collect
+    # worker-0's course tracking (target goal / steps_since_last_goal) is briefly
+    # out of sync with the car's eval-moved position; it self-corrects on that
+    # gym's next episode reset (~1 short episode). Single-env runs are unchanged.
+    if num_envs > 1:
+        eval_env = make_env('ros-server-0:50051', course_type="donut")
+    else:
+        eval_env = env
     # Bookkeeping that used to live on env.course; tracking it in main() lets
     # us share the same code path for single- vs multi-env training (in
     # multi-env mode the per-subprocess course state isn't reachable from
@@ -1211,6 +1242,16 @@ def main(
                   chicanes_north=_init_ch_n, chicanes_east=_init_ch_e,
                   chicanes_south=_init_ch_s, chicanes_west=_init_ch_w,
                   env_discount=env_discount_val)
+    # Mirror the same job config onto the dedicated eval env (multi-env runs).
+    # The curriculum scheduler keeps them in sync on later stage changes; this
+    # sets the initial stage-0 geometry / discount before the first eval.
+    if eval_env is not env:
+        configure_env(eval_env, job_id=job_id, pass_through_actions=False,
+                      corner_radius=_init_cr,
+                      curvature_difficulty=_init_cd,
+                      chicanes_north=_init_ch_n, chicanes_east=_init_ch_e,
+                      chicanes_south=_init_ch_s, chicanes_west=_init_ch_w,
+                      env_discount=env_discount_val)
     print(f"pass_through_actions: False")
     print(f"env_discount={env_discount_val} (effective gamma*env_discount "
           f"= {gamma_val * env_discount_val:.4f})", flush=True)
@@ -1330,11 +1371,18 @@ def main(
     # while min_force was -1.0, so it contains hard active-braking
     # transitions down to -1.0 that are now OUTSIDE the policy's action
     # range - feeding them into prefill/BC would train the actor toward
-    # targets it can no longer emit. The long-standing default w-course set
-    # was collected drive-only (>= 0.001), so this drops 0 rows there; the
-    # per-source "dropped N" log below makes which source was affected
-    # explicit. Keep in sync with DonutCourse.action_spec's minimum[0].
-    _DEMO_MIN_ACCEL = -0.01
+    # targets it can no longer emit.
+    #
+    # Raised -0.01 -> 0.05 (2026-07-24) to track the action_spec floor moving
+    # to a positive 0.05 (see DonutCourse.action_spec). This now also drops
+    # every near-idle transition (0 <= force < 0.05) from ANY reused legacy
+    # set - including the old w-course [0.001, 0.2] data whose median force
+    # was ~0.012, i.e. most of it - which is intentional: those idle rows are
+    # exactly the crawl prior we're eliminating. Freshly-collected demos use
+    # min_force=0.2 (> 0.05) so they lose 0 rows. The per-source "dropped N"
+    # log below makes which source was affected explicit. Keep in sync with
+    # DonutCourse.action_spec's minimum[0].
+    _DEMO_MIN_ACCEL = 0.05
     _per_dir_trajectories = []
     _per_dir_counts = []
     for _record_dir in record_dirs:
@@ -1653,7 +1701,17 @@ def main(
             f"demos will FIFO-evict as RL data accumulates)", flush=True)
     
     # Policies
-    tf_eval_policy = tf_agent.policy
+    # EVAL uses a GREEDY wrapper (2026-07-25). tf-agents' SacAgent sets both
+    # `policy` and `collect_policy` to the SAME stochastic ActorPolicy, so
+    # without this wrap eval would sample from the tanh-Gaussian with full
+    # exploration noise - one unlucky sampled steering action can crash the car
+    # mid-corner, so AverageReturn / episode-length carried the policy's
+    # exploration VARIANCE rather than its learned competence (the spuriously
+    # short eval episodes). GreedyPolicy takes the distribution's MODE
+    # (tanh(mean)) so eval measures the deterministic learned behavior - lower
+    # variance, more meaningful best-model selection. Collection still uses the
+    # stochastic collect_policy below (exploration is required there).
+    tf_eval_policy = greedy_policy.GreedyPolicy(tf_agent.policy)
     eval_policy = py_tf_eager_policy.PyTFEagerPolicy(
         tf_eval_policy, use_tf_function=True)
     
@@ -1902,7 +1960,7 @@ def main(
     
     _phase("learner+eval_actor build")
     eval_actor = actor.Actor(
-        env,
+        eval_env,
         eval_policy,
         train_step,
         episodes_per_run=num_eval_episodes,
@@ -1978,24 +2036,27 @@ def main(
               f"{pre_episodes if pre_episodes is not None else '?'}",
               flush=True)
 
-        # Keep the rollout viz live during the (blocking) eval run. The
-        # in-training eval steps the SAME N-actor parallel env, so all clients
-        # are active - but the viz context is otherwise only refreshed in the
-        # TRAIN loop, leaving a frozen collect fan during eval. This helper
-        # thread refreshes the viz context (greedy eval_policy + the eval env's
-        # CACHED current_time_step, all N actors) every ~50ms so every client
-        # renders its own live eval fan. It only READS the cached batched
-        # time_step (no subprocess call), so it doesn't race the eval stepping;
-        # update_context is a no-op when ROLLOUT_VIZ is disabled.
+        # Keep the rollout viz live during the (blocking) eval run. In-training
+        # eval now steps the DEDICATED single-gym eval env (ros-server-0), not
+        # the N-actor collect env, so only that one client is active during
+        # eval - but the viz context is otherwise only refreshed in the TRAIN
+        # loop, leaving a frozen collect fan during eval. This helper thread
+        # refreshes the viz context (greedy eval_policy + the eval env's CACHED
+        # current_time_step) every ~50ms so the eval client renders its live
+        # fan. It only READS the cached time_step (no subprocess call), so it
+        # doesn't race the eval stepping; update_context is a no-op when
+        # ROLLOUT_VIZ is disabled.
         _eval_viz_stop = threading.Event()
+        # Eval runs on a single client regardless of collect num_envs.
+        _eval_num_envs = 1 if eval_env is not env else num_envs
 
         def _feed_eval_viz():
             while not _eval_viz_stop.is_set():
                 try:
-                    get_viz().update_context(eval_policy, env, eval_step,
+                    get_viz().update_context(eval_policy, eval_env, eval_step,
                                              mode="eval")
                     # Keep the HUD on EVAL even when the fan is disabled.
-                    get_viz().publish_mode("eval", num_envs, eval_step)
+                    get_viz().publish_mode("eval", _eval_num_envs, eval_step)
                 except Exception:  # noqa: BLE001 - viz must never break eval
                     pass
                 _eval_viz_stop.wait(0.05)
@@ -2005,12 +2066,13 @@ def main(
         _eval_viz_thread.start()
         # Disable immediate reset during eval - eval steps quickly and the
         # blocking reset just slows it down. The normal reset path is fast
-        # enough when there's no learner delay between steps.
-        set_immediate_reset_on_failure(env, False)
+        # enough when there's no learner delay between steps. Toggle it on the
+        # eval env (the single-gym eval client in multi-env runs).
+        set_immediate_reset_on_failure(eval_env, False)
         try:
             eval_actor.run()
         finally:
-            set_immediate_reset_on_failure(env, True)
+            set_immediate_reset_on_failure(eval_env, True)
             _eval_viz_stop.set()
             _eval_viz_thread.join(timeout=1.0)
 
@@ -2203,8 +2265,10 @@ def main(
               flush=True)
 
     # Curriculum scheduler (None when curriculum_stages_val is unset).
+    # eval_env is passed so stage changes also reconfigure the dedicated
+    # single-gym eval env (multi-env runs); it's a no-op when eval_env is env.
     _curriculum = (
-        CurriculumScheduler(_curriculum_stages, env)
+        CurriculumScheduler(_curriculum_stages, env, eval_env=eval_env)
         if _curriculum_stages else None
     )
 
@@ -2511,7 +2575,14 @@ def main(
 
             saved_checkpoint = False
             if step >= min_write_step and is_new_max_avg: # step % write_policy_interval == 0
-                tf_policy_saver = policy_saver.PolicySaver(tf_agent.policy)
+                # Export the GREEDY policy (tf_eval_policy = GreedyPolicy(agent
+                # .policy)) so the deployed best model takes the distribution's
+                # MODE (tanh(mean)) instead of sampling. A deployed SAC actor
+                # should drive deterministically; saving the raw stochastic
+                # policy would ship the exploration noise into production. This
+                # matches the greedy eval used to SELECT this best model, so the
+                # exported artifact behaves like what was measured.
+                tf_policy_saver = policy_saver.PolicySaver(tf_eval_policy)
                 save_dir_name=get_save_dir_name(tf_agent)+ "_step_" + str(step)
                 tf_policy_saver.save(save_dir_name)
                 robot_type = os.getenv('ROBOT_TYPE')
@@ -5173,7 +5244,15 @@ def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
     # to react, causing corner crashes. Capped back down to 0.25 alongside
     # MAX_SPEED 5.0 -> 3.5 to reduce both how fast the car can ramp up AND
     # how much speed the braking logic ever has to shed before a corner.
-    base_force=0.25
+    #
+    # 0.25 -> 0.5 (2026-07-24): base_force is the UPPER bound the collector's
+    # throttle ramps toward on straights (see the ACCEL_STEP branch below:
+    # `action_apply_force = min(base_force, action_apply_force + ACCEL_STEP)`),
+    # so it sets how hard/fast the demo car ever accelerates. With min_force
+    # also raised to 0.2, the demo force now lives in [0.2, 0.5] instead of
+    # the old crawl-prone [-0.01, 0.25] - a real forward-throttle band that
+    # teaches driving speed. Still well under the action_spec max (1.0).
+    base_force=0.5
     # min_force widened 0.001 -> -1.0 (2026-07-19, same day as the
     # action_spec range change above from [0.1,2.0] to [-1,1]): 0.001 was
     # effectively "coast at ~0 drive torque", the ONLY deceleration
@@ -5188,7 +5267,20 @@ def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
     # -1.0 -> -0.01 (2026-07-22): full -1.0 active braking was too strong,
     # so the decel floor is pulled back to a near-coast -0.01 (barely
     # negative torque) rather than hard reverse braking.
-    min_force=-0.01
+    #
+    # -0.01 -> 0.2 (2026-07-24): demo-distribution analysis of the resulting
+    # tfrecords showed the [-0.01, base_force] range let the collector sit at
+    # near-zero throttle for the vast majority of steps (median force ~0.01-
+    # 0.07, ~70% of W-course steps in the near-coast band), which AWAC's BC
+    # term then faithfully reproduced as a ~0.5 m/s "crawl" the reward could
+    # never overcome. Raising the FLOOR to 0.2 (with base_force=0.25) pins the
+    # collector to a near-constant [0.2, 0.25] forward throttle - it can no
+    # longer coast/brake below 0.2 - so a freshly-collected demo set teaches
+    # actual driving speed instead of idling. NOTE: this only affects NEW demo
+    # collection jobs; existing tfrecords are unchanged and must be re-
+    # collected for this to take effect. 0.2 is >= the action_spec minimum
+    # (0.05) so the _DEMO_MIN_ACCEL load filter drops 0 of these rows.
+    min_force=0.2
     # Simple curvature-scaled heuristic (2026-07-18 rewrite, replacing the
     # previous corner_urgency/clearance-cone/curvature-asymmetry/force-cap
     # system - see git history for that version). That system's extra
