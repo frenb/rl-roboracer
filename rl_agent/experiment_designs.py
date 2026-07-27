@@ -111,6 +111,20 @@ SCHEMA = {
         "paper_ref": None,
         "kwarg": "eval_time_fraction_val",
     },
+    "eval_train_interval_sec": {
+        "type": "int",
+        "default": 0,
+        "min": 0, "max": 86_400,
+        "doc": ("Fixed TRAINING wall-clock seconds between evals. When > 0 it "
+                "takes precedence over eval_time_fraction: an eval fires after "
+                "every N seconds of training time, a constant 'eval every N "
+                "minutes' cadence independent of eval duration (unlike the "
+                "time-fraction budget, whose train gap scales with eval "
+                "length). 0 disables (use eval_time_fraction / eval_interval). "
+                "Overridden at runtime by the EVAL_TRAIN_INTERVAL_SEC env var."),
+        "paper_ref": None,
+        "kwarg": "eval_train_interval_sec_val",
+    },
     "log_interval": {
         "type": "int",
         "default": 5000,

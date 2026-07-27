@@ -19,7 +19,16 @@ class DonutCourse (BaseCourse):
     # frequent than intended - bounding episode length by goal count keeps
     # episode boundaries (and the env.reset()/course-config refresh that
     # comes with them) happening at a steady, predictable cadence.
-    GOALS_PER_EPISODE_CAP = 30
+    #
+    # 30 -> 100 (2026-07-26): the policy had been reliably hitting the 30 cap
+    # (every eval/collect episode truncating at exactly 30 goals), so the cap
+    # was both the ceiling on the curriculum's goals/ep advancement signal and
+    # an artificial cut on how far a competent policy could demonstrate it can
+    # drive. Raised to 100 so episodes run ~3x longer before the success-
+    # truncation, giving the eval-gated curriculum (see robotaxi.py) real head-
+    # room to measure sustained driving. NOTE: this lengthens BOTH eval and
+    # collect/DEMO episodes ~proportionally, so eval-cycle wall-clock grows too.
+    GOALS_PER_EPISODE_CAP = 100
 
     def __init__(self, api, env):
         self.env = env
