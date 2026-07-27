@@ -113,9 +113,20 @@ class DonutCourse (BaseCourse):
         # braking proved too strong, so the acceleration floor is pulled
         # back to a near-coast -0.01 (barely-negative torque) while the
         # +1 drive ceiling and the full [-1, 1] steering range are kept.
+        #
+        # acceleration minimum -0.01 -> 0.05, maximum kept at 1.0
+        # (2026-07-24): demo-distribution analysis showed the [-0.01, 1]
+        # range let the policy idle at ~0 throttle (a ~0.5 m/s "crawl"), so
+        # the floor is raised to a POSITIVE 0.05 - the policy can no longer
+        # coast/brake below a gentle forward torque and is forced to keep
+        # driving. This restores the always-forward property the original
+        # 2026-04-26 spec had (that spec was accel [0.1, 2.0]); the new range
+        # [0.05, 1.0] uses a slightly lower floor (0.05 vs 0.1) and half the
+        # top-end torque (1.0 vs 2.0). Steering range [-1, 1] unchanged. Keep
+        # minimum[0] in sync with _DEMO_MIN_ACCEL in robotaxi.py.
         self.action_spec = array_spec.BoundedArraySpec(
             shape=(2, ), dtype=np.float32, 
-                minimum=[-0.01,-1], 
+                minimum=[0.05,-1], 
                 maximum=[1, 1], name='action')
         self.observation_spec = array_spec.BoundedArraySpec(
             shape=(32,), dtype=np.float32,
