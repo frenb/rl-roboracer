@@ -278,3 +278,75 @@ after resume, caused by the critic adapting to the temporarily demo-heavy buffer
 7. Let it reach the next eval cycle and inspect `eval_curve.csv` (Layer 3) for a smooth return trajectory.
 
 Total wall time: ~15–20 minutes once the implementation is in place.
+
+### Analyzing DEMO-collection metrics (speed / episodes / crashes)
+
+`rl_agent/analyze_demo_metrics.py` recovers per-run driving statistics for a
+**DEMO** (`collect_expert_demos`) job straight from its stored tfrecords.
+
+#### Background
+
+A DEMO job drives the car with a scripted heuristic and records every
+transition to `/tfrecords/job_<id>/` for later use as an AWAC/BC expert prior.
+Unlike TRAIN jobs, a DEMO run:
+
+- does **not** write TensorBoard / course metrics (no `metrics/` event files,
+  no `avg_speed` / `crashes_per_1k_steps` / `avg_goals_per_episode` scalars —
+  those come from the TRAIN loop's `update_stats`, which DEMO collection never
+  enters), and
+- only prints per-episode counts to stdout, which lands in `/tmp/trainer.log`
+  and is **overwritten by the next trainer launch**.
+
+So once you've moved on to training, the only durable record of how well a demo
+run actually drove is the tfrecords themselves. This tool reads them back.
+
+#### Rationale — measured vs. reconstructed
+
+- **Speed is measured directly.** `observation[1]` is the signed car speed in
+  m/s (see `DonutCourse.observation_spec`: `obs[0]`=angle-to-goal,
+  `obs[1]`=speed, `obs[17]`=forward raycast clearance). The tool reports
+  per-stage and overall mean/median/percentiles plus `%reverse`, `%stopped`,
+  and `%cruise`.
+- **Episodes / goals-per-episode / crashes are reconstructed** (estimates, not
+  ground truth), because the tfrecords store single-step transitions with
+  synthetic step-types — episode boundaries aren't persisted. Rows are in
+  temporal order within each stage file, so:
+  - an **episode boundary** is a respawn: speed dips below `--speed-stop` after
+    having driven above `--speed-moving` (with `min_force >= 0.2` the demo car
+    only sits at ~0 m/s on a fresh spawn);
+  - **goals/episode** is inferred from the per-stage goal budget ÷ reconstructed
+    episode count — the collector advances a stage after `--goal-budget` goals
+    and truncates each episode at `--goal-cap` goals, so a crash-free stage
+    lands on exactly `ceil(goal_budget / goal_cap)` episodes (e.g. 4 for
+    100/30). Landing on that minimum is itself the signal that the run was
+    essentially crash-free;
+  - a **crash-ended episode** is flagged when the forward clearance at the
+    episode's last step is in the bottom decile (car against a wall) rather than
+    a clean cap/budget cutoff on open road.
+
+#### Usage
+
+Runs inside the `sim-controller` container (it imports `collect_training_data`
+and reads the `/tfrecords` volume):
+
+```powershell
+docker compose -f docker-compose.yml -f compose/scale.yml exec -T sim-controller `
+  bash -lc "cd /python_ws/src && PYTHONPATH=/python_ws/src python -u analyze_demo_metrics.py <JOB_ID>"
+```
+
+The positional argument accepts a bare job id, `job_<id>`, or a full
+`/tfrecords/...` path:
+
+```powershell
+# by job id
+... python -u analyze_demo_metrics.py 6a63d44dc9d3ac4a1af57a0a
+
+# override the collection's budget/cap or the respawn speed thresholds
+... python -u analyze_demo_metrics.py 6a63d44d --goal-budget 100 --goal-cap 30 --speed-stop 0.3
+```
+
+Output is an `OVERALL` block followed by one block per curriculum stage (the
+leading zero-padded number in each `<stage>_g<gym>_<subbatch>trajectories.tfrecord`
+filename). Keep `--goal-budget` / `--goal-cap` in sync with
+`robotaxi.GOALS_PER_STAGE` and `donut_course.GOALS_PER_EPISODE_CAP` if those
+change, so the goals-per-episode estimate stays accurate.
