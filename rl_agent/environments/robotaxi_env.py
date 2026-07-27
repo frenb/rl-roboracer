@@ -87,6 +87,17 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         """
         return self.course.get_raw_counters()
 
+    def get_recent_goals_per_episode(self, n):
+        """Return the inner course's most-recent ``n`` per-episode goal counts.
+
+        Same env-level dispatch pattern as get_course_metrics/
+        get_course_raw_counters so it can be reached through
+        ``ParallelPyEnvironment.call('get_recent_goals_per_episode', n)`` if
+        ever needed. The trainer's curriculum gate uses this on the single-gym
+        eval env to average the top-K episodes of the latest eval cycle.
+        """
+        return self.course.recent_goals_per_episode(n)
+
     def get_timeout_counts(self):
         """Snapshot the RobotApi's asyncio.TimeoutError counters.
 
