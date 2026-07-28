@@ -362,6 +362,23 @@ SCHEMA = {
         "paper_ref": None,
         "kwarg": "curriculum_stages_val",
     },
+    "curriculum_start_stage": {
+        "type": "int",
+        "default": 0,
+        "min": 0, "max": 63,
+        "doc": (
+            "[Curriculum] 0-based index of the stage the curriculum STARTS on "
+            "(default 0 = normal bottom-up curriculum). Set to "
+            "len(curriculum_stages)-1 to start (and stay) on the final/hardest "
+            "geometry - e.g. to fine-tune a warm-started policy directly on the "
+            "terminal stage without re-climbing the ladder (the terminal stage "
+            "has no advance_goals, so the scheduler never advances past it). "
+            "Clamped into [0, n_stages-1]; ignored when curriculum_stages is "
+            "unset."
+        ),
+        "paper_ref": None,
+        "kwarg": "curriculum_start_stage_val",
+    },
     "corner_radius": {
         "type": "float",
         "default": 10.0,
