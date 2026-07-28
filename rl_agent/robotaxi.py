@@ -800,7 +800,7 @@ class CurriculumScheduler:
         advanced = sched.update(avg_goals_per_episode, train_step)
     """
 
-    def __init__(self, stages, env, eval_env=None):
+    def __init__(self, stages, env, eval_env=None, start_stage=0):
         if not stages:
             raise ValueError("CurriculumScheduler requires at least one stage")
         self.stages = stages
@@ -812,7 +812,17 @@ class CurriculumScheduler:
         # object as env) in single-env runs where collect and eval share one env.
         self.eval_env = eval_env if (eval_env is not None
                                      and eval_env is not env) else None
-        self.stage_idx = 0
+        # Starting stage index (curriculum_start_stage). Default 0 = normal
+        # bottom-up curriculum. Set > 0 to pin the run higher up the ladder,
+        # e.g. start_stage=len(stages)-1 trains directly on the final/hardest
+        # geometry (terminal stage: no advance_goals, so update() is a no-op
+        # and the run stays there). Clamped into range so an out-of-bounds
+        # config can never IndexError.
+        try:
+            start_stage = int(start_stage)
+        except (TypeError, ValueError):
+            start_stage = 0
+        self.stage_idx = max(0, min(start_stage, len(stages) - 1))
         self._consecutive_above = 0
         self._apply_stage(train_step=0)
 
@@ -1037,6 +1047,12 @@ def main(
     # designs/jobs that carry these fields from raising a TypeError
     # when main() is invoked.
     curriculum_stages_val=None,
+    # Curriculum starting stage index (0-based). 0 = normal bottom-up
+    # curriculum. Set to len(curriculum_stages)-1 to start (and stay) on the
+    # final/hardest geometry - useful to fine-tune a warm-started policy
+    # directly on the terminal stage without re-climbing the ladder. Clamped
+    # into [0, n_stages-1] by CurriculumScheduler.
+    curriculum_start_stage_val=0,
     corner_radius_val=10.0,
     curvature_difficulty_val=0.0,
     # Per-edge absolute chicane counts (2026-07-18), applied when there is
@@ -1231,6 +1247,10 @@ def main(
     # Resolve initial track geometry. If curriculum_stages_val is provided,
     # use the first stage's geometry; otherwise use the fixed design values.
     _curriculum_stages = None
+    # Starting stage index (curriculum_start_stage). Resolved once here so the
+    # PRE-LOOP env geometry below and the CurriculumScheduler both key off the
+    # same stage. Clamped after the stage list is known.
+    _curriculum_start = 0
     if curriculum_stages_val:
         try:
             import json as _json
@@ -1238,14 +1258,21 @@ def main(
                 _curriculum_stages = _json.loads(curriculum_stages_val)
             else:
                 _curriculum_stages = list(curriculum_stages_val)
-            _init_cr = float(_curriculum_stages[0].get('corner_radius', corner_radius_val))
-            _init_cd = float(_curriculum_stages[0].get('curvature_difficulty', curvature_difficulty_val))
-            _init_ch_n = int(_curriculum_stages[0].get('chicanes_north', chicanes_north_val))
-            _init_ch_e = int(_curriculum_stages[0].get('chicanes_east', chicanes_east_val))
-            _init_ch_s = int(_curriculum_stages[0].get('chicanes_south', chicanes_south_val))
-            _init_ch_w = int(_curriculum_stages[0].get('chicanes_west', chicanes_west_val))
+            try:
+                _curriculum_start = int(curriculum_start_stage_val)
+            except (TypeError, ValueError):
+                _curriculum_start = 0
+            _curriculum_start = max(
+                0, min(_curriculum_start, len(_curriculum_stages) - 1))
+            _init_cr = float(_curriculum_stages[_curriculum_start].get('corner_radius', corner_radius_val))
+            _init_cd = float(_curriculum_stages[_curriculum_start].get('curvature_difficulty', curvature_difficulty_val))
+            _init_ch_n = int(_curriculum_stages[_curriculum_start].get('chicanes_north', chicanes_north_val))
+            _init_ch_e = int(_curriculum_stages[_curriculum_start].get('chicanes_east', chicanes_east_val))
+            _init_ch_s = int(_curriculum_stages[_curriculum_start].get('chicanes_south', chicanes_south_val))
+            _init_ch_w = int(_curriculum_stages[_curriculum_start].get('chicanes_west', chicanes_west_val))
             print(f"[curriculum] enabled: {len(_curriculum_stages)} stages, "
-                  f"starting at corner_radius={_init_cr}, "
+                  f"starting at stage {_curriculum_start}/"
+                  f"{len(_curriculum_stages) - 1}: corner_radius={_init_cr}, "
                   f"curvature_difficulty={_init_cd}, "
                   f"chicanes(N/E/S/W)={_init_ch_n}/{_init_ch_e}/{_init_ch_s}/{_init_ch_w}",
                   flush=True)
@@ -1253,13 +1280,14 @@ def main(
             print(f"[curriculum] failed to parse curriculum_stages_val: {_e}; "
                   f"falling back to fixed track geometry.", flush=True)
             _curriculum_stages = None
+            _curriculum_start = 0
     if _curriculum_stages:
-        _init_cr = float(_curriculum_stages[0].get('corner_radius', corner_radius_val))
-        _init_cd = float(_curriculum_stages[0].get('curvature_difficulty', curvature_difficulty_val))
-        _init_ch_n = int(_curriculum_stages[0].get('chicanes_north', chicanes_north_val))
-        _init_ch_e = int(_curriculum_stages[0].get('chicanes_east', chicanes_east_val))
-        _init_ch_s = int(_curriculum_stages[0].get('chicanes_south', chicanes_south_val))
-        _init_ch_w = int(_curriculum_stages[0].get('chicanes_west', chicanes_west_val))
+        _init_cr = float(_curriculum_stages[_curriculum_start].get('corner_radius', corner_radius_val))
+        _init_cd = float(_curriculum_stages[_curriculum_start].get('curvature_difficulty', curvature_difficulty_val))
+        _init_ch_n = int(_curriculum_stages[_curriculum_start].get('chicanes_north', chicanes_north_val))
+        _init_ch_e = int(_curriculum_stages[_curriculum_start].get('chicanes_east', chicanes_east_val))
+        _init_ch_s = int(_curriculum_stages[_curriculum_start].get('chicanes_south', chicanes_south_val))
+        _init_ch_w = int(_curriculum_stages[_curriculum_start].get('chicanes_west', chicanes_west_val))
     else:
         _init_cr = corner_radius_val
         _init_cd = curvature_difficulty_val
@@ -2318,7 +2346,8 @@ def main(
     # eval_env is passed so stage changes also reconfigure the dedicated
     # single-gym eval env (multi-env runs); it's a no-op when eval_env is env.
     _curriculum = (
-        CurriculumScheduler(_curriculum_stages, env, eval_env=eval_env)
+        CurriculumScheduler(_curriculum_stages, env, eval_env=eval_env,
+                            start_stage=_curriculum_start)
         if _curriculum_stages else None
     )
 
