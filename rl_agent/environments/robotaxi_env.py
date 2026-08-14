@@ -5,7 +5,7 @@ from tf_agents.trajectories import time_step as ts
 import numpy as np
 import tensorflow as tf
 from scipy.interpolate import interp1d
-from environments.courses import donut_course,simple_course
+from environments.courses import donut_course,donut_course_no_hint,simple_course
 
 # Module-level switch for the per-step `ACTION accel=... steer=...` trace
 # emitted by `_do_action` below. Default ON (preserves the diagnostic
@@ -30,6 +30,11 @@ class RobotaxiEnv(py_environment.PyEnvironment):
     def __init__(self, api, course_type='donut'):
         if course_type == 'donut':
             self.course = donut_course.DonutCourse(api, self)
+        elif course_type == 'donut_no_hint':
+            # DonutCourse with the goal-derived dist_from_traj (angle-to-next-
+            # goal) element dropped from the observation (32 -> 31 dims), for
+            # policies that must transfer to a real robot with no goal objects.
+            self.course = donut_course_no_hint.DonutCourseNoHint(api, self)
         else:
             self.course = simple_course.SimpleCourse(api, self)
         self._api = api
@@ -86,6 +91,17 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         course state between trials.
         """
         return self.course.get_raw_counters()
+
+    def restore_course_cumulative(self, stats):
+        """Re-seed the inner course's lifetime counters (pause/resume continuity).
+
+        Same env-level dispatch pattern as get_course_metrics/
+        get_course_raw_counters so the trainer can push per-actor counter
+        values through ``ParallelPyEnvironment.call('restore_course_cumulative',
+        stats)`` on resume. Delegates to BaseCourse.restore_cumulative_counters,
+        which whitelists + no-ops safely on any missing field.
+        """
+        return self.course.restore_cumulative_counters(stats)
 
     def get_recent_goals_per_episode(self, n):
         """Return the inner course's most-recent ``n`` per-episode goal counts.
@@ -297,3 +313,54 @@ class RobotaxiEnv(py_environment.PyEnvironment):
     
     def _scene_data_array(self, scene_data):
         return self.course.scene_data_array(scene_data)
+
+    def _close(self):
+        """Tear down this env's RobotApi asyncio loop-thread + gRPC channel.
+
+        tf-agents' ``PyEnvironment._close`` default is a no-op, so without this
+        the background asyncio loop thread (``RobotApi-loop[...]``) and its
+        ``grpc.aio`` channel that ``make_env`` started for this env would leak
+        for the life of the trainer process. The trainer runs many jobs in ONE
+        process (run_jobs_loop), so those threads/handles accumulate per job
+        and worsen the fork-safety of the NEXT job's ParallelPyEnvironment
+        spawn - forking a process with many live threads holding locks was
+        observed to segfault the spawn (2026-08-10). Closing them at the
+        job->job boundary keeps the parent lean before it forks.
+
+        Best-effort + idempotent: bounded joins + swallowed errors so a job
+        transition never wedges on teardown. Runs both in the parent (for the
+        single-gym eval/eval-job/baseline envs) and inside each
+        ParallelPyEnvironment worker subprocess as it shuts down.
+        """
+        import asyncio
+        api = getattr(self, "_api", None)
+        loop = getattr(self, "_api_loop", None)
+        thread = getattr(self, "_api_thread", None)
+        # Close the grpc.aio channel on its own loop first (channel.close() is
+        # a coroutine bound to that loop), then stop the loop and join the
+        # thread so no orphaned RobotApi-loop thread survives this env.
+        try:
+            if api is not None and loop is not None and loop.is_running():
+                chan = getattr(
+                    getattr(api, "rpc_client", None), "channel", None)
+                if chan is not None:
+                    fut = asyncio.run_coroutine_threadsafe(chan.close(), loop)
+                    try:
+                        fut.result(timeout=5)
+                    except Exception:  # noqa: BLE001 - teardown is best-effort
+                        pass
+        except Exception as e:  # noqa: BLE001
+            print(f"RobotaxiEnv._close: channel close skipped: {e}", flush=True)
+        try:
+            if loop is not None and loop.is_running():
+                loop.call_soon_threadsafe(loop.stop)
+        except Exception as e:  # noqa: BLE001
+            print(f"RobotaxiEnv._close: loop stop skipped: {e}", flush=True)
+        try:
+            if thread is not None:
+                thread.join(timeout=5)
+        except Exception as e:  # noqa: BLE001
+            print(f"RobotaxiEnv._close: thread join skipped: {e}", flush=True)
+        self._api = None
+        self._api_loop = None
+        self._api_thread = None

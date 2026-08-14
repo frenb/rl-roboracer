@@ -223,6 +223,25 @@
                   class="w-full input-base appearance-none select-chevron pr-8">
             <option value="">No gym selected</option>
           </select>
+
+          <!-- Course selector. Chooses which observation/reward course the
+               job runs against. "trainer default" omits any per-job override
+               so the trainer falls back to the ROBOTAXI_COURSE_TYPE env var
+               (then 'donut'). 'donut_no_hint' is DonutCourse with the
+               goal-derived dist_from_traj (angle-to-next-goal) element dropped
+               from the observation (32 -> 31 dims) for sim->real transfer to a
+               robot with no goal objects. do_job reads course_type off the job
+               doc and threads it into env creation + the demo/BC observation
+               width (see rl_agent/robotaxi.py do_job). -->
+          <label for="f-course"
+                 class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="Which course/observation the job trains against. 'trainer default' uses the trainer's ROBOTAXI_COURSE_TYPE env var (then donut). 'donut_no_hint' drops the goal-derived angle-to-goal element (31-dim obs) for real-robot transfer.">Course</label>
+          <select id="f-course" name="course_type"
+                  class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="trainer default" selected>trainer default (donut, 32-dim)</option>
+            <option value="donut">donut (32-dim)</option>
+            <option value="donut_no_hint">donut_no_hint (31-dim, no angle-to-goal)</option>
+          </select>
         </form>
       </div>
       <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
@@ -450,6 +469,26 @@
           { key: 'experiment_design_name', label: 'Experiment design', sortable: true, filter: true,
             sortValue: (r) => r.experiment_design_name || '',
             render: (_v, row) => formatters.experimentDesignBadge(row, { noTruncate: true }) },
+          // Course the job trains against. Stamped on the job doc by the
+          // New-job form only when the user picks a concrete course; a
+          // missing/"trainer default" value means the trainer's env-var
+          // default (historically always 'donut'), so render those as
+          // 'donut'. The server backfills legacy docs with course_type='donut'
+          // on startup (see dashboard/src/server.ts), so most will carry an
+          // explicit value; the fallback here covers any that predate that.
+          { key: 'course_type', label: 'Course', sortable: true, filter: true,
+            sortValue: (r) => (r.course_type && r.course_type !== 'trainer default')
+              ? r.course_type : 'donut',
+            render: (v) => {
+              const c = (v && v !== 'trainer default') ? String(v) : 'donut';
+              const isNoHint = c === 'donut_no_hint';
+              const cls = isNoHint
+                ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                : 'bg-slate-500/15 text-slate-300 border-slate-500/30';
+              return '<span class="inline-flex items-center px-2 py-0.5 rounded-full '
+                + 'text-[11px] font-medium border ' + cls + '" title="'
+                + c + '">' + c + '</span>';
+            } },
           { key: 'status',           label: 'Status',   sortable: true,  filter: true,
             render: (v) => formatters.statusBadge(v) },
           { key: 'percent_complete', label: 'Progress', sortable: true,  filter: false,
@@ -947,6 +986,16 @@
             ? { corner_radius_val: Number(fd.get('corner_radius_val')) } : {}),
           ...(fd.get('curvature_difficulty_val') !== ''
             ? { curvature_difficulty_val: Number(fd.get('curvature_difficulty_val')) } : {}),
+          // Course selector. Only stamp a course_type when the user picked a
+          // concrete course; "trainer default" (and blank) are omitted so the
+          // trainer's ROBOTAXI_COURSE_TYPE env-var fallback still applies and
+          // old jobs stay byte-identical - same "omit when default" convention
+          // as reward_design / experiment_design below. do_job treats a
+          // missing/"trainer default" value as the default course.
+          ...((() => {
+            const c = String(fd.get('course_type') || '');
+            return (c && c !== 'trainer default') ? { course_type: c } : {};
+          })()),
         };
         // Gym — record which Unity scene / gym this job runs against.
         // gym_file_path is stamped directly on the job doc so do_job

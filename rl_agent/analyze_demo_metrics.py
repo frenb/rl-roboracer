@@ -55,9 +55,14 @@ import numpy as np
 
 import collect_training_data
 
-# Observation-vector indices (DonutCourse.observation_spec).
-SPEED_IDX = 1    # signed car speed, m/s
-FWD_IDX = 17     # forward (straight-ahead) raycast clearance
+# Observation-vector indices (DonutCourse.observation_spec). These shift down
+# by _OBS_DROP_LEADING when analyzing 'donut_no_hint' demos (ROBOTAXI_
+# OBSERVATION_SIZE=31), whose observation drops the leading dist_from_traj
+# element - keep them derived from the same constant the parse schema uses so
+# a mismatched env var can't silently make this read the wrong columns.
+_OBS_DROP_LEADING = getattr(collect_training_data, "_OBS_DROP_LEADING", 0)
+SPEED_IDX = 1 - _OBS_DROP_LEADING   # signed car speed, m/s
+FWD_IDX = 17 - _OBS_DROP_LEADING    # forward (straight-ahead) raycast clearance
 
 
 def _pct(a, p):

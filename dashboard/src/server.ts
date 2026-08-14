@@ -228,6 +228,26 @@ export const createServer = (config): express.Application => {
     superviseChangeStream('experiment_designs', dbo.collection("experiment_designs"), () => { experimentDesignsChanged = true; });
     superviseChangeStream('gyms', dbo.collection("gyms"), () => { gymsChanged = true; });
 
+    // One-shot, idempotent backfill of the per-job `course_type` field
+    // (added alongside the New-job form's Course selector). Every job that
+    // predates that field ran against the only course that existed then -
+    // the classic 'donut' course - so stamping course_type='donut' on any
+    // doc missing it is accurate historical provenance, and lets the Jobs
+    // table's Course column show a concrete value instead of a fallback.
+    // Runs once per server start; the {$exists:false} filter makes it a
+    // no-op on subsequent boots (and never touches docs that already carry
+    // an explicit course_type from the form).
+    dbo.collection("jobs").updateMany(
+      { course_type: { $exists: false } },
+      { $set: { course_type: "donut" } }
+    ).then((r) => {
+      if (r && r.modifiedCount) {
+        console.log(`course_type backfill: set 'donut' on ${r.modifiedCount} legacy job(s)`);
+      }
+    }).catch((e) => {
+      console.warn("course_type backfill failed:", e && e.message ? e.message : e);
+    });
+
     // Index for the Weakness Map (/weakness_map). The logs collection is
     // dominated by per-step "did not fail" rows (no position_history), so
     // an unindexed {job_id, position_history} query degrades to a full

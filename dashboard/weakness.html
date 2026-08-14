@@ -31,11 +31,14 @@
       <div class="flex flex-wrap gap-2 ml-auto items-center">
         <label class="text-xs text-slate-500 dark:text-slate-400">
           Job
-          <select data-action="job"
-                  class="ml-1 appearance-none select-chevron pr-7 px-2 py-1 text-xs
-                         border border-slate-300 dark:border-slate-600
-                         bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100
-                         rounded-md shadow-card min-w-[16rem]"></select>
+          <input data-action="job" list="job-datalist" type="text" autocomplete="off"
+                 placeholder="Type to search jobs…"
+                 title="Type part of an experiment-design / reward name or the id suffix to filter, then pick a match."
+                 class="ml-1 px-2 py-1 text-xs
+                        border border-slate-300 dark:border-slate-600
+                        bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100
+                        rounded-md shadow-card min-w-[20rem]">
+          <datalist id="job-datalist"></datalist>
         </label>
         <label class="text-xs text-slate-500 dark:text-slate-400">
           Layer
@@ -108,11 +111,26 @@
     const plotEl = $('[data-role="plot"]');
     const emptyEl = $('[data-role="empty"]');
     const statusEl = $('[data-role="status"]');
-    const jobSel = $('[data-action="job"]');
+    const jobInput = $('[data-action="job"]');
+    const jobList = $('#job-datalist');
     const layerSel = $('[data-action="layer"]');
 
     let lastData = null;     // last /weakness_map payload
     let autoTimer = null;
+
+    // Searchable job picker state. The <input>+<datalist> shows human labels;
+    // these maps resolve the typed/selected label back to the full job id
+    // (which the label only carries a 6-char suffix of). selectedJobId is the
+    // last resolved pick, so a label refresh (status change) or the user
+    // clearing the box doesn't silently drop the current heatmap's job.
+    const idByLabel = new Map();
+    const labelById = new Map();
+    let selectedJobId = '';
+    function currentJobId() {
+      const v = jobInput.value.trim();
+      if (idByLabel.has(v)) return idByLabel.get(v);
+      return selectedJobId;
+    }
 
     const ctrl = {
       bins: () => clampInt($('[data-action="bins"]').value, 8, 200, 48),
@@ -122,7 +140,7 @@
       wSlow: () => parseFloat($('[data-action="w-slow"]').value) || 0,
       wRisk: () => parseFloat($('[data-action="w-risk"]').value) || 0,
       layer: () => layerSel.value,
-      jobId: () => jobSel.value || '',
+      jobId: () => currentJobId(),
     };
 
     function clampInt(v, lo, hi, dflt) {
@@ -145,6 +163,20 @@
       const status = j.status ? ` · ${j.status}` : '';
       return `${name} …${short}${status}`;
     }
+    // Recency key for ordering the dropdown newest-first. Prefer an explicit
+    // date field, but fall back to the ObjectId's embedded creation time
+    // (its first 4 bytes are unix seconds) when both are absent. Jobs saved
+    // WITHOUT create_date/update_date - the New-job form, Clone-Job, EVAL
+    // jobs queued from the Models tab, and trainer-completed jobs all omit
+    // them - would otherwise all collapse to epoch 0 and sink beneath the
+    // ~1000 older dated jobs, which is why a just-finished TRAIN job looked
+    // like it "wasn't added" (it was, just buried at the bottom).
+    function jobTimeKey(j) {
+      const d = Date.parse(j.update_date || j.create_date || '');
+      if (!isNaN(d)) return d;
+      const id = jobIdOf(j);
+      return /^[0-9a-fA-F]{8}/.test(id) ? parseInt(id.slice(0, 8), 16) * 1000 : 0;
+    }
     async function loadJobs() {
       try {
         // Always force: /get_jobs is change-gated and would otherwise
@@ -156,34 +188,49 @@
         if (txt === 'NO_CHANGES') return;
         const jobs = JSON.parse(txt);
         if (!Array.isArray(jobs)) return;
-        // Most-recently-touched first: prefer a date field, else _id order reversed.
-        jobs.sort((a, b) => {
-          const ad = Date.parse(a.update_date || a.create_date || 0) || 0;
-          const bd = Date.parse(b.update_date || b.create_date || 0) || 0;
-          return bd - ad;
-        });
+        // Most-recently-created first (see jobTimeKey for the ObjectId
+        // fallback that keeps undated jobs correctly ordered) so the
+        // datalist's native suggestions surface the newest jobs at the top.
+        jobs.sort((a, b) => jobTimeKey(b) - jobTimeKey(a));
 
-        const firstBuild = jobSel.options.length === 0;
-        // Update labels IN PLACE (don't tear down the <select>) so a status
-        // change is reflected without dropping the user's current selection
-        // or collapsing an open dropdown.
+        const firstBuild = jobList.options.length === 0;
+        // Rebuild the datalist wholesale each refresh. Unlike a <select>, a
+        // <datalist> has no open/selected UI state to disturb - the text
+        // <input> holds the selection independently - so a full rebuild is
+        // both simpler and keeps labels (status suffixes) fresh. We rebuild
+        // the label<->id maps in lockstep.
+        idByLabel.clear();
+        labelById.clear();
+        const frag = document.createDocumentFragment();
         for (const j of jobs) {
           const id = jobIdOf(j);
           if (!id) continue;
-          let opt = jobSel.querySelector('option[value="' + id + '"]');
-          if (!opt) {
-            opt = document.createElement('option');
-            opt.value = id;
-            jobSel.appendChild(opt);
-          }
           const lbl = jobLabel(j);
-          if (opt.textContent !== lbl) opt.textContent = lbl;
+          // Labels are near-unique (design/reward name + 6-char id suffix +
+          // status); on the rare collision last-writer-wins, which is
+          // acceptable for a search picker.
+          idByLabel.set(lbl, id);
+          labelById.set(id, lbl);
+          const opt = document.createElement('option');
+          opt.value = lbl;
+          frag.appendChild(opt);
+        }
+        jobList.replaceChildren(frag);
+
+        // Keep the input text in sync with the current selection's (possibly
+        // updated) label, but never clobber what the user is actively typing.
+        if (selectedJobId && labelById.has(selectedJobId)
+            && document.activeElement !== jobInput) {
+          jobInput.value = labelById.get(selectedJobId);
         }
 
         // Default to a RUNNING job on the first build only.
-        if (firstBuild && !jobSel.value) {
+        if (firstBuild && !selectedJobId) {
           const running = jobs.find((j) => String(j.status).toUpperCase().includes('RUN'));
-          if (running) jobSel.value = jobIdOf(running);
+          if (running) {
+            selectedJobId = jobIdOf(running);
+            jobInput.value = labelById.get(selectedJobId) || '';
+          }
         }
       } catch (e) { /* ignore */ }
     }
@@ -363,7 +410,20 @@
 
     // ---- Wiring ------------------------------------------------------
     $('[data-action="refresh"]').addEventListener('click', fetchMap);
-    jobSel.addEventListener('change', fetchMap);
+    // Fire as soon as the typed / picked text exactly matches a job label
+    // (covers both selecting a datalist suggestion and typing a full label).
+    // 'input' catches mouse/enter selection in most browsers; 'change' is the
+    // blur-time fallback. Guarded on an actual id change so we don't refetch
+    // the same heatmap on every keystroke.
+    function resolveJobAndFetch() {
+      const v = jobInput.value.trim();
+      if (idByLabel.has(v) && idByLabel.get(v) !== selectedJobId) {
+        selectedJobId = idByLabel.get(v);
+        fetchMap();
+      }
+    }
+    jobInput.addEventListener('input', resolveJobAndFetch);
+    jobInput.addEventListener('change', resolveJobAndFetch);
     layerSel.addEventListener('change', render);
     $('[data-action="bins"]').addEventListener('change', fetchMap);
     $('[data-action="limit"]').addEventListener('change', fetchMap);

@@ -39,6 +39,7 @@ except ImportError:
     pass
 
 import asyncio
+import os
 import sys
 import threading
 
@@ -199,7 +200,7 @@ def _start_api(addr):
     return api, loop, thread
 
 
-def make_env(grpc_addr='ros-server-0:50051', course_type='donut',
+def make_env(grpc_addr='ros-server-0:50051', course_type=None,
              actor_index=None):
     """Construct a :class:`RobotaxiEnv` connected to the given gRPC endpoint.
 
@@ -210,8 +211,13 @@ def make_env(grpc_addr='ros-server-0:50051', course_type='donut',
         ``ros-server-0:50051`` matches the network alias declared on the
         base ros-server service in ``docker-compose.yml`` (so single-env
         works without the ``compose/scale.yml`` overlay).
-      course_type: ``'donut'`` (default) or ``'simple'``; selected when
-        building the inner course.
+      course_type: ``'donut'``, ``'donut_no_hint'`` (donut with the
+        goal-derived dist_from_traj element removed -> 31-dim obs), or
+        ``'simple'``; selected when building the inner course. When left
+        ``None`` (the default), it's resolved from the ``ROBOTAXI_COURSE_TYPE``
+        env var (falling back to ``'donut'``), so every env in a run - training,
+        eval, demo-collection, policy-run - stays on the same course/observation
+        spec without each call site having to thread the value through.
       actor_index: when provided, the worker's stdout/stderr are wrapped
         to prefix every line with ``[actor-N] ``. Single-actor callers
         leave this ``None`` so the existing un-decorated logs are
@@ -227,6 +233,8 @@ def make_env(grpc_addr='ros-server-0:50051', course_type='donut',
     """
     if actor_index is not None:
         _install_actor_prefix(actor_index)
+    if course_type is None:
+        course_type = os.environ.get("ROBOTAXI_COURSE_TYPE", "donut")
     api, loop, thread = _start_api(grpc_addr)
     env = RobotaxiEnv(api, course_type=course_type)
     env._api = api

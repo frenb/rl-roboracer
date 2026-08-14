@@ -1,8 +1,17 @@
 from abc import ABC, abstractmethod
+import os
 import numpy as np
 import math
 from tf_agents.trajectories import time_step as ts
 from tf_agents.specs import array_spec
+
+# Stuck-detection tuning (see BaseCourse.check_if_moving). Env-overridable so
+# these can be dialed without a code change / trainer rebuild:
+#   ROBOTAXI_STUCK_WINDOW    - number of trailing per-step positions to inspect
+#   ROBOTAXI_STUCK_RADIUS_M  - min net travel (metres) over that window to count
+#                              as "moving"; below it the car is treated as wedged
+STUCK_WINDOW = int(os.environ.get("ROBOTAXI_STUCK_WINDOW", "200"))
+STUCK_RADIUS_M = float(os.environ.get("ROBOTAXI_STUCK_RADIUS_M", "0.5"))
 
 class BaseCourse(ABC):
     def __init__(self, api, env):
@@ -181,6 +190,51 @@ class BaseCourse(ABC):
         """
         return {k: float(getattr(self, k, 0)) for k in self.RAW_COUNTER_KEYS}
 
+    # Lifetime-cumulative course fields that should survive a pause/resume so
+    # the course's TensorBoard curves (avg/max goals-per-episode, avg/max
+    # speed + accel, avg steering ratio, crashes_per_1k_steps,
+    # avg_steps_per_episode, per-location traversal/crash counts) continue from
+    # their pre-pause values instead of restarting at 0. These are exactly the
+    # fields update_stats() derives the cumulative (non-last_30) metrics from;
+    # the rolling *_last_30 windows and their backing arrays are intentionally
+    # NOT restored (they re-stabilize within ~30 episodes). The trainer splits
+    # the SUM-type totals evenly across actors before restore and passes the
+    # aggregated value for the mean/max-type fields - see
+    # robotaxi._seed_resume_counters.
+    RESTORABLE_CUMULATIVE_KEYS = (
+        'steps_total',
+        'num_episodes_total',
+        'speeds_total',
+        'accel_total',
+        'goals_per_episode_total',
+        'steering_angle_ratio_total',
+        'crashes_total',
+        'easy_corner_traversals',
+        'hard_corner_traversals',
+        'crashes_easy_corner',
+        'crashes_hard_corner',
+        'crashes_straight',
+        'max_speed',
+        'max_accel',
+        'max_goals_per_episode',
+    )
+
+    def restore_cumulative_counters(self, stats):
+        """Re-seed lifetime cumulative counters after a pause/resume.
+
+        Only whitelisted keys (RESTORABLE_CUMULATIVE_KEYS) present BOTH in
+        ``stats`` and as an existing attribute are applied, so a course that
+        doesn't track a given field (e.g. SimpleCourse) silently skips it.
+        Best-effort: never raises into the env RPC path - a failed restore
+        just means that actor's cumulative metrics start from 0 as before.
+        """
+        try:
+            for k in self.RESTORABLE_CUMULATIVE_KEYS:
+                if isinstance(stats, dict) and k in stats and hasattr(self, k):
+                    setattr(self, k, stats[k])
+        except Exception as e:  # noqa: BLE001
+            self.debug_print(f"restore_cumulative_counters failed: {e}")
+
     def recent_goals_per_episode(self, n):
         """Return the goal counts of the most recent ``n`` completed episodes.
 
@@ -200,29 +254,37 @@ class BaseCourse(ABC):
     def check_if_moving(self, arr):
         """Helper method to check if robot is moving.
 
-        Window widened 6 -> 200 (2026-07-19): compares the CURRENT position
-        against each of the last WINDOW-1 recorded positions (one entry
-        appended per env step - see robotaxi_env.py._step), returning True
-        (moving) the moment ANY of them differ by >= the threshold. With a
-        6-step window a car that's legitimately slowed way down (e.g. easing
-        through a chicane per the goal-proximity/curvature braking in
-        collect_expert_demos) could go net-stationary across those 6 samples
-        and get flagged is_stuck=True - i.e. treated as a crash/failure and
-        reset - even though it was still crawling forward and would have
-        recovered given a bit more time. 200 steps gives it a much longer
-        runway (order of several seconds at typical step rate) to
-        accumulate enough net displacement to prove it's still making
-        progress before this gives up on it as truly wedged.
+        Window widened 6 -> 200 (2026-07-19) to give a legitimately slow car
+        (e.g. easing through a chicane per collect_expert_demos' braking) a
+        multi-second runway to prove it's still making progress before this
+        gives up on it as wedged.
+
+        NET-DISPLACEMENT test (2026-08-09): the previous logic returned
+        "moving" the moment the CURRENT position differed from ANY of the last
+        WINDOW-1 samples by >= 0.0001 m (0.1 mm). That effectively required a
+        car to be *perfectly frozen* to be flagged stuck - but a car
+        high-centered / wedged against geometry with the policy still applying
+        throttle (spinning wheels) and sweeping the steering micro-oscillates
+        FAR more than 0.1 mm, so it always cleared that bar and was never
+        reset. It just burned steps until the 10 000-step cap
+        (has_too_many_steps), dumping thousands of near-zero-reward wedged
+        transitions into the buffer (observed on the w-course hairpin neck).
+
+        Instead we measure how far the car has travelled from its CURRENT spot
+        across the whole window: a wedge stays inside a small ball (jitter /
+        steer sweep don't move the chassis anywhere), while a slow-but-
+        progressing car escapes STUCK_RADIUS_M. This is immune to
+        steering/wheel-spin jitter. Both the window and the radius are
+        env-tunable (ROBOTAXI_STUCK_WINDOW / ROBOTAXI_STUCK_RADIUS_M).
         """
-        last_position = len(arr)-1
-        window = 200
+        window = STUCK_WINDOW
         if len(arr) < window:
             return True
-        for i in reversed(range(last_position-(window-1), last_position)):
-            dist = math.dist(arr[last_position], arr[i])
-            if dist >= 0.0001:
-                return True
-        return False 
+        recent = arr[-window:]
+        current = recent[-1]
+        # Farthest the car has been from where it is now, across the window.
+        max_dist = max(math.dist(current, p) for p in recent)
+        return max_dist >= STUCK_RADIUS_M
     
     def debug_print(self, text):
         debug_print_enabled = True
