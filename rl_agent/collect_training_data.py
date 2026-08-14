@@ -38,8 +38,37 @@ current_time = datetime.datetime.now()
 root_dir = "C:\\Users\\benja\\Documents\\robots\\LATEST\\tfrecords\\job_6412bd37f6548aa06d94eea8"
 # batch_size = 50000
 training_steps = 10000
-observation_size = 32 
+# Full observation width as RECORDED in the demo TFRecords. The live env writes
+# its raw observation straight to disk (see robotaxi.write_trajectories_to_file),
+# and the canonical/default expert corpus was recorded on the 32-wide donut
+# course. This is the width we PARSE at, always - see feature_description.
+FULL_OBSERVATION_SIZE = 32
+# Active observation width the CURRENT job trains against. Defaults to the full
+# width (classic DonutCourse). Set to 31 for the 'donut_no_hint' course, whose
+# observation drops the leading dist_from_traj (angle-to-next-goal) element.
+# Override via ROBOTAXI_OBSERVATION_SIZE or, per-job, set_observation_size().
+# The dummy env spec and the trajectory-buffer width are derived from this.
+observation_size = int(
+    os.environ.get("ROBOTAXI_OBSERVATION_SIZE", str(FULL_OBSERVATION_SIZE)))
+# How many LEADING recorded columns to DROP at read time to go from the
+# recorded (full) width down to the active width. The only feature ever
+# removed is the leading dist_from_traj (index 0), so this is 0 for donut (32)
+# and 1 for donut_no_hint (31). Applied both to the full 32-wide bound lists
+# (to build the active observation_spec) AND to each parsed observation row in
+# convert_tfrecord_to_trajectory - so a SINGLE 32-wide demo corpus can feed
+# both donut and donut_no_hint jobs with no re-collection.
+_OBS_DROP_LEADING = FULL_OBSERVATION_SIZE - observation_size
 action_size = 2
+
+# Single source of truth mapping a course_type -> its observation width. Used
+# by set_observation_size() (called per-job from robotaxi.do_job) so the demo
+# read/write + BC pipeline width always matches the course the job runs
+# against. Unknown/absent courses (e.g. 'simple', 'trainer default') fall back
+# to the classic 32 via the .get(..., 32) at the call site.
+COURSE_OBSERVATION_SIZES = {
+    "donut": 32,
+    "donut_no_hint": 31,
+}
 
 class robotaxi():
     def __init__(self):
@@ -63,8 +92,8 @@ class robotaxi():
         #     maximum=1,
         #     name='observation')
         self._observation_spec = tensor_spec.BoundedTensorSpec(
-            shape=(32,), dtype=np.float32,
-            minimum=[
+            shape=(observation_size,), dtype=np.float32,
+            minimum=np.array([
                 -1, #scene_data["car"]["dist_from_traj"] angle to next goal
                 -10, #scene_data["car"]["speed"] magnitude of car velocity
                 -1, #scene_data["car"]["goal_2"] angle from velocity to car
@@ -97,8 +126,8 @@ class robotaxi():
                 0, #scene_data["car"]["forward_right_right"],# float64 forward_right_right
                 0, #scene_data["car"]["forward_right"],
                 0, #scene_data["car"]["right"]
-                ],
-            maximum=[
+                ], dtype=np.float32)[_OBS_DROP_LEADING:],
+            maximum=np.array([
                 1, #scene_data["car"]["dist_from_traj"]
                 10, #scene_data["car"]["speed"] magnitude of car velocity
                 1, #scene_data["car"]["goal_2"] angle from velocity to car
@@ -131,7 +160,7 @@ class robotaxi():
                 1000, #scene_data["car"]["forward_right_right"],# float64 forward_right_right
                 1000, #scene_data["car"]["forward_right"],
                 1000, #scene_data["car"]["right"]
-                ],
+                ], dtype=np.float32)[_OBS_DROP_LEADING:],
             name='observation')
         self._reward_spec = tensor_spec.BoundedTensorSpec(
             shape=(1,), 
@@ -261,9 +290,13 @@ env = robotaxi()
 #     feature_value = example["action"]
 #     return feature_value
 
+# NOTE: observation is parsed at the RECORDED (full) width, NOT the active
+# width - the active-width slice (dropping _OBS_DROP_LEADING leading columns)
+# happens in convert_tfrecord_to_trajectory. This is what lets a 32-wide demo
+# corpus be read by a 31-wide (donut_no_hint) job.
 feature_description = {
-    'action': tf.io.FixedLenFeature((2,), tf.float32),
-    'observation': tf.io.FixedLenFeature((32,), tf.float32),
+    'action': tf.io.FixedLenFeature((action_size,), tf.float32),
+    'observation': tf.io.FixedLenFeature((FULL_OBSERVATION_SIZE,), tf.float32),
     # 'reward': tf.io.FixedLenFeature((1,), tf.float32),
     # 'discount': tf.io.FixedLenFeature((1,), tf.float32),
 }
@@ -271,6 +304,43 @@ feature_description = {
 def _parse_function(example_proto):
   # Parse the input `tf.train.Example` proto using the dictionary above.
   return tf.io.parse_single_example(example_proto, feature_description)
+
+def set_observation_size(n):
+    """Re-point the demo/BC pipeline at an observation width of ``n``.
+
+    The demo read schema (``feature_description``), the trajectory-buffer
+    width (used by ``convert_tfrecord_to_trajectory``), the drop count
+    (``_OBS_DROP_LEADING``), and the module-level dummy ``env`` (whose
+    observation spec is baked at construction and consumed by
+    ``train_agent`` / ``train_agent_sampling``) are all derived from the
+    module-global ``observation_size``. That global is fixed at import time
+    from ``ROBOTAXI_OBSERVATION_SIZE``; this setter lets ``robotaxi.do_job``
+    override it per job based on the job's selected course (see
+    ``COURSE_OBSERVATION_SIZES``), so a single trainer process can run
+    ``donut`` (32) and ``donut_no_hint`` (31) jobs back-to-back with the
+    correct demo width each time.
+
+    SAFE because jobs run strictly sequentially in the singleton trainer
+    process - there is never more than one course's demo pipeline live at
+    once. If concurrent multi-course jobs are ever introduced, this global
+    mutation would need to become per-call plumbing instead.
+    """
+    global observation_size, _OBS_DROP_LEADING, env
+    n = int(n)
+    if n == observation_size:
+        return
+    observation_size = n
+    _OBS_DROP_LEADING = FULL_OBSERVATION_SIZE - observation_size
+    # feature_description is intentionally NOT rebuilt: demos are always parsed
+    # at the recorded (full) width and sliced down in
+    # convert_tfrecord_to_trajectory, so the parse schema is width-invariant.
+    # Rebuild the dummy env so its (import-time-baked) observation spec matches
+    # the new ACTIVE width - train_agent/train_agent_sampling read it via
+    # spec_utils.get_tensor_specs(env).
+    env = robotaxi()
+    print(f"collect_training_data: observation_size set to {observation_size} "
+          f"(recorded={FULL_OBSERVATION_SIZE}, drop_leading={_OBS_DROP_LEADING})",
+          flush=True)
 
 def get_files_from_directory(directory):
     files = os.listdir(directory)
@@ -327,18 +397,31 @@ def convert_tfrecord_to_trajectory(rows,batch_size=1000):
     """Read the data from a TFRecord file."""
     reward = tf.constant([1], dtype=tf.float32)
     discount = tf.constant([0.99], dtype=tf.float32)
-    observation = np.empty((batch_size,32), dtype=np.float32)
-    action = np.empty((batch_size,2), dtype=np.float32)
+    # Fill a FULL-width buffer with a plain direct assignment (fast: one
+    # tensor->ndarray conversion per row, same as the original path), then drop
+    # the leading column(s) ONCE below via a vectorized numpy slice. Doing the
+    # drop per-row as `row["observation"][_OBS_DROP_LEADING:]` instead dispatches
+    # a TF strided_slice op for every one of ~500k rows, which turned this
+    # loop from ~seconds into many minutes (looked like a hung "job init").
+    observation_full = np.empty(
+        (batch_size, FULL_OBSERVATION_SIZE), dtype=np.float32)
+    action = np.empty((batch_size, action_size), dtype=np.float32)
     i=0
 
     #sampled_rows = np.random.choice(rows, 10000)
     for row in rows: 
         #print(row)
-        observation_val = row["observation"]
-        action_val = row["action"]
-        observation[i]=observation_val
-        action[i]=action_val
+        observation_full[i]=row["observation"]
+        action[i]=row["action"]
         i=i+1
+
+    # Drop the leading _OBS_DROP_LEADING recorded column(s) to reach the active
+    # observation width (0 for donut, 1 for donut_no_hint which drops the
+    # leading dist_from_traj hint). Single vectorized slice + a contiguous copy
+    # so downstream tf.convert_to_tensor sees a dense C-contiguous array. This
+    # is what lets the 32-wide demo corpus feed a 31-wide donut_no_hint job.
+    observation = np.ascontiguousarray(
+        observation_full[:, _OBS_DROP_LEADING:])
 
     print(action.shape)
     print(observation.shape)

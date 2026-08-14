@@ -534,10 +534,205 @@ def read_course_recent_goals(env, n):
         return []
 
 
+# Names of the collect_actor's CUMULATIVE tf-agents py_metrics that reset to 0
+# on every process restart (they live only in memory, not in the Learner's
+# tf.train.Checkpoint). Persisting + re-seeding these across a pause/resume
+# keeps their TensorBoard curves (Metrics/EnvironmentSteps,
+# Metrics/NumberOfEpisodes) continuous instead of sawtoothing back to 0 at the
+# resume train_step. AverageReturn/AverageEpisodeLength are deliberately NOT
+# listed: they're windowed (last-N) buffers, not lifetime totals, so they
+# simply refill and don't need seeding.
+_RESUMABLE_COUNTER_NAMES = ('EnvironmentSteps', 'NumberOfEpisodes')
+
+# Course lifetime counters that read_course_raw_counters() SUMS across actors
+# (numerators/denominators of the cumulative ratio metrics). On restore these
+# are split evenly across the current actor count so the summed aggregate and
+# every mean-aggregated ratio derived from them stay continuous.
+_COURSE_SUM_KEYS = (
+    'steps_total', 'num_episodes_total', 'speeds_total', 'accel_total',
+    'goals_per_episode_total', 'steering_angle_ratio_total',
+)
+# Course lifetime counters read from read_course_metrics() (already aggregated:
+# mean for the counts, max for the max_* fields). On restore each actor is set
+# to the aggregated value directly (no split): mean-of-equal-values == the
+# value, and max-of-equal-values == the value, so the aggregate is preserved.
+_COURSE_MEAN_OR_MAX_KEYS = (
+    'crashes_total', 'easy_corner_traversals', 'hard_corner_traversals',
+    'crashes_easy_corner', 'crashes_hard_corner', 'crashes_straight',
+    'max_speed', 'max_accel', 'max_goals_per_episode',
+)
+
+
+def restore_course_counters(env, stats):
+    """Push a per-actor cumulative-counter dict into the course(s) of a
+    (possibly batched) env, so course metrics continue across a pause/resume.
+
+    The SAME per-actor ``stats`` dict is sent to every subprocess course (the
+    even-split / aggregate values were computed by the caller). Best-effort +
+    non-fatal: a failure just leaves that env's course metrics starting at 0.
+    """
+    from tf_agents.environments import parallel_py_environment
+    try:
+        if isinstance(env, parallel_py_environment.ParallelPyEnvironment):
+            promises = [proc_env.call('restore_course_cumulative', stats)
+                        for proc_env in env._envs]
+            for promise in promises:
+                promise()
+        else:
+            env.restore_course_cumulative(stats)
+    except Exception as e:  # noqa: BLE001
+        print(f"restore_course_counters failed (non-fatal): {e}", flush=True)
+
+
+def _save_resume_counters(path, collect_actor, env=None):
+    """Snapshot the cumulative monitoring counters to JSON (non-fatal).
+
+    Persists BOTH the collect_actor's tf-agents py_metrics
+    (EnvironmentSteps / NumberOfEpisodes) AND the collect env's course lifetime
+    counters (goal/speed/accel/crash totals + per-location + lifetime maxes),
+    so a later resume can continue every cumulative TensorBoard curve rather
+    than restarting it at 0. Called on pause and on each periodic Reverb
+    checkpoint. Best-effort: any failure just means the next resume falls back
+    to starting the affected counters from 0 (cosmetic only).
+    """
+    try:
+        vals = {m.name: int(m.result())
+                for m in collect_actor.metrics
+                if m.name in _RESUMABLE_COUNTER_NAMES}
+        # Course lifetime counters: raw = summed across actors, metrics =
+        # already mean/max aggregated (see read_course_* docstrings).
+        if env is not None:
+            try:
+                raw = read_course_raw_counters(env)
+                cm = read_course_metrics(env)
+                vals["course"] = {
+                    "raw": {k: float(raw.get(k, 0.0)) for k in _COURSE_SUM_KEYS},
+                    "agg": {k: float(cm.get(k, 0.0))
+                            for k in _COURSE_MEAN_OR_MAX_KEYS},
+                }
+            except Exception as _ce:  # noqa: BLE001
+                print(f"main: course-counter snapshot skipped (non-fatal): "
+                      f"{_ce}", flush=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(vals, f)
+        os.replace(tmp, path)
+    except Exception as e:  # noqa: BLE001
+        print(f"main: resume-counter save failed (non-fatal): {e}", flush=True)
+
+
+def _seed_resume_counters(path, collect_actor, env=None, num_envs=1,
+                          env_step_metric=None):
+    """Re-seed the cumulative monitoring counters from a prior snapshot.
+
+    Only meaningful on a resume. Restores:
+      * the collect_actor tf-agents py_metrics EnvironmentSteps /
+        NumberOfEpisodes (tf-agents 0.11 EnvironmentSteps exposes
+        reset(environment_steps=N); NumberOfEpisodes has no seedable reset(),
+        so its numpy_storage field is set directly); and
+      * the collect env's course lifetime counters - the SUM-type totals are
+        split evenly across ``num_envs`` actors (so their summed aggregate and
+        every mean-aggregated ratio stay continuous) while the already-
+        aggregated mean/max fields are passed through unchanged.
+    Best-effort + non-fatal: a missing file (fresh start, or first resume after
+    this feature was added) is a silent no-op and the counters start at 0.
+    """
+    try:
+        if not os.path.exists(path):
+            return
+        with open(path) as f:
+            vals = json.load(f)
+        for m in collect_actor.metrics:
+            if m.name == "EnvironmentSteps" and "EnvironmentSteps" in vals:
+                m.reset(environment_steps=int(vals["EnvironmentSteps"]))
+            elif m.name == "NumberOfEpisodes" and "NumberOfEpisodes" in vals:
+                m._np_state.number_episodes = np.int64(int(vals["NumberOfEpisodes"]))
+        if env_step_metric is not None and "EnvironmentSteps" in vals:
+            env_step_metric.reset(environment_steps=int(vals["EnvironmentSteps"]))
+        # Course lifetime counters -> split SUM totals across actors, pass the
+        # aggregated mean/max fields straight through, then push to the env.
+        course = vals.get("course")
+        if env is not None and isinstance(course, dict):
+            n = max(1, int(num_envs))
+            per_actor = {}
+            for k, v in course.get("raw", {}).items():
+                per_actor[k] = float(v) / n
+            for k, v in course.get("agg", {}).items():
+                per_actor[k] = float(v)
+            restore_course_counters(env, per_actor)
+            print(f"main: seeded course counters (split across {n} actor(s)): "
+                  f"{per_actor}", flush=True)
+        print(f"main: seeded resume counters from {path}: "
+              f"{ {k: v for k, v in vals.items() if k != 'course'} }", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"main: resume-counter seed failed (non-fatal): {e}", flush=True)
+
+
+# ---- Cross-job env teardown ------------------------------------------- *
+#
+# run_jobs_loop reuses ONE long-lived trainer process across many jobs. Each
+# TRAIN job builds a collect env (a ParallelPyEnvironment of N Unity worker
+# SUBPROCESSES) plus a single-gym eval env; EVAL/baseline jobs build a single
+# env. main()/run_policy never closed these, so a finished job's worker
+# subprocesses + asyncio loop-threads lingered in the parent. When the loop
+# then picked up the NEXT job and build_train_env forked a fresh
+# ParallelPyEnvironment, that fork ran from a process STILL holding the
+# previous job's live worker subprocesses + many threads (pymongo monitors,
+# grpc loops) - and forking a heavily-threaded process where another thread
+# holds a lock segfaulted the spawn (observed 2026-08-10; the parent then hung
+# in ParallelPyEnvironment.start() waiting on the dead child).
+#
+# Fix: register every env a job builds and close_train_envs() them at the
+# job->job boundary. ParallelPyEnvironment.close() terminates + joins the N
+# Unity worker subprocesses; RobotaxiEnv._close() stops a single env's asyncio
+# loop-thread + grpc channel. Called in run_jobs_loop's per-job finally AND
+# defensively at the top of build_train_env, so the next fork starts from a
+# process with no leftover env workers/threads.
+_ACTIVE_TRAIN_ENVS = []
+
+
+def _register_train_env(env):
+    """Track an env built for the current job so close_train_envs() reaps it.
+
+    Identity-deduped (an env is unhashable / not meaningfully ==-comparable,
+    so we compare by ``is``) - in single-env runs eval_env IS the collect env,
+    and we must not close it twice.
+    """
+    if env is not None and all(env is not e for e in _ACTIVE_TRAIN_ENVS):
+        _ACTIVE_TRAIN_ENVS.append(env)
+    return env
+
+
+def close_train_envs():
+    """Close + forget every env registered for the just-finished job.
+
+    Best-effort and idempotent: safe to call with nothing registered, and any
+    single env's close() failure is logged and skipped so a job transition
+    never wedges on teardown. Closing a ParallelPyEnvironment terminates and
+    joins its Unity worker subprocesses; closing a single RobotaxiEnv stops its
+    asyncio loop-thread + grpc channel (see RobotaxiEnv._close).
+    """
+    global _ACTIVE_TRAIN_ENVS
+    envs, _ACTIVE_TRAIN_ENVS = _ACTIVE_TRAIN_ENVS, []
+    for e in envs:
+        try:
+            e.close()
+            print(f"close_train_envs: closed {type(e).__name__}", flush=True)
+        except Exception as ex:  # noqa: BLE001
+            print(f"close_train_envs: {type(e).__name__}.close() failed "
+                  f"(non-fatal): {ex}", flush=True)
+
+
 def build_train_env(num_envs, course_type='donut'):
     """Construct the training env (single or parallel) for main()."""
+    # Defensive: reap any env(s) left over from a PREVIOUS in-process job
+    # BEFORE forking new workers, so the ParallelPyEnvironment spawn below
+    # never forks a process that still holds the prior job's worker
+    # subprocesses + threads (segfault hazard - see _ACTIVE_TRAIN_ENVS).
+    close_train_envs()
     if num_envs <= 1:
-        return make_env('ros-server-0:50051', course_type=course_type)
+        return _register_train_env(
+            make_env('ros-server-0:50051', course_type=course_type))
 
     from tf_agents.environments import parallel_py_environment
     # Quiesce the rollout-viz background sampler around the multiprocessing
@@ -553,11 +748,12 @@ def build_train_env(num_envs, course_type='donut'):
     # multiple workers are emitting interleaved per-step prints.
     pause_viz()
     try:
-        return parallel_py_environment.ParallelPyEnvironment(
-            [(lambda i=i: make_env(f'ros-server-{i}:50051',
-                                   course_type=course_type,
-                                   actor_index=i))
-             for i in range(num_envs)])
+        return _register_train_env(
+            parallel_py_environment.ParallelPyEnvironment(
+                [(lambda i=i: make_env(f'ros-server-{i}:50051',
+                                       course_type=course_type,
+                                       actor_index=i))
+                 for i in range(num_envs)]))
     finally:
         resume_viz()
 
@@ -894,9 +1090,65 @@ class CurriculumScheduler:
         return False
 
 
+# Per-course baked-in default expert-demo source (the DEMO job whose
+# /tfrecords/job_<id> directory is used when a TRAIN job doesn't name its
+# own demo sources). The classic default is a 32-wide collection recorded on
+# the donut course. donut_no_hint REUSES that same 32-wide corpus: the demo
+# read path (collect_training_data.convert_tfrecord_to_trajectory) drops the
+# leading dist_from_traj column at load time so the 32-wide records feed a
+# 31-wide job unchanged - no separate collection needed. Unknown/unmapped
+# courses fall back to the donut default for back-compat. A value of None
+# would mean "no safe default" (callers must then supply demo_job_ids).
+COURSE_DEFAULT_DEMO_JOB_IDS = {
+    "donut": "64168c1b58d4d8ccdb76e721",
+    "donut_no_hint": "64168c1b58d4d8ccdb76e721",
+}
+
+
+def _resolve_default_demo_job_id(course_type):
+    """Return the baked-in default demo job id for a course, or None.
+
+    Precedence: the ROBOTAXI_DEFAULT_DEMO_JOB_ID env var (operator/container
+    override, applies to whatever course is running) wins over the per-course
+    map. Courses mapped to None return None so callers know there is no safe
+    default to fall back to. Unknown courses fall back to the donut default.
+    """
+    env_override = os.environ.get("ROBOTAXI_DEFAULT_DEMO_JOB_ID")
+    if env_override:
+        return env_override
+    return COURSE_DEFAULT_DEMO_JOB_IDS.get(
+        course_type, COURSE_DEFAULT_DEMO_JOB_IDS["donut"])
+
+
+# Course to RECORD expert demos on. A reduced-observation course
+# (donut_no_hint) shares its full-width parent's dynamics and differs ONLY by
+# dropping the leading observation column, so we always collect on the parent
+# (donut). The recorded demos are therefore always full 32-wide and reusable
+# by BOTH donut and donut_no_hint TRAIN jobs (donut_no_hint drops the leading
+# column at read time - see collect_training_data.convert_tfrecord_to_trajectory).
+# This keeps every demo corpus universally reusable and removes the footgun of
+# a donut_no_hint DEMO job silently recording narrower, non-reusable 31-wide
+# records. Courses absent from this map record on themselves (identity).
+DEMO_RECORDING_COURSE = {
+    "donut_no_hint": "donut",
+}
+
+
+def _demo_recording_course(course_type):
+    """Map a (possibly reduced-obs) course to the course demos are recorded on.
+
+    See DEMO_RECORDING_COURSE. Identity for any course not in the map.
+    """
+    return DEMO_RECORDING_COURSE.get(course_type, course_type)
+
+
 def main(
     job_id="",
     num_envs=1,
+    # Per-job course override (from the New-job form's Course selector,
+    # threaded through do_job's base_kwargs). None / "trainer default" ->
+    # fall back to the ROBOTAXI_COURSE_TYPE env var, then 'donut'.
+    course_type_val=None,
     checkpoint_restore=False, 
     version=None,
     num_iterations_val=50000,
@@ -1154,8 +1406,30 @@ def main(
               f"{total:8.2f}s  (100.0%)\n", flush=True)
 
     _phase("env_spawn (Unity handshake)")
+    # Course selection. Defaults to the classic 'donut' course (32-dim
+    # observation). The per-job Course selector (course_type_val, from the
+    # New-job form via do_job) wins when set; otherwise fall back to the
+    # ROBOTAXI_COURSE_TYPE env var, then 'donut'. Set donut_no_hint to train
+    # against the variant that drops the goal-derived dist_from_traj (angle-
+    # to-next-goal) element (31-dim observation) for sim->real transfer to a
+    # robot with no goal objects. Both the collect and eval envs use the same
+    # course so their observation specs match.
+    if course_type_val and course_type_val != "trainer default":
+        _course_type = course_type_val
+    else:
+        _course_type = os.environ.get("ROBOTAXI_COURSE_TYPE", "donut")
+    print(f"[env_spawn] course_type={_course_type}", flush=True)
+    # Point the demo/BC read pipeline at this course's observation width so the
+    # 32-wide corpus is dropped down to the active width (31 for donut_no_hint)
+    # before it hits the actor/critic. do_job already does this before calling
+    # main(), but doing it here too makes direct/manual main() callers correct.
+    try:
+        collect_training_data.set_observation_size(
+            collect_training_data.COURSE_OBSERVATION_SIZES.get(_course_type, 32))
+    except Exception as _e:  # noqa: BLE001 - obs-size set must not kill training
+        print(f"main: set_observation_size failed (non-fatal): {_e}", flush=True)
     # Environment. Single-env runs use one env for both collect and eval.
-    env = build_train_env(num_envs, course_type="donut")
+    env = build_train_env(num_envs, course_type=_course_type)
     # Dedicated single-gym EVAL env (option-a, 2026-07-25). In multi-env runs
     # the collect env is a ParallelPyEnvironment that steps ALL gyms in
     # lockstep; reusing it for eval meant the eval phase hammered every client
@@ -1172,7 +1446,11 @@ def main(
     # out of sync with the car's eval-moved position; it self-corrects on that
     # gym's next episode reset (~1 short episode). Single-env runs are unchanged.
     if num_envs > 1:
-        eval_env = make_env('ros-server-0:50051', course_type="donut")
+        # Separate single-gym eval env; register it so close_train_envs()
+        # reaps its asyncio loop-thread at the job boundary. (Single-env runs
+        # share the collect env, already registered by build_train_env.)
+        eval_env = _register_train_env(
+            make_env('ros-server-0:50051', course_type=_course_type))
     else:
         eval_env = env
     # Bookkeeping that used to live on env.course; tracking it in main() lets
@@ -1410,10 +1688,28 @@ def main(
 
     _phase("expert_tfrecord_load (500k records)")
     # demo_record_dirs_val lets a job combine MULTIPLE DEMO collections into
-    # one expert dataset (see the kwarg's docstring above); None falls back
-    # to the single long-standing default job's directory, unchanged from
-    # the original hardcoded behavior.
-    record_dirs = demo_record_dirs_val or ['/tfrecords/job_64168c1b58d4d8ccdb76e721']
+    # one expert dataset (see the kwarg's docstring above). do_job always
+    # passes an explicit non-empty list (and fails the job early if a course
+    # has no resolvable demo source), so this fallback only matters for
+    # direct/manual main() callers. It is COURSE-AWARE via
+    # _resolve_default_demo_job_id: donut and donut_no_hint both fall back to
+    # the classic 32-wide default (donut_no_hint reads it 31-wide by dropping
+    # the leading hint column - see collect_training_data). A course mapped to
+    # None has no default and raises below.
+    if demo_record_dirs_val:
+        record_dirs = list(demo_record_dirs_val)
+    else:
+        _fallback_demo_id = _resolve_default_demo_job_id(_course_type)
+        record_dirs = (
+            [f'/tfrecords/job_{_fallback_demo_id}'] if _fallback_demo_id
+            else [])
+    if not record_dirs:
+        raise RuntimeError(
+            f"main: no expert-demo source for course '{_course_type}' and none "
+            f"provided via demo_record_dirs_val; supply demo dirs for this "
+            f"course (via the job's demo_job_ids / default_demo_job_id, the "
+            f"ROBOTAXI_DEFAULT_DEMO_JOB_ID env var, or "
+            f"COURSE_DEFAULT_DEMO_JOB_IDS).")
     # 1. Load each directory's demos separately, then concatenate into ONE
     # Trajectory object. Only `observation`/`action` actually vary by
     # source - `step_type`/`next_step_type`/`reward`/`discount` are the
@@ -1699,6 +1995,12 @@ def main(
     # without searching for a random temp path. The directory is created
     # by make_local_replay when checkpointing_dir is set.
     _reverb_ckpt_dir = os.path.join(learner_dir, "reverb_checkpoint")
+    # Sidecar JSON holding the collect_actor's cumulative tf-agents counters
+    # (EnvironmentSteps / NumberOfEpisodes). Written next to the Reverb/Learner
+    # checkpoints on pause + each periodic checkpoint, and re-seeded on resume
+    # so their TensorBoard curves stay continuous across a restart instead of
+    # sawtoothing back to 0 (see _save_resume_counters / _seed_resume_counters).
+    _resume_counters_path = os.path.join(learner_dir, "resume_counters.json")
     # Periodic (not just on-pause) Reverb online-table checkpoint cadence.
     # Added 2026-07-22: previously the ONLY time the online replay buffer
     # was snapshotted was a graceful dashboard pause (see the
@@ -2016,7 +2318,15 @@ def main(
         metrics=actor.collect_metrics(10),
         summary_dir=train_dir,
         observers=[rb_observer, env_step_metric])
-    
+
+    # On resume, re-seed the cumulative counters (EnvironmentSteps /
+    # NumberOfEpisodes) from the pre-pause snapshot so their TensorBoard curves
+    # continue from where they left off instead of restarting at 0 at the
+    # restored train_step. No-op on a fresh start or if the snapshot is absent.
+    if is_resume_val:
+        _seed_resume_counters(_resume_counters_path, collect_actor, env=env,
+                              num_envs=num_envs, env_step_metric=env_step_metric)
+
     _phase("learner+eval_actor build")
     eval_actor = actor.Actor(
         eval_env,
@@ -2427,6 +2737,9 @@ def main(
                     print(
                         f"main: Reverb checkpoint failed (non-fatal): {_rv_e}",
                         flush=True)
+                # Snapshot the cumulative monitoring counters alongside the
+                # buffer so resume continues their TB curves (non-fatal).
+                _save_resume_counters(_resume_counters_path, collect_actor, env=env)
                 _e = None  # checkpoint succeeded; clear sentinel
             if _e is not None:
                 # If the checkpoint write fails (disk full, weird
@@ -2567,6 +2880,9 @@ def main(
                     flush=True)
                 _prune_reverb_checkpoints(
                     _reverb_ckpt_dir, keep=REVERB_PERIODIC_CHECKPOINT_KEEP)
+                # Keep the counter snapshot fresh so an ungraceful crash (not
+                # just a graceful pause) also resumes with continuous curves.
+                _save_resume_counters(_resume_counters_path, collect_actor, env=env)
             except Exception as _rv_periodic_e:  # noqa: BLE001
                 print(
                     f"main: periodic Reverb checkpoint failed "
@@ -2760,7 +3076,11 @@ def main(
                     # Stamp the training job id so the Models tab can
                     # link each row back to its TensorBoard run for
                     # the multi-model TB comparison flow.
-                    job_id=job_id)
+                    job_id=job_id,
+                    # Stamp the resolved course so the Models tab (and any
+                    # downstream EVAL) knows which course/observation this
+                    # checkpoint was trained against (donut vs donut_no_hint).
+                    course_type=_course_type)
                 saved_checkpoint = True
 
             eval_cycle_elapsed = time.time() - eval_cycle_start
@@ -2854,7 +3174,8 @@ def run_policy(saved_policy, tf_env, job_id="",
                                   num_eval_episodes=5,
                                   log_interval=10,
                                   max_steps_per_episode=0,
-                                  max_goals_per_episode=100):
+                                  max_goals_per_episode=100,
+                                  pct_base=0.0, pct_span=100.0):
     """Run an EVAL job for ``saved_policy`` and report the metrics.
 
     Args:
@@ -2896,6 +3217,13 @@ def run_policy(saved_policy, tf_env, job_id="",
         both produce the same goal count per episode. When the cap is
         hit the episode is counted as done and the env is reset.
         Set to 0 or None to disable. Default 100.
+      pct_base / pct_span: map this run's 0..100%% completion into the
+        sub-window ``[pct_base, pct_base + pct_span]`` of the job's
+        percent_complete bar. Defaults (0, 100) = the whole bar (single-
+        geometry eval). The curriculum-sweep driver (_eval_over_curriculum)
+        passes an even per-stage slice so a multi-stage EVAL job's bar
+        advances monotonically 0->100 across all stages instead of resetting
+        to 0 at each stage.
     """
     print("run policy")
     tempdir = "/tmp/active/"
@@ -2961,7 +3289,8 @@ def run_policy(saved_policy, tf_env, job_id="",
         if not job_id:
             return
         completed = (trial_idx - 1) * num_eval_episodes + episodes_done_in_trial
-        pct = max(0.0, min(100.0, 100.0 * completed / total_episodes_target))
+        frac = completed / total_episodes_target
+        pct = max(0.0, min(100.0, pct_base + pct_span * frac))
         try:
             update_job(job_id, pct, "percent_complete")
         except Exception as e:  # noqa: BLE001
@@ -3233,12 +3562,16 @@ def run_policy(saved_policy, tf_env, job_id="",
         # Re-enable immediate reset for any subsequent training on this env.
         set_immediate_reset_on_failure(tf_env, True)
 
-    # Final snap to 100% on a clean completion so the Jobs tab bar
-    # reaches full width even if the last per-chunk update landed
-    # at 99.something% due to integer rounding.
+    # Final snap to the top of THIS run's progress slice on a clean
+    # completion so the Jobs tab bar reaches the slice boundary even if the
+    # last per-chunk update landed a hair short due to integer rounding. For
+    # a single-geometry eval (pct_base=0, pct_span=100) that's 100%; for a
+    # curriculum sweep it's this stage's boundary (pct_base+pct_span), so the
+    # bar climbs stage-by-stage and only the final stage snaps to 100%.
     if job_id:
         try:
-            update_job(job_id, 100.0, "percent_complete")
+            update_job(job_id, min(100.0, pct_base + pct_span),
+                       "percent_complete")
         except Exception as e:  # noqa: BLE001
             print(f"run_policy: final percent_complete update failed: {e}",
                   flush=True)
@@ -3258,13 +3591,147 @@ def get_saved_model(policy_type, version=None, path_arg=None):
     saved_policy = tf.saved_model.load(path)
     return saved_policy, path
 
+def _resolve_eval_curriculum_stages(job):
+    """Resolve the ordered curriculum-stage geometries an EVAL job should
+    sweep, or None for a normal single-geometry eval.
+
+    Opt-in, so existing EVAL jobs that merely carry an experiment_design_id
+    keep their single-geometry behaviour. A sweep is requested when EITHER:
+      * job['curriculum_stages'] is present (an explicit list, or a JSON
+        string, of stage dicts), OR
+      * job['eval_all_stages'] is truthy AND the stages resolve from
+        job['experiment_design_id'].curriculum_stages.
+
+    Each stage dict uses the same keys as the TRAIN curriculum: corner_radius,
+    curvature_difficulty (logging-only), chicanes_{north,east,south,west}.
+    Returns None (with a logged reason) when a sweep was requested but no
+    stages could be resolved, so the caller degrades to a single-geometry
+    eval rather than crashing.
+    """
+    import json as _json
+    raw = job.get("curriculum_stages")
+    if raw:
+        try:
+            stages = _json.loads(raw) if isinstance(raw, str) else list(raw)
+            if stages:
+                return list(stages)
+        except Exception as e:  # noqa: BLE001
+            print(f"_resolve_eval_curriculum_stages: bad curriculum_stages on "
+                  f"job (ignored): {e}", flush=True)
+    if not job.get("eval_all_stages"):
+        return None
+    ed_id_raw = job.get("experiment_design_id")
+    if not ed_id_raw:
+        print("_resolve_eval_curriculum_stages: eval_all_stages set but job "
+              "has neither experiment_design_id nor curriculum_stages; "
+              "falling back to single-geometry eval.", flush=True)
+        return None
+    from bson import ObjectId
+    ed_doc = None
+    try:
+        ed_doc = db.experiment_designs.find_one(
+            {"_id": ObjectId(str(ed_id_raw))})
+    except Exception:  # noqa: BLE001
+        ed_doc = None
+    if ed_doc is None:
+        ed_doc = db.experiment_designs.find_one({"_id": str(ed_id_raw)})
+    stages = ed_doc.get("curriculum_stages") if ed_doc else None
+    if isinstance(stages, str):
+        try:
+            stages = _json.loads(stages)
+        except Exception:  # noqa: BLE001
+            stages = None
+    if not stages:
+        print(f"_resolve_eval_curriculum_stages: experiment design "
+              f"{ed_id_raw!r} has no curriculum_stages; falling back to "
+              f"single-geometry eval.", flush=True)
+        return None
+    return list(stages)
+
+
+def _eval_over_curriculum(saved_policy, env, job_id, stages, run_kwargs,
+                          save_path=None, stage_start=0, stage_end=None):
+    """Run ONE EVAL job that walks a contiguous range of curriculum stages.
+
+    For each stage i in the inclusive range [stage_start, stage_end]:
+    reconfigure the env's track geometry to that stage's knobs (corner_radius
+    + per-edge chicanes), run a full run_policy eval (max_episodes trials x
+    num_eval_episodes episodes each), and persist the per-trial results tagged
+    with the ABSOLUTE stage index + geometry. This is the standalone-eval
+    analogue of what CurriculumScheduler does for the in-training eval env -
+    except it walks the stages deterministically in order (no advance_goals
+    gating) so every requested stage is measured exactly once.
+
+    stage_start / stage_end: inclusive 0-based bounds into ``stages`` (the
+    Models-tab Eval modal's Start/End stage dropdowns). ``stage_start``
+    defaults to 0 and ``stage_end=None`` means "through the last stage", so
+    the default is still a full sweep. Both are clamped to the valid range and
+    swapped-safe (end<start collapses to a single stage). Tagged stage_idx is
+    always the ABSOLUTE index, so a partial-range eval's leaderboard rows line
+    up with the same stage numbers a full sweep would produce.
+
+    Percent-complete is mapped into an even per-run-stage slice via
+    run_policy's pct_base/pct_span so the Jobs-tab bar climbs monotonically
+    across the selected range. save_path: model location to persist per-stage
+    leaderboard_scores under; None skips persistence. Returns the LAST stage's
+    result dict.
+    """
+    n = len(stages)
+    if n == 0:
+        return None
+    s0 = max(0, int(stage_start) if stage_start is not None else 0)
+    s0 = min(s0, n - 1)
+    s1 = (n - 1) if stage_end is None else min(n - 1, max(0, int(stage_end)))
+    if s1 < s0:
+        s1 = s0
+    run_idx = list(range(s0, s1 + 1))
+    count = max(1, len(run_idx))
+    print(f"_eval_over_curriculum: evaluating stages {s0}..{s1} "
+          f"of 0..{n - 1}", flush=True)
+    last = None
+    for k, i in enumerate(run_idx):
+        s = stages[i]
+        cr = float(s.get("corner_radius", 10.0))
+        cd = float(s.get("curvature_difficulty", 0.0))
+        chn = int(s.get("chicanes_north", 0))
+        che = int(s.get("chicanes_east", 0))
+        chs = int(s.get("chicanes_south", 0))
+        chw = int(s.get("chicanes_west", 0))
+        # Stamp the stage geometry onto the env; run_policy's reset (and every
+        # per-episode reset within it) then regenerates the track at these
+        # knobs, so the whole stage runs on the stage-i track.
+        configure_env(env, job_id=job_id, pass_through_actions=False,
+                      corner_radius=cr, curvature_difficulty=cd,
+                      chicanes_north=chn, chicanes_east=che,
+                      chicanes_south=chs, chicanes_west=chw)
+        geom = {"corner_radius": cr, "curvature_difficulty": cd,
+                "chicanes_north": chn, "chicanes_east": che,
+                "chicanes_south": chs, "chicanes_west": chw}
+        print(f"EVAL curriculum: stage {i}/{n - 1} geometry={geom}",
+              flush=True)
+        results = run_policy(
+            saved_policy, env, job_id=job_id,
+            pct_base=100.0 * k / count, pct_span=100.0 / count, **run_kwargs)
+        if save_path is not None:
+            try:
+                save_results_to_db(save_path, results,
+                                   stage_idx=i, stage_geometry=geom)
+            except Exception as e:  # noqa: BLE001
+                print(f"_eval_over_curriculum: save stage {i} failed "
+                      f"(non-fatal): {e}", flush=True)
+        last = results
+    return last
+
+
 def load_saved_model(policy_type, version=None, path=None, job_id="",
                      num_trials=None, num_eval_episodes=None,
                      max_steps_per_episode=None,
                      max_goals_per_episode=None,
                      corner_radius=10.0, curvature_difficulty=0.0,
                      chicanes_north=0, chicanes_east=0,
-                     chicanes_south=0, chicanes_west=0):
+                     chicanes_south=0, chicanes_west=0,
+                     course_type=None, curriculum_stages=None,
+                     stage_start=0, stage_end=None):
     """Build an env, load the policy at ``path`` (or by version), run an
     EVAL through it, persist the resulting per-trial means to MongoDB.
 
@@ -3295,7 +3762,8 @@ def load_saved_model(policy_type, version=None, path=None, job_id="",
         the same-named TRAIN kwargs so eval geometry equals training
         geometry).
     """
-    env = make_env('ros-server-0:50051')
+    env = _register_train_env(
+        make_env('ros-server-0:50051', course_type=course_type))
     env.job_id = job_id
     # Mirror main()'s configure_env call so the track geometry at eval
     # time matches what was used during training.  Without this, every
@@ -3393,6 +3861,15 @@ def load_saved_model(policy_type, version=None, path=None, job_id="",
     # let unrelated ValueErrors propagate so they still surface in
     # full detail in the logs.
     try:
+        if curriculum_stages:
+            # Curriculum sweep: walk every stage geometry in one job,
+            # persisting per-stage results inside the loop. Wrapped in the
+            # SAME spec-mismatch conversion below (a stale model trips it on
+            # the first stage's run_policy).
+            _eval_over_curriculum(saved_policy, env, job_id,
+                                  curriculum_stages, run_kwargs, save_path=path,
+                                  stage_start=stage_start, stage_end=stage_end)
+            return
         results = run_policy(saved_policy, env, job_id=job_id, **run_kwargs)
     except ValueError as e:
         msg = str(e)
@@ -3623,7 +4100,8 @@ def _extract_savedmodel_specs(saved_policy):
 
 def add_model(path, robot_type, model_type, training_iterations, avg_return=None,
               observation_spec=None, action_spec=None, reward_design=None,
-              job_id=None, experiment_design=None, is_global_best=True):
+              job_id=None, experiment_design=None, is_global_best=True,
+              course_type=None):
     """Persist a new saved-model record to MongoDB.
 
     Extended with ``observation_spec`` / ``action_spec`` kwargs so the
@@ -3745,6 +4223,10 @@ def add_model(path, robot_type, model_type, training_iterations, avg_return=None
             # mount) - dashboard renders that as "no git provenance".
             "git_sha": _GIT_SHA,
             "git_branch": _GIT_BRANCH,
+            # Course this checkpoint was trained against ('donut' /
+            # 'donut_no_hint'). Lets the Models tab surface which
+            # observation layout the model expects; None for legacy records.
+            "course_type": course_type,
             # Whether this record was the global-best avg_return for
             # its job AT TIME OF INSERT. With the resume-aware
             # max_avg_return seeding in main(), every saved model IS
@@ -3756,7 +4238,7 @@ def add_model(path, robot_type, model_type, training_iterations, avg_return=None
             "is_global_best": bool(is_global_best),
         })
 
-def save_results_to_db(path, results):
+def save_results_to_db(path, results, stage_idx=None, stage_geometry=None):
     """Persist an EVAL run's per-trial samples to db.leaderboard_scores.
 
     ``results`` accepts either:
@@ -3841,6 +4323,14 @@ def save_results_to_db(path, results):
             # Leaderboard tab can show crash frequency and steps-per-goal
             # without re-deriving them from the ratio fields.
             "episode_counts": list(episode_counts),
+            # Curriculum-sweep tagging (2026-08-10). None for ordinary
+            # single-geometry evals; set by _eval_over_curriculum so a
+            # multi-stage EVAL job writes one leaderboard_scores doc per
+            # stage, each carrying which stage index + track geometry it was
+            # measured on. Lets the Analysis/Leaderboard tabs group a single
+            # eval job's scores by curriculum stage.
+            "stage_idx": stage_idx,
+            "stage_geometry": stage_geometry,
         })
 
 def log_reward(job_id, type, score, diff=None, extra_data=None, step_costs=[], position_history=[],stat_array=[]):
@@ -3948,6 +4438,26 @@ def _signal_gym_switch(job):
 
 def do_job(job, num_envs=1):
     print(job["job_type"])
+    # Resolve this job's course ONCE, up front, so every branch below
+    # (DEMO/EVAL env creation + TRAIN's main()) and the demo/BC observation
+    # width all agree. Precedence: the job doc's course_type (New-job form's
+    # Course selector) -> ROBOTAXI_COURSE_TYPE env var -> 'donut'. A missing
+    # or "trainer default" value means "use the env-var/default course".
+    _job_course_type = job.get("course_type")
+    if not _job_course_type or _job_course_type == "trainer default":
+        _job_course_type = os.environ.get("ROBOTAXI_COURSE_TYPE", "donut")
+    # Point the demo/BC pipeline at this course's observation width so
+    # DEMO writes, and TRAIN/BC reads, use the matching feature count (32 for
+    # donut, 31 for donut_no_hint). Safe because jobs run sequentially in the
+    # singleton trainer (see set_observation_size's docstring).
+    try:
+        collect_training_data.set_observation_size(
+            collect_training_data.COURSE_OBSERVATION_SIZES.get(
+                _job_course_type, 32))
+    except Exception as _e:  # noqa: BLE001 - obs-size set must not kill pickup
+        print(f"do_job: set_observation_size failed (non-fatal): {_e}",
+              flush=True)
+    print(f"do_job: course_type={_job_course_type}", flush=True)
     # Decide resume-vs-fresh BEFORE flipping status to IN_PROGRESS, so
     # _detect_resume_for_train_job can still see the operator's
     # original pickup-time status (= the discriminator between
@@ -4065,9 +4575,33 @@ def do_job(job, num_envs=1):
         # the GIL. Default 1 preserves the original single-gym behavior for
         # every job that doesn't opt in.
         demo_num_gyms = max(1, _demo_int_field("demo_num_gyms", 1))
-        env = make_env('ros-server-0:50051')
+        # Always RECORD at the full observation width so the corpus is reusable
+        # across courses (see _demo_recording_course). A donut_no_hint DEMO job
+        # collects on donut (identical dynamics, 32-wide obs); donut_no_hint
+        # TRAIN jobs then reuse those 32-wide records, dropping the leading
+        # column at read time. Without this a no_hint DEMO job would record
+        # 31-wide records that the reuse reader (which parses at 32) rejects.
+        _demo_course = _demo_recording_course(_job_course_type)
+        if _demo_course != _job_course_type:
+            print(f"do_job: DEMO recording on full-width course "
+                  f"'{_demo_course}' instead of job course "
+                  f"'{_job_course_type}' so demos stay 32-wide and reusable.",
+                  flush=True)
+            # Re-point the demo pipeline's observation width at the RECORDING
+            # course (overriding the job-course width set before the branch),
+            # so the dummy env/read schema match the 32-wide records this job
+            # writes. Safe: jobs run sequentially in the singleton trainer.
+            try:
+                collect_training_data.set_observation_size(
+                    collect_training_data.COURSE_OBSERVATION_SIZES.get(
+                        _demo_course, 32))
+            except Exception as _e:  # noqa: BLE001 - non-fatal obs-size set
+                print(f"do_job: DEMO set_observation_size failed "
+                      f"(non-fatal): {_e}", flush=True)
+        env = make_env('ros-server-0:50051', course_type=_demo_course)
         _demo_envs = [env] + [
-            make_env(f'ros-server-{_i}:50051', actor_index=_i)
+            make_env(f'ros-server-{_i}:50051', course_type=_demo_course,
+                     actor_index=_i)
             for _i in range(1, demo_num_gyms)]
         if demo_num_gyms > 1:
             print(f"do_job: DEMO collecting across {demo_num_gyms} parallel "
@@ -4444,29 +4978,68 @@ def do_job(job, num_envs=1):
                 return default
 
         # demo_job_ids (optional, job-doc field): extra DEMO-job ids whose
-        # /tfrecords/job_<id> directories get ADDED to the long-standing
-        # default expert-demo job, all concatenated into one combined
-        # expert dataset for prefill + BC pretrain (see main()'s
-        # demo_record_dirs_val). Additive rather than a replacement so the
-        # default set is never silently dropped just because a job wants to
-        # supplement it with a fresh collection.
-        _DEFAULT_DEMO_JOB_ID = "64168c1b58d4d8ccdb76e721"
+        # /tfrecords/job_<id> directories get ADDED to the per-course default
+        # expert-demo job, all concatenated into one combined expert dataset
+        # for prefill + BC pretrain (see main()'s demo_record_dirs_val).
+        # Additive rather than a replacement so the default set is never
+        # silently dropped just because a job wants to supplement it.
+        #
+        # The DEFAULT is COURSE-AWARE (see COURSE_DEFAULT_DEMO_JOB_IDS): both
+        # donut and donut_no_hint use the classic 32-wide collection -
+        # donut_no_hint REUSES it, dropping the leading dist_from_traj column
+        # at read time (collect_training_data.convert_tfrecord_to_trajectory)
+        # so the 32-wide records feed a 31-wide job with no re-collection.
+        # Override precedence for the default:
+        #   1. job doc "default_demo_job_id"
+        #   2. ROBOTAXI_DEFAULT_DEMO_JOB_ID env var (in _resolve_default_...)
+        #   3. per-course COURSE_DEFAULT_DEMO_JOB_IDS map
+        # job doc "skip_default_demo": true drops the baked default entirely,
+        # using only the explicitly-listed demo_job_ids.
+        _DEFAULT_DEMO_JOB_ID = (
+            job.get("default_demo_job_id")
+            or _resolve_default_demo_job_id(_job_course_type))
+        _skip_default_demo = bool(job.get("skip_default_demo"))
         _extra_demo_job_ids = job.get("demo_job_ids") or []
         if isinstance(_extra_demo_job_ids, str):
             _extra_demo_job_ids = [
                 s.strip() for s in _extra_demo_job_ids.split(",") if s.strip()]
-        _demo_job_ids = [_DEFAULT_DEMO_JOB_ID] + [
-            j for j in _extra_demo_job_ids if j and j != _DEFAULT_DEMO_JOB_ID]
+        _base_demo_ids = (
+            [_DEFAULT_DEMO_JOB_ID]
+            if (_DEFAULT_DEMO_JOB_ID and not _skip_default_demo) else [])
+        _demo_job_ids = _base_demo_ids + [
+            j for j in _extra_demo_job_ids
+            if j and j != _DEFAULT_DEMO_JOB_ID]
+        if not _demo_job_ids:
+            # No demo source resolved. Both donut and donut_no_hint have a
+            # baked 32-wide default (donut_no_hint reads it 31-wide via the
+            # read-time drop), so this only triggers when the course maps to
+            # None OR skip_default_demo dropped the default with no
+            # demo_job_ids supplied. Fail fast with an actionable message
+            # rather than crashing deep in the demo loader; run_jobs_loop
+            # turns any exception here into status=FAILED + eval_error.
+            raise RuntimeError(
+                f"TRAIN job {job.get('_id')} (course={_job_course_type}) has no "
+                f"expert-demo source: the per-course default is unset (or was "
+                f"dropped via skip_default_demo) and the job didn't set "
+                f"demo_job_ids / default_demo_job_id. Set this job's "
+                f"demo_job_ids to a DEMO job id (or set the "
+                f"ROBOTAXI_DEFAULT_DEMO_JOB_ID env var).")
         demo_record_dirs_val = [
             f"/tfrecords/job_{_jid}" for _jid in _demo_job_ids]
         if len(_demo_job_ids) > 1:
             print(f"do_job: TRAIN combining {len(_demo_job_ids)} expert-demo "
-                  f"sources: {_demo_job_ids}", flush=True)
+                  f"sources for course={_job_course_type}: {_demo_job_ids}",
+                  flush=True)
+        else:
+            print(f"do_job: TRAIN expert-demo source for course="
+                  f"{_job_course_type}: {_demo_job_ids}", flush=True)
 
         # demo_source_counts (optional, job-doc field): exact per-source
         # target step counts, parallel to _demo_job_ids/demo_record_dirs_val
         # above (same order - index 0 is always the default job). See
-        # main()'s demo_source_counts_val docstring. None/absent preserves
+        # main()'s demo_source_counts_val docstring. Index 0 is the baked
+        # default job unless skip_default_demo dropped it, in which case the
+        # list follows the explicit demo_job_ids order. None/absent preserves
         # the default proportional-to-availability behavior.
         _demo_source_counts = job.get("demo_source_counts") or None
         if _demo_source_counts is not None:
@@ -4488,6 +5061,9 @@ def do_job(job, num_envs=1):
             demo_source_counts_val=_demo_source_counts,
             job_id=job["_id"],
             num_envs=num_envs,
+            # Per-job course selection (New-job form Course selector). main()
+            # falls back to the ROBOTAXI_COURSE_TYPE env var when this is None.
+            course_type_val=_job_course_type,
             num_iterations_val=num_iterations,
             pass_through_actions=pass_through_actions,
             actor_fc_layer_params_x=actor_fc_layer_params_x,
@@ -4584,6 +5160,23 @@ def do_job(job, num_envs=1):
         eval_chicanes_east = _opt_int(job.get("chicanes_east_val")) or 0
         eval_chicanes_south = _opt_int(job.get("chicanes_south_val")) or 0
         eval_chicanes_west = _opt_int(job.get("chicanes_west_val")) or 0
+        # Optional curriculum sweep (2026-08-10): when the job opts in
+        # (eval_all_stages / explicit curriculum_stages), the eval walks every
+        # curriculum stage's geometry in one run instead of the single
+        # geometry above. None = ordinary single-geometry eval; the resolver
+        # logs + degrades to single-geometry if a sweep was asked for but no
+        # stages could be resolved. The single-geometry knobs above are then
+        # ignored (each stage stamps its own geometry).
+        _eval_stages = _resolve_eval_curriculum_stages(job)
+        # Optional inclusive stage range (Models-tab Start/End stage
+        # dropdowns). None => full sweep (0..last). Clamping/swap-safety lives
+        # in _eval_over_curriculum so a bad pair can't crash the job.
+        _eval_stage_start = _opt_int(job.get("eval_stage_start"))
+        _eval_stage_end = _opt_int(job.get("eval_stage_end"))
+        if _eval_stages:
+            print(f"do_job: EVAL curriculum sweep over {len(_eval_stages)} "
+                  f"stages (range {_eval_stage_start}..{_eval_stage_end}) "
+                  f"for job {job['_id']}", flush=True)
         # Wrap the EVAL dispatch in an EvalSpecMismatchError catch so a
         # model with stale observation/action specs against the current
         # env reports cleanly instead of tearing down the whole
@@ -4603,7 +5196,11 @@ def do_job(job, num_envs=1):
                     chicanes_north=eval_chicanes_north,
                     chicanes_east=eval_chicanes_east,
                     chicanes_south=eval_chicanes_south,
-                    chicanes_west=eval_chicanes_west)
+                    chicanes_west=eval_chicanes_west,
+                    course_type=_job_course_type,
+                    curriculum_stages=_eval_stages,
+                    stage_start=_eval_stage_start,
+                    stage_end=_eval_stage_end)
             else:
                 load_saved_model(
                     model_type, path=location, job_id=job["_id"],
@@ -4616,7 +5213,11 @@ def do_job(job, num_envs=1):
                     chicanes_north=eval_chicanes_north,
                     chicanes_east=eval_chicanes_east,
                     chicanes_south=eval_chicanes_south,
-                    chicanes_west=eval_chicanes_west)
+                    chicanes_west=eval_chicanes_west,
+                    course_type=_job_course_type,
+                    curriculum_stages=_eval_stages,
+                    stage_start=_eval_stage_start,
+                    stage_end=_eval_stage_end)
         except EvalSpecMismatchError as e:
             # Record the precise reason on the job doc so the dashboard
             # (Jobs tab and, eventually, the Models tab Compat column)
@@ -5205,7 +5806,9 @@ def _is_job_cancelled(job_id):
 def run_randompolicy(job_id="", num_trials=None, num_eval_episodes=None,
                      corner_radius=10.0, curvature_difficulty=0.0,
                      chicanes_north=0, chicanes_east=0,
-                     chicanes_south=0, chicanes_west=0):
+                     chicanes_south=0, chicanes_west=0,
+                     course_type=None, curriculum_stages=None,
+                     stage_start=0, stage_end=None):
     """Run a uniformly-random-action EVAL job as a baseline benchmark.
 
     Mirrors load_saved_model's pattern: builds a single env on
@@ -5237,7 +5840,8 @@ def run_randompolicy(job_id="", num_trials=None, num_eval_episodes=None,
     own env exactly like load_saved_model does.
     """
     debug_print("in random policy")
-    env = make_env('ros-server-0:50051')
+    env = _register_train_env(
+        make_env('ros-server-0:50051', course_type=course_type))
     env.job_id = job_id
     configure_env(env, job_id=job_id, pass_through_actions=False,
                   corner_radius=corner_radius,
@@ -5254,10 +5858,17 @@ def run_randompolicy(job_id="", num_trials=None, num_eval_episodes=None,
         run_kwargs["max_episodes"] = int(num_trials)
     if num_eval_episodes is not None:
         run_kwargs["num_eval_episodes"] = int(num_eval_episodes)
-    results = run_policy(random_policy, env, job_id=job_id, **run_kwargs)
-    debug_print(results)
     random_policy_path = get_latest_save_dir_name(random_policy)
     debug_print(random_policy_path)
+    if curriculum_stages:
+        # Baseline curriculum sweep: same per-stage geometry walk as the
+        # saved-model path, persisting per-stage baseline scores.
+        _eval_over_curriculum(random_policy, env, job_id, curriculum_stages,
+                              run_kwargs, save_path=random_policy_path,
+                              stage_start=stage_start, stage_end=stage_end)
+        return
+    results = run_policy(random_policy, env, job_id=job_id, **run_kwargs)
+    debug_print(results)
     save_results_to_db(random_policy_path, results)
 
 def create_traj(
@@ -5568,9 +6179,21 @@ def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
             next_time_step=environment._step(action)
             # data = environment._do_action(action)
             # print(f"data: {data}")
-            obs = next_time_step.observation
-            raw_steer = float(obs[0])
-            speed = float(obs[1])
+            # Read the heading-error-to-goal and speed from environment.data
+            # rather than by observation index. For the classic 'donut' course
+            # these were obs[0] (dist_from_traj) and obs[1] (speed), but the
+            # 'donut_no_hint' course drops dist_from_traj from the observation,
+            # which would shift every index. environment.data["car"] carries
+            # the raw, layout-independent values (dist_from_traj is normalized
+            # /180 in Unity and copied verbatim into obs[0] on the donut
+            # course, so this is exactly equivalent there) and is refreshed by
+            # the _step() call above - same source the dist_from_goal read
+            # below already uses. This lets the heuristic expert keep steering
+            # on the goal hint to produce good demos even though the RECORDED
+            # observation no longer contains it.
+            _car = environment.data.get("car", {})
+            raw_steer = float(_car.get("dist_from_traj", 0.0))
+            speed = float(_car.get("speed", 0.0))
 
             # Steering: proportional controller on the heading-error signal.
             # Clamped to [-1,1] (see comment above) since K_STEERING=4.0
@@ -6016,6 +6639,14 @@ def run_jobs_loop(num_envs=1):
                 # re-populate it inside main() after constructing
                 # its own Learner.
                 _emergency_state.clear()
+                # Tear down the finished job's collect + eval envs
+                # (ParallelPyEnvironment Unity worker subprocesses +
+                # single-env asyncio loop-threads) so the NEXT job's
+                # ParallelPyEnvironment fork starts from a lean process
+                # instead of one still holding the previous job's live
+                # workers/threads (the 2026-08-10 fork segfault). Best-
+                # effort; see close_train_envs / _ACTIVE_TRAIN_ENVS.
+                close_train_envs()
         print("sleep")
         time.sleep(5)
 

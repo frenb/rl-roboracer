@@ -162,6 +162,46 @@
                  class="w-full input-base"
                  title="Chicane density 0–1. 0 = plain rectangle; 1 = max chicanes. Default 0.">
 
+          <!-- Curriculum sweep — when checked the trainer walks the selected
+               inclusive [Start stage, End stage] range of the model's
+               experiment-design curriculum, one stage after another, in a
+               single EVAL job (per-stage results are tagged with the ABSOLUTE
+               stage_idx + stage_geometry in leaderboard_scores). Default range
+               is the full curriculum (0..last). The corner-radius / curvature
+               inputs above are ignored in this mode because each stage stamps
+               its own geometry (incl. the per-edge chicane counts the trainer
+               curriculum uses, which those inputs can't express). Requires the
+               model to carry an experiment_design_id whose design has
+               curriculum_stages; the Start/End options are populated from it
+               (gyms carry no stage data). -->
+          <label for="f-eval-all-stages"
+                 class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="Run one EVAL that walks a range of curriculum stage geometries from the model's experiment design.">Curriculum sweep</label>
+          <div class="flex flex-col gap-2">
+            <label class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer">
+              <input id="f-eval-all-stages" type="checkbox" class="accent-sky-600">
+              Eval across curriculum stages (ignores corner radius / curvature above)
+            </label>
+            <!-- Start / End stage range. Options are populated on modal open
+                 from the SELECTED model(s)' experiment-design curriculum_stages
+                 (gyms carry no stage data). Both dropdowns share the same
+                 option set; the eval runs the inclusive [start, end] range. -->
+            <div id="f-eval-stage-range" class="hidden grid grid-cols-2 gap-2">
+              <label class="flex flex-col gap-1 text-xs text-slate-600 dark:text-slate-300">
+                Start stage
+                <select id="f-eval-stage-start"
+                        class="w-full input-base appearance-none select-chevron pr-8"></select>
+              </label>
+              <label class="flex flex-col gap-1 text-xs text-slate-600 dark:text-slate-300">
+                End stage
+                <select id="f-eval-stage-end"
+                        class="w-full input-base appearance-none select-chevron pr-8"></select>
+              </label>
+            </div>
+            <p id="f-eval-stage-hint"
+               class="hidden text-[11px] text-slate-500 dark:text-slate-400"></p>
+          </div>
+
           <span class="text-xs font-medium text-slate-600 dark:text-slate-300">
             Presets
           </span>
@@ -960,9 +1000,97 @@
         }
       }
 
-      function openEvalModal(selectionCount) {
+      // Curriculum-stage state for the Start/End dropdowns. Stages come from
+      // the SELECTED model(s)' experiment-design curriculum_stages - the real
+      // source of stages (gyms carry none). _evalStageCount is the max stage
+      // count across the selection; EDs can differ in length and the trainer
+      // clamps each model to its own ED's range at eval time.
+      let _evalStageCount = 0;
+      async function populateEvalStages(rows) {
+        const startSel = document.getElementById('f-eval-stage-start');
+        const endSel   = document.getElementById('f-eval-stage-end');
+        const toggleEl = document.getElementById('f-eval-all-stages');
+        if (!startSel || !endSel) return;
+        _evalStageCount = 0;
+        let repStages = null;   // longest stage array in the selection (for labels)
+        try {
+          const designs = await _fetchExpDesignsCached();
+          const byId = new Map((designs || []).map((d) => [String(d._id), d]));
+          for (const m of (rows || [])) {
+            const ed = m && m.experiment_design_id
+              ? byId.get(String(m.experiment_design_id)) : null;
+            const cs = ed && Array.isArray(ed.curriculum_stages)
+              ? ed.curriculum_stages : null;
+            if (cs && cs.length > _evalStageCount) {
+              _evalStageCount = cs.length;
+              repStages = cs;
+            }
+          }
+        } catch (e) {
+          console.warn('populateEvalStages: ED fetch failed:', e);
+        }
+        // Rebuild both dropdowns with identical options 0..count-1.
+        startSel.innerHTML = '';
+        endSel.innerHTML = '';
+        for (let k = 0; k < _evalStageCount; k++) {
+          const s = (repStages && repStages[k]) ? repStages[k] : {};
+          const cr = (s.corner_radius != null) ? s.corner_radius : '?';
+          const geom = `r=${cr} chic ${s.chicanes_north || 0}/`
+            + `${s.chicanes_east || 0}/${s.chicanes_south || 0}/${s.chicanes_west || 0}`;
+          const label = `Stage ${k} — ${geom}`;
+          const o1 = document.createElement('option');
+          o1.value = String(k); o1.textContent = label;
+          const o2 = document.createElement('option');
+          o2.value = String(k); o2.textContent = label;
+          startSel.appendChild(o1); endSel.appendChild(o2);
+        }
+        const has = _evalStageCount > 0;
+        if (has) { startSel.value = '0'; endSel.value = String(_evalStageCount - 1); }
+        if (toggleEl) {
+          toggleEl.disabled = !has;
+          if (!has) toggleEl.checked = false;
+        }
+        syncEvalStageRangeVisibility();
+      }
+
+      // Show the Start/End range only when stages exist AND the sweep toggle
+      // is on; surface an inline hint (unavailable, or the available count).
+      function syncEvalStageRangeVisibility() {
+        const rangeEl  = document.getElementById('f-eval-stage-range');
+        const hintEl   = document.getElementById('f-eval-stage-hint');
+        const toggleEl = document.getElementById('f-eval-all-stages');
+        const has = _evalStageCount > 0;
+        const on = has && !!(toggleEl && toggleEl.checked);
+        if (rangeEl) rangeEl.classList.toggle('hidden', !on);
+        if (hintEl) {
+          if (!has) {
+            hintEl.textContent = 'Selected model(s) have no curriculum stages '
+              + '(no experiment design with curriculum_stages) — sweep unavailable.';
+            hintEl.classList.remove('hidden');
+          } else if (on) {
+            hintEl.textContent = `${_evalStageCount} stage`
+              + `${_evalStageCount === 1 ? '' : 's'} from the model's experiment `
+              + `design; per-stage geometry overrides the corner/curvature inputs.`;
+            hintEl.classList.remove('hidden');
+          } else {
+            hintEl.classList.add('hidden');
+          }
+        }
+      }
+
+      function openEvalModal(rows) {
+        const selectionCount = Array.isArray(rows) ? rows.length : (Number(rows) || 0);
         evalCountEl.textContent = String(selectionCount);
         evalPluralEl.textContent = selectionCount === 1 ? '' : 's';
+        // Default the curriculum-sweep toggle OFF on every open so a prior
+        // sweep selection doesn't silently carry into the next eval.
+        const allStagesEl = document.getElementById('f-eval-all-stages');
+        if (allStagesEl) allStagesEl.checked = false;
+        // Populate the Start/End stage dropdowns from the selected models'
+        // experiment-design curriculum (async; reflects toggle when done).
+        populateEvalStages(Array.isArray(rows) ? rows : [])
+          .catch((e) => console.warn('stage hydrate failed:', e));
+        syncEvalStageRangeVisibility();
         refreshEvalModalFooter();
         loadGymsIntoEvalDropdown().catch((e) => console.warn('gyms hydrate failed:', e));
         evalModal.classList.remove('opacity-0', 'pointer-events-none');
@@ -1402,8 +1530,23 @@
             duration: 5000,
           });
         }
-        openEvalModal(sel.length);
+        openEvalModal(sel);
       });
+
+      // Reveal the Start/End range when the sweep toggle flips, and keep the
+      // range coherent (start <= end) as the user changes either endpoint.
+      document.getElementById('f-eval-all-stages')
+        ?.addEventListener('change', syncEvalStageRangeVisibility);
+      (function wireEvalStageRange() {
+        const ss = document.getElementById('f-eval-stage-start');
+        const se = document.getElementById('f-eval-stage-end');
+        ss?.addEventListener('change', () => {
+          if (se && Number(ss.value) > Number(se.value)) se.value = ss.value;
+        });
+        se?.addEventListener('change', () => {
+          if (ss && Number(se.value) < Number(ss.value)) ss.value = se.value;
+        });
+      })();
 
       evalSubmitBtn.addEventListener('click', async () => {
         const sel = table.getSelectedRows();
@@ -1432,11 +1575,28 @@
             trackOverrides.gym_file_path = selOpt.title || '';
           }
         }
+        // Curriculum sweep toggle — when set, each EVAL job walks every
+        // curriculum stage from the model's experiment design (do_job resolves
+        // the stages from experiment_design_id). The corner-radius/curvature
+        // overrides are then ignored by the trainer (each stage stamps its
+        // own geometry).
+        const evalAllStages = !!document.getElementById('f-eval-all-stages')?.checked;
+        // Inclusive [start, end] stage range (only when the sweep is on).
+        // null => let the trainer default (start=0 / end=last).
+        let stageStart = null, stageEnd = null;
+        if (evalAllStages) {
+          const ss = document.getElementById('f-eval-stage-start');
+          const se = document.getElementById('f-eval-stage-end');
+          stageStart = (ss && ss.value !== '') ? Number(ss.value) : null;
+          stageEnd   = (se && se.value !== '') ? Number(se.value) : null;
+        }
         closeEvalModal();
-        await submitEvalJobs(sel, numTrials, trackOverrides);
+        await submitEvalJobs(sel, numTrials, trackOverrides, evalAllStages,
+                             stageStart, stageEnd);
       });
 
-      async function submitEvalJobs(rows, numTrials, trackOverrides = {}) {
+      async function submitEvalJobs(rows, numTrials, trackOverrides = {}, evalAllStages = false,
+                                    stageStart = null, stageEnd = null) {
         const results = await Promise.all(rows.map((m) =>
           fetch('/add_job', {
             method: 'POST',
@@ -1447,6 +1607,26 @@
               iterations: 200,
               model_type: 'SacAgent',
               location: m.location,
+              // Curriculum sweep: opt-in flag + the design whose
+              // curriculum_stages the trainer walks. Omitted (no-op) unless
+              // the checkbox is set; if the model has no experiment_design_id
+              // the trainer logs + falls back to a single-geometry eval.
+              ...(evalAllStages ? {
+                eval_all_stages: true,
+                ...(stageStart != null ? { eval_stage_start: stageStart } : {}),
+                ...(stageEnd != null ? { eval_stage_end: stageEnd } : {}),
+                ...(m.experiment_design_id
+                    ? { experiment_design_id: String(m.experiment_design_id) }
+                    : {}),
+              } : {}),
+              // Stamp the model's training-time course onto the EVAL job so
+              // do_job builds the matching env/observation (32-dim donut vs
+              // 31-dim donut_no_hint). Without this the EVAL env would fall
+              // back to the trainer's default course and a no-hint model
+              // would trip EvalSpecMismatchError. Omitted for legacy models
+              // that predate the course_type stamp (do_job then defaults to
+              // donut, matching how those were trained).
+              ...(m.course_type ? { course_type: String(m.course_type) } : {}),
               // Lets the trainer's run_policy use a non-default
               // max_episodes. robotaxi.py's do_job EVAL branch reads
               // this field and passes it through; legacy trainers
@@ -1560,11 +1740,21 @@
         return `model: ${fmt(modelSpec)}  ·  env: ${fmt(envSpec)}`;
       }
 
+      // Course -> observation width. Mirror of
+      // collect_training_data.COURSE_OBSERVATION_SIZES /
+      // DonutCourse(NoHint).observation_spec in rl_agent. Keeps the Compat
+      // column course-aware so a model is checked against the observation
+      // spec of the course it will ACTUALLY be evaluated on (do_job builds
+      // the EVAL env from the model's own course_type - see models.html
+      // submitEvalJobs), not the single live env_spec (which only reflects
+      // whichever course last ran and would misfire when, e.g., a 31-dim
+      // donut_no_hint model is compared against a 32-dim donut env).
+      const COURSE_OBS_SIZES = { donut: 32, donut_no_hint: 31 };
+
       function computeCompat(model, envSpecsByRobot) {
         const envSpec = envSpecsByRobot.get(String(model.robot_type || ''));
-        // We need BOTH the model's recorded specs AND a current env
-        // spec for the same robot_type to make any claim. Anything
-        // missing on either side renders as "?".
+        // We need the model's recorded specs to make any claim; anything
+        // missing renders as "?".
         if (!model.observation_spec || !model.action_spec) {
           return {
             status: 'unknown',
@@ -1572,22 +1762,60 @@
                                            : 'Missing observation_spec on model record (legacy row).',
           };
         }
-        if (!envSpec) {
-          return {
-            status: 'unknown',
-            reason: `No env_spec published yet for robot_type=${model.robot_type || '?'}. ` +
-                    `Start a TRAIN or EVAL job and the sim-controller will publish one.`,
-          };
+        // Course the EVAL env will be built from. Legacy models predating the
+        // course_type stamp (and the "trainer default" sentinel) default to
+        // 'donut', matching how they were trained.
+        const course = (model.course_type && model.course_type !== 'trainer default')
+          ? String(model.course_type) : 'donut';
+        const expectedObsDim = COURSE_OBS_SIZES[course];
+
+        if (expectedObsDim == null) {
+          // Unknown/unmapped course (e.g. a course added after this page
+          // shipped). Fall back to the legacy live-env comparison so we still
+          // say something useful rather than silently passing.
+          if (!envSpec) {
+            return {
+              status: 'unknown',
+              reason: `Unrecognized course '${course}' and no env_spec published ` +
+                      `for robot_type=${model.robot_type || '?'} - cannot verify.`,
+            };
+          }
+          const obsOk0 = specsCompatible(model.observation_spec, envSpec.observation_spec);
+          const actOk0 = specsCompatible(model.action_spec, envSpec.action_spec);
+          if (obsOk0 === false || actOk0 === false) {
+            const reasons = [];
+            if (obsOk0 === false) reasons.push('Observation: ' + specDiff(model.observation_spec, envSpec.observation_spec));
+            if (actOk0 === false) reasons.push('Action: ' + specDiff(model.action_spec, envSpec.action_spec));
+            return { status: 'incompatible', reason: 'EVAL would fail with EvalSpecMismatchError. ' + reasons.join(' | ') };
+          }
+          if (obsOk0 === null || actOk0 === null) return { status: 'unknown', reason: 'Partial spec - cannot verify.' };
+          return { status: 'compatible', reason: `Observation + action specs match the current env (course '${course}' unmapped; compared to live env).` };
         }
-        const obsOk = specsCompatible(model.observation_spec, envSpec.observation_spec);
-        const actOk = specsCompatible(model.action_spec, envSpec.action_spec);
+
+        // Observation: compare the model's recorded spec against the expected
+        // width for ITS course. dtype is course-independent (float32), so we
+        // reuse the model's own dtype in the expected spec - the meaningful
+        // check here is the observation dimension.
+        const expectedObs = {
+          shape: [expectedObsDim],
+          dtype: (model.observation_spec && model.observation_spec.dtype) || 'float32',
+        };
+        const obsOk = specsCompatible(model.observation_spec, expectedObs);
+        // Action spec is identical across the donut courses, so a published
+        // env_spec (any course) is a valid reference; fall back to the
+        // canonical (2,) shape when none has been published yet.
+        const expectedAct = (envSpec && envSpec.action_spec)
+          ? envSpec.action_spec
+          : { shape: [2], dtype: (model.action_spec && model.action_spec.dtype) || 'float32' };
+        const actOk = specsCompatible(model.action_spec, expectedAct);
+
         if (obsOk === false || actOk === false) {
           const reasons = [];
           if (obsOk === false) {
-            reasons.push('Observation: ' + specDiff(model.observation_spec, envSpec.observation_spec));
+            reasons.push(`Observation: ${specDiff(model.observation_spec, expectedObs)} (expected for course '${course}')`);
           }
           if (actOk === false) {
-            reasons.push('Action: ' + specDiff(model.action_spec, envSpec.action_spec));
+            reasons.push('Action: ' + specDiff(model.action_spec, expectedAct));
           }
           return {
             status: 'incompatible',
@@ -1597,7 +1825,10 @@
         if (obsOk === null || actOk === null) {
           return { status: 'unknown', reason: 'Partial spec - cannot verify.' };
         }
-        return { status: 'compatible', reason: 'Observation + action specs match the current env.' };
+        return {
+          status: 'compatible',
+          reason: `Observation (${expectedObsDim}-dim) + action specs match course '${course}'.`,
+        };
       }
 
       function mergeWithLeaderboard(models, leaderboard, envSpecs) {
@@ -1767,8 +1998,11 @@
           // /get_env_specs is allowed to 404 on dashboard containers
           // that haven't been rebuilt yet (the route was added later
           // than /get_models). Treat the failure as "no env specs yet"
-          // rather than aborting the whole poll - models still render,
-          // just with compat_status='unknown' for every row.
+          // rather than aborting the whole poll - models still render.
+          // computeCompat is course-aware (derives the expected observation
+          // width from the model's own course_type), so observation compat
+          // is still computed without a published env_spec; only the action
+          // spec falls back to the canonical (2,) shape in that case.
           const envOk = envRes.ok;
           const [modelsTxt, lbTxt, envTxt] = await Promise.all([
             modelsRes.text(),
