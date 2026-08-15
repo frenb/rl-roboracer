@@ -191,7 +191,7 @@ services:
     # `networks.<net>.aliases:`, so links: is unnecessary.
 
   dashboard:
-    image: node:15.8
+    image: node:20
     restart: always
     ports:
       - "80:80"

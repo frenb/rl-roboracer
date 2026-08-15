@@ -3,7 +3,8 @@
   "version": "2.1.0",
   "private": true,
   "scripts": {
-    "prestart": "npm install && npm run build",
+    "prestart": "npm run ensure-deps && npm run build",
+    "ensure-deps": "node -e \"process.exit(require('fs').existsSync('node_modules/express')?0:1)\" || npm install",
     "build": "tsc -p tsconfig.json",
     "start": "node ./build/index.js",
     "dev": "ts-node ./src/index.ts"
