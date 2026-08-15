@@ -13,6 +13,35 @@ import * as morgan from 'morgan';
 const WebSocket = require('ws');
 
 // ----------------------------------------------------------------
+// Process-level crash guards.
+//
+// The dashboard is a SINGLE Node process. Historically, any transient
+// MongoDB error surfaced through a `if (err) throw err` in an async
+// driver callback (see the REST handlers below) became an
+// uncaughtException / unhandledRejection with no handler - and on
+// Node >=15 an unhandled rejection TERMINATES the process by default.
+// Docker's `restart: always` then bounced the container, whose
+// `npm start` re-runs `prestart` (npm install + tsc) before listening
+// again - so a 1s blip became tens of seconds (or, on a network hiccup
+// during npm install, an indefinite) outage. That is the "dashboard
+// freezes / locks up during a demo" symptom.
+//
+// These guards keep the event loop alive across a stray async error.
+// They are a LAST RESORT backstop: the individual handlers below also
+// respond with a 500 instead of throwing, so requests don't hang. We
+// deliberately do NOT exit here - a logged-and-swallowed error keeps
+// every other tab/socket working, which is exactly what we want for a
+// live demo. Genuinely fatal, unrecoverable states (OOM, etc.) still
+// crash the runtime on their own.
+// ----------------------------------------------------------------
+process.on('uncaughtException', (err: any) => {
+  console.error('[uncaughtException] kept process alive:', err && (err.stack || err.message || err));
+});
+process.on('unhandledRejection', (reason: any) => {
+  console.error('[unhandledRejection] kept process alive:', reason && ((reason as any).stack || (reason as any).message || reason));
+});
+
+// ----------------------------------------------------------------
 // WebSocket server for real-time data updates (MongoDB change streams)
 // Clients connect to port 8081, subscribe to collections, and receive
 // incremental updates instead of polling.
@@ -23,11 +52,15 @@ const dataWss = new WebSocket.Server({ port: 8082 });
 // Map<WebSocket, Set<collectionName>>
 const dataClients: Map<any, Set<string>> = new Map();
 
-// Broadcast a change event to all clients subscribed to a collection
-function broadcastChange(collection: string, change: any) {
+// Broadcast a change event to all clients subscribed to a collection.
+// `version` is the collection's post-change version cursor so a client
+// applying this event in-place can advance its ?since cursor and avoid a
+// redundant full refetch on its next poll.
+function broadcastChange(collection: string, change: any, version?: number) {
   const message = JSON.stringify({
     type: 'change',
     collection,
+    version,
     operationType: change.operationType,
     documentKey: change.documentKey,
     // For updates, include the changed fields
@@ -66,7 +99,7 @@ function broadcastChange(collection: string, change: any) {
 function superviseChangeStream(
   collName: string,
   collection: any,
-  markChanged: () => void,
+  markChanged: () => number | void,
 ): void {
   let backoff = 1000;
   const MAX_BACKOFF = 30000;
@@ -99,8 +132,8 @@ function superviseChangeStream(
     stream.on('change', (change: any) => {
       backoff = 1000;                // healthy traffic resets the backoff
       console.log(`Change detected (${collName}):`, change.operationType, change.documentKey?._id);
-      markChanged();
-      broadcastChange(collName, change);
+      const version = markChanged();
+      broadcastChange(collName, change, typeof version === 'number' ? version : undefined);
     });
     stream.on('error', (err: any) => scheduleReopen('stream error', err && (err.message || err)));
     stream.on('close', () => scheduleReopen('stream closed'));
@@ -197,13 +230,59 @@ export const createServer = (config): express.Application => {
   // configurations (name + full file path). Selected per-job via the
   // New-Job and Eval dialogs' "Gym" dropdowns.
   var gymsChanged = true;
+
+  // ----------------------------------------------------------------
+  // Per-collection version cursor.
+  //
+  // The `*Changed` booleans above are a SINGLE shared flag per
+  // collection: whichever client polls first consumes it (flips it
+  // false), so a second tab polling the same collection gets a false
+  // NO_CHANGES and renders stale. That's why every polling tab had to
+  // pass ?force=true (re-pulling the entire collection every few
+  // seconds) - which is the load we're trying to remove.
+  //
+  // These monotonically-increasing counters are the per-client fix. The
+  // change-stream bumps the counter on every write; a client passes
+  // ?since=<last-seen-version> and the server replies NO_CHANGES only if
+  // the client is already current (since >= version). Because the
+  // decision is derived from the client's own cursor (not a shared
+  // boolean), N tabs can all poll cheaply without racing each other.
+  // The current version rides back on every response as the
+  // `X-Coll-Version` header (present on both data and NO_CHANGES
+  // replies) so the client can advance its cursor.
+  //
+  // Backward compatible: ?force=true still forces; a client that sends
+  // neither force nor since falls back to the legacy shared-flag path.
+  // ----------------------------------------------------------------
+  const collVersions: Record<string, number> = {
+    jobs: 1, models: 1, leaderboard_scores: 1, env_specs: 1,
+    reward_designs: 1, experiment_designs: 1, gyms: 1,
+  };
+  const bumpVersion = (name: string): number => {
+    collVersions[name] = (collVersions[name] || 0) + 1;
+    return collVersions[name];
+  };
+
   var MongoClient = mongoDB.MongoClient;
   var url = process.env.MONGODB_URL || "mongodb://root:example@mongo:27017";
   var dbo;
-  MongoClient.connect(url, function(err, db) {
-    if (err) throw err;
-    
-    dbo = db.db(databaseName);
+  // Retry the initial connect instead of throwing (a throw here at boot
+  // would crash the process before it ever listens; with restart:always
+  // that becomes a tight crash-loop whenever mongo is a few seconds
+  // behind the dashboard coming up).
+  const connectWithRetry = (attempt: number) => {
+    MongoClient.connect(url, function(err, db) {
+      if (err) {
+        const delay = Math.min(30000, 1000 * Math.pow(2, attempt));
+        console.error(`[mongo] connect failed (attempt ${attempt + 1}); retrying in ${delay}ms:`, err && (err.message || err));
+        setTimeout(() => connectWithRetry(attempt + 1), delay);
+        return;
+      }
+      dbo = db.db(databaseName);
+      onConnected();
+    });
+  };
+  const onConnected = () => {
     // create a collection object for the collection based on collection_name
     // collectionNames.forEach(function(collectionName) {
     //   const collection = dbo.collection(collectionName);
@@ -220,13 +299,13 @@ export const createServer = (config): express.Application => {
     // `*Changed` flag the matching REST route is gated on, so both the
     // WebSocket push and the poll fallback recover after a stream
     // recreate.
-    superviseChangeStream('jobs', dbo.collection("jobs"), () => { jobsChanged = true; });
-    superviseChangeStream('models', dbo.collection("models"), () => { modelsChanged = true; });
-    superviseChangeStream('leaderboard_scores', dbo.collection("leaderboard_scores"), () => { leaderboardScoresChanged = true; });
-    superviseChangeStream('env_specs', dbo.collection("env_specs"), () => { envSpecsChanged = true; });
-    superviseChangeStream('reward_designs', dbo.collection("reward_designs"), () => { rewardDesignsChanged = true; });
-    superviseChangeStream('experiment_designs', dbo.collection("experiment_designs"), () => { experimentDesignsChanged = true; });
-    superviseChangeStream('gyms', dbo.collection("gyms"), () => { gymsChanged = true; });
+    superviseChangeStream('jobs', dbo.collection("jobs"), () => { jobsChanged = true; return bumpVersion('jobs'); });
+    superviseChangeStream('models', dbo.collection("models"), () => { modelsChanged = true; return bumpVersion('models'); });
+    superviseChangeStream('leaderboard_scores', dbo.collection("leaderboard_scores"), () => { leaderboardScoresChanged = true; return bumpVersion('leaderboard_scores'); });
+    superviseChangeStream('env_specs', dbo.collection("env_specs"), () => { envSpecsChanged = true; return bumpVersion('env_specs'); });
+    superviseChangeStream('reward_designs', dbo.collection("reward_designs"), () => { rewardDesignsChanged = true; return bumpVersion('reward_designs'); });
+    superviseChangeStream('experiment_designs', dbo.collection("experiment_designs"), () => { experimentDesignsChanged = true; return bumpVersion('experiment_designs'); });
+    superviseChangeStream('gyms', dbo.collection("gyms"), () => { gymsChanged = true; return bumpVersion('gyms'); });
 
     // One-shot, idempotent backfill of the per-job `course_type` field
     // (added alongside the New-job form's Course selector). Every job that
@@ -262,7 +341,8 @@ export const createServer = (config): express.Application => {
       (e) => console.warn('logs index create failed:', e && e.message)
     );
 
-  });
+  };
+  connectWithRetry(0);
 
   if (config.logging != "none") {
     app.use(morgan(config.logging));
@@ -270,6 +350,12 @@ export const createServer = (config): express.Application => {
 
   app.use(cors());
   app.options('*', cors());
+  // Let browser fetch() read the version cursor header (needed only for
+  // cross-origin reads; harmless same-origin).
+  app.use((req, res, next) => {
+    res.setHeader('Access-Control-Expose-Headers', 'X-Coll-Version');
+    next();
+  });
 
   app.use(bodyParser.urlencoded({ extended: true }));
   app.use(bodyParser.json());
@@ -278,20 +364,33 @@ export const createServer = (config): express.Application => {
     const lb: string = path.join(__dirname, '/../leaderboard.html');
     res.sendFile(lb);
   });
-  var needsUpdate = function (req, changed) {
-    var force = (req.query.force == 'true');
-    console.log(`force: ${force} req.query.force: ${req.query.force} jobsChanged: ${changed}`);
-    return (changed || force);
+  // Decide whether a change-gated GET should return fresh data. Always
+  // stamps the current per-collection version on the response so the
+  // client can advance its cursor (even on a NO_CHANGES reply).
+  //
+  //   ?force=true      -> always send (legacy / on-demand loads)
+  //   ?since=<version> -> per-client cursor: send iff the client is
+  //                       behind (since < current version). Unparseable
+  //                       `since` fails safe toward sending.
+  //   (neither)        -> legacy shared-`changed`-flag path.
+  var needsUpdate = function (req, res, changed, collName) {
+    const ver = collVersions[collName] || 0;
+    try { res.setHeader('X-Coll-Version', String(ver)); } catch (e) { /* headers already sent */ }
+    if (req.query.force === 'true') return true;
+    if (req.query.since !== undefined) {
+      const since = parseInt(String(req.query.since), 10);
+      return !Number.isFinite(since) || since < ver;
+    }
+    return changed;
   }
 
 
   app.get('/leaderboard_scores', (req,res) => {
-    if(needsUpdate(req, leaderboardScoresChanged))
+    if(needsUpdate(req, res, leaderboardScoresChanged, 'leaderboard_scores'))
     {
       leaderboardScoresChanged=false;
       dbo.collection("leaderboard_scores").find({}).toArray(function(err, result) {
-        if (err) throw err;
-        //console.log(result);
+        if (err) { console.error('leaderboard_scores query failed:', err); leaderboardScoresChanged = true; res.status(500).json({ error: String(err && (err.message || err)) }); return; }
         console.log(`${result.length} leaderboard scores retrieved`);
         res.json(result);
       });
@@ -321,17 +420,15 @@ export const createServer = (config): express.Application => {
   app.post('/add_job', (req,res) => {
     console.log("add_job: " + JSON.stringify(req.body));
     dbo.collection("jobs").insertOne(req.body,function(err, result) {
-      if (err) throw err;
-      //console.log(result);
+      if (err) { console.error('add_job failed:', err); res.status(500).json({ error: String(err && (err.message || err)) }); return; }
       res.json(result)
     });
   });
   app.get('/get_jobs', (req,res) => {
-    if (needsUpdate(req, jobsChanged)) {
+    if (needsUpdate(req, res, jobsChanged, 'jobs')) {
       jobsChanged=false;
       dbo.collection("jobs").find({}).toArray(function(err, result) {
-          if (err) throw err;
-          //console.log(result);
+          if (err) { console.error('get_jobs query failed:', err); jobsChanged = true; res.status(500).json({ error: String(err && (err.message || err)) }); return; }
           console.log(`${result.length} jobs retrieved`)
           res.json(result)
       });
@@ -508,7 +605,7 @@ export const createServer = (config): express.Application => {
     const newvalues = { "$set": { "status": job["status"] } };
     const options = { upsert: false };
     dbo.collection("jobs").updateOne(myquery,newvalues, options, function(err, result) {
-      if (err) throw err;
+      if (err) { console.error('update_job_status failed:', err); res.status(500).json({ error: String(err && (err.message || err)) }); return; }
       console.log(result);
       res.json(result)
     });
@@ -519,7 +616,7 @@ export const createServer = (config): express.Application => {
     const myquery = { "_id": ObjectID(job["_id"]) };
     console.log(myquery);
     dbo.collection("jobs").deleteOne(myquery, function(err, result) {
-      if (err) throw err;
+      if (err) { console.error('delete_job failed:', err); res.status(500).json({ error: String(err && (err.message || err)) }); return; }
       console.log(result);
       res.json(result)
     });
@@ -1406,7 +1503,7 @@ export const createServer = (config): express.Application => {
       });
   });
   app.get('/get_models', (req,res) => {
-    if(needsUpdate(req, modelsChanged))
+    if(needsUpdate(req, res, modelsChanged, 'models'))
     {
       modelsChanged=false;
       // Projection excludes ``reward_design_code`` from the list-view
@@ -1425,8 +1522,7 @@ export const createServer = (config): express.Application => {
       dbo.collection("models")
          .find({}, { projection: { reward_design_code: 0 } })
          .toArray(function(err, result) {
-        if (err) throw err;
-        //console.log(result);
+        if (err) { console.error('get_models query failed:', err); modelsChanged = true; res.status(500).json({ error: String(err && (err.message || err)) }); return; }
         console.log(`${result.length} models retrieved`)
         res.json(result)
       });
@@ -1485,11 +1581,11 @@ export const createServer = (config): express.Application => {
   // live env's. Same NO_CHANGES short-circuit as the other read-only
   // endpoints to keep the dashboard polling cheap.
   app.get('/get_env_specs', (req,res) => {
-    if(needsUpdate(req, envSpecsChanged))
+    if(needsUpdate(req, res, envSpecsChanged, 'env_specs'))
     {
       envSpecsChanged=false;
       dbo.collection("env_specs").find({}).toArray(function(err, result) {
-        if (err) throw err;
+        if (err) { console.error('get_env_specs query failed:', err); envSpecsChanged = true; res.status(500).json({ error: String(err && (err.message || err)) }); return; }
         console.log(`${result.length} env_specs retrieved`)
         res.json(result)
       });
@@ -1515,10 +1611,10 @@ export const createServer = (config): express.Application => {
   //                             container without saving anything
 
   app.get('/get_reward_designs', (req, res) => {
-    if (needsUpdate(req, rewardDesignsChanged)) {
+    if (needsUpdate(req, res, rewardDesignsChanged, 'reward_designs')) {
       rewardDesignsChanged = false;
       dbo.collection("reward_designs").find({}).toArray(function(err, result) {
-        if (err) throw err;
+        if (err) { console.error('get_reward_designs query failed:', err); rewardDesignsChanged = true; res.status(500).json({ error: String(err && (err.message || err)) }); return; }
         console.log(`${result.length} reward_designs retrieved`);
         res.json(result);
       });
@@ -1698,10 +1794,10 @@ export const createServer = (config): express.Application => {
   });
 
   app.get('/get_experiment_designs', (req, res) => {
-    if (needsUpdate(req, experimentDesignsChanged)) {
+    if (needsUpdate(req, res, experimentDesignsChanged, 'experiment_designs')) {
       experimentDesignsChanged = false;
       dbo.collection("experiment_designs").find({}).toArray(function(err, result) {
-        if (err) throw err;
+        if (err) { console.error('get_experiment_designs query failed:', err); experimentDesignsChanged = true; res.status(500).json({ error: String(err && (err.message || err)) }); return; }
         console.log(`${result.length} experiment_designs retrieved`);
         res.json(result);
       });
@@ -1845,10 +1941,10 @@ export const createServer = (config): express.Application => {
   // ---------------------------------------------------------------- *
 
   app.get('/get_gyms', (req, res) => {
-    if (needsUpdate(req, gymsChanged)) {
+    if (needsUpdate(req, res, gymsChanged, 'gyms')) {
       gymsChanged = false;
       dbo.collection("gyms").find({}).toArray(function(err, result) {
-        if (err) throw err;
+        if (err) { console.error('get_gyms query failed:', err); gymsChanged = true; res.status(500).json({ error: String(err && (err.message || err)) }); return; }
         console.log(`${result.length} gyms retrieved`);
         res.json(result);
       });

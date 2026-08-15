@@ -1283,6 +1283,11 @@
 
       let pollHandle = null;
       let pollInFlight = false;
+      // Per-client change cursor for /get_jobs. Advanced from the
+      // X-Coll-Version response header; sent back as ?since=<v> so the
+      // recurring poll returns a cheap NO_CHANGES unless jobs actually
+      // changed, WITHOUT racing other tabs on a shared server flag.
+      let jobsVer = 0;
       let ws = null;
       let wsConnected = false;
       let wsReconnectTimer = null;
@@ -1294,14 +1299,32 @@
       const POLL_INTERVAL_WITH_WS = 30000;    // Slow fallback when WS connected
       const POLL_INTERVAL_WITHOUT_WS = 5000;  // Fast polling when WS disconnected
 
-      // Initial full data fetch via HTTP
-      async function fetchFullData() {
+      // Full data fetch via HTTP.
+      //
+      // `force` bypasses the server's change-gate (needsUpdate). We force
+      // ONLY on the initial load and after a local mutation, NOT on the
+      // recurring background poll:
+      //   * The server's `jobsChanged` flag is a single boolean SHARED by
+      //     all clients. Whichever client polls first consumes it (flips
+      //     it false), so a second tab polling un-forced would get
+      //     NO_CHANGES and render empty. Forcing the initial load
+      //     guarantees a fresh tab always paints.
+      //   * The recurring poll is un-forced so it returns a tiny
+      //     "NO_CHANGES" string instead of the entire ~1k-doc jobs
+      //     collection every interval. Live updates arrive over the
+      //     WebSocket; this poll is only a fallback catch-up.
+      async function fetchFullData(force = false) {
         if (pollInFlight) return;
         pollInFlight = true;
         try {
-          const url = `/get_jobs?force=true`;
+          const url = force ? `/get_jobs?force=true` : `/get_jobs?since=${jobsVer}`;
           const res = await fetch(url);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          // Advance the cursor from the header (present on data AND
+          // NO_CHANGES replies). Guarded so a missing/garbled header
+          // leaves jobsVer at its prior value (fails safe toward fetching).
+          const v = parseInt(res.headers.get('X-Coll-Version') || '', 10);
+          if (!isNaN(v)) jobsVer = v;
           const text = await res.text();
           freshness.markSuccess();
           if (text === 'NO_CHANGES') return;
@@ -1326,6 +1349,11 @@
         const { operationType, documentKey, updateDescription, fullDocument } = data;
         const id = documentKey?._id;
         if (!id) return;
+
+        // Advance the poll cursor: this change was applied in-place here,
+        // so the next recurring poll shouldn't refetch the whole
+        // collection just to see it.
+        if (typeof data.version === 'number' && data.version > jobsVer) jobsVer = data.version;
 
         freshness.markSuccess();
 
@@ -1470,11 +1498,14 @@
 
       // Legacy pollOnce for compatibility with scheduleImmediatePoll
       async function pollOnce(force) {
-        return fetchFullData();
+        return fetchFullData(!!force);
       }
 
+      // Called right after a local mutation (add / delete / status
+      // change). Force so the user sees their own change immediately
+      // without waiting for the change-stream event to flip jobsChanged.
       function scheduleImmediatePoll() {
-        setTimeout(() => fetchFullData(), 200);
+        setTimeout(() => fetchFullData(true), 200);
       }
 
       /* ---------- Cross-tab "focus this job" handoff ---------------
@@ -1545,8 +1576,10 @@
         if (focusParam) requestFocusJob(focusParam);
       } catch (_e) { /* swallow */ }
 
-      // Initial fetch + connect WebSocket for real-time updates
-      fetchFullData();
+      // Initial fetch + connect WebSocket for real-time updates.
+      // Force the first paint (see fetchFullData's note on the shared
+      // server-side change flag); the recurring poll below stays un-forced.
+      fetchFullData(true);
       connectWebSocket();
       updatePollInterval();
 

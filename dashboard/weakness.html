@@ -177,13 +177,19 @@
       const id = jobIdOf(j);
       return /^[0-9a-fA-F]{8}/.test(id) ? parseInt(id.slice(0, 8), 16) * 1000 : 0;
     }
+    // Per-client change cursor for /get_jobs (this tab has no WebSocket,
+    // so it polls). Sent as ?since=<v>; advanced from the X-Coll-Version
+    // header. This returns a cheap NO_CHANGES when nothing changed, but -
+    // unlike the old shared-flag path - is per-client, so it never races
+    // other tabs into a false NO_CHANGES that would leave job statuses
+    // (NOT_STARTED -> RUNNING -> DONE) stale in the dropdown.
+    let jobsVer = 0;
     async function loadJobs() {
       try {
-        // Always force: /get_jobs is change-gated and would otherwise
-        // return NO_CHANGES, leaving job statuses (NOT_STARTED -> RUNNING
-        // -> DONE) stale in the dropdown.
-        const r = await fetch('/get_jobs?force=true');
+        const r = await fetch(`/get_jobs?since=${jobsVer}`);
         if (!r.ok) return;
+        const v = parseInt(r.headers.get('X-Coll-Version') || '', 10);
+        if (!isNaN(v)) jobsVer = v;
         const txt = await r.text();
         if (txt === 'NO_CHANGES') return;
         const jobs = JSON.parse(txt);
