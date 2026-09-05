@@ -195,7 +195,9 @@ public class TrajectoryRolloutViz : MonoBehaviour
         if (!_subscribed) { TrySubscribe(); }
 
         var kb = Keyboard.current;
-        if (kb != null && kb.tKey.wasPressedThisFrame)
+        // T while the JetRacer CSI view is up is handled by CameraViewSwitcher
+        // (CSI-only overlay). Leave the overhead fan state alone.
+        if (kb != null && kb.tKey.wasPressedThisFrame && !CameraViewSwitcher.CarCameraOn)
         {
             _vizEnabled = !_vizEnabled;
             if (!_vizEnabled)
@@ -246,6 +248,13 @@ public class TrajectoryRolloutViz : MonoBehaviour
             _redrawAccum = 0f;
             DrawPayload(_active);
         }
+    }
+
+    public void CopyLineRenderers(List<Renderer> dst)
+    {
+        if (dst == null) return;
+        for (int i = 0; i < _pool.Count; i++)
+            if (_pool[i] != null) dst.Add(_pool[i]);
     }
 
     void HideAll()
