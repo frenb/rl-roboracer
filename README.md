@@ -335,6 +335,50 @@ pip install grpcio-tools
 
 ---
 
+## Sim2real
+
+The physical car is the
+[Waveshare JetRacer Professional Version ROS AI Kit](https://www.amazon.com/JetRacer-Professional-ROS-Kit-Controllers/dp/B0BLH9Y3VN)
+(dual controllers, RPLiDAR, IMX219 CSI, **Jetson Nano 4 GB** — not the 2 GB
+board). On-car ROS notes live in [`jetson.md`](jetson.md). Deploying a
+SavedModel onto Melodic `/cmd_vel` is still a plan
+([`docs/tf-model-jetson-deployment-guide.md`](docs/tf-model-jetson-deployment-guide.md)).
+Publishing CSI pixels into the trainer (`camera/front`, a `donut_camera`
+course) is also still a plan
+([`jetson.md` § Sim camera](jetson.md#sim-camera-mirror-the-jetracer-csi-feed-into-unity-gyms-and-the-model)).
+
+Policies that can transfer are **`donut_no_hint`** (31-D rays / speed /
+sideslip — no Unity goal angle). See
+[The `donut_no_hint` course](#the-donut_no_hint-course-hint-free-observation-for-simreal)
+below.
+
+### Unity gym changes (visual / physics stand-in)
+
+These are what the play scene does today to look and collide more like
+that kit. **P** switches Main Camera ↔ CSI (`CameraViewSwitcher`).
+
+| Change | Why |
+|---|---|
+| `JetRacer_Physics` / `JetRacer_Physics_wcourse` prefabs (mesh + rigidbody) instead of `RiggedWaymo` | Same silhouette, wheelbase, and collision as the kit, not the taxi |
+| Play scene `Assets/Scenes/w-course-jetracer.unity` (enabled in `EditorBuildSettings`) | Kit `Tarmac_c` tiles on layer **Road** (6), not the grey-cube `generated_course_jetracer` |
+| `Goal` treats `JetRacer_Physics` as the car (walks parents + `attachedRigidbody`); goal meshes on the Road layer | Hits register; CSI can see the spheres |
+| `JetRacerCsiCamera` on the car: 640×480, aspect 4:3, skybox clear, near **0.05 m**, far **200 m**, no HDR/MSAA | Match `gscam` **640×480** and `config/camera_calibration/cam_640x480.yaml` size |
+| Yaml `fx` / `fy` stored on `JetRacerCsiIntrinsics`; **visual VFOV opened to 80°** (yaml `fx` is ~62°) | Strict `fy`/`fx` left too little tarmac ahead of the hood |
+| Prefab mount **`(0, 1.82, 1.70)` m**, **~5°** pitch down | Stalk-tip pose looked **into the chassis** (hull top ≈ y 1.72, nose ≈ z 2.33) |
+| `cullingMask = ~0` | Prefab mask 63 hid layer 6, so P-view showed Default grey ground instead of asphalt |
+| No plumb_bob **D** warp | Same-size undistort punched black fisheye corners; undistort-on-Nano or pad-then-D is later |
+| CSI hides `Sky_Dome` (finite mesh bowl, not a skybox) | Nested `Example_Track_A` + the bowl caused “bubbling” / horizon clipping |
+| CSI defaults: trajectory / goals / rays **off**; **T / G / R** toggle those on CSI only | Real CSI has no debug overlays |
+| P-view undocks the render texture, letterboxes 4:3, does not blit via OnGUI | Game view was “Display 1 No cameras rendering” while the RT was the only target |
+| Fantasy Skybox FREE imported | Assign a skybox mat in Lighting and disable `Sky_Dome` in the scene |
+
+Still **not** on the learning loop: CSI frames are for the operator (P-view).
+`car_scene_data` is still the 31/32-D vector. Do not parent dressing under
+`Track` (`TrackGenerator` destroys it). Decorative meshes named `Curb` /
+`Rail` on Default become crash geometry.
+
+---
+
 ## Developer notes
 
 ### Testing Reverb buffer save/restore on pause-resume
