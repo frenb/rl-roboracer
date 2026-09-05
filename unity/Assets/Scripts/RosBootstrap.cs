@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using UnityEngine;
 #if UNITY_STANDALONE_WIN && !UNITY_EDITOR
 using System;
@@ -43,11 +45,19 @@ using System.Runtime.InteropServices;
 /// </summary>
 public static class RosBootstrap
 {
-    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+    // BeforeSceneLoad so unityPort is set before ROSConnection.Start()
+    // binds TcpListener (StartMessageServer). AfterSceneLoad is too late:
+    // the listener has already thrown WSAEADDRINUSE.
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
     static void Apply()
     {
         ApplyCommandLineOverrides();
         TunePerformance();
+    }
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+    static void ApplyWindowChrome()
+    {
         EnableWindowResize();
     }
 
@@ -102,7 +112,63 @@ public static class RosBootstrap
         if (port.HasValue)         ros.rosPort = port.Value;
         if (unityPort.HasValue)    ros.unityPort = unityPort.Value;
 
+        // Default inbound listen port is 5005. A leftover standalone gym
+        // ("robotaxi gym level 1.exe") or a second Editor Play holds it and
+        // StartMessageServer throws SocketException 0x80004005 (WSAEADDRINUSE).
+        // If the user did not pin --unity-port, move to the next free port so
+        // Play still works. The ROS-TCP handshake advertises this port back
+        // to ros-server.
+        if (!unityPort.HasValue && PortInUse(ros.unityPort))
+        {
+            int taken = ros.unityPort;
+            int fallback = FindFreePort(taken + 1, taken + 16);
+            if (fallback > 0)
+            {
+                ros.unityPort = fallback;
+                Debug.LogWarning(
+                    $"[RosBootstrap] unityPort {taken} already in use " +
+                    $"(another gym client or Editor Play?). Listening on {fallback} instead. " +
+                    "Close the other client if you meant to be the only Unity on ros-server.");
+            }
+            else
+            {
+                Debug.LogError(
+                    $"[RosBootstrap] unityPort {taken} is in use and no free port in " +
+                    $"{taken + 1}-{taken + 16}. Close 'robotaxi gym level 1.exe' or pass --unity-port.");
+            }
+        }
+
         Debug.Log($"[RosBootstrap] ROS endpoint: {ros.rosIPAddress}:{ros.rosPort}, unityPort: {ros.unityPort}");
+    }
+
+    static bool PortInUse(int port)
+    {
+        TcpListener listener = null;
+        try
+        {
+            listener = new TcpListener(IPAddress.Any, port);
+            listener.Start();
+            return false;
+        }
+        catch (SocketException)
+        {
+            return true;
+        }
+        finally
+        {
+            if (listener != null)
+                listener.Stop();
+        }
+    }
+
+    static int FindFreePort(int start, int endInclusive)
+    {
+        for (int p = start; p <= endInclusive; p++)
+        {
+            if (!PortInUse(p))
+                return p;
+        }
+        return -1;
     }
 
     static void TunePerformance()
