@@ -29,17 +29,32 @@
       </span>
 
       <div class="flex flex-wrap gap-2 ml-auto items-center">
-        <label class="text-xs text-slate-500 dark:text-slate-400">
-          Job
-          <input data-action="job" list="job-datalist" type="text" autocomplete="off"
-                 placeholder="Type to search jobs…"
-                 title="Type part of an experiment-design / reward name or the id suffix to filter, then pick a match."
-                 class="ml-1 px-2 py-1 text-xs
-                        border border-slate-300 dark:border-slate-600
-                        bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100
-                        rounded-md shadow-card min-w-[20rem]">
-          <datalist id="job-datalist"></datalist>
-        </label>
+        <div class="relative" data-role="jobpicker">
+          <label class="text-xs text-slate-500 dark:text-slate-400">
+            Job
+            <input data-action="job" type="text" autocomplete="off"
+                   placeholder="Type to search jobs…"
+                   title="Type part of an experiment-design / reward name, status, or id suffix to filter. Click a row to select; hover a row for full details."
+                   class="ml-1 px-2 py-1 text-xs
+                          border border-slate-300 dark:border-slate-600
+                          bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100
+                          rounded-md shadow-card min-w-[22rem] align-middle">
+          </label>
+          <!-- Custom searchable dropdown (replaces the native <datalist> so
+               each row can show a status badge + finished-time and expose a
+               hover detail card). Anchored to the relative parent. -->
+          <div data-role="job-panel"
+               class="hidden absolute right-0 mt-1 w-[30rem] max-h-[60vh] overflow-y-auto
+                      rounded-lg border border-slate-200 dark:border-slate-700
+                      bg-white dark:bg-slate-900 shadow-2xl z-[50] py-1 text-xs"></div>
+          <!-- Hover detail card, positioned to the LEFT of the panel (the Job
+               control sits at the right edge of the toolbar). -->
+          <div data-role="job-card"
+               class="hidden absolute z-[60] w-[23rem] p-3 leading-relaxed
+                      rounded-lg border border-slate-200 dark:border-slate-700
+                      bg-white dark:bg-slate-900 shadow-2xl text-xs
+                      text-slate-700 dark:text-slate-200"></div>
+        </div>
         <label class="text-xs text-slate-500 dark:text-slate-400">
           Layer
           <select data-action="layer"
@@ -112,25 +127,24 @@
     const emptyEl = $('[data-role="empty"]');
     const statusEl = $('[data-role="status"]');
     const jobInput = $('[data-action="job"]');
-    const jobList = $('#job-datalist');
+    const jobPanel = $('[data-role="job-panel"]');
+    const jobCard = $('[data-role="job-card"]');
     const layerSel = $('[data-action="layer"]');
 
     let lastData = null;     // last /weakness_map payload
     let autoTimer = null;
 
-    // Searchable job picker state. The <input>+<datalist> shows human labels;
-    // these maps resolve the typed/selected label back to the full job id
-    // (which the label only carries a 6-char suffix of). selectedJobId is the
-    // last resolved pick, so a label refresh (status change) or the user
-    // clearing the box doesn't silently drop the current heatmap's job.
-    const idByLabel = new Map();
-    const labelById = new Map();
+    // Custom searchable job-picker state. `allJobs` holds the full job docs
+    // (newest-first); the panel renders filtered rows from it, and the hover
+    // card reads a job's fields straight off jobById. The <input> is a SEARCH
+    // box only — the actual selection lives in selectedJobId, so a label
+    // refresh (status change) or the user editing the search text never
+    // silently drops the current heatmap's job.
+    let allJobs = [];
+    const jobById = new Map();
     let selectedJobId = '';
-    function currentJobId() {
-      const v = jobInput.value.trim();
-      if (idByLabel.has(v)) return idByLabel.get(v);
-      return selectedJobId;
-    }
+    let panelOpen = false;
+    function currentJobId() { return selectedJobId; }
 
     const ctrl = {
       bins: () => clampInt($('[data-action="bins"]').value, 8, 200, 48),
@@ -156,12 +170,14 @@
       if (j && j._id && typeof j._id === 'object' && j._id.$oid) return j._id.$oid;
       return j && j._id != null ? String(j._id) : '';
     }
+    function jobName(j) {
+      return j.experiment_design_name || j.reward_design_name || j.job_type || 'job';
+    }
     function jobLabel(j) {
       const id = jobIdOf(j);
       const short = id.slice(-6);
-      const name = j.experiment_design_name || j.reward_design_name || j.type || 'job';
       const status = j.status ? ` · ${j.status}` : '';
-      return `${name} …${short}${status}`;
+      return `${jobName(j)} …${short}${status}`;
     }
     // Recency key for ordering the dropdown newest-first. Prefer an explicit
     // date field, but fall back to the ObjectId's embedded creation time
@@ -172,10 +188,55 @@
     // ~1000 older dated jobs, which is why a just-finished TRAIN job looked
     // like it "wasn't added" (it was, just buried at the bottom).
     function jobTimeKey(j) {
-      const d = Date.parse(j.update_date || j.create_date || '');
+      const d = Date.parse(j.ended_at || j.update_date || j.create_date || '');
       if (!isNaN(d)) return d;
       const id = jobIdOf(j);
       return /^[0-9a-fA-F]{8}/.test(id) ? parseInt(id.slice(0, 8), 16) * 1000 : 0;
+    }
+
+    // ---- Small formatting helpers ------------------------------------
+    function escapeHtml(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+    function parseMs(v) { const d = Date.parse(v || ''); return isNaN(d) ? null : d; }
+    function relTime(ms) {
+      if (ms == null) return '';
+      const s = Math.round((Date.now() - ms) / 1000);
+      if (s < 0) return 'in the future';
+      if (s < 60) return `${s}s ago`;
+      const m = Math.round(s / 60);
+      if (m < 60) return `${m}m ago`;
+      const h = Math.round(m / 60);
+      if (h < 48) return `${h}h ago`;
+      const d = Math.round(h / 24);
+      return `${d}d ago`;
+    }
+    function absTime(ms) { return ms == null ? '—' : new Date(ms).toLocaleString(); }
+    // The "finished" moment + a human label describing which timestamp it is.
+    // TRAIN/EVAL jobs get `ended_at` on completion; running/queued jobs have
+    // none, so we describe start/created time instead.
+    function jobWhen(j) {
+      const ended = parseMs(j.ended_at);
+      if (ended != null) return { ms: ended, verb: 'finished' };
+      const started = parseMs(j.started_at);
+      if (started != null) return { ms: started, verb: 'started' };
+      const created = parseMs(j.create_date) ??
+        (/^[0-9a-fA-F]{8}/.test(jobIdOf(j)) ? parseInt(jobIdOf(j).slice(0, 8), 16) * 1000 : null);
+      return { ms: created, verb: 'created' };
+    }
+    function statusTone(status) {
+      const s = String(status || '').toUpperCase();
+      if (s.includes('DONE') || s.includes('SUCC')) return 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
+      if (s.includes('FAIL') || s.includes('CANCEL') || s.includes('ERROR')) return 'bg-rose-500/15 text-rose-300 border-rose-500/30';
+      if (s.includes('PROGRESS') || s.includes('RUN')) return 'bg-sky-500/15 text-sky-300 border-sky-500/30';
+      if (s.includes('PAUSE')) return 'bg-amber-500/15 text-amber-300 border-amber-500/30';
+      return 'bg-slate-500/15 text-slate-300 border-slate-500/30';
+    }
+    function statusBadge(status) {
+      const s = escapeHtml(status || 'unknown');
+      return `<span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold border whitespace-nowrap ${statusTone(status)}">${s}</span>`;
     }
     // Per-client change cursor for /get_jobs (this tab has no WebSocket,
     // so it polls). Sent as ?since=<v>; advanced from the X-Coll-Version
@@ -194,40 +255,21 @@
         if (txt === 'NO_CHANGES') return;
         const jobs = JSON.parse(txt);
         if (!Array.isArray(jobs)) return;
-        // Most-recently-created first (see jobTimeKey for the ObjectId
-        // fallback that keeps undated jobs correctly ordered) so the
-        // datalist's native suggestions surface the newest jobs at the top.
+
+        const firstBuild = allJobs.length === 0;
+        // Most-recently-finished first (jobTimeKey now prefers ended_at, then
+        // the date fields, then the ObjectId's embedded creation time) so the
+        // freshest jobs surface at the top of the picker.
         jobs.sort((a, b) => jobTimeKey(b) - jobTimeKey(a));
+        allJobs = jobs;
+        jobById.clear();
+        for (const j of jobs) { const id = jobIdOf(j); if (id) jobById.set(id, j); }
 
-        const firstBuild = jobList.options.length === 0;
-        // Rebuild the datalist wholesale each refresh. Unlike a <select>, a
-        // <datalist> has no open/selected UI state to disturb - the text
-        // <input> holds the selection independently - so a full rebuild is
-        // both simpler and keeps labels (status suffixes) fresh. We rebuild
-        // the label<->id maps in lockstep.
-        idByLabel.clear();
-        labelById.clear();
-        const frag = document.createDocumentFragment();
-        for (const j of jobs) {
-          const id = jobIdOf(j);
-          if (!id) continue;
-          const lbl = jobLabel(j);
-          // Labels are near-unique (design/reward name + 6-char id suffix +
-          // status); on the rare collision last-writer-wins, which is
-          // acceptable for a search picker.
-          idByLabel.set(lbl, id);
-          labelById.set(id, lbl);
-          const opt = document.createElement('option');
-          opt.value = lbl;
-          frag.appendChild(opt);
-        }
-        jobList.replaceChildren(frag);
-
-        // Keep the input text in sync with the current selection's (possibly
+        // Keep the search box showing the current selection's (possibly
         // updated) label, but never clobber what the user is actively typing.
-        if (selectedJobId && labelById.has(selectedJobId)
+        if (selectedJobId && jobById.has(selectedJobId)
             && document.activeElement !== jobInput) {
-          jobInput.value = labelById.get(selectedJobId);
+          jobInput.value = jobLabel(jobById.get(selectedJobId));
         }
 
         // Default to a RUNNING job on the first build only.
@@ -235,11 +277,162 @@
           const running = jobs.find((j) => String(j.status).toUpperCase().includes('RUN'));
           if (running) {
             selectedJobId = jobIdOf(running);
-            jobInput.value = labelById.get(selectedJobId) || '';
+            jobInput.value = jobLabel(running);
           }
         }
+
+        // If the dropdown is open, re-render so statuses / finished-times
+        // stay live under the 8s refresh.
+        if (panelOpen) renderPanel();
       } catch (e) { /* ignore */ }
     }
+
+    // ---- Custom dropdown: filtering, rendering, selection, hover card ----
+    function filteredJobs() {
+      const q = jobInput.value.trim().toLowerCase();
+      // When the box shows the current selection's exact label, treat it as
+      // "no filter" so opening the panel shows the full list, not just the
+      // one selected row.
+      const selLabel = selectedJobId && jobById.has(selectedJobId)
+        ? jobLabel(jobById.get(selectedJobId)).toLowerCase() : '';
+      const eff = (!q || q === selLabel) ? '' : q;
+      let rows = allJobs;
+      if (eff) {
+        rows = allJobs.filter((j) => {
+          const hay = [
+            jobName(j), j.status, j.job_type, j.course_type,
+            j.gym_name, jobIdOf(j),
+          ].join(' ').toLowerCase();
+          return hay.includes(eff);
+        });
+      }
+      return rows.slice(0, 300); // cap for render cost with ~1k jobs
+    }
+
+    function rowHtml(j) {
+      const id = jobIdOf(j);
+      const when = jobWhen(j);
+      const sel = id === selectedJobId;
+      const pct = Number(j.percent_complete);
+      const pctTxt = (j.status && String(j.status).toUpperCase().includes('PROGRESS')
+        && isFinite(pct)) ? ` · ${pct.toFixed(0)}%` : '';
+      return `
+        <div data-jobrow="${escapeHtml(id)}"
+             class="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer
+                    ${sel ? 'bg-sky-500/10' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}">
+          <div class="min-w-0 flex-1">
+            <div class="truncate font-medium text-slate-800 dark:text-slate-100">
+              ${escapeHtml(jobName(j))}
+              <span class="font-mono text-[10px] text-slate-400">…${escapeHtml(id.slice(-6))}</span>
+            </div>
+            <div class="text-[10px] text-slate-500 dark:text-slate-400">
+              ${escapeHtml(when.verb)} ${escapeHtml(relTime(when.ms))}${pctTxt}
+            </div>
+          </div>
+          ${statusBadge(j.status)}
+        </div>`;
+    }
+
+    function renderPanel() {
+      const rows = filteredJobs();
+      if (!rows.length) {
+        jobPanel.innerHTML =
+          '<div class="px-3 py-3 text-slate-400">No matching jobs.</div>';
+        return;
+      }
+      jobPanel.innerHTML = rows.map(rowHtml).join('');
+    }
+
+    function openPanel() {
+      renderPanel();
+      jobPanel.classList.remove('hidden');
+      panelOpen = true;
+    }
+    function closePanel() {
+      jobPanel.classList.add('hidden');
+      panelOpen = false;
+      hideCard();
+    }
+    function selectJob(id) {
+      const j = jobById.get(id);
+      if (!j) return;
+      selectedJobId = id;
+      jobInput.value = jobLabel(j);
+      closePanel();
+      fetchMap();
+    }
+
+    // Hover card: rich per-job detail so the operator can assess a job
+    // before committing to it. Positioned to the LEFT of the panel, vertically
+    // aligned to the hovered row (both are absolute inside the relative
+    // [data-role="jobpicker"] container).
+    function cardHtml(j) {
+      const kv = [];
+      const push = (k, v) => { if (v != null && v !== '') kv.push([k, v]); };
+      const started = parseMs(j.started_at), ended = parseMs(j.ended_at);
+      const dur = (started != null && ended != null && ended >= started)
+        ? (() => { const s = Math.round((ended - started) / 1000);
+            const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+            return h ? `${h}h ${m}m` : `${m}m`; })()
+        : null;
+      push('Type', j.job_type);
+      push('Course', (j.course_type && j.course_type !== 'trainer default') ? j.course_type : 'donut');
+      push('Gym', j.gym_name);
+      push('Reward design', j.reward_design_name);
+      push('Experiment design', j.experiment_design_name);
+      if (j.num_iterations != null && j.num_iterations !== '')
+        push('Iterations', Number(j.num_iterations).toLocaleString());
+      if (j.num_trials != null && j.num_trials !== '')
+        push('Trials', String(j.num_trials));
+      if (j.training_steps != null) push('Training steps', Number(j.training_steps).toLocaleString());
+      push('Created', absTime(parseMs(j.create_date) ??
+        (/^[0-9a-fA-F]{8}/.test(jobIdOf(j)) ? parseInt(jobIdOf(j).slice(0, 8), 16) * 1000 : null)));
+      if (started != null) push('Started', absTime(started));
+      if (ended != null) push('Finished', absTime(ended));
+      if (dur) push('Duration', dur);
+      if (j.trainer_git_branch || j.trainer_git_sha)
+        push('Git', `${escapeHtml(j.trainer_git_branch || '')} ${(j.trainer_git_sha || '').slice(0, 8)}`.trim());
+
+      const pct = Number(j.percent_complete);
+      const progressBar = (j.status && String(j.status).toUpperCase().includes('PROGRESS') && isFinite(pct))
+        ? `<div class="mt-2"><div class="h-1.5 w-full rounded bg-slate-200 dark:bg-slate-700 overflow-hidden">
+             <div class="h-full bg-sky-400" style="width:${Math.max(0, Math.min(100, pct)).toFixed(1)}%"></div>
+           </div><div class="text-[10px] text-slate-400 mt-0.5">${pct.toFixed(1)}% complete</div></div>`
+        : '';
+      const errBlock = j.eval_error
+        ? `<div class="mt-2 p-1.5 rounded bg-rose-500/10 border border-rose-500/30 text-rose-300
+                     text-[10px] font-mono whitespace-pre-wrap break-words max-h-24 overflow-auto">${escapeHtml(String(j.eval_error).slice(0, 600))}</div>`
+        : '';
+
+      const rows = kv.map(([k, v]) =>
+        `<div class="flex gap-2"><span class="w-28 shrink-0 text-slate-400">${escapeHtml(k)}</span>
+           <span class="min-w-0 break-words text-slate-700 dark:text-slate-200">${escapeHtml(v)}</span></div>`).join('');
+
+      return `
+        <div class="flex items-center justify-between gap-2 mb-1.5">
+          <div class="font-semibold text-slate-800 dark:text-slate-100 truncate">${escapeHtml(jobName(j))}</div>
+          ${statusBadge(j.status)}
+        </div>
+        <div class="font-mono text-[10px] text-slate-400 mb-2 select-all break-all">${escapeHtml(jobIdOf(j))}</div>
+        <div class="space-y-0.5">${rows}</div>
+        ${progressBar}
+        ${errBlock}`;
+    }
+    function showCard(id, rowEl) {
+      const j = jobById.get(id);
+      if (!j) { hideCard(); return; }
+      jobCard.innerHTML = cardHtml(j);
+      jobCard.classList.remove('hidden');
+      // Fixed location: upper-right of the list. The card's top-left corner
+      // pins to the panel's top-right corner (panel is right-0, so its right
+      // edge == the container's right edge => left:100%), and it stays there
+      // regardless of which row is hovered.
+      jobCard.style.right = 'auto';
+      jobCard.style.left = '100%';
+      jobCard.style.marginLeft = '8px';
+      jobCard.style.top = jobPanel.offsetTop + 'px';
+    }
+    function hideCard() { jobCard.classList.add('hidden'); }
 
     // ---- Fetch + render ---------------------------------------------
     async function fetchMap() {
@@ -416,20 +609,42 @@
 
     // ---- Wiring ------------------------------------------------------
     $('[data-action="refresh"]').addEventListener('click', fetchMap);
-    // Fire as soon as the typed / picked text exactly matches a job label
-    // (covers both selecting a datalist suggestion and typing a full label).
-    // 'input' catches mouse/enter selection in most browsers; 'change' is the
-    // blur-time fallback. Guarded on an actual id change so we don't refetch
-    // the same heatmap on every keystroke.
-    function resolveJobAndFetch() {
-      const v = jobInput.value.trim();
-      if (idByLabel.has(v) && idByLabel.get(v) !== selectedJobId) {
-        selectedJobId = idByLabel.get(v);
-        fetchMap();
-      }
-    }
-    jobInput.addEventListener('input', resolveJobAndFetch);
-    jobInput.addEventListener('change', resolveJobAndFetch);
+
+    // Job picker: the <input> is a live search box; the panel below it is
+    // the selectable list.
+    function openPicker() { jobInput.select(); openPanel(); }
+    jobInput.addEventListener('focus', openPicker);
+    // Selecting a row keeps focus on the input (the row mousedown
+    // preventDefaults to stay stable), so a subsequent click fires NO focus
+    // event - handle click explicitly so re-clicking the box reopens the list.
+    jobInput.addEventListener('click', () => { if (!panelOpen) openPicker(); });
+    jobInput.addEventListener('input', () => { if (!panelOpen) openPanel(); else renderPanel(); });
+    jobInput.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closePanel(); jobInput.blur(); } });
+
+    // Select on mousedown (not click) so we act before the input's blur
+    // would otherwise close the panel out from under the pointer.
+    jobPanel.addEventListener('mousedown', (e) => {
+      const row = e.target.closest('[data-jobrow]');
+      if (!row) return;
+      e.preventDefault();            // keep focus/selection stable
+      selectJob(row.getAttribute('data-jobrow'));
+    });
+    // Hover a row -> show its detail card.
+    jobPanel.addEventListener('mouseover', (e) => {
+      const row = e.target.closest('[data-jobrow]');
+      if (row) showCard(row.getAttribute('data-jobrow'), row);
+    });
+    jobPanel.addEventListener('mouseleave', hideCard);
+
+    // Close on outside click / blur (deferred so a row mousedown wins).
+    document.addEventListener('mousedown', (e) => {
+      if (!e.target.closest('[data-role="jobpicker"]')) closePanel();
+    });
+    jobInput.addEventListener('blur', () => setTimeout(() => {
+      if (document.activeElement !== jobInput
+          && !jobPanel.matches(':hover') && !jobCard.matches(':hover')) closePanel();
+    }, 150));
+
     layerSel.addEventListener('change', render);
     $('[data-action="bins"]').addEventListener('change', fetchMap);
     $('[data-action="limit"]').addEventListener('change', fetchMap);
@@ -459,9 +674,10 @@
     (async function init() {
       await loadJobs();
       await fetchMap();
-      // Keep job statuses fresh even when the heatmap auto-refresh is off.
-      // Cheap: /get_jobs hits the small jobs collection and only repaints
-      // changed option labels.
+      // Keep job statuses / finished-times fresh even when the heatmap auto-
+      // refresh is off. Cheap: the ?since cursor returns NO_CHANGES unless the
+      // jobs collection actually changed; when it does, an open picker panel
+      // re-renders in place.
       setInterval(loadJobs, 8000);
     })();
   })();
