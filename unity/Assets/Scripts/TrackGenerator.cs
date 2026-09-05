@@ -989,7 +989,7 @@ public class TrackGenerator : MonoBehaviour
         // (CreatePrimitive defaults to layer 0). Ignore Raycast (layer 2)
         // removes goals from all raycast queries while leaving OnTriggerEnter
         // (physics-based, layer-agnostic) intact for goal completion detection.
-        goal.layer = 2;
+        goal.layer = 6;
 
         // The car detects goals by OnTriggerEnter; collider must be a trigger.
         var col = goal.GetComponent<Collider>();

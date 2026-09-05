@@ -25,10 +25,29 @@ public class Goal : MonoBehaviour
         goalComplete=false;
     }
 
+    static bool IsCar(Collider hit)
+    {
+        if (hit == null) return false;
+        // Wheel / child colliders fire OnTriggerEnter with their own name,
+        // so walk parents and also accept the attached rigidbody root.
+        for (Transform t = hit.transform; t != null; t = t.parent)
+        {
+            if (NameIsCar(t.name)) return true;
+        }
+        if (hit.attachedRigidbody != null && NameIsCar(hit.attachedRigidbody.gameObject.name))
+            return true;
+        return false;
+    }
+
+    static bool NameIsCar(string name)
+    {
+        return name.Contains("RiggedWaymo") || name.Contains("JetRacer_Physics");
+    }
+
     void OnTriggerEnter(Collider hit)
     {
         Debug.Log("collided with " + hit.transform.gameObject.name);
-        if(hit.transform.gameObject.name.Contains("RiggedWaymo"))
+        if (IsCar(hit))
         {
            Debug.Log("set goal zz complete to true");
            goalComplete=true;
