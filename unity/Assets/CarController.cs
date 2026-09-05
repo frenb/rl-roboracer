@@ -46,6 +46,7 @@ public class CarController : MonoBehaviour {
     // component, so a public field would deserialize the stale inspector value
     // (0.8) baked into the prefab and ignore this code default.
     private float raycastLineWidth = 0.1f;
+    public Transform raycastOrigin;
     private LineRenderer[] rayLineRenderers = new LineRenderer[29];
     private Material rayLineMaterial;
     private Transform rayLineParent;
@@ -502,7 +503,9 @@ public class CarController : MonoBehaviour {
     void Update()
     {
         var kb = Keyboard.current;
-        if (kb != null && kb.rKey.wasPressedThisFrame)
+        // R while the JetRacer CSI view is up is handled by CameraViewSwitcher
+        // (CSI-only overlay). Leave the overhead ray-line state alone.
+        if (kb != null && kb.rKey.wasPressedThisFrame && !CameraViewSwitcher.CarCameraOn)
             ShowRaycastLines = !ShowRaycastLines;
         if (ShowRaycastLines != _lastRayLinesState)
         {
@@ -520,6 +523,13 @@ public class CarController : MonoBehaviour {
             rayLineMaterial = new Material(shader);
         }
         return rayLineMaterial;
+    }
+
+    public void CopyRayLineRenderers(List<Renderer> dst)
+    {
+        if (dst == null) return;
+        for (int i = 0; i < rayLineRenderers.Length; i++)
+            if (rayLineRenderers[i] != null) dst.Add(rayLineRenderers[i]);
     }
 
     void SetRayLinesEnabled(bool on)
@@ -633,9 +643,10 @@ public class CarController : MonoBehaviour {
     {
         bool hitSomething = false;
           //forward
+        Vector3 origin = raycastOrigin != null ? raycastOrigin.position : transform.position;
         foreach(float r in rotations)
         {
-            hitSomething = DrawRay(transform.position, Quaternion.AngleAxis(angle+r, Vector3.up) * fwd, d*distanceMultiple, Color.green, direction);
+            hitSomething = DrawRay(origin, Quaternion.AngleAxis(angle+r, Vector3.up) * fwd, d*distanceMultiple, Color.green, direction);
             if(hitSomething)
                 break;
         }

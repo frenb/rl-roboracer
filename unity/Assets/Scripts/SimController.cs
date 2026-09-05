@@ -98,6 +98,9 @@ public class SimController : MonoBehaviour
         // geometry directly, without needing a Python trainer connected).
         // Toggle with the C key. No scene setup required.
         gameObject.AddComponent(typeof(CurriculumStageButtons));
+        // Auto-attach the P-key view switcher (top-down Main Camera <->
+        // on-car JetRacerCsiCamera). No scene setup required.
+        gameObject.AddComponent(typeof(CameraViewSwitcher));
         // // Publish camera frames for computer vision.
         // if (publishedCamera != null)
         // {
