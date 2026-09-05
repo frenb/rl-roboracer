@@ -125,6 +125,40 @@ Useful after edits that need a fresh container state (changes to
 pure `rl_agent/` Python edits, the bind mount picks them up live — no
 restart needed, just re-run `python robotaxi.py --num-envs 4`.
 
+### Trajectory rollout viewer (2 actors)
+
+The policy candidate-path fan (`TrajectoryRolloutViz` in Unity, **T** to
+toggle) stays empty unless the trainer is started with
+`ROLLOUT_VIZ_ENABLED=1`. The compose `command:` never sets that flag, so a
+container auto-start or a `pkill` that lets sim-controller respawn
+`robotaxi.py` will not show trajectories.
+
+Use the scale overlay (no auto-trainer), two Unity clients, then exec the
+trainer yourself:
+
+```powershell
+.\scripts\Restart-Stack.ps1 -N 2
+```
+
+When both Unity windows are up:
+
+```powershell
+docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller `
+  bash -c 'export ROLLOUT_VIZ_ENABLED=1 && cd /python_ws/src && python -u robotaxi.py --num-envs 2 2>&1 | tee /tmp/trainer.log'
+```
+
+Match `--num-envs` to `-N`. Start a TRAIN or EVAL job from the dashboard.
+Watch actor 0 (or both; `ROLLOUT_VIZ_ALL_ACTORS` defaults on) from the
+**top-down Main Camera**. Press **T** if the fan is hidden.
+
+EVAL uses the greedy SavedModel, so the lines almost overlap — that still
+means the viz is working. TRAIN shows the real spread.
+
+If the stack is already up with scale.yml and no trainer, skip
+`Restart-Stack` and run only the `export ROLLOUT_VIZ_ENABLED=1` command.
+Do not run a second `robotaxi.py` on top of an existing one. More knobs:
+`docs/trajectory-rollout-viz.md`.
+
 ### Unity-side-only lifecycle
 
 For the common case of "I edited `RunClientWrapper.ps1` / re-promoted a
