@@ -16,16 +16,125 @@ rl-roboracer/
 └── scripts/                   # PowerShell helpers
 ```
 
-The repo expects to live next to a few sibling data folders:
+The repo expects to live next to a few sibling data folders (created in
+Setup below). Trainer `/tmp` is a Compose named volume (`tmpdata`), not a
+host bind mount. The Unity gym binary lives in-repo at
+`unity\Builds\latest\`, not as a sibling.
 
 ```
 LATEST/
-├── saved_models/          # tf-agents checkpoints           (bind-mounted)
-├── mongodb/               # mongo data dir                  (bind-mounted)
-├── tfrecords/             # demonstration trajectories      (bind-mounted)
-├── tmp/                   # tensorboard scratch + run logs  (bind-mounted)
-└── UnityBinary/           # pre-built Unity gym executable
+├── rl-roboracer/      # this repo
+├── saved_models/      # tf-agents checkpoints   (bind-mounted)
+├── mongodb/           # mongo data dir          (bind-mounted)
+└── tfrecords/         # demonstration trajectories (bind-mounted)
 ```
+
+## Setup
+
+Do these once, in order, on a Windows host with an NVIDIA GPU. Scripts
+are PowerShell.
+
+### 1. Install host software
+
+1. **Git.**
+2. **[NVIDIA Game Ready or Studio driver](https://www.nvidia.com/Download/index.aspx)**
+   new enough for WSL 2 CUDA (required by `sim-controller`;
+   [R495 or later](https://docs.nvidia.com/cuda/wsl-user-guide/index.html)
+   on the Windows host — do not install a Linux NVIDIA driver inside WSL).
+3. **[Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/)**
+   with the **WSL 2** engine. There is no separate “enable GPU”
+   checkbox — [GPU-PV](https://docs.docker.com/desktop/features/gpu/)
+   is on when the NVIDIA host driver is current, WSL is updated
+   (`wsl --update`), and Settings → **General** has **Use the WSL 2
+   based engine** checked (default on a WSL 2 machine; the row is
+   hidden if it is the only engine). Settings → **Resources → WSL
+   Integration** is only needed if you will run `docker` from a Linux
+   distro. Compose reserves one NVIDIA device for `sim-controller`.
+   Confirm with `docker version`, `docker compose version`, and:
+
+   ```powershell
+   docker run --rm --gpus all nvidia/cuda:11.0.3-runtime-ubuntu20.04 nvidia-smi
+   ```
+4. **[Unity Hub](https://unity.com/download)**, then install **Unity
+   Editor 2020.3.11f1** (changeset `99c7afb366b3`). That is the version
+   in `unity/ProjectSettings/ProjectVersion.txt`; a newer 2020.3 patch
+   will rewrite the project. In Hub → Installs → the editor's modules,
+   add **Windows Build Support (Mono)**. Hub itself is unpinned.
+
+### 2. Clone the repo
+
+Parent directory name can be anything; compose bind-mounts
+`../saved_models`, `../mongodb`, and `../tfrecords` relative to the
+repo, so those three folders must sit next to `rl-roboracer`.
+
+```powershell
+cd <parent>   # e.g. Documents\agents\robots\LATEST
+git clone https://github.com/frenb/rl-roboracer.git
+cd rl-roboracer
+```
+
+### 3. Create sibling data directories
+
+```powershell
+New-Item -ItemType Directory -Force `
+  ..\saved_models, ..\mongodb, ..\tfrecords | Out-Null
+```
+
+Empty dirs are enough to start. Copy demo tfrecords or checkpoints into
+those folders when you have them. Optional: `Copy-Item .env.example .env`
+if you will enable the Mad Scientist (off by default).
+
+### 4. Build the Docker images
+
+First-time `docker compose build` compiles the three local images and
+tags them with the names compose already uses (pulling the `FROM`
+bases as it goes). From the repo root:
+
+```powershell
+docker compose -f docker-compose.yml -f compose/scale.yml build
+```
+
+| Service | Compose image | Source |
+|---|---|---|
+| `ros-server` (+ `ros-server-1..3`) | `docker_ros-server:thin` | Built from `docker/ros_server/Dockerfile` (`FROM ros:noetic-ros-base-focal`) |
+| `sim-controller` | `sim_controller:latest` | Built from `docker/sim_controller/Dockerfile` (`FROM nvidia/cuda:11.0.3-runtime-ubuntu20.04`; pip installs `tensorflow==2.7.0rc1`, `tf-agents[reverb]==0.11.0rc0`) |
+| `madscientist` | `madscientist:latest` | Built from `docker/madscientist/Dockerfile` (`FROM python:3.11-slim`) |
+| `dashboard` | `node:20` | Pulled; no local Dockerfile |
+| `mongo` | `bitnami/mongodb:6.0` | Pulled |
+| `mongo-express` | `mongo-express` | Pulled (tag unpinned) |
+
+`Start-Stack.ps1` later pulls any remaining public images (`mongo`,
+`mongo-express`, `node:20`) on first `up`.
+
+The compose `image:` name `docker_ros-server:thin` is the tag applied to
+the full `Dockerfile` build. Incremental rebuilds (edit ROS packages
+without reinstalling apt) are optional: tag a `Dockerfile` build as
+`docker_ros-server:working`, then
+`docker build -f docker/ros_server/DockerfileThin -t docker_ros-server:thin docker/ros_server`.
+
+### 5. Build and promote the Unity gym
+
+1. Unity Hub → **Add** → open the `unity\` folder of this repo with
+   Editor **2020.3.11f1**.
+2. Confirm **File → Build Settings** has `Assets/Scenes/w-course-jetracer.unity`
+   enabled (it is the play scene in `EditorBuildSettings`).
+3. **File → Build Settings → Build**, platform **Windows**, into a
+   dated subfolder of `unity\Builds\` (e.g.
+   `unity\Builds\2026.09.05-jetracer\`). Do not build straight into
+   `latest\`.
+4. Promote that folder so the launchers can find it:
+
+```powershell
+.\scripts\PromoteLatestBuild.ps1
+```
+
+This archives any previous `unity\Builds\latest\` and renames the new
+dated folder to `latest\`. The launchers always read from `latest\` and
+copy it into per-instance directories (`unity\Builds\instances\0..N-1\`)
+so Unity's "force single instance" mutex does not block multi-actor
+runs.
+
+After this, use **Running an experiment** for day-to-day start/stop.
 
 ## Running an experiment
 
@@ -41,21 +150,6 @@ SAC learner. Three PowerShell scripts in `scripts\` handle the full lifecycle:
 All three accept `-N <int>` to override the default of 4 actors, plus
 `-StaggerSeconds`, `-Popup`, `-SkipUnity`, and `-WaitForRosServersSeconds` —
 see each script's help block for details.
-
-### One-time prerequisite
-
-Build the Unity binary from the editor into a dated subfolder of `unity\Builds\`
-(e.g. `unity\Builds\2026.05.09-multi-actor\`), then promote it to the location
-the launchers expect:
-
-```powershell
-.\scripts\PromoteLatestBuild.ps1
-```
-
-This archives any previous `unity\Builds\latest\` and renames the new dated
-folder to `latest\`. The launchers always read from `latest\` and copy it into
-per-instance directories (`unity\Builds\instances\0..N-1\`) so that Unity's
-"force single instance" mutex doesn't block multi-actor runs.
 
 ### Bring everything up
 
@@ -232,13 +326,12 @@ pip install grpcio-tools
 
 ## Notes
 
-- `ros-server` is built from `image: docker_ros-server:thin`, which expects you to
-  have first built the base layer (`Dockerfile`) as `docker_ros-server:working`,
-  then built `DockerfileThin` on top. If you're starting from scratch, swap the
-  compose `build:` block to use `Dockerfile` directly.
-- The Unity gym binary, MongoDB data, saved models, tfrecords, and tensorboard
-  scratch all live as siblings of this repo so they can be regenerated, swapped,
-  or wiped without touching git history.
+- First-time image build is **Setup §4**. Incremental `ros-server` rebuilds
+  via `DockerfileThin` (layer on `docker_ros-server:working`) are optional.
+- MongoDB data, saved models, and tfrecords live as siblings of this repo
+  so they can be regenerated, swapped, or wiped without touching git
+  history. The gym binary is `unity\Builds\latest\`. Trainer `/tmp` is
+  the Compose volume `tmpdata`.
 
 ---
 
