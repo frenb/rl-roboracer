@@ -159,13 +159,13 @@ var config = {
                       type: 'component',
                       title: 'Jobs',
                       componentName: 'iframeComponent',
-                      componentState: { src: 'http://localhost/jobs?v=ws4', id: 'jobs' }
+                      componentState: { src: 'http://localhost/jobs?v=norays1', id: 'jobs' }
                     },
                     {
                       type: 'component',
                       title: 'Models',
                       componentName: 'iframeComponent',
-                      componentState: { src: 'http://localhost/models?v=ws1', id: 'models' }
+                      componentState: { src: 'http://localhost/models?v=norays1', id: 'models' }
                     },
                     {
                       type: 'component',

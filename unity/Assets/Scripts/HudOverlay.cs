@@ -124,7 +124,7 @@ public class HudOverlay : MonoBehaviour
 
         // Background panel for readability.
         Rect panel = new Rect(cx - panelWidth * 0.5f, top - 6f,
-                              panelWidth, wheelSize + 104f + headerH + stageRowH);
+                              panelWidth, wheelSize + 122f + headerH + stageRowH);
         Color prevC = GUI.color;
         GUI.color = new Color(0f, 0f, 0f, 0.38f);
         GUI.DrawTexture(panel, _panelTex);
@@ -177,6 +177,11 @@ public class HudOverlay : MonoBehaviour
                                panelWidth, stageRowH),
                       stageText, _labelStyle);
         }
+
+        string csi = CsiFramePublisher.LastStatus;
+        float csiY = contentTop + wheelSize + 86f + stageRowH;
+        GUI.Label(new Rect(cx - panelWidth * 0.5f, csiY, panelWidth, 18f),
+                  csi, _labelStyle);
     }
 
     void EnsureAssets()

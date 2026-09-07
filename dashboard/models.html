@@ -1710,10 +1710,28 @@
         return t.replace(/^tf\./, '').replace(/^numpy\./, '').replace(/^np\./, '');
       }
 
+      function isLeafSpec(s) {
+        return s && typeof s === 'object' && Object.prototype.hasOwnProperty.call(s, 'shape');
+      }
+
       function specsCompatible(a, b) {
         // Mirror of robotaxi.py:_specs_compatible. None on either
         // side → unknown (caller treats as "?", not "incompatible").
         if (!a || !b) return null;
+        const aLeaf = isLeafSpec(a);
+        const bLeaf = isLeafSpec(b);
+        if (aLeaf !== bLeaf) return false;
+        if (!aLeaf) {
+          const ak = Object.keys(a), bk = Object.keys(b);
+          if (ak.length !== bk.length) return false;
+          for (const k of ak) {
+            if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+            const r = specsCompatible(a[k], b[k]);
+            if (r === false) return false;
+            if (r === null) return null;
+          }
+          return true;
+        }
         const as = a.shape || [];
         const bs = b.shape || [];
         if (as.length !== bs.length) return false;
@@ -1733,6 +1751,9 @@
         // Both sides may be missing.
         const fmt = (s) => {
           if (!s) return 'unknown';
+          if (!isLeafSpec(s)) {
+            return '{' + Object.keys(s).sort().map((k) => k + ':' + fmt(s[k])).join(', ') + '}';
+          }
           const shape = s.shape == null ? '?' : `[${s.shape.join(', ')}]`;
           const dt = normalizeDtype(s.dtype) || '?';
           return `${shape} ${dt}`;
@@ -1750,6 +1771,19 @@
       // whichever course last ran and would misfire when, e.g., a 31-dim
       // donut_no_hint model is compared against a 32-dim donut env).
       const COURSE_OBS_SIZES = { donut: 32, donut_no_hint: 31 };
+      const COURSE_OBS_DICT = {
+        donut_camera: {
+          vector: { shape: [31], dtype: 'float32' },
+          image: { shape: [84, 84, 3], dtype: 'float32' },
+        },
+        // Raycast ablation arm. The 2-D vector is what makes a donut_camera
+        // checkpoint fail Compat here (and vice versa) instead of silently
+        // cross-loading between the two arms of the study.
+        donut_camera_no_rays: {
+          vector: { shape: [2], dtype: 'float32' },
+          image: { shape: [84, 84, 3], dtype: 'float32' },
+        },
+      };
 
       function computeCompat(model, envSpecsByRobot) {
         const envSpec = envSpecsByRobot.get(String(model.robot_type || ''));
@@ -1768,8 +1802,9 @@
         const course = (model.course_type && model.course_type !== 'trainer default')
           ? String(model.course_type) : 'donut';
         const expectedObsDim = COURSE_OBS_SIZES[course];
+        const expectedObsDict = COURSE_OBS_DICT[course];
 
-        if (expectedObsDim == null) {
+        if (expectedObsDim == null && !expectedObsDict) {
           // Unknown/unmapped course (e.g. a course added after this page
           // shipped). Fall back to the legacy live-env comparison so we still
           // say something useful rather than silently passing.
@@ -1796,7 +1831,7 @@
         // width for ITS course. dtype is course-independent (float32), so we
         // reuse the model's own dtype in the expected spec - the meaningful
         // check here is the observation dimension.
-        const expectedObs = {
+        const expectedObs = expectedObsDict || {
           shape: [expectedObsDim],
           dtype: (model.observation_spec && model.observation_spec.dtype) || 'float32',
         };

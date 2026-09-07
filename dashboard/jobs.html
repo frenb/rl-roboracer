@@ -114,13 +114,24 @@
             <option value="DONE">DONE</option>
           </select>
 
-          <label for="f-job-type" class="text-xs font-medium text-slate-600 dark:text-slate-300">Job type</label>
+          <label for="f-job-type" class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="TRAIN: SAC (donut / donut_no_hint reuse expert demos + optional BC; donut_camera is Conv-SAC from scratch, no demos). DEMO: collect expert TFRecords. EVAL: run a SavedModel. BC_TRAINING_ONLY: BC on existing demos (not donut_camera).">Job type</label>
           <select id="f-job-type" name="job_type" class="w-full input-base appearance-none select-chevron pr-8">
             <option value="TRAIN" selected>TRAIN</option>
             <option value="DEMO">DEMO</option>
             <option value="EVAL">EVAL</option>
             <option value="BC_TRAINING_ONLY">BC_TRAINING_ONLY</option>
           </select>
+
+          <label id="f-skip-first-eval-label" for="f-skip-first-eval"
+                 class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="TRAIN only. Skip the two cold-start evals (10 episodes each; a donut episode ends at 100 goals). Go straight to TRAIN begin. Periodic in-loop evals still run.">Skip first eval</label>
+          <label id="f-skip-first-eval-wrap"
+                 class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer">
+            <input id="f-skip-first-eval" name="skip_first_eval" type="checkbox"
+                   class="accent-sky-600">
+            Skip the two startup evals; go straight to TRAIN
+          </label>
 
           <label for="f-model-type" class="text-xs font-medium text-slate-600 dark:text-slate-300">Model type</label>
           <select id="f-model-type" name="model_type" class="w-full input-base appearance-none select-chevron pr-8">
@@ -235,13 +246,16 @@
                width (see rl_agent/robotaxi.py do_job). -->
           <label for="f-course"
                  class="text-xs font-medium text-slate-600 dark:text-slate-300"
-                 title="Which course/observation the job trains against. 'trainer default' uses the trainer's ROBOTAXI_COURSE_TYPE env var (then donut). 'donut_no_hint' drops the goal-derived angle-to-goal element (31-dim obs) for real-robot transfer.">Course</label>
+                 title="Which course/observation the job trains against. 'trainer default' uses the trainer's ROBOTAXI_COURSE_TYPE env var (then donut). 'donut_no_hint' drops the goal-derived angle-to-goal element (31-dim obs) for real-robot transfer. 'donut_camera' is 31-D + 84x84 CSI (Conv-SAC, train from scratch). 'donut_camera_no_rays' is the raycast ablation of donut_camera: same image, vector cut to 2-D (speed, sideslip).">Course</label>
           <select id="f-course" name="course_type"
                   class="w-full input-base appearance-none select-chevron pr-8">
             <option value="trainer default" selected>trainer default (donut, 32-dim)</option>
             <option value="donut">donut (32-dim)</option>
             <option value="donut_no_hint">donut_no_hint (31-dim, no angle-to-goal)</option>
+            <option value="donut_camera">donut_camera (31-D + 84x84 CSI)</option>
+            <option value="donut_camera_no_rays">donut_camera_no_rays (2-D + 84x84 CSI, raycast ablation)</option>
           </select>
+          <p id="f-job-hint" class="col-span-2 m-0 text-xs leading-relaxed text-slate-500 dark:text-slate-400"></p>
         </form>
       </div>
       <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
@@ -482,7 +496,10 @@
             render: (v) => {
               const c = (v && v !== 'trainer default') ? String(v) : 'donut';
               const isNoHint = c === 'donut_no_hint';
-              const cls = isNoHint
+              const isCamera = c === 'donut_camera' || c === 'donut_camera_no_rays';
+              const cls = isCamera
+                ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+                : isNoHint
                 ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
                 : 'bg-slate-500/15 text-slate-300 border-slate-500/30';
               return '<span class="inline-flex items-center px-2 py-0.5 rounded-full '
@@ -792,6 +809,50 @@
       const formEl    = document.getElementById('create-job-form');
       const submitBtn = modal.querySelector('[data-action="submit-create"]');
 
+      function updateJobHint() {
+        const hint = document.getElementById('f-job-hint');
+        if (!hint) return;
+        const jt = document.getElementById('f-job-type').value;
+        const course = document.getElementById('f-course').value;
+        const noRays = course === 'donut_camera_no_rays';
+        const camera = course === 'donut_camera' || noRays;
+        if (jt === 'TRAIN' && camera) {
+          hint.textContent =
+            'TRAIN on ' + course + ' is SAC from scratch: a CNN on the 84×84 CSI ' +
+            'image plus the ' + (noRays ? '2-D vector (speed, sideslip only — the ' +
+            '29 raycasts are ablated away)' : '31-D no-hint vector') + '. ' +
+            'No expert demos, BC pretrain, ' +
+            'or AWAC (those need dict TFRecords, Phase 7). Unity must publish ' +
+            'camera/front (Editor Play or a promoted gym). Do not load a 31-D / ' +
+            '32-D checkpoint. DEMO and BC_TRAINING_ONLY on this course are refused. ' +
+            'Check Skip first eval to go straight to TRAIN — the two 10-episode ' +
+            'startup evals take hours on a random Conv-SAC.' +
+            (noRays ? ' To compare against donut_camera, match that run’s reward ' +
+            'design, experiment design, and iteration budget.' : '');
+        } else if (jt === 'TRAIN') {
+          hint.textContent =
+            'TRAIN runs SAC on the selected course. donut is 32-D (includes ' +
+            'angle-to-goal). donut_no_hint is 31-D for sim2real. Both reuse the ' +
+            'classic expert demo set for BC pretrain unless you override Demo job ID.';
+        } else if (jt === 'EVAL' && camera) {
+          hint.textContent =
+            'EVAL a ' + course + ' SavedModel only. Any other observation spec — ' +
+            'including the other camera course, whose vector is ' +
+            (noRays ? '31-D' : '2-D') + ' — fails Compat / EvalSpecMismatchError.';
+        } else if ((jt === 'DEMO' || jt === 'BC_TRAINING_ONLY') && camera) {
+          hint.textContent =
+            'DEMO and BC_TRAINING_ONLY are not supported on ' + course + ' yet ' +
+            '(Phase 7: dict TFRecords). Use TRAIN from scratch.';
+        } else {
+          hint.textContent = '';
+        }
+        const skipLab = document.getElementById('f-skip-first-eval-label');
+        const skipWrap = document.getElementById('f-skip-first-eval-wrap');
+        const showSkip = jt === 'TRAIN';
+        if (skipLab) skipLab.classList.toggle('hidden', !showSkip);
+        if (skipWrap) skipWrap.classList.toggle('hidden', !showSkip);
+      }
+
       function openModal() {
         modal.classList.remove('opacity-0', 'pointer-events-none');
         modal.classList.add('opacity-100', 'pointer-events-auto');
@@ -799,6 +860,7 @@
         dialogEl.classList.add('opacity-100', 'translate-y-0', 'scale-100');
         modal.setAttribute('aria-hidden', 'false');
         document.getElementById('f-job-type').focus();
+        updateJobHint();
         // Hydrate the reward-design + experiment-design dropdowns
         // each time the modal opens so newly-authored designs show
         // up without a page reload. We always force=true on both:
@@ -814,6 +876,9 @@
           console.warn('gyms hydrate failed:', err);
         });
       }
+
+      document.getElementById('f-job-type').addEventListener('change', updateJobHint);
+      document.getElementById('f-course').addEventListener('change', updateJobHint);
 
       // ---- Gym dropdown population ------------------------------ *
       //
@@ -977,6 +1042,12 @@
           ...(fd.get('training_steps') !== ''
             ? { training_steps: Number(fd.get('training_steps')) } : {}),
           demo_job_id: String(fd.get('demo_job_id') || ''),
+          // TRAIN only. Omitted when unchecked so legacy jobs stay
+          // bit-identical (do_job treats missing as false).
+          ...(document.getElementById('f-skip-first-eval')
+              && document.getElementById('f-skip-first-eval').checked
+              && fd.get('job_type') === 'TRAIN'
+            ? { skip_first_eval: true } : {}),
           // pass_through_actions is hardcoded false in the trainer.
           pass_through_actions: false,
           // Track geometry — forwarded to Unity's TrackGenerator on every
@@ -1313,12 +1384,25 @@
       //     "NO_CHANGES" string instead of the entire ~1k-doc jobs
       //     collection every interval. Live updates arrive over the
       //     WebSocket; this poll is only a fallback catch-up.
+      let pendingForce = false;
       async function fetchFullData(force = false) {
-        if (pollInFlight) return;
+        if (pollInFlight) {
+          // Don't drop a forced refresh behind an in-flight since-poll
+          // (create / status-change would otherwise vanish until the
+          // next interval).
+          if (force) pendingForce = true;
+          return;
+        }
         pollInFlight = true;
         try {
           const url = force ? `/get_jobs?force=true` : `/get_jobs?since=${jobsVer}`;
-          const res = await fetch(url);
+          const res = await fetch(url, { cache: 'no-store' });
+          // Express etag can turn an unchanged NO_CHANGES body into
+          // 304; treat that as "still current" rather than an error.
+          if (res.status === 304) {
+            freshness.markSuccess();
+            return;
+          }
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           // Advance the cursor from the header (present on data AND
           // NO_CHANGES replies). Guarded so a missing/garbled header
@@ -1341,50 +1425,65 @@
           else showToast({ type: 'error', message: `Refresh failed: ${err.message || err}` });
         } finally {
           pollInFlight = false;
+          if (pendingForce) {
+            pendingForce = false;
+            fetchFullData(true);
+          }
         }
       }
 
-      // Handle incremental update from WebSocket
+      function mongoId(v) {
+        if (v == null) return '';
+        if (typeof v === 'object') return String(v.$oid || v._id || v);
+        return String(v);
+      }
+
+      // Apply a change-stream event through TableView.setData so the
+      // synthetic __rcRowKey index is stamped. Poking Tabulator with
+      // the raw Mongo doc (no __rcRowKey) silently no-ops, then
+      // advancing jobsVer made the fallback poll return NO_CHANGES —
+      // the table only moved on a hard refresh (force=true).
+      function paintRows() {
+        table.setData(table._rows);
+        updateCounts(table._rows);
+      }
+
       function handleWsChange(data) {
-        const { operationType, documentKey, updateDescription, fullDocument } = data;
-        const id = documentKey?._id;
-        if (!id) return;
-
-        // Advance the poll cursor: this change was applied in-place here,
-        // so the next recurring poll shouldn't refetch the whole
-        // collection just to see it.
-        if (typeof data.version === 'number' && data.version > jobsVer) jobsVer = data.version;
-
-        freshness.markSuccess();
+        const { operationType, documentKey, fullDocument } = data;
+        const id = mongoId(documentKey && documentKey._id);
+        let applied = false;
 
         if (operationType === 'insert' && fullDocument) {
-          // Add new row at the top (newest first)
-          table._tabulator.addData([fullDocument], true);
-          table._rows.unshift(fullDocument);
-          updateCounts(table._rows);
-          console.log('[WS] Inserted job:', id);
-        } else if (operationType === 'update' && fullDocument) {
-          // Update existing row with full document
-          table._tabulator.updateData([fullDocument]);
-          // Update internal _rows array
-          const idx = table._rows.findIndex(r => String(r._id) === String(id));
+          const exists = table._rows.some((r) => mongoId(r._id) === id);
+          if (!exists) table._rows.unshift(fullDocument);
+          else {
+            const idx = table._rows.findIndex((r) => mongoId(r._id) === id);
+            if (idx >= 0) table._rows[idx] = fullDocument;
+          }
+          applied = true;
+        } else if ((operationType === 'update' || operationType === 'replace')
+                   && fullDocument) {
+          const idx = table._rows.findIndex((r) => mongoId(r._id) === id);
           if (idx >= 0) table._rows[idx] = fullDocument;
-          updateCounts(table._rows);
-          console.log('[WS] Updated job:', id);
-        } else if (operationType === 'delete') {
-          // Remove row
-          table._tabulator.deleteRow(String(id));
-          table._rows = table._rows.filter(r => String(r._id) !== String(id));
-          updateCounts(table._rows);
-          console.log('[WS] Deleted job:', id);
-        } else if (operationType === 'replace' && fullDocument) {
-          // Replace entire document
-          table._tabulator.updateData([fullDocument]);
-          const idx = table._rows.findIndex(r => String(r._id) === String(id));
-          if (idx >= 0) table._rows[idx] = fullDocument;
-          updateCounts(table._rows);
-          console.log('[WS] Replaced job:', id);
+          else table._rows.unshift(fullDocument);
+          applied = true;
+        } else if (operationType === 'delete' && id) {
+          table._rows = table._rows.filter((r) => mongoId(r._id) !== id);
+          applied = true;
         }
+
+        if (!applied) {
+          // Missing fullDocument / unknown op: don't advance the
+          // cursor; force a full refetch so the table can't stall.
+          fetchFullData(true);
+          return;
+        }
+
+        if (typeof data.version === 'number' && data.version > jobsVer) {
+          jobsVer = data.version;
+        }
+        freshness.markSuccess();
+        paintRows();
       }
 
       // Connect to WebSocket server for real-time updates
@@ -1492,7 +1591,11 @@
       function updatePollInterval() {
         if (pollHandle) clearInterval(pollHandle);
         const interval = wsConnected ? POLL_INTERVAL_WITH_WS : POLL_INTERVAL_WITHOUT_WS;
-        pollHandle = setInterval(() => fetchFullData(), interval);
+        // Force the interval poll. The change-stream version cursor
+        // can stall (stream goes quiet without error) and then
+        // ?since=<v> returns NO_CHANGES forever — the table only
+        // moved on a hard refresh. force=true always re-reads Mongo.
+        pollHandle = setInterval(() => fetchFullData(true), interval);
         console.log('[Polling] Interval set to', interval, 'ms (WS connected:', wsConnected, ')');
       }
 

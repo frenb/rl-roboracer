@@ -344,8 +344,8 @@ board). On-car ROS notes live in [`jetson.md`](jetson.md). Deploying a
 SavedModel onto Melodic `/cmd_vel` is still a plan
 ([`docs/tf-model-jetson-deployment-guide.md`](docs/tf-model-jetson-deployment-guide.md)).
 Publishing CSI pixels into the trainer (`camera/front`, a `donut_camera`
-course) is also still a plan
-([`jetson.md` § Sim camera](jetson.md#sim-camera-mirror-the-jetracer-csi-feed-into-unity-gyms-and-the-model)).
+course) is still a plan
+([`docs/csi-camera-observation-guide.md`](docs/csi-camera-observation-guide.md)).
 
 Policies that can transfer are **`donut_no_hint`** (31-D rays / speed /
 sideslip — no Unity goal angle). See
@@ -371,6 +371,7 @@ that kit. **P** switches Main Camera ↔ CSI (`CameraViewSwitcher`).
 | CSI defaults: trajectory / goals / rays **off**; **T / G / R** toggle those on CSI only | Real CSI has no debug overlays |
 | P-view undocks the render texture, letterboxes 4:3, does not blit via OnGUI | Game view was “Display 1 No cameras rendering” while the RT was the only target |
 | Fantasy Skybox FREE imported | Assign a skybox mat in Lighting and disable `Sky_Dome` in the scene |
+| `CsiFramePublisher`: one 84×84 `rgb8` per `cmd_id` on `camera/front` | Vision Phase 1–2. HUD `csi cmd …`; PNGs in `unity/CsiFrameDumps/`; **F** dumps. `unity_node.py` lists the topic ([guide](docs/csi-camera-observation-guide.md#4-phase-1--unity-one-csi-frame-per-applyforce)) |
 
 Still **not** on the learning loop: CSI frames are for the operator (P-view).
 `car_scene_data` is still the 31/32-D vector. Do not parent dressing under
@@ -595,7 +596,7 @@ subclasses `DonutCourse` and slices column 0 off the observation spec,
 #### Selecting the course per job
 
 The dashboard **New-job** form has a **Course** selector (`trainer default`,
-`donut`, `donut_no_hint`). The choice is stored as `course_type` on the job
+`donut`, `donut_no_hint`, `donut_camera`). The choice is stored as `course_type` on the job
 document and threaded through the whole pipeline:
 
 - `do_job()` resolves `_job_course_type` (job doc → `ROBOTAXI_COURSE_TYPE`
@@ -652,10 +653,19 @@ knobs:
 - `demo_source_counts`: explicit per-source step counts (parallel to the
   resolved source list).
 
-If no source resolves at all (course mapped to `None`, or `skip_default_demo`
+If no source resolves at all on a **vector** course (`skip_default_demo`
 with no `demo_job_ids`), the job **fails fast** with an actionable message
 (stamped as `FAILED` + `eval_error` by `run_jobs_loop`) rather than silently
 loading incompatible data.
+
+`donut_camera` maps to `None` on purpose and does **not** fail: a TRAIN
+job on that course is **SAC from scratch** (CNN on the 84×84 CSI image +
+31-D vector). There is no expert TFRecord / BC / AWAC yet — those records
+are still flat 32-D vectors. See
+[CSI camera observation guide](docs/csi-camera-observation-guide.md#train-donut_camera).
+The New-job modal explains this when Job type is TRAIN and Course is
+`donut_camera`. Unity must publish `camera/front` (Editor Play or a
+promoted gym). DEMO and `BC_TRAINING_ONLY` on this course are refused.
 
 #### Compatibility / gotchas
 

@@ -1,7 +1,11 @@
 #!/bin/bash
 
 source ./devel/setup.bash
-echo "ROS_IP: $(hostname -I)" > src/niryo_moveit/config/params.yaml
+# Bind ROS-TCP on all interfaces. hostname -I is the Docker bridge IP
+# (e.g. 172.18.0.5); listening only there breaks Docker Desktop's
+# published 127.0.0.1:10000 after a recreate (Unity SocketException).
+# Reverse Unity connections still use UNITY_MACHINE_IP (host.docker.internal).
+echo "ROS_IP: 0.0.0.0" > src/niryo_moveit/config/params.yaml
 
 # Kill Background Jobs on exit.
 trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM EXIT

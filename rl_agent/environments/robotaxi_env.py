@@ -5,7 +5,9 @@ from tf_agents.trajectories import time_step as ts
 import numpy as np
 import tensorflow as tf
 from scipy.interpolate import interp1d
-from environments.courses import donut_course,donut_course_no_hint,simple_course
+from environments.courses import (
+    donut_course, donut_course_no_hint, donut_course_camera,
+    donut_course_camera_no_rays, simple_course)
 
 # Module-level switch for the per-step `ACTION accel=... steer=...` trace
 # emitted by `_do_action` below. Default ON (preserves the diagnostic
@@ -28,6 +30,8 @@ _LOG_ACTIONS = os.environ.get("ROBOTAXI_LOG_ACTIONS", "1").lower() not in (
 
 class RobotaxiEnv(py_environment.PyEnvironment):
     def __init__(self, api, course_type='donut'):
+        self._course_type = course_type
+        self._obs_shape_logged = False
         if course_type == 'donut':
             self.course = donut_course.DonutCourse(api, self)
         elif course_type == 'donut_no_hint':
@@ -35,8 +39,20 @@ class RobotaxiEnv(py_environment.PyEnvironment):
             # goal) element dropped from the observation (32 -> 31 dims), for
             # policies that must transfer to a real robot with no goal objects.
             self.course = donut_course_no_hint.DonutCourseNoHint(api, self)
+        elif course_type == 'donut_camera':
+            # Phase 5: 31-D no-hint vector + 84x84x3 CSI image. Dict spec.
+            # Rewards still use scene_data_array() (vector only).
+            self.course = donut_course_camera.DonutCourseCamera(api, self)
+        elif course_type == 'donut_camera_no_rays':
+            # Raycast ablation: same image, but the policy's vector is cut to
+            # 2 dims (speed, sideslip). scene_data_array() stays 31-D.
+            self.course = donut_course_camera_no_rays.DonutCourseCameraNoRays(
+                api, self)
         else:
             self.course = simple_course.SimpleCourse(api, self)
+        # Derived from the course rather than a course_type list so a new dict
+        # course only has to declare its spec above to be packed correctly.
+        self._dict_obs = isinstance(self.course.observation_spec, dict)
         self._api = api
         self._action_spec = self.course.action_spec
         self._observation_spec = self.course.observation_spec
@@ -209,6 +225,44 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         funcs = load_reward_design(name, code)
         return install_on_course(self.course, funcs)
 
+    def _front_camera_cmd_id(self, _data=None):
+        # Wait for the cmd_id THIS RobotApi just sent. last_executed_cmd_id
+        # on car_scene_data is Unity-global and can be another client
+        # (trainer leftover 6441 vs this env's 0).
+        return getattr(self._api, 'last_apply_force_cmd_id', None)
+
+    def _front_camera_image(self, data):
+        # Lazy import so donut / donut_no_hint never load cv2.
+        from vision.image_to_obs import image_to_obs
+        frame = self._api.GetFrontCameraFrameBlocking(self._front_camera_cmd_id(data))
+        return image_to_obs(frame)
+
+    def _pack_observation(self, data_arr, data=None):
+        vec = np.asarray(data_arr, dtype=np.float32)
+        if not self._dict_obs:
+            return vec
+        src = data if data is not None else self.data
+        image = self._front_camera_image(src)
+        # Only the policy's slice goes on the TimeStep. Callers that compute
+        # rewards / stuck detection keep using the full data_arr, so narrowing
+        # the observation (donut_camera_no_rays) cannot disturb them.
+        pol = np.asarray(self.course.policy_vector(vec), dtype=np.float32)
+        if not self._obs_shape_logged:
+            self._obs_shape_logged = True
+            print(
+                f'[{self._course_type}] obs '
+                f'vector{tuple(pol.shape)} (of scene{tuple(vec.shape)}) '
+                f'image{tuple(image.shape)} '
+                f'dtype={image.dtype} '
+                f'cmd_id={self._front_camera_cmd_id(src)}',
+                flush=True)
+        return {'vector': pol, 'image': image}
+
+    def _as_obs_time_step(self, time_step, data_arr, data=None):
+        if not self._dict_obs:
+            return time_step
+        return time_step._replace(observation=self._pack_observation(data_arr, data))
+
     def _reset(self):
         self._episode_ended = False
         # Skip the Unity reset if it was already triggered immediately on
@@ -223,7 +277,7 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         data_arr=self.course.scene_data_array(data)
         self._step_costs=[]
         self._position_history=[]
-        return ts.restart(np.array(data_arr, dtype=np.float32))
+        return ts.restart(self._pack_observation(data_arr, data))
    
     def __has_failed(self, data, data_arr):
         return self.course.has_failed(
@@ -253,20 +307,26 @@ class RobotaxiEnv(py_environment.PyEnvironment):
             self.data["car"]['location_z']
             ]) #z position
         if self.__has_failed(data, data_arr):
-            return self.course.reward_failure(
-                self.job_id, self._step_costs, data,
-                data_arr, self._position_history)
+            return self._as_obs_time_step(
+                self.course.reward_failure(
+                    self.job_id, self._step_costs, data,
+                    data_arr, self._position_history),
+                data_arr, data)
             # reward = -1 * np.mean(self._step_costs) if len(self._step_costs) > 0 and np.mean(self._step_costs) > 0  else -1
             # log_reward(self.job_id, "has failed", float(reward),extra_data=data,step_costs=self._step_costs, position_history=self._position_history)
             # term_time_step = ts.termination(np.array(data_arr, dtype=np.float32), reward=reward)
             # return term_time_step
         if self.__has_succeeded(data, data_arr):
-            return self.course.reward_success(
-                curr_step_cost, self.job_id, data, data_arr,
-                self._step_costs, self._position_history)
+            return self._as_obs_time_step(
+                self.course.reward_success(
+                    curr_step_cost, self.job_id, data, data_arr,
+                    self._step_costs, self._position_history),
+                data_arr, data)
         else:
-            return self.course.reward_standard(
-                data, data_arr, self._step_costs, self.job_id)
+            return self._as_obs_time_step(
+                self.course.reward_standard(
+                    data, data_arr, self._step_costs, self.job_id),
+                data_arr, data)
     
     def _do_action(self, action):
         if type(action).__name__ == "ndarray":

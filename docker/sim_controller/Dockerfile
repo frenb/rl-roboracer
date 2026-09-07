@@ -70,5 +70,9 @@ RUN dos2unix /tutorial && dos2unix /setup.sh && chmod +x /setup.sh && /setup.sh 
 RUN /bin/bash -c "cd /python_ws && pip install -r requirements.txt"
 
 RUN ln -s /usr/local/cuda-11.0/targets/x86_64-linux/lib/libcusolver.so.10 /usr/local/cuda-11.0/targets/x86_64-linux/lib/libcusolver.so.11
-RUN apt-get install -y libcudnn8
+# Pin cuDNN to the CUDA 11.2 build TF 2.7 was compiled against. Unpinned
+# `libcudnn8` now resolves to 8.9.7+cuda12.2, which dlopens
+# libcublasLt.so.12 and aborts on the first Conv2D (donut_camera).
+# 31/32-D MLP jobs never call cuDNN, so they kept working.
+RUN apt-get install -y --allow-downgrades libcudnn8=8.1.1.33-1+cuda11.2
 ENV LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:/usr/local/cuda/lib:/usr/local/cuda/lib64

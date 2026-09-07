@@ -212,7 +212,10 @@ def make_env(grpc_addr='ros-server-0:50051', course_type=None,
         base ros-server service in ``docker-compose.yml`` (so single-env
         works without the ``compose/scale.yml`` overlay).
       course_type: ``'donut'``, ``'donut_no_hint'`` (donut with the
-        goal-derived dist_from_traj element removed -> 31-dim obs), or
+        goal-derived dist_from_traj element removed -> 31-dim obs),
+        ``'donut_camera'`` (31-D vector + 84x84x3 CSI image dict),
+        ``'donut_camera_no_rays'`` (raycast ablation: same image, vector cut
+        to 2-D speed+sideslip), or
         ``'simple'``; selected when building the inner course. When left
         ``None`` (the default), it's resolved from the ``ROBOTAXI_COURSE_TYPE``
         env var (falling back to ``'donut'``), so every env in a run - training,
