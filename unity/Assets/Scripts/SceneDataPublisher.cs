@@ -163,6 +163,9 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
             sceneDataMessage.last_executed_cmd_id = sceneCarDataMessage.last_executed_cmd_id;
         }
         ros.Send(topicName, sceneCarDataMessage);
+        // One CSI frame per cmd_id (not the 20 Hz scene_data loop).
+        if (CsiFramePublisher.Instance != null)
+            CsiFramePublisher.Instance.Request(sceneCarDataMessage.last_executed_cmd_id);
     }
 
     // True only when every goal in the car's list is still alive. Returns false

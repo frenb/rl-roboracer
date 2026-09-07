@@ -4,3 +4,6 @@ google-api-python-client==2.70.0
 tensorflow==2.7.0rc1
 tensorflow_hub==0.12.0
 protobuf==3.20.1
+# Headless OpenCV for image_to_obs (cv2.undistort). 4.6.x still has
+# cp38 manylinux wheels that install on the CUDA 11 / Ubuntu 20 image.
+opencv-python-headless==4.6.0.66

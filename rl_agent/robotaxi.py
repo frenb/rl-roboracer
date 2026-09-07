@@ -430,11 +430,11 @@ def read_timeout_counts(env):
     Parallel envs: dispatch to each underlying ProcessPyEnvironment and
     sum.
 
-    The returned dict has the five counter keys
+    The returned dict has the six counter keys
     ('reset_timeouts', 'apply_force_timeouts', 'scene_data_timeouts',
-    'move_timeouts', 'publish_timeouts'); the trainer prefixes them
-    with 'timeouts/' when writing to tf.summary so they group together
-    in TensorBoard's UI.
+    'front_camera_timeouts', 'move_timeouts', 'publish_timeouts'); the
+    trainer prefixes them with 'timeouts/' when writing to tf.summary
+    so they group together in TensorBoard's UI.
 
     publish_timeouts in particular catches the case where the gRPC
     channel to ros-server goes stale (historically after a long no-
@@ -445,7 +445,8 @@ def read_timeout_counts(env):
     """
     from tf_agents.environments import parallel_py_environment
     keys = ['reset_timeouts', 'apply_force_timeouts',
-            'scene_data_timeouts', 'move_timeouts', 'publish_timeouts']
+            'scene_data_timeouts', 'front_camera_timeouts',
+            'move_timeouts', 'publish_timeouts']
     if isinstance(env, parallel_py_environment.ParallelPyEnvironment):
         promises = [proc_env.call('get_timeout_counts')
                     for proc_env in env._envs]
@@ -1102,6 +1103,11 @@ class CurriculumScheduler:
 COURSE_DEFAULT_DEMO_JOB_IDS = {
     "donut": "64168c1b58d4d8ccdb76e721",
     "donut_no_hint": "64168c1b58d4d8ccdb76e721",
+    # No vector TFRecords for dict obs. TRAIN is SAC from scratch (Phase 6).
+    # Both MUST stay mapped to None: an unmapped course falls back to the donut
+    # default below, which would hand a dict-obs job the 32-wide vector corpus.
+    "donut_camera": None,
+    "donut_camera_no_rays": None,
 }
 
 
@@ -1233,6 +1239,11 @@ def main(
     critic_joint_fc_layer_params_y=512,
     log_interval_val=5000,
     num_eval_episodes_val=10,
+    # New-job "Skip first eval": omit the two cold-start get_eval_metrics()
+    # runs (first_eval + pre_train_eval, 10 episodes each, 100 goals/ep
+    # on donut*). In-loop evals are unchanged. From-scratch vision jobs
+    # otherwise sit in EVAL begin for hours before TRAIN begin.
+    skip_first_eval_val=False,
     eval_interval_val=5000,
     # Target fraction of training-loop WALL-CLOCK spent in eval (the rest is
     # collect/training). 0.25 => ~75% train / 25% eval, so the clients spend
@@ -1357,6 +1368,8 @@ def main(
     critic_joint_fc_layer_params = (critic_joint_fc_layer_params_x, critic_joint_fc_layer_params_y)
     log_interval = log_interval_val # @param {type:"integer"}
     num_eval_episodes = num_eval_episodes_val # @param {type:"integer"}
+    skip_first_eval = bool(skip_first_eval_val)
+    print(f"main: skip_first_eval={skip_first_eval}", flush=True)
     eval_interval = eval_interval_val # @param {type:"integer"}
     policy_save_interval = policy_save_interval_val # @param {type:"integer"}
     # Track / curriculum knobs are applied live: configure_env() below stamps
@@ -1419,13 +1432,26 @@ def main(
     else:
         _course_type = os.environ.get("ROBOTAXI_COURSE_TYPE", "donut")
     print(f"[env_spawn] course_type={_course_type}", flush=True)
+    _dict_obs_course = (
+        collect_training_data.COURSE_OBS_KIND.get(_course_type) == "dict")
+    if _dict_obs_course:
+        # Phase 6: CNN towers, SAC from scratch. Vector TFRecords / BC / AWAC
+        # would be the wrong spec (Phase 7).
+        print(
+            f"main: {_course_type} TRAIN from scratch "
+            "(skip expert TFRecords, BC pretrain, AWAC)",
+            flush=True)
+        bc_pretrain_steps_val = 0
+        demo_prefill_count = 0
+        demo_min_keep = 0
+        demo_sample_ratio = 0.0
+        awac_lambda_val = 0.0
     # Point the demo/BC read pipeline at this course's observation width so the
     # 32-wide corpus is dropped down to the active width (31 for donut_no_hint)
     # before it hits the actor/critic. do_job already does this before calling
     # main(), but doing it here too makes direct/manual main() callers correct.
     try:
-        collect_training_data.set_observation_size(
-            collect_training_data.COURSE_OBSERVATION_SIZES.get(_course_type, 32))
+        collect_training_data.apply_course_observation_size(_course_type)
     except Exception as _e:  # noqa: BLE001 - obs-size set must not kill training
         print(f"main: set_observation_size failed (non-fatal): {_e}", flush=True)
     # Environment. Single-env runs use one env for both collect and eval.
@@ -1669,23 +1695,49 @@ def main(
 
     _phase("network_build (actor+critic)")
     with strategy.scope():
-        critic_net = critic_network.CriticNetwork(
-            (observation_spec, action_spec),
-            observation_fc_layer_params=None,
-            action_fc_layer_params=None,
-            joint_fc_layer_params=critic_joint_fc_layer_params,
-            kernel_initializer='glorot_uniform',
-            last_kernel_initializer='glorot_uniform')
+        if _dict_obs_course:
+            from vision.camera_networks import (
+                DictObsCriticNetwork, camera_preprocessing_combiner,
+                camera_preprocessing_layers)
+            print(
+                f"main: building {_course_type} Conv-SAC "
+                f"(image Conv 32/64/64 + vector Dense 64 over "
+                f"{observation_spec['vector'].shape[0]}-D vector)",
+                flush=True)
+            critic_net = DictObsCriticNetwork(
+                (observation_spec, action_spec),
+                joint_fc_layer_params=critic_joint_fc_layer_params)
+        else:
+            critic_net = critic_network.CriticNetwork(
+                (observation_spec, action_spec),
+                observation_fc_layer_params=None,
+                action_fc_layer_params=None,
+                joint_fc_layer_params=critic_joint_fc_layer_params,
+                kernel_initializer='glorot_uniform',
+                last_kernel_initializer='glorot_uniform')
     
     # Actor network.
     with strategy.scope():
-        actor_net = actor_distribution_network.ActorDistributionNetwork(
-            observation_spec,
-            action_spec,
-            fc_layer_params=actor_fc_layer_params,
-            continuous_projection_net=(
-                tanh_normal_projection_network.TanhNormalProjectionNetwork))
+        if _dict_obs_course:
+            actor_net = actor_distribution_network.ActorDistributionNetwork(
+                observation_spec,
+                action_spec,
+                preprocessing_layers=camera_preprocessing_layers(),
+                preprocessing_combiner=camera_preprocessing_combiner(),
+                fc_layer_params=actor_fc_layer_params,
+                continuous_projection_net=(
+                    tanh_normal_projection_network.TanhNormalProjectionNetwork))
+        else:
+            actor_net = actor_distribution_network.ActorDistributionNetwork(
+                observation_spec,
+                action_spec,
+                fc_layer_params=actor_fc_layer_params,
+                continuous_projection_net=(
+                    tanh_normal_projection_network.TanhNormalProjectionNetwork))
 
+    trajectory_dataset = None
+    if _dict_obs_course:
+        demo_record_dirs_val = []
     _phase("expert_tfrecord_load (500k records)")
     # demo_record_dirs_val lets a job combine MULTIPLE DEMO collections into
     # one expert dataset (see the kwarg's docstring above). do_job always
@@ -1704,230 +1756,238 @@ def main(
             [f'/tfrecords/job_{_fallback_demo_id}'] if _fallback_demo_id
             else [])
     if not record_dirs:
-        raise RuntimeError(
-            f"main: no expert-demo source for course '{_course_type}' and none "
-            f"provided via demo_record_dirs_val; supply demo dirs for this "
-            f"course (via the job's demo_job_ids / default_demo_job_id, the "
-            f"ROBOTAXI_DEFAULT_DEMO_JOB_ID env var, or "
-            f"COURSE_DEFAULT_DEMO_JOB_IDS).")
-    # 1. Load each directory's demos separately, then concatenate into ONE
-    # Trajectory object. Only `observation`/`action` actually vary by
-    # source - `step_type`/`next_step_type`/`reward`/`discount` are the
-    # same synthetic length-1 constants read_files_from_directory always
-    # produces (see collect_training_data.convert_tfrecord_to_trajectory),
-    # so it's safe to keep just one copy of those and stretch later via
-    # match_length below.
-    # Acceleration-floor for expert demos: drop every transition whose
-    # commanded acceleration (action[:, 0] - the force channel, see
-    # collect_expert_demos' `np.array([action_apply_force,
-    # action_steering_angle])`) is below the current action_spec minimum.
-    # Added 2026-07-22 alongside pulling the acceleration floor from -1.0
-    # to -0.01: the TrackGen demo collection (job 6a5ec0d1...) was recorded
-    # while min_force was -1.0, so it contains hard active-braking
-    # transitions down to -1.0 that are now OUTSIDE the policy's action
-    # range - feeding them into prefill/BC would train the actor toward
-    # targets it can no longer emit.
-    #
-    # Raised -0.01 -> 0.05 (2026-07-24) to track the action_spec floor moving
-    # to a positive 0.05 (see DonutCourse.action_spec). This now also drops
-    # every near-idle transition (0 <= force < 0.05) from ANY reused legacy
-    # set - including the old w-course [0.001, 0.2] data whose median force
-    # was ~0.012, i.e. most of it - which is intentional: those idle rows are
-    # exactly the crawl prior we're eliminating. Freshly-collected demos use
-    # min_force=0.2 (> 0.05) so they lose 0 rows. The per-source "dropped N"
-    # log below makes which source was affected explicit. Keep in sync with
-    # DonutCourse.action_spec's minimum[0].
-    _DEMO_MIN_ACCEL = 0.05
-    _per_dir_trajectories = []
-    _per_dir_counts = []
-    for _record_dir in record_dirs:
-        _traj = collect_training_data.read_files_from_directory(_record_dir)
-        _n_loaded = int(tf.shape(_traj.observation)[0])
-        # .numpy() so the boolean mask below works whether
-        # read_files_from_directory handed back tf.Tensors or numpy arrays
-        # (same reason the resampling block downstream does this).
-        _obs_np = (_traj.observation.numpy()
-                   if hasattr(_traj.observation, "numpy")
-                   else _traj.observation)
-        _act_np = (_traj.action.numpy()
-                   if hasattr(_traj.action, "numpy")
-                   else _traj.action)
-        _keep_mask = _act_np[:, 0] >= _DEMO_MIN_ACCEL
-        _n_steps = int(_keep_mask.sum())
-        _n_dropped = _n_loaded - _n_steps
-        if _n_dropped > 0:
-            # Only reconstruct (and only touch observation/action) when we
-            # actually drop rows. step_type/next_step_type/reward/discount
-            # are the synthetic length-constants read_files_from_directory
-            # produces and are stretched to length downstream via
-            # match_length - NOT per-row arrays - so they're passed through
-            # unchanged, exactly like the resampling block below does.
-            _traj = trajectory.Trajectory(
-                step_type=_traj.step_type,
-                observation=_obs_np[_keep_mask],
-                action=_act_np[_keep_mask],
-                policy_info=(),
-                next_step_type=_traj.next_step_type,
-                reward=_traj.reward,
-                discount=_traj.discount,
-            )
-        print(f"Loaded {_n_steps} expert steps from {_record_dir} "
-              f"(dropped {_n_dropped} of {_n_loaded} with acceleration < "
-              f"{_DEMO_MIN_ACCEL})", flush=True)
-        _per_dir_trajectories.append(_traj)
-        _per_dir_counts.append(_n_steps)
+        if _dict_obs_course:
+            print(
+                f"main: no expert-demo source (expected for {_course_type}); "
+                "SAC from scratch.",
+                flush=True)
+            trajectory_dataset = None
+        else:
+            raise RuntimeError(
+                f"main: no expert-demo source for course '{_course_type}' and none "
+                f"provided via demo_record_dirs_val; supply demo dirs for this "
+                f"course (via the job's demo_job_ids / default_demo_job_id, the "
+                f"ROBOTAXI_DEFAULT_DEMO_JOB_ID env var, or "
+                f"COURSE_DEFAULT_DEMO_JOB_IDS).")
+    if record_dirs:
+        # 1. Load each directory's demos separately, then concatenate into ONE
+        # Trajectory object. Only `observation`/`action` actually vary by
+        # source - `step_type`/`next_step_type`/`reward`/`discount` are the
+        # same synthetic length-1 constants read_files_from_directory always
+        # produces (see collect_training_data.convert_tfrecord_to_trajectory),
+        # so it's safe to keep just one copy of those and stretch later via
+        # match_length below.
+        # Acceleration-floor for expert demos: drop every transition whose
+        # commanded acceleration (action[:, 0] - the force channel, see
+        # collect_expert_demos' `np.array([action_apply_force,
+        # action_steering_angle])`) is below the current action_spec minimum.
+        # Added 2026-07-22 alongside pulling the acceleration floor from -1.0
+        # to -0.01: the TrackGen demo collection (job 6a5ec0d1...) was recorded
+        # while min_force was -1.0, so it contains hard active-braking
+        # transitions down to -1.0 that are now OUTSIDE the policy's action
+        # range - feeding them into prefill/BC would train the actor toward
+        # targets it can no longer emit.
+        #
+        # Raised -0.01 -> 0.05 (2026-07-24) to track the action_spec floor moving
+        # to a positive 0.05 (see DonutCourse.action_spec). This now also drops
+        # every near-idle transition (0 <= force < 0.05) from ANY reused legacy
+        # set - including the old w-course [0.001, 0.2] data whose median force
+        # was ~0.012, i.e. most of it - which is intentional: those idle rows are
+        # exactly the crawl prior we're eliminating. Freshly-collected demos use
+        # min_force=0.2 (> 0.05) so they lose 0 rows. The per-source "dropped N"
+        # log below makes which source was affected explicit. Keep in sync with
+        # DonutCourse.action_spec's minimum[0].
+        _DEMO_MIN_ACCEL = 0.05
+        _per_dir_trajectories = []
+        _per_dir_counts = []
+        for _record_dir in record_dirs:
+            _traj = collect_training_data.read_files_from_directory(_record_dir)
+            _n_loaded = int(tf.shape(_traj.observation)[0])
+            # .numpy() so the boolean mask below works whether
+            # read_files_from_directory handed back tf.Tensors or numpy arrays
+            # (same reason the resampling block downstream does this).
+            _obs_np = (_traj.observation.numpy()
+                       if hasattr(_traj.observation, "numpy")
+                       else _traj.observation)
+            _act_np = (_traj.action.numpy()
+                       if hasattr(_traj.action, "numpy")
+                       else _traj.action)
+            _keep_mask = _act_np[:, 0] >= _DEMO_MIN_ACCEL
+            _n_steps = int(_keep_mask.sum())
+            _n_dropped = _n_loaded - _n_steps
+            if _n_dropped > 0:
+                # Only reconstruct (and only touch observation/action) when we
+                # actually drop rows. step_type/next_step_type/reward/discount
+                # are the synthetic length-constants read_files_from_directory
+                # produces and are stretched to length downstream via
+                # match_length - NOT per-row arrays - so they're passed through
+                # unchanged, exactly like the resampling block below does.
+                _traj = trajectory.Trajectory(
+                    step_type=_traj.step_type,
+                    observation=_obs_np[_keep_mask],
+                    action=_act_np[_keep_mask],
+                    policy_info=(),
+                    next_step_type=_traj.next_step_type,
+                    reward=_traj.reward,
+                    discount=_traj.discount,
+                )
+            print(f"Loaded {_n_steps} expert steps from {_record_dir} "
+                  f"(dropped {_n_dropped} of {_n_loaded} with acceleration < "
+                  f"{_DEMO_MIN_ACCEL})", flush=True)
+            _per_dir_trajectories.append(_traj)
+            _per_dir_counts.append(_n_steps)
 
-    # Optional balanced/oversampled per-source resampling (2026-07-21): see
-    # demo_source_counts_val's docstring above. Runs BEFORE concatenation so
-    # every source is independently resampled to its own EXACT target count
-    # (fixed seed per-source index for reproducibility) - sources with fewer
-    # real rows than their target are oversampled WITH replacement, sources
-    # with more are subsampled WITHOUT replacement. Everything downstream
-    # (concatenation, _source_ids, the full shuffle, the prefill loop's
-    # demo_prefill_count cap) is unchanged and just sees the resampled
-    # per-dir trajectories/counts as if that's how many rows always existed.
-    if demo_source_counts_val:
-        if len(demo_source_counts_val) != len(record_dirs):
-            raise ValueError(
-                f"demo_source_counts_val has {len(demo_source_counts_val)} "
-                f"entries but there are {len(record_dirs)} record_dirs: "
-                f"{record_dirs}")
-        _resample_rng = np.random.RandomState(42)
-        for _i, _target_n in enumerate(demo_source_counts_val):
-            _avail_n = _per_dir_counts[_i]
-            _target_n = int(_target_n)
-            _with_replacement = _target_n > _avail_n
-            if _with_replacement:
-                print(
-                    f"Oversampling {record_dirs[_i]}: {_avail_n} real steps "
-                    f"-> {_target_n} target (WITH replacement, "
-                    f"{_target_n / _avail_n:.2f}x)", flush=True)
-            else:
-                print(
-                    f"Subsampling {record_dirs[_i]}: {_avail_n} real steps "
-                    f"-> {_target_n} target (without replacement)",
-                    flush=True)
-            _idx = _resample_rng.choice(
-                _avail_n, size=_target_n, replace=_with_replacement)
-            _src_traj = _per_dir_trajectories[_i]
-            # trajectory.first() (inside read_files_from_directory) converts
-            # the numpy observation/action arrays into tf.Tensors, which do
-            # NOT support numpy-style fancy indexing with an arbitrary int
-            # array via `[...]` (only slices/scalars) - must go through
-            # .numpy() first (no-op if already a numpy array) so the
-            # fancy-index gather below works regardless of which type
-            # read_files_from_directory happened to hand back.
-            _obs_np = (_src_traj.observation.numpy()
-                       if hasattr(_src_traj.observation, "numpy")
-                       else _src_traj.observation)
-            _act_np = (_src_traj.action.numpy()
-                       if hasattr(_src_traj.action, "numpy")
-                       else _src_traj.action)
-            _per_dir_trajectories[_i] = trajectory.Trajectory(
-                step_type=_src_traj.step_type,
-                observation=_obs_np[_idx],
-                action=_act_np[_idx],
-                policy_info=(),
-                next_step_type=_src_traj.next_step_type,
-                reward=_src_traj.reward,
-                discount=_src_traj.discount,
-            )
-            _per_dir_counts[_i] = _target_n
+        # Optional balanced/oversampled per-source resampling (2026-07-21): see
+        # demo_source_counts_val's docstring above. Runs BEFORE concatenation so
+        # every source is independently resampled to its own EXACT target count
+        # (fixed seed per-source index for reproducibility) - sources with fewer
+        # real rows than their target are oversampled WITH replacement, sources
+        # with more are subsampled WITHOUT replacement. Everything downstream
+        # (concatenation, _source_ids, the full shuffle, the prefill loop's
+        # demo_prefill_count cap) is unchanged and just sees the resampled
+        # per-dir trajectories/counts as if that's how many rows always existed.
+        if demo_source_counts_val:
+            if len(demo_source_counts_val) != len(record_dirs):
+                raise ValueError(
+                    f"demo_source_counts_val has {len(demo_source_counts_val)} "
+                    f"entries but there are {len(record_dirs)} record_dirs: "
+                    f"{record_dirs}")
+            _resample_rng = np.random.RandomState(42)
+            for _i, _target_n in enumerate(demo_source_counts_val):
+                _avail_n = _per_dir_counts[_i]
+                _target_n = int(_target_n)
+                _with_replacement = _target_n > _avail_n
+                if _with_replacement:
+                    print(
+                        f"Oversampling {record_dirs[_i]}: {_avail_n} real steps "
+                        f"-> {_target_n} target (WITH replacement, "
+                        f"{_target_n / _avail_n:.2f}x)", flush=True)
+                else:
+                    print(
+                        f"Subsampling {record_dirs[_i]}: {_avail_n} real steps "
+                        f"-> {_target_n} target (without replacement)",
+                        flush=True)
+                _idx = _resample_rng.choice(
+                    _avail_n, size=_target_n, replace=_with_replacement)
+                _src_traj = _per_dir_trajectories[_i]
+                # trajectory.first() (inside read_files_from_directory) converts
+                # the numpy observation/action arrays into tf.Tensors, which do
+                # NOT support numpy-style fancy indexing with an arbitrary int
+                # array via `[...]` (only slices/scalars) - must go through
+                # .numpy() first (no-op if already a numpy array) so the
+                # fancy-index gather below works regardless of which type
+                # read_files_from_directory happened to hand back.
+                _obs_np = (_src_traj.observation.numpy()
+                           if hasattr(_src_traj.observation, "numpy")
+                           else _src_traj.observation)
+                _act_np = (_src_traj.action.numpy()
+                           if hasattr(_src_traj.action, "numpy")
+                           else _src_traj.action)
+                _per_dir_trajectories[_i] = trajectory.Trajectory(
+                    step_type=_src_traj.step_type,
+                    observation=_obs_np[_idx],
+                    action=_act_np[_idx],
+                    policy_info=(),
+                    next_step_type=_src_traj.next_step_type,
+                    reward=_src_traj.reward,
+                    discount=_src_traj.discount,
+                )
+                _per_dir_counts[_i] = _target_n
 
-    expert_trajectories = trajectory.Trajectory(
-        step_type=_per_dir_trajectories[0].step_type,
-        observation=np.concatenate(
-            [t.observation for t in _per_dir_trajectories], axis=0),
-        action=np.concatenate(
-            [t.action for t in _per_dir_trajectories], axis=0),
-        policy_info=(),
-        next_step_type=_per_dir_trajectories[0].next_step_type,
-        reward=_per_dir_trajectories[0].reward,
-        discount=_per_dir_trajectories[0].discount,
-    )
-    print(f"Combined {len(record_dirs)} demo source(s) into "
-          f"{expert_trajectories.observation.shape[0]} total expert steps: "
-          f"{record_dirs}", flush=True)
-    print(f"Loaded trajectories shape: {expert_trajectories.step_type.shape}")
-    # Per-row source attribution (2026-07-21): remembers which record_dir
-    # each concatenated row came from, so downstream consumers - chiefly the
-    # demo_prefill loop below - can report a verifiable per-source
-    # breakdown of what actually ended up in Reverb, not just what was
-    # loaded into memory. THE BUG THIS FIXES: demo_prefill_count (e.g.
-    # 50000) is almost always far smaller than the first source's row
-    # count (e.g. 500001), and trajectory_dataset was previously consumed
-    # in raw concatenation order with NO shuffle - so with 2+ sources
-    # concatenated one-after-another, the prefill loop's `break` after
-    # demo_prefill_count items would exhaust its budget entirely within
-    # source #1 and NEVER reach source #2's rows at all. The combined
-    # "loaded" log above was accurate, but the ACTUAL Reverb demo table
-    # silently contained 100% source #1 / 0% every other source. Shuffling
-    # below (with source ids carried alongside) fixes this by making the
-    # first demo_prefill_count items an unbiased random draw across ALL
-    # sources instead of a prefix of source #1.
-    _source_ids = np.concatenate([
-        np.full(_n, _i, dtype=np.int32)
-        for _i, _n in enumerate(_per_dir_counts)])
+        expert_trajectories = trajectory.Trajectory(
+            step_type=_per_dir_trajectories[0].step_type,
+            observation=np.concatenate(
+                [t.observation for t in _per_dir_trajectories], axis=0),
+            action=np.concatenate(
+                [t.action for t in _per_dir_trajectories], axis=0),
+            policy_info=(),
+            next_step_type=_per_dir_trajectories[0].next_step_type,
+            reward=_per_dir_trajectories[0].reward,
+            discount=_per_dir_trajectories[0].discount,
+        )
+        print(f"Combined {len(record_dirs)} demo source(s) into "
+              f"{expert_trajectories.observation.shape[0]} total expert steps: "
+              f"{record_dirs}", flush=True)
+        print(f"Loaded trajectories shape: {expert_trajectories.step_type.shape}")
+        # Per-row source attribution (2026-07-21): remembers which record_dir
+        # each concatenated row came from, so downstream consumers - chiefly the
+        # demo_prefill loop below - can report a verifiable per-source
+        # breakdown of what actually ended up in Reverb, not just what was
+        # loaded into memory. THE BUG THIS FIXES: demo_prefill_count (e.g.
+        # 50000) is almost always far smaller than the first source's row
+        # count (e.g. 500001), and trajectory_dataset was previously consumed
+        # in raw concatenation order with NO shuffle - so with 2+ sources
+        # concatenated one-after-another, the prefill loop's `break` after
+        # demo_prefill_count items would exhaust its budget entirely within
+        # source #1 and NEVER reach source #2's rows at all. The combined
+        # "loaded" log above was accurate, but the ACTUAL Reverb demo table
+        # silently contained 100% source #1 / 0% every other source. Shuffling
+        # below (with source ids carried alongside) fixes this by making the
+        # first demo_prefill_count items an unbiased random draw across ALL
+        # sources instead of a prefix of source #1.
+        _source_ids = np.concatenate([
+            np.full(_n, _i, dtype=np.int32)
+            for _i, _n in enumerate(_per_dir_counts)])
 
-    # 2. Find our target length (e.g., 500001) based on the observation tensor
-    num_steps = tf.shape(expert_trajectories.observation)[0]
-    # Helper function to stretch length-1 tensors to match num_steps
-    def match_length(tensor, target_length):
-        if tensor.shape[0] == 1 and target_length > 1:
-            return tf.repeat(tensor, target_length, axis=0)
-        return tensor
+        # 2. Find our target length (e.g., 500001) based on the observation tensor
+        num_steps = tf.shape(expert_trajectories.observation)[0]
+        # Helper function to stretch length-1 tensors to match num_steps
+        def match_length(tensor, target_length):
+            if tensor.shape[0] == 1 and target_length > 1:
+                return tf.repeat(tensor, target_length, axis=0)
+            return tensor
 
-    # 3. Create a new, shape-aligned Trajectory object
-    aligned_trajectories = trajectory.Trajectory(
-        step_type=match_length(expert_trajectories.step_type, num_steps),
-        observation=expert_trajectories.observation,
-        action=expert_trajectories.action,
-        policy_info=(), # Keep empty
-        next_step_type=match_length(expert_trajectories.next_step_type, num_steps),
-        reward=match_length(expert_trajectories.reward, num_steps),
-        discount=match_length(expert_trajectories.discount, num_steps)
-    )
+        # 3. Create a new, shape-aligned Trajectory object
+        aligned_trajectories = trajectory.Trajectory(
+            step_type=match_length(expert_trajectories.step_type, num_steps),
+            observation=expert_trajectories.observation,
+            action=expert_trajectories.action,
+            policy_info=(), # Keep empty
+            next_step_type=match_length(expert_trajectories.next_step_type, num_steps),
+            reward=match_length(expert_trajectories.reward, num_steps),
+            discount=match_length(expert_trajectories.discount, num_steps)
+        )
 
-    # 4. Now slice the perfectly aligned trajectories!
-    trajectory_dataset = tf.data.Dataset.from_tensor_slices(aligned_trajectories)
+        # 4. Now slice the perfectly aligned trajectories!
+        trajectory_dataset = tf.data.Dataset.from_tensor_slices(aligned_trajectories)
 
-    # Zip in the per-row source id and shuffle BOTH together (same
-    # permutation applied to each, since zip keeps them aligned element-
-    # for-element) - see the _source_ids comment above for why this must
-    # happen before anything takes only a prefix of this dataset.
-    # buffer_size = the full row count so this is a true full-dataset
-    # shuffle, not a sliding-window approximation - the underlying arrays
-    # are already fully materialized in memory (they came from
-    # np.concatenate above), so this costs no extra I/O, just an
-    # index permutation. Fixed seed => reproducible prefill/BC-pretrain
-    # composition across runs of the same job for easier debugging.
-    # reshuffle_each_iteration=False so multiple full passes (e.g. BC
-    # pretrain's many epochs over this same dataset) see a STABLE order
-    # rather than re-shuffling every epoch, matching this dataset's
-    # original (unshuffled-but-fixed-order) semantics as closely as
-    # possible while still fixing the source-starvation bug.
-    _dataset_with_source = tf.data.Dataset.zip((
-        trajectory_dataset, tf.data.Dataset.from_tensor_slices(_source_ids)
-    )).shuffle(buffer_size=int(num_steps), seed=42, reshuffle_each_iteration=False)
-    # Downstream consumers that only want the Trajectory (BC pretrain, the
-    # AWAC demo iterator, etc.) get a plain projection that preserves the
-    # SAME shuffled order - so every consumer of `trajectory_dataset` from
-    # this point on is implicitly drawing from the same shuffled pool the
-    # prefill loop below verifies against.
-    trajectory_dataset = _dataset_with_source.map(lambda traj, _sid: traj)
+        # Zip in the per-row source id and shuffle BOTH together (same
+        # permutation applied to each, since zip keeps them aligned element-
+        # for-element) - see the _source_ids comment above for why this must
+        # happen before anything takes only a prefix of this dataset.
+        # buffer_size = the full row count so this is a true full-dataset
+        # shuffle, not a sliding-window approximation - the underlying arrays
+        # are already fully materialized in memory (they came from
+        # np.concatenate above), so this costs no extra I/O, just an
+        # index permutation. Fixed seed => reproducible prefill/BC-pretrain
+        # composition across runs of the same job for easier debugging.
+        # reshuffle_each_iteration=False so multiple full passes (e.g. BC
+        # pretrain's many epochs over this same dataset) see a STABLE order
+        # rather than re-shuffling every epoch, matching this dataset's
+        # original (unshuffled-but-fixed-order) semantics as closely as
+        # possible while still fixing the source-starvation bug.
+        _dataset_with_source = tf.data.Dataset.zip((
+            trajectory_dataset, tf.data.Dataset.from_tensor_slices(_source_ids)
+        )).shuffle(buffer_size=int(num_steps), seed=42, reshuffle_each_iteration=False)
+        # Downstream consumers that only want the Trajectory (BC pretrain, the
+        # AWAC demo iterator, etc.) get a plain projection that preserves the
+        # SAME shuffled order - so every consumer of `trajectory_dataset` from
+        # this point on is implicitly drawing from the same shuffled pool the
+        # prefill loop below verifies against.
+        trajectory_dataset = _dataset_with_source.map(lambda traj, _sid: traj)
 
-    # 5. Add a batch dimension of 1 for Reverb
-    #batched_parsed_dataset = trajectory_dataset.batch(1)
+        # 5. Add a batch dimension of 1 for Reverb
+        #batched_parsed_dataset = trajectory_dataset.batch(1)
  
 
-    # parsed_dataset = collect_training_data.get_parsed_dataset(file)
+        # parsed_dataset = collect_training_data.get_parsed_dataset(file)
     
-    # collect_training_data.train_agent_sampling(
-    #     actor_net,
-    #     record_dir, 
-    #     training_steps=1000,
-    #     sampling_fraction=0.1,
-    #     parsed_dataset=parsed_dataset)
+        # collect_training_data.train_agent_sampling(
+        #     actor_net,
+        #     record_dir, 
+        #     training_steps=1000,
+        #     sampling_fraction=0.1,
+        #     parsed_dataset=parsed_dataset)
 
 
     _phase("agent_build (SAC)")
@@ -2126,17 +2186,23 @@ def main(
     # underflow at every gradient step.
     _phase("demo_prefill (-> Reverb)")
     skip_demo_prefill = (
-        is_resume_val
-        and demo_prefill_count > 0
-        and demo_sample_ratio <= 0.0
+        trajectory_dataset is None
+        or (
+            is_resume_val
+            and demo_prefill_count > 0
+            and demo_sample_ratio <= 0.0
+        )
     )
     if skip_demo_prefill:
-        print(
-            f"RESUME: skipping demo prefill into {prefill_label}. "
-            f"BC pretrain is skipped + demo_sample_ratio={demo_sample_ratio} "
-            f"means demos are unused during SAC training; saves the "
-            f"trajectory-load wall time.",
-            flush=True)
+        if trajectory_dataset is None:
+            print("main: skipping demo prefill (no expert dataset).", flush=True)
+        else:
+            print(
+                f"RESUME: skipping demo prefill into {prefill_label}. "
+                f"BC pretrain is skipped + demo_sample_ratio={demo_sample_ratio} "
+                f"means demos are unused during SAC training; saves the "
+                f"trajectory-load wall time.",
+                flush=True)
         items_added = 0
     else:
         print(f"Loading expert demonstrations into Reverb -> {prefill_label} (cap={demo_prefill_count})...")
@@ -2195,7 +2261,8 @@ def main(
     # pretraining on top would overwrite that with another round of
     # imitation, wasting the saved policy progress.
     _phase("bc_pretrain")
-    if bc_pretrain_steps_val > 0 and not is_resume_val:
+    if (bc_pretrain_steps_val > 0 and not is_resume_val
+            and trajectory_dataset is not None):
         collect_training_data.bc_pretrain_actor_net(
             actor_net=actor_net,
             time_step_spec=time_step_spec,
@@ -2334,7 +2401,21 @@ def main(
         train_step,
         episodes_per_run=num_eval_episodes,
         metrics=actor.eval_metrics(num_eval_episodes),
-        summary_dir=eval_dir)
+        summary_dir=eval_dir,
+        # Plot EVERY eval. tf-agents' Actor.run() only writes summaries when
+        # `train_step - last_summary >= summary_interval`, and the default
+        # interval is 1000 train steps. Evals here are scheduled on a
+        # wall-clock budget (see eval_time_fraction) and routinely land
+        # 350-900 steps apart, so the default silently dropped roughly every
+        # other eval: on job 6a9ddb2470a42b21d154b86c only 33 of 76 evals
+        # reached TensorBoard. That included the run's best point (17.62 at
+        # step 37197, 609 steps after the previous write), so the Models tab
+        # showed a best avg_return that simply did not exist on the eval
+        # curve. Model saving reads metrics["AverageReturn"] from every eval
+        # and was never gated, so the two views disagreed. 1 = write on every
+        # run() call; 0 would disable summaries entirely (the guard is
+        # `summary_interval > 0`), so do not "turn it off" with 0.
+        summary_interval=1)
     
     # Triggers to save the agent's policy checkpoints.
     learning_triggers = [
@@ -2482,7 +2563,14 @@ def main(
         return results
 
     _phase("first_eval")
-    metrics = get_eval_metrics()
+    if skip_first_eval:
+        print(
+            "main: skip_first_eval - omitting cold-start eval "
+            "(first_eval + pre_train_eval). In-loop evals still run.",
+            flush=True)
+        metrics = {"AverageReturn": 0.0, "AverageEpisodeLength": 0.0}
+    else:
+        metrics = get_eval_metrics()
 
     def log_eval_metrics(step, metrics):
         eval_results = (', ').join(
@@ -2580,8 +2668,12 @@ def main(
             flush=True)
 
     _phase("pre_train_eval")
-    # Evaluate the agent's policy once before training.
-    avg_return = get_eval_metrics()["AverageReturn"]
+    # Evaluate the agent's policy once before training (unless the job
+    # asked to skip both cold-start evals and go straight to TRAIN).
+    if skip_first_eval:
+        avg_return = metrics["AverageReturn"]
+    else:
+        avg_return = get_eval_metrics()["AverageReturn"]
     returns = [avg_return]
     curr_iteration=0
     print("Num iterations: " + str(num_iterations), flush=True)
@@ -3935,6 +4027,8 @@ def _spec_to_dict(spec):
     """
     if spec is None:
         return None
+    if isinstance(spec, dict):
+        return {str(k): _spec_to_dict(v) for k, v in spec.items()}
     shape_attr = getattr(spec, 'shape', None)
     if shape_attr is None:
         return {"shape": None, "dtype": str(getattr(spec, 'dtype', 'unknown'))}
@@ -3988,6 +4082,14 @@ def _specs_compatible(a, b):
     """
     if a is None or b is None:
         return False
+    a_leaf = isinstance(a, dict) and 'shape' in a
+    b_leaf = isinstance(b, dict) and 'shape' in b
+    if a_leaf != b_leaf:
+        return False
+    if (not a_leaf) and isinstance(a, dict) and isinstance(b, dict):
+        if set(a.keys()) != set(b.keys()):
+            return False
+        return all(_specs_compatible(a[k], b[k]) for k in a)
     a_shape = a.get('shape') or []
     b_shape = b.get('shape') or []
     if len(a_shape) != len(b_shape):
@@ -4451,13 +4553,23 @@ def do_job(job, num_envs=1):
     # donut, 31 for donut_no_hint). Safe because jobs run sequentially in the
     # singleton trainer (see set_observation_size's docstring).
     try:
-        collect_training_data.set_observation_size(
-            collect_training_data.COURSE_OBSERVATION_SIZES.get(
-                _job_course_type, 32))
+        collect_training_data.apply_course_observation_size(_job_course_type)
     except Exception as _e:  # noqa: BLE001 - obs-size set must not kill pickup
         print(f"do_job: set_observation_size failed (non-fatal): {_e}",
               flush=True)
     print(f"do_job: course_type={_job_course_type}", flush=True)
+    # Phase 6: TRAIN/EVAL are allowed on donut_camera (Conv-SAC). DEMO/BC
+    # still need a dict TFRecord layout (Phase 7).
+    if (collect_training_data.COURSE_OBS_KIND.get(_job_course_type) == "dict"
+            and job.get("job_type") in ("DEMO", "BC")):
+        err = (
+            f"course '{_job_course_type}' DEMO/BC is Phase 7 "
+            "(dict TFRecords). Use TRAIN from scratch."
+        )
+        print(f"do_job: refusing {job.get('job_type')}: {err}", flush=True)
+        update_job(job["_id"], err, "eval_error")
+        update_job(job["_id"], "FAILED")
+        return
     # Decide resume-vs-fresh BEFORE flipping status to IN_PROGRESS, so
     # _detect_resume_for_train_job can still see the operator's
     # original pickup-time status (= the discriminator between
@@ -4592,9 +4704,7 @@ def do_job(job, num_envs=1):
             # so the dummy env/read schema match the 32-wide records this job
             # writes. Safe: jobs run sequentially in the singleton trainer.
             try:
-                collect_training_data.set_observation_size(
-                    collect_training_data.COURSE_OBSERVATION_SIZES.get(
-                        _demo_course, 32))
+                collect_training_data.apply_course_observation_size(_demo_course)
             except Exception as _e:  # noqa: BLE001 - non-fatal obs-size set
                 print(f"do_job: DEMO set_observation_size failed "
                       f"(non-fatal): {_e}", flush=True)
@@ -5010,20 +5120,26 @@ def do_job(job, num_envs=1):
             j for j in _extra_demo_job_ids
             if j and j != _DEFAULT_DEMO_JOB_ID]
         if not _demo_job_ids:
-            # No demo source resolved. Both donut and donut_no_hint have a
-            # baked 32-wide default (donut_no_hint reads it 31-wide via the
-            # read-time drop), so this only triggers when the course maps to
-            # None OR skip_default_demo dropped the default with no
-            # demo_job_ids supplied. Fail fast with an actionable message
-            # rather than crashing deep in the demo loader; run_jobs_loop
-            # turns any exception here into status=FAILED + eval_error.
-            raise RuntimeError(
-                f"TRAIN job {job.get('_id')} (course={_job_course_type}) has no "
-                f"expert-demo source: the per-course default is unset (or was "
-                f"dropped via skip_default_demo) and the job didn't set "
-                f"demo_job_ids / default_demo_job_id. Set this job's "
-                f"demo_job_ids to a DEMO job id (or set the "
-                f"ROBOTAXI_DEFAULT_DEMO_JOB_ID env var).")
+            if collect_training_data.COURSE_OBS_KIND.get(_job_course_type) == "dict":
+                print(
+                    f"do_job: TRAIN course={_job_course_type} from scratch "
+                    "(no expert-demo source).",
+                    flush=True)
+            else:
+                # No demo source resolved. Both donut and donut_no_hint have a
+                # baked 32-wide default (donut_no_hint reads it 31-wide via the
+                # read-time drop), so this only triggers when the course maps to
+                # None OR skip_default_demo dropped the default with no
+                # demo_job_ids supplied. Fail fast with an actionable message
+                # rather than crashing deep in the demo loader; run_jobs_loop
+                # turns any exception here into status=FAILED + eval_error.
+                raise RuntimeError(
+                    f"TRAIN job {job.get('_id')} (course={_job_course_type}) has no "
+                    f"expert-demo source: the per-course default is unset (or was "
+                    f"dropped via skip_default_demo) and the job didn't set "
+                    f"demo_job_ids / default_demo_job_id. Set this job's "
+                    f"demo_job_ids to a DEMO job id (or set the "
+                    f"ROBOTAXI_DEFAULT_DEMO_JOB_ID env var).")
         demo_record_dirs_val = [
             f"/tfrecords/job_{_jid}" for _jid in _demo_job_ids]
         if len(_demo_job_ids) > 1:
@@ -5071,6 +5187,7 @@ def do_job(job, num_envs=1):
             critic_joint_fc_layer_params_x=critic_joint_fc_layer_params_x,
             critic_joint_fc_layer_params_y=critic_joint_fc_layer_params_y,
             eval_interval_val=10,
+            skip_first_eval_val=bool(job.get("skip_first_eval")),
             reward_design=reward_design_doc,
             experiment_design=experiment_design_doc,
             seed=seed,
@@ -5096,6 +5213,10 @@ def do_job(job, num_envs=1):
         # Bare-name sibling import; see reward_designs import note above.
         from experiment_designs import apply_to_main_kwargs as _apply_ed
         main_kwargs = _apply_ed(experiment_design_doc, base_kwargs)
+        print(
+            f"do_job: skip_first_eval="
+            f"{bool(main_kwargs.get('skip_first_eval_val'))}",
+            flush=True)
         try:
             main(**main_kwargs)
         except RewardDesignError as e:

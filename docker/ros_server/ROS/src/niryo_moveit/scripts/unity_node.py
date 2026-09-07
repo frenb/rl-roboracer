@@ -24,6 +24,7 @@ def main():
         'sim_command': RosSubscriber('sim_command', SimCommand, tcp_server),
         'sim_status': RosPublisher('sim_status', SimStatus),
         'camera/overhead': RosPublisher('camera/overhead', Camera),
+        'camera/front': RosPublisher('camera/front', Camera),
         # Trajectory-rollout viz: the trainer publishes a JSON payload as a
         # std_msgs/String on `policy_rollouts` (see rl_agent/rollout_viz.py).
         # This endpoint's routing table is STATIC - the embedded ROS-TCP

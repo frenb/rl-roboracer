@@ -69,6 +69,28 @@ COURSE_OBSERVATION_SIZES = {
     "donut": 32,
     "donut_no_hint": 31,
 }
+# Vector courses use COURSE_OBSERVATION_SIZES (an int). donut_camera is a
+# dict {vector: 31, image: 84x84x3} — do not call set_observation_size for
+# it (that helper only knows a flat width). Networks / BC are Phase 6–7.
+COURSE_OBS_KIND = {
+    "donut": "vector",
+    "donut_no_hint": "vector",
+    "donut_camera": "dict",
+    # Raycast ablation arm of donut_camera: same image, vector narrowed to
+    # 2 dims (speed, sideslip). Also dict, so demo/BC is skipped the same way.
+    "donut_camera_no_rays": "dict",
+}
+
+
+def apply_course_observation_size(course_type):
+    """Point the demo/BC pipeline at a vector course, or skip dict courses."""
+    if COURSE_OBS_KIND.get(course_type, "vector") == "dict":
+        print(
+            f"collect_training_data: skip set_observation_size "
+            f"(course={course_type} is dict obs; demo/BC is Phase 7)",
+            flush=True)
+        return
+    set_observation_size(COURSE_OBSERVATION_SIZES.get(course_type, 32))
 
 class robotaxi():
     def __init__(self):

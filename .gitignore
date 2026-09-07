@@ -47,6 +47,12 @@ unity/[Ll]ogs/
 unity/[Uu]serSettings/
 unity/[Mm]emoryCaptures/
 unity/[Rr]ecordings/
+unity/CsiFrameDumps/
+
+# Third-party asset pack (~390 MB of skybox TIFFs). Re-import from the Unity
+# Asset Store rather than versioning it here; the repo has no LFS configured.
+unity/Assets/Assets MOOD WARE/
+unity/Assets/Assets MOOD WARE.meta
 
 # Auto-generated VS / Rider project files
 unity/*.csproj

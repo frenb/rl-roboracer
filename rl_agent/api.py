@@ -1,12 +1,57 @@
+import base64
 import json
 import pprint
 import asyncio
 import time
 import grpc
 from grpc import aio
+from collections import OrderedDict
 
 from virtual_endpoint.proto import ros_service_pb2_grpc
 from virtual_endpoint.proto import ros_service_pb2
+
+# CSI publish size (Unity CsiFramePublisher). Used for the zeros fallback
+# when a step's frame is missing so Phase 4 image_to_obs still sees a
+# well-formed niryo_moveit/Camera dict.
+FRONT_CAMERA_HEIGHT = 84
+FRONT_CAMERA_WIDTH = 84
+FRONT_CAMERA_ENCODING = 'rgb8'
+FRONT_CAMERA_STEP = FRONT_CAMERA_WIDTH * 3
+FRONT_CAMERA_BYTES = FRONT_CAMERA_HEIGHT * FRONT_CAMERA_STEP
+FRONT_CAMERA_WAIT_S = 2.0
+FRONT_CAMERA_FRAME_CACHE = 16
+# Procedural w-course-jetracer Generate() often exceeds the old 4s
+# reset wait. Trainer then applies force while Unity is still
+# rebuilding, which cascades into apply/scene/camera timeouts.
+RESET_WAIT_S = 20.0
+
+
+def _front_camera_cmd_id(frame):
+    """Read Unity's cmd_id from niryo_moveit/Camera JSON (header.seq)."""
+    try:
+        return int(frame['frame']['header']['seq'])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _empty_front_camera_frame(cmd_id=0):
+    """84x84 rgb8 zeros, same shape as a live CSI publish."""
+    return {
+        'frame': {
+            'header': {
+                'seq': int(cmd_id or 0),
+                'stamp': {},
+                'frame_id': 'camera_visual',
+            },
+            'height': FRONT_CAMERA_HEIGHT,
+            'width': FRONT_CAMERA_WIDTH,
+            'encoding': FRONT_CAMERA_ENCODING,
+            'is_bigendian': 0,
+            'step': FRONT_CAMERA_STEP,
+            'data': base64.b64encode(b'\x00' * FRONT_CAMERA_BYTES).decode('ascii'),
+        }
+    }
+
 
 class RpcClient:
     # Client-side per-RPC deadlines. Without these the gRPC stub awaits
@@ -125,16 +170,24 @@ class RobotApi:
         self.latest_car_scene_data = None
         self.latest_overhead_camera_frame = None
         self.have_overhead_camera_frame = asyncio.Event()
+        self.latest_front_camera_frame = None
+        self.front_camera_frames = OrderedDict()
+        self.front_camera_events = {}
+        self.last_apply_force_cmd_id = None
+        self._front_camera_logged = False
 
         # Timeout counters. Incremented in each `except asyncio.TimeoutError`
         # branch below. Exposed via get_timeout_counts() so the trainer
         # in robotaxi.py can aggregate across all ParallelPyEnvironment
         # workers and write the totals as tf.summary scalars under the
-        # `timeouts/` namespace in TensorBoard. The five buckets map to
-        # the five timeout-handling sites in this file:
+        # `timeouts/` namespace in TensorBoard. The six buckets map to
+        # the timeout-handling sites in this file:
         #   - reset:       DoReset, 4s wait on reset_event
         #   - apply_force: DoApplyForce, first wait on apply_force_event
         #   - scene_data:  DoApplyForce, second wait on scene_data_events[cmd_id]
+        #   - front_camera: GetFrontCameraFrame, wait on
+        #                  front_camera_events[cmd_id]. Not armed by
+        #                  donut / donut_no_hint (those never call it).
         #   - move:        DoMove, either of the two wait_for()s in its
         #                  shared try/except (rare in current training)
         #   - publish:     _do_sim_command / DoMove's grpc Publish RPC
@@ -147,6 +200,7 @@ class RobotApi:
         self.reset_timeouts = 0
         self.apply_force_timeouts = 0
         self.scene_data_timeouts = 0
+        self.front_camera_timeouts = 0
         self.move_timeouts = 0
         self.publish_timeouts = 0
 
@@ -163,6 +217,7 @@ class RobotApi:
             'reset_timeouts': self.reset_timeouts,
             'apply_force_timeouts': self.apply_force_timeouts,
             'scene_data_timeouts': self.scene_data_timeouts,
+            'front_camera_timeouts': self.front_camera_timeouts,
             'move_timeouts': self.move_timeouts,
             'publish_timeouts': self.publish_timeouts,
         }
@@ -179,6 +234,7 @@ class RobotApi:
         self.loop.create_task(self.rpc_client.Subscribe('sim_status', 'niryo_moveit/SimStatus', self._on_sim_status))
         self.loop.create_task(self.rpc_client.Subscribe('move_action/result', 'niryo_moveit/MoveActionResult', self._on_move_action_result))
         self.loop.create_task(self.rpc_client.Subscribe('camera/overhead', 'niryo_moveit/Camera', self._on_overhead_camera_frame))
+        self.loop.create_task(self.rpc_client.Subscribe('camera/front', 'niryo_moveit/Camera', self._on_front_camera_frame))
 
     def _on_sim_status(self, sim_status):
         #print("sim_status: " + str(sim_status))
@@ -213,6 +269,57 @@ class RobotApi:
     def _on_overhead_camera_frame(self, frame):
         self.latest_overhead_camera_frame = frame
         self.have_overhead_camera_frame.set()
+
+    def _cached_front_camera_at_or_after(self, cmd_id):
+        """Exact seq, else the newest cached frame with seq >= cmd_id.
+
+        SceneDataPublisher publishes CSI from Unity's last_executed_cmd_id.
+        If we subscribed late or Unity is a few ids ahead, waiting for an
+        already-skipped seq only burns FRONT_CAMERA_WAIT_S and then uses
+        last-good anyway.
+        """
+        exact = self.front_camera_frames.get(cmd_id)
+        if exact is not None:
+            return exact
+        newer = [k for k in self.front_camera_frames if k is not None and k >= cmd_id]
+        if not newer:
+            return None
+        return self.front_camera_frames[max(newer)]
+
+    def _remember_front_camera_frame(self, cmd_id, frame):
+        self.front_camera_frames[cmd_id] = frame
+        self.front_camera_frames.move_to_end(cmd_id)
+        while len(self.front_camera_frames) > FRONT_CAMERA_FRAME_CACHE:
+            self.front_camera_frames.popitem(last=False)
+
+    def _on_front_camera_frame(self, frame):
+        # gRPC JSON is niryo_moveit/Camera: {frame: sensor_msgs/Image}.
+        # Unity stamps header.seq = cmd_id. Store by that id so
+        # GetFrontCameraFrame can return a frame that arrived before
+        # the waiter registered (CSI is published after car_scene_data).
+        cmd_id = _front_camera_cmd_id(frame)
+        self.latest_front_camera_frame = frame
+        if cmd_id is not None:
+            self._remember_front_camera_frame(cmd_id, frame)
+            ev = self.front_camera_events.get(cmd_id)
+            if ev is not None:
+                ev.set()
+        if not self._front_camera_logged:
+            self._front_camera_logged = True
+            img = frame.get('frame') if isinstance(frame, dict) else None
+            img = img if isinstance(img, dict) else {}
+            data = img.get('data') or ''
+            try:
+                nbytes = len(base64.b64decode(data, validate=False))
+            except Exception:
+                nbytes = len(data) if isinstance(data, (bytes, str)) else -1
+            print(
+                '[front_camera] first frame '
+                f"{img.get('width')}x{img.get('height')} "
+                f"encoding={img.get('encoding')} "
+                f"seq={cmd_id} bytes={nbytes} "
+                f"frame_id={img.get('header', {}).get('frame_id')}",
+                flush=True)
 
 
     def _on_move_action_result(self, result):
@@ -281,6 +388,10 @@ class RobotApi:
     def GetCarSceneDataBlocking(self):
         return asyncio.run_coroutine_threadsafe(self.GetCarSceneData(), self.loop).result()
 
+    def GetFrontCameraFrameBlocking(self, cmd_id=None):
+        return asyncio.run_coroutine_threadsafe(
+            self.GetFrontCameraFrame(cmd_id), self.loop).result()
+
     async def PublishRollouts(self, payload_json):
         """Publish a policy-rollout-visualization payload to Unity.
 
@@ -323,9 +434,12 @@ class RobotApi:
         # would raise TypeError in message_converter). chicanes_north/east/
         # south/west (2026-07-18) are declared int32 in ApplyForce.msg and
         # MUST be ints here for the same check_types=True reason.
+        cmd_id = self._next_id()
+        self.last_apply_force_cmd_id = cmd_id
         force_angle = {
             'acceleration': 0.0,
             'steering_angle': 0.0,
+            'cmd_id': cmd_id,
             'num_obstacles': num_obstacles,
             'corner_radius': float(corner_radius),
             'curvature_difficulty': float(curvature_difficulty),
@@ -336,14 +450,19 @@ class RobotApi:
         }
         await self._do_sim_command( { 'cmd' : 0 , 'ApplyForce': force_angle} )
         try:
-            await asyncio.wait_for(self.reset_event.wait(), 4)
+            await asyncio.wait_for(self.reset_event.wait(), RESET_WAIT_S)
         except asyncio.TimeoutError:
             self.reset_timeouts += 1
-            print('timed out waiting for reset. Ignoring')
+            print(
+                f'timed out waiting for reset (>{RESET_WAIT_S:.0f}s). '
+                'Unity never sent RESTARTED — Exit Play and Play again '
+                'on ros-server:10000, then leave the job IN_PROGRESS.',
+                flush=True)
     
     async def DoApplyForce(self, acceleration=100.0, steering_angle=30.0, num_obstacles=20):
         # print("DoApplyForce: " + str(num_obstacles))
         cmd_id = self._next_id()
+        self.last_apply_force_cmd_id = cmd_id
         force_angle = {
             'acceleration': acceleration,
             'steering_angle': steering_angle,
@@ -482,3 +601,50 @@ class RobotApi:
             self.have_overhead_camera_frame.clear()
         res = self.latest_overhead_camera_frame
         return res
+
+    async def GetFrontCameraFrame(self, cmd_id=None):
+        """Wait for the CSI frame whose header.seq matches cmd_id.
+
+        Call after DoApplyForce's scene-data wait (Unity publishes the
+        image at the end of that same Publish()). donut / donut_no_hint
+        must not call this — they stay on the 31-D vector. Missing or
+        late frames return the last good image, or zeros, and increment
+        front_camera_timeouts. Never raises into the actor.
+
+        cmd_id=None uses last_apply_force_cmd_id from the most recent
+        DoApplyForce (or 0).
+        """
+        if cmd_id is None:
+            cmd_id = self.last_apply_force_cmd_id
+        if cmd_id is None:
+            cmd_id = 0
+
+        cached = self._cached_front_camera_at_or_after(cmd_id)
+        if cached is not None:
+            return cached
+
+        ev = self.front_camera_events.get(cmd_id)
+        if ev is None:
+            ev = asyncio.Event()
+            self.front_camera_events[cmd_id] = ev
+        # Frame may have landed between the cache miss and Event create.
+        cached = self._cached_front_camera_at_or_after(cmd_id)
+        if cached is not None:
+            self.front_camera_events.pop(cmd_id, None)
+            return cached
+
+        try:
+            await asyncio.wait_for(ev.wait(), FRONT_CAMERA_WAIT_S)
+        except asyncio.TimeoutError:
+            self.front_camera_timeouts += 1
+            print(
+                f'Front camera timed out waiting for cmd_id={cmd_id}. '
+                f'Using {"last good" if self.latest_front_camera_frame else "zeros"}.',
+                flush=True)
+            return self.latest_front_camera_frame or _empty_front_camera_frame(cmd_id)
+        finally:
+            self.front_camera_events.pop(cmd_id, None)
+
+        return (self.front_camera_frames.get(cmd_id)
+                or self.latest_front_camera_frame
+                or _empty_front_camera_frame(cmd_id))

@@ -101,6 +101,8 @@ public class SimController : MonoBehaviour
         // Auto-attach the P-key view switcher (top-down Main Camera <->
         // on-car JetRacerCsiCamera). No scene setup required.
         gameObject.AddComponent(typeof(CameraViewSwitcher));
+        // One CSI frame per cmd_id on camera/front (Phase 1).
+        gameObject.AddComponent(typeof(CsiFramePublisher));
         // // Publish camera frames for computer vision.
         // if (publishedCamera != null)
         // {
@@ -305,7 +307,9 @@ public class SimController : MonoBehaviour
         // placed on one of those goals.
         ApplyTrackConfig(af);
         InstantiateObjects(af);
-        sceneDataPublisher.UpdateWorldRefs();
+        // Stamp the reset cmd_id so the first CSI frame + car_scene_data
+        // share the same seq (Phase 1).
+        sceneDataPublisher.UpdateWorldRefs(af);
         currentWait = WAIT_FRAMES;
     }
 

@@ -453,6 +453,14 @@ rosrun map_server map_server ~/maps/explore_map.yaml
 
 ## Sim camera: mirror the JetRacer CSI feed into Unity gyms and the model
 
+The Unity CSI **stand-in** (640×480 `JetRacerCsiCamera`, P-view, Road-layer
+culling, mount/FOV) is already in the gym. That changelog is
+[README → Sim2real](README.md#sim2real). The implementation plan for
+publishing those frames as `camera/front` and training a vision course is
+[`docs/csi-camera-observation-guide.md`](docs/csi-camera-observation-guide.md).
+This section keeps the Nano camera contract; it does **not** implement
+those nodes.
+
 Today’s SAC policies (`donut` / `donut_no_hint`) are **1-D vectors** (31 or 32 floats). They do **not** use the CSI camera. `/csi_cam_0/image_raw` is published on the Nano for Foxglove only. In the Unity gym, overhead-camera publish is **commented out** in `SimController.cs`; `unity_node.py` still lists `camera/overhead`, and `RobotApi` already subscribes — nothing in `DonutCourse` or the actor/critic reads it.
 
 This section is the plan to make the **gym camera look like the JetRacer CSI**, ship frames over the existing ROS-TCP → gRPC plane, and turn them into a tensor the policy can train and (later) run on. It does **not** implement the nodes.

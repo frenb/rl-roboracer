@@ -2,6 +2,10 @@
 
 Plan only. This document tells you how to take a **TensorFlow SavedModel** trained in this repo and run it on the **WaveShare JetRacer ROS AI Kit** (Jetson Nano, ROS Melodic). It does **not** implement the bridge.
 
+Putting Unity CSI frames on the training loop (`camera/front`,
+`donut_camera`) is a separate plan:
+[`csi-camera-observation-guide.md`](csi-camera-observation-guide.md).
+
 The two stacks were never designed as one system. Training already has a ROS graph, but it is a **custom gym graph** inside the `ros-server` Docker container (`niryo_moveit` messages, ROS-TCP to Unity, gRPC to the trainer). The car speaks **standard Jetson topics** (`/scan`, `/odom_raw`, `/cmd_vel`) on ROS Melodic. Those graphs do not share message types. Deployment is a **new adapter** that rebuilds the 31-D observation from Jetson sensors and writes Twist — it does **not** reuse `car_scene_data` / `sim_command` on the Nano.
 
 ---

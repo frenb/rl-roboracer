@@ -133,7 +133,13 @@ function superviseChangeStream(
       backoff = 1000;                // healthy traffic resets the backoff
       console.log(`Change detected (${collName}):`, change.operationType, change.documentKey?._id);
       const version = markChanged();
-      broadcastChange(collName, change, typeof version === 'number' ? version : undefined);
+      try {
+        broadcastChange(collName, change, typeof version === 'number' ? version : undefined);
+      } catch (e: any) {
+        // A stringify/send throw must not kill the tailable cursor —
+        // the REST poll still has a bumped version to catch up.
+        console.error(`[stream:${collName}] broadcast failed:`, e && (e.message || e));
+      }
     });
     stream.on('error', (err: any) => scheduleReopen('stream error', err && (err.message || err)));
     stream.on('close', () => scheduleReopen('stream closed'));
@@ -350,10 +356,17 @@ export const createServer = (config): express.Application => {
 
   app.use(cors());
   app.options('*', cors());
+  // List endpoints are change-gated GETs whose body is often the
+  // identical "NO_CHANGES" string. Express's default ETag turns that
+  // into a 304, and fetch() then either throws (status not ok) or
+  // serves a cached payload — both look like a frozen jobs table.
+  app.set('etag', false);
   // Let browser fetch() read the version cursor header (needed only for
   // cross-origin reads; harmless same-origin).
   app.use((req, res, next) => {
     res.setHeader('Access-Control-Expose-Headers', 'X-Coll-Version');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
     next();
   });
 
