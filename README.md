@@ -65,7 +65,9 @@ are PowerShell.
 
 Parent directory name can be anything; compose bind-mounts
 `../saved_models`, `../mongodb`, and `../tfrecords` relative to the
-repo, so those three folders must sit next to `rl-roboracer`.
+repo, so those three folders must sit next to `rl-roboracer`. The
+tfrecords location can be pointed elsewhere with `TFRECORDS_DIR` — see
+[the TFRecord corpus](#the-tfrecord-corpus-layout-tfrecords_dir-and-housekeeping).
 
 ```powershell
 cd <parent>   # e.g. Documents\agents\robots\LATEST
@@ -82,7 +84,8 @@ New-Item -ItemType Directory -Force `
 
 Empty dirs are enough to start. Copy demo tfrecords or checkpoints into
 those folders when you have them. Optional: `Copy-Item .env.example .env`
-if you will enable the Mad Scientist (off by default).
+if you will enable the Mad Scientist (off by default) or want to keep the
+tfrecords corpus somewhere other than `..\tfrecords` (`TFRECORDS_DIR`).
 
 ### 4. Build the Docker images
 
@@ -499,6 +502,116 @@ Details / limitations:
 - Windowed metrics `AverageReturn` / `AverageEpisodeLength` are last-N buffers
   (not lifetime totals), so they simply refill and are intentionally not
   seeded. `max_avg_return` (best-model gate) is separately restored from Mongo.
+
+### The TFRecord corpus: layout, `TFRECORDS_DIR`, and housekeeping
+
+Expert demonstrations are stored as one directory per DEMO job —
+`job_<id>/`, holding one or more `.tfrecord` files. Every consumer (BC
+pretraining, the AWAC actor regularizer, `analyze_demo_metrics.py`) reads
+this same tree.
+
+#### Host path vs. container path — the distinction that bites
+
+One folder, two names, and conflating them breaks the trainer:
+
+| | Path | Who uses it |
+| --- | --- | --- |
+| Host (Windows) | `LATEST\tfrecords\` | Compose, as the bind-mount **source** |
+| Container | `/tfrecords` | **every line of Python** |
+
+`sim-controller` is the only service that mounts the volume — the
+dashboard and Mad Scientist never touch it, they pass job ids around
+instead.
+
+The Python side is hardcoded to the **container** path on purpose:
+`robotaxi.py` builds `/tfrecords/job_<id>` strings for both the write side
+(`collect_expert_demos`) and the read side (`demo_record_dirs`), and
+`analyze_demo_metrics.py` resolves a bare job id against `/tfrecords`.
+Because the mount **target** is fixed, those literals always resolve no
+matter where the host folder actually sits. Never rewrite them to a host
+path such as `C:\...\tfrecords` — there is no `C:` drive inside the
+container, and every demo-backed job would fail to find its corpus.
+
+#### Relocating the corpus with `TFRECORDS_DIR`
+
+The host side *is* configurable. Compose reads:
+
+```yaml
+      - type: bind
+        source: ${TFRECORDS_DIR:-../tfrecords}
+        target: /tfrecords
+```
+
+so with the variable unset the corpus stays a sibling of the repo (the
+[Setup](#3-create-sibling-data-directories) default) and nothing changes.
+To keep it somewhere else — a roomier drive, a shared scratch disk — set
+it in `.env`:
+
+```ini
+TFRECORDS_DIR=D:/rl-data/tfrecords
+```
+
+Three rules for the value: **forward slashes** (backslashes in a `.env`
+invite escaping surprises), **no trailing slash** (a trailing separator on
+a bind source is a well-known source of Compose grief), and either an
+absolute path or one relative to the repo root. Only the host side moves;
+the target stays `/tfrecords`, so no Python changes and no re-collection.
+
+Confirm the substitution actually happened before bringing the stack up:
+
+```powershell
+docker compose -f docker-compose.yml -f compose/scale.yml config |
+  Select-String tfrecords -Context 1,1
+```
+
+Then apply it with `docker compose ... up -d`. A bare `restart` is **not**
+enough — mounts are fixed at container creation, so `sim-controller` has
+to be recreated to pick up a new source.
+
+#### Filenames inside a job directory
+
+`read_files_from_directory()` reads *every* file in the job dir and
+concatenates them, so three naming generations coexist harmlessly:
+
+| Pattern | Era |
+| --- | --- |
+| `000000trajectories.tfrecord` | original — one write at end of run |
+| `<batch>_<sub>trajectories.tfrecord` | periodic flush (`flush_every_n_steps`) |
+| `<batch>_g<gym>_<sub>trajectories.tfrecord` | current — `g<gym>` added for concurrent gyms |
+
+`<batch>` is the curriculum stage (`batch_number`), `<sub>` the flush
+counter, `<gym>` the Unity instance index. The concatenate-everything read
+is why `collect_expert_demos()` insists callers pass a **distinct**
+`batch_number` per stage and bakes `gym_index` into the name: reusing
+either would silently clobber a sibling stage's steps rather than adding
+to them.
+
+#### Related environment variables
+
+| Variable | Read by | Effect |
+| --- | --- | --- |
+| `TFRECORDS_DIR` | Compose (host) | Host directory to bind-mount at `/tfrecords`. Defaults to `../tfrecords`. |
+| `ROBOTAXI_DEFAULT_DEMO_JOB_ID` | `sim-controller` | Overrides which DEMO job supplies the default expert corpus — step 2 of `_resolve_default_demo_job_id()`, below the job doc's own `default_demo_job_id` and above the per-course `COURSE_DEFAULT_DEMO_JOB_IDS` map. |
+| `ROBOTAXI_OBSERVATION_SIZE` | `sim-controller` | Fallback active observation width the demo reader slices down to. Normally irrelevant — `do_job()` sets it per-job via `set_observation_size()` from the course. |
+
+Note the asymmetry: `TFRECORDS_DIR` answers *where the corpus is*, the
+other two answer *which records to load and how wide they are*. Only the
+first one belongs in `.env`; the other two are container-side overrides
+for one-off experiments.
+
+#### Housekeeping
+
+The corpus is a **sibling** of the repo, not inside it, so git never sees
+it and there is nothing to gitignore — but equally, nothing backs it up.
+It grows roughly linearly with DEMO hours (currently ~0.5 GB across 30 job
+dirs, the largest ~110 MB), so it is slow-growing rather than urgent.
+
+Moving a corpus to another machine is a plain folder copy: `job_<id>`
+directories are self-contained and carry no absolute paths. Deleting one,
+however, orphans any job document still referencing that id — a TRAIN job
+pointed at a missing source resolves to an empty dataset. Prefer trimming
+via `demo_job_ids` / `skip_default_demo` on the job doc over deleting
+directories.
 
 ### Analyzing DEMO-collection metrics (speed / episodes / crashes)
 

@@ -120,8 +120,10 @@ services:
       - type: bind
         source: ../saved_models
         target: /saved_models
+      # Host location is overridable via TFRECORDS_DIR in .env; the target
+      # is fixed, so the trainer's hardcoded /tfrecords paths always resolve.
       - type: bind
-        source: ../tfrecords
+        source: ${TFRECORDS_DIR:-../tfrecords}
         target: /tfrecords
       # /tmp lives on a Docker NAMED VOLUME (not a host bind mount) so
       # that /tmp/active and /tmp/jobsdata sit on the same native ext4

@@ -35,7 +35,6 @@ current_time = datetime.datetime.now()
 #3/4 job_6402f67e124fee671f8dffe7
 #3/4.1 job_6403b7a094b9d3d95304fcb7
 #3/15 job_6412bd37f6548aa06d94eea8
-root_dir = "C:\\Users\\benja\\Documents\\robots\\LATEST\\tfrecords\\job_6412bd37f6548aa06d94eea8"
 # batch_size = 50000
 training_steps = 10000
 # Full observation width as RECORDED in the demo TFRecords. The live env writes
