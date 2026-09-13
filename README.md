@@ -382,6 +382,22 @@ Still **not** on the learning loop: CSI frames are for the operator (P-view).
 
 ## Developer notes
 
+### Migrating off the legacy Bitnami Mongo image
+
+The `mongo` service pins `bitnamilegacy/mongodb:6.0`. Broadcom retired the
+Bitnami Docker Hub catalogue in August 2025, so `bitnami/mongodb:6.0` no
+longer resolves and a cold `docker compose up` fails at the pull.
+`bitnamilegacy` is that same image republished (MongoDB 6.0.13, UID 1001,
+same entrypoint and data layout), so env vars, both bind mounts, and
+existing `../mongodb` data carry over unchanged.
+
+It is a stopgap — the legacy org is frozen and gets no further security
+patches. Moving to stock `mongo:6.0` is not a one-line swap: the Bitnami
+entrypoint bootstraps the replica set from `MONGODB_REPLICA_SET_MODE`, and
+`dashboard/src/server.ts` drives its live UI from change streams, which
+require a replica set. A standalone `mongod` breaks the dashboard silently
+while ordinary CRUD keeps working, and no test covers it.
+
 ### Testing Reverb buffer save/restore on pause-resume
 
 On pause the trainer now saves **both** the Learner checkpoint (actor + critic

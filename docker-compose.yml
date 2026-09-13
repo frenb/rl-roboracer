@@ -51,7 +51,18 @@ services:
     command: sh -c "./src/start.sh"
 
   mongo:
-    image: bitnami/mongodb:6.0
+    # Was `bitnami/mongodb:6.0`. Broadcom retired the Bitnami Docker Hub
+    # catalogue (Aug 2025): that tag no longer resolves and a cold `docker
+    # compose up` dies at the pull with "not found". `bitnamilegacy` is the
+    # SAME image republished - MongoDB 6.0.13, UID 1001, identical
+    # /opt/bitnami entrypoint and /bitnami/mongodb data layout - so every
+    # env var and both bind mounts below are unchanged, and existing
+    # ../mongodb data keeps working.
+    #
+    # Caveat: the legacy org is frozen at the retirement snapshot, so this
+    # gets no further security patches. See "Migrating off the legacy
+    # Bitnami Mongo image" in README.md for the stock-mongo:6.0 path.
+    image: bitnamilegacy/mongodb:6.0
     restart: always
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
