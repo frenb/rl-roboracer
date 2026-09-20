@@ -5322,6 +5322,24 @@ def do_job(job, num_envs=1):
                     curriculum_stages=_eval_stages,
                     stage_start=_eval_stage_start,
                     stage_end=_eval_stage_end)
+            elif model_type == "FlyPyPolicy":
+                # Like RandomPyPolicy, this is a form-created baseline with no
+                # ``location``: the policy is built from the frozen connectome
+                # plus the step-5 readout, not loaded from a saved snapshot.
+                run_flypolicy(
+                    job_id=job["_id"],
+                    num_trials=num_trials,
+                    num_eval_episodes=num_eval_episodes,
+                    corner_radius=eval_corner_radius,
+                    curvature_difficulty=eval_curvature_difficulty,
+                    chicanes_north=eval_chicanes_north,
+                    chicanes_east=eval_chicanes_east,
+                    chicanes_south=eval_chicanes_south,
+                    chicanes_west=eval_chicanes_west,
+                    course_type=_job_course_type,
+                    curriculum_stages=_eval_stages,
+                    stage_start=_eval_stage_start,
+                    stage_end=_eval_stage_end)
             else:
                 load_saved_model(
                     model_type, path=location, job_id=job["_id"],
@@ -5991,6 +6009,71 @@ def run_randompolicy(job_id="", num_trials=None, num_eval_episodes=None,
     results = run_policy(random_policy, env, job_id=job_id, **run_kwargs)
     debug_print(results)
     save_results_to_db(random_policy_path, results)
+
+def run_flypolicy(job_id="", num_trials=None, num_eval_episodes=None,
+                  corner_radius=10.0, curvature_difficulty=0.0,
+                  chicanes_north=0, chicanes_east=0,
+                  chicanes_south=0, chicanes_west=0,
+                  course_type=None, curriculum_stages=None,
+                  stage_start=0, stage_end=None):
+    """Run an EVAL job for the fly-connectome policy.
+
+    Step 6 of docs/flybrain-driver-plan.md. Structurally identical to
+    run_randompolicy - same single env on ros-server-0, same run_policy, same
+    save_results_to_db - so the fly policy lands on the leaderboard directly
+    comparable to SAC on identical geometry, with no bespoke harness.
+
+    Requires the fly-brain service and the step-5 readout at
+    /saved_models/robotaxi/FlyPyPolicy/0/readout.npz.
+
+    Only meaningful on the 31-D ray courses (donut_no_hint); the encoder reads
+    speed at index 0 and the 29 rays at 2..30.
+    """
+    from fly_brain.policy import FlyPyPolicy
+
+    debug_print("in fly policy")
+    env = _register_train_env(
+        make_env('ros-server-0:50051', course_type=course_type))
+    env.job_id = job_id
+    configure_env(env, job_id=job_id, pass_through_actions=False,
+                  corner_radius=corner_radius,
+                  curvature_difficulty=curvature_difficulty,
+                  chicanes_north=chicanes_north, chicanes_east=chicanes_east,
+                  chicanes_south=chicanes_south, chicanes_west=chicanes_west)
+    publish_env_spec(env)
+    fly_policy = FlyPyPolicy(env.time_step_spec(), env.action_spec())
+    run_kwargs = {}
+    if num_trials is not None:
+        run_kwargs["max_episodes"] = int(num_trials)
+    if num_eval_episodes is not None:
+        run_kwargs["num_eval_episodes"] = int(num_eval_episodes)
+    fly_policy_path = get_latest_save_dir_name(fly_policy)
+    debug_print(fly_policy_path)
+    # save_results_to_db keys its leaderboard row off a models record at this
+    # location, and unlike a SAC snapshot there is no TRAIN job to have created
+    # one. Register it on first use so the eval lands on the leaderboard.
+    # job_id stays None: an EVAL job is not a training run, and add_model's
+    # job_id is what maps a model back to its TensorBoard training directory.
+    if db.models.find_one({"location": fly_policy_path}) is None:
+        add_model(fly_policy_path, os.getenv('ROBOT_TYPE'), "FlyPyPolicy", 0,
+                  observation_spec=env.observation_spec(),
+                  action_spec=env.action_spec(),
+                  course_type=course_type)
+        print(f"run_flypolicy: registered model record at {fly_policy_path}",
+              flush=True)
+    try:
+        if curriculum_stages:
+            _eval_over_curriculum(fly_policy, env, job_id, curriculum_stages,
+                                  run_kwargs, save_path=fly_policy_path,
+                                  stage_start=stage_start, stage_end=stage_end)
+            return
+        results = run_policy(fly_policy, env, job_id=job_id, **run_kwargs)
+        debug_print(results)
+        save_results_to_db(fly_policy_path, results)
+    finally:
+        # The policy holds a gRPC channel to fly-brain; the trainer process is
+        # long-lived and runs job after job, so leaking one per EVAL adds up.
+        fly_policy.close()
 
 def create_traj(
     observation, 
