@@ -1397,6 +1397,59 @@ measured on at roughly 5.6 hours.
 history-dependent, so off-policy replay is learning from features it cannot
 exactly reconstruct.
 
+#### Runbook: launching a `fly_donut` TRAIN job
+
+Worked example — 50,000 iterations on `wCourseJetRacer2026.09.20-v13`.
+
+**1. Start the trainer at one env**, teeing to the path
+`scripts/Monitor-Job.ps1` reads. Pass no `--num-envs`; the default of 1 is the
+only safe value, for the reason under *lane work*.
+
+```powershell
+docker compose exec -T sim-controller sh -c "pkill -f 'robotaxi.py'; sleep 3"
+docker compose exec -d sim-controller `
+  sh -c "cd /python_ws/src && python -u robotaxi.py 2>&1 | tee /tmp/trainer.log"
+```
+
+**2. Queue the job** from the Jobs tab's **New job** form:
+
+| Field | Value |
+|---|---|
+| Job type / Model type | `TRAIN` / `SacAgent` |
+| Course | `fly_donut` |
+| Gym | `wCourseJetRacer2026.09.20-v13` |
+| Iterations | `50000` |
+| Reward design | `Goal-count speed (v4, TIME_COST 0.0073)` |
+| Experiment design | `AWAC + No-BC + curriculum (5-stage) + reward_scale1` |
+| Demo job id / Skip first eval | blank / off |
+
+Those two designs are the ones behind the `SacAgent/7573_step_87314` baseline,
+so matching them is what lets a later comparison mean anything. AWAC is
+force-disabled on a course with no demo corpus, so that half of the experiment
+design is inert; the 5-stage curriculum still applies and stamps its own
+geometry per stage, so leave the corner-radius and curvature boxes empty.
+
+You do not launch Unity yourself — `do_job` POSTs the job's `gym_file_path` to
+`/set_desired_gym`, and each `RunClientWrapper.ps1` supervisor hot-swaps its
+binary to match.
+
+**3. Confirm pickup.** Three lines appear within ~30 s, the last being the one
+that proves the connectome is in the observation path rather than the ray
+vector:
+
+```
+main: fly_donut TRAIN from scratch (skip expert TFRecords, BC pretrain, AWAC)
+fly_donut: trace_len=1314 obs_max=5.52 substeps=5 device=cuda
+[fly_donut] obs vector(1314,) (of scene(31,))
+```
+
+**4. Monitor** with `.\scripts\Monitor-Job.ps1 -Watch`. Judge progress by
+`eval/goals_per_episode_this_eval`, not `avg_return`, which is not comparable
+across jobs with different reward designs. At ~0.23 s/iteration, 50,000
+iterations is roughly 3.2 hours plus eval overhead — note that the baseline
+checkpoint is at step 87,314, so 50k is a real run but not yet the equal-budget
+comparison.
+
 #### The overlay
 
 `rl_agent/fly_brain/viz.py` publishes two topics; `FlyBrainViz.cs` renders them
