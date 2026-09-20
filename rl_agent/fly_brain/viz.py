@@ -68,16 +68,23 @@ def get_config():
         # restart the trainer). A build has no inspector, so without this every
         # "it's off screen" costs an Editor round trip. Unity falls back to its
         # own defaults when displaySize is absent/0.
-        # Defaults tuned against the sim's top-down camera: 12 m was legible
-        # but small, and the neurons/edges washed out against the grass.
-        "display_size": _float("FLY_VIZ_DISPLAY_SIZE", 25.0),
+        # Defaults tuned against the sim's top-down camera.
+        "display_size": _float("FLY_VIZ_DISPLAY_SIZE", 50.0),
         "point_size": _float("FLY_VIZ_POINT_SIZE", 0.16),
-        "offset": os.environ.get("FLY_VIZ_OFFSET", "0,40,0"),
+        # Parks the overlay in the empty area left of the track, under the ROS
+        # HUD, which also puts it over the camera's flat background instead of
+        # grass. Note the axes are the overlay parent's LOCAL ones and that
+        # parent is rotated: measured against this camera, +z moves the brain
+        # left at 3.1 px/m and +x moves it up at 2.5 px/m (at 1250 px wide).
+        "offset": os.environ.get("FLY_VIZ_OFFSET", "-8,40,130"),
         # 0, not a slow turntable: the sim camera looks straight down, so a
         # spin about Unity's y would swing the brain in the screen plane and
         # left/right would stop meaning left/right.
         "spin": _float("FLY_VIZ_SPIN", 0.0),
         "edge_alpha": _float("FLY_VIZ_EDGE_ALPHA", 0.40),
+        # Draw the connections at all. See the note in _build_geometry.
+        "edges": os.environ.get("FLY_VIZ_EDGES", "0").lower()
+        in ("1", "true", "yes", "on"),
         # Which connectome axis goes on which Unity axis, as signed names for
         # Unity x,y,z. The camera looks down Unity y, so whatever lands there
         # is the axis we lose. Measured on the display subset (n=3225):
@@ -92,6 +99,15 @@ def get_config():
         # How much of the camera-facing axis to keep. 1.0 is anatomically
         # honest but perspective-smears the overlay; see _build_geometry.
         "depth_scale": _float("FLY_VIZ_DEPTH_SCALE", 0.12),
+        # Floor under the published activity byte, 0-255. Unity maps that byte
+        # onto a rest->full ramp whose resting end is a hardcoded 0.18 of the
+        # role colour at 0.20 alpha, which is near-invisible against the sim's
+        # background; the connectome is quiet most of the time, so most of the
+        # cloud sits at that floor. Lifting it here keeps the knob on the side
+        # that does not need an Editor rebuild. Activity still varies, it just
+        # starts somewhere you can see: 140 lands a resting neuron at ~40%
+        # brightness after Unity's 1.6 gamma.
+        "act_floor": int(_float("FLY_VIZ_ACT_FLOOR", 140.0)),
     }
 
 
@@ -171,44 +187,56 @@ class FlyBrainViz(object):
 
         # Normalize to a unit box centred on the origin so the Unity side is a
         # single scale factor rather than hard-coded connectome coordinates
-        # (which are raw MaleCNS nanometre-ish soma positions).
-        centre = pos.mean(axis=0)
-        pos = pos - centre
-        # A percentile, not the max: a handful of descending cells project far
-        # down the nerve cord (z spans 106k against a 7.6k sd), and dividing by
-        # that outlier shrinks the actual brain to a dot.
-        extent = float(np.percentile(np.abs(pos), 99.0))
-        if extent > 0:
-            pos = pos / extent
-        # Clip rather than let the ~1% beyond the percentile run free. The sim
-        # camera is perspective, so a neuron left at 3.5 units of depth sits
-        # ~88 m up at displaySize 25 -- close enough to the camera that it
-        # projects way off to the side and the brain smears into a radial fan.
-        pos = np.clip(pos, -1.0, 1.0)
-        # Flatten depth. A top-down camera throws that axis away anyway, and
-        # squashing it keeps near and far neurons at nearly the same projected
-        # scale, so the overlay reads as a clean diagram instead of a cone.
-        pos[:, 1] *= self.cfg["depth_scale"]
+        # (which are raw MaleCNS nanometre-ish soma positions). The median, not
+        # the mean, so the long descending projections down the nerve cord do
+        # not drag the centre off the brain.
+        pos = pos - np.median(pos, axis=0)
+
+        # Scale the two on-screen axes together, by their shared max, so the
+        # anatomy keeps its true aspect and nothing needs clipping. Taking the
+        # max over all three axes is what used to shrink the brain to a dot --
+        # the culprit was depth (z spans 106k against a 7.6k sd), and depth is
+        # handled separately below, so within the screen plane the max is only
+        # about 1.4x the 99th percentile and costs nothing.
+        plane = float(np.abs(pos[:, [0, 2]]).max())
+        if plane > 0:
+            pos = pos / plane
+        # Depth is the one axis a top-down camera throws away, and it is where
+        # the extreme outliers live. Clip it, then flatten it: left free, a
+        # neuron at 3.5 units sits ~88 m up at displaySize 25, close enough to
+        # a perspective camera that it projects far off to the side and smears
+        # the whole structure into a radial fan.
+        pos[:, 1] = np.clip(pos[:, 1], -1.0, 1.0) * self.cfg["depth_scale"]
 
         labels = json.loads(g["labels_json"])
         role = np.array([ROLE_CODES.get(l.get("role"), 0) for l in labels], np.uint8)
         side = np.array([SIDE_CODES.get(l.get("side"), 0) for l in labels], np.uint8)
+
+        # Edges are off by default. 8000 lines over a bright sim background
+        # read as a dark scribble that buries the neurons; the reference
+        # renders this connectome as a bare point cloud for the same reason.
+        # Sending none (rather than alpha 0) also drops ~94 KB off the payload.
+        edges_on = self.cfg["edges"]
+        n_edges = int(g["n_edges"]) if edges_on else 0
+        empty32 = np.zeros(0, np.int32)
 
         ox, oy, oz = _offset(self.cfg["offset"])
         return json.dumps({
             "kind": "geometry",
             "stamp": time.time(),
             "n": int(g["n_display"]),
-            "nEdges": int(g["n_edges"]),
+            "nEdges": n_edges,
             "displaySize": self.cfg["display_size"],
             "pointSize": self.cfg["point_size"],
             "offsetX": ox, "offsetY": oy, "offsetZ": oz,
             "spin": self.cfg["spin"],
             "edgeAlpha": self.cfg["edge_alpha"],
             "pos": _b64(pos.reshape(-1)),            # float32[n*3], xyz interleaved
-            "edgeSrc": _b64(g["edge_src"]),          # int32[nEdges], index into pos
-            "edgeDst": _b64(g["edge_dst"]),          # int32[nEdges]
-            "edgeWeight": _b64(g["edge_weight"]),    # float32[nEdges], signed
+            # Always a string, never absent: Unity base64-decodes these
+            # unconditionally and null would throw in BuildMeshes.
+            "edgeSrc": _b64(g["edge_src"] if edges_on else empty32),
+            "edgeDst": _b64(g["edge_dst"] if edges_on else empty32),
+            "edgeWeight": _b64(g["edge_weight"] if edges_on else empty32),
             "role": _b64(role),                      # uint8[n], see ROLE_CODES
             "side": _b64(side),                      # uint8[n], see SIDE_CODES
         })
@@ -238,6 +266,13 @@ class FlyBrainViz(object):
                     slot, self._slot = self._slot, None
                 if slot is not None:
                     activity, step, spikes = slot
+                    floor = self.cfg["act_floor"]
+                    if floor > 0:
+                        # Rescale into [floor, 255] rather than clamping, so a
+                        # firing neuron still separates from a resting one.
+                        activity = (
+                            floor + activity.astype(np.uint16)
+                            * (255 - floor) // 255).astype(np.uint8)
                     pub.publish(ACTIVITY_TOPIC, json.dumps({
                         "kind": "activity",
                         "stamp": t0,

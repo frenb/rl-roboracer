@@ -1397,11 +1397,31 @@ All optional; the defaults are what the numbers above were measured with.
 | `FLY_VIZ_ENABLED` | `1` | Overlay publishing off with `0` |
 | `FLY_VIZ_HZ` | `20` | Activity publish rate |
 | `FLY_VIZ_GEOMETRY_S` | `10` | Geometry resend period |
-| `FLY_VIZ_DISPLAY_SIZE` / `_POINT_SIZE` / `_OFFSET` / `_SPIN` | `12` / `0.10` / `0,40,0` / `8` | Where and how big the brain is drawn |
+| `FLY_VIZ_DISPLAY_SIZE` / `_POINT_SIZE` / `_OFFSET` / `_SPIN` | `50` / `0.16` / `-8,40,130` / `0` | Where and how big the brain is drawn |
+| `FLY_VIZ_AXES` | `x,z,y` | Which connectome axis goes on which Unity axis |
+| `FLY_VIZ_DEPTH_SCALE` | `0.12` | How much of the camera-facing axis to keep |
+| `FLY_VIZ_EDGES` / `_EDGE_ALPHA` | `0` / `0.40` | Draw connections between neurons |
+| `FLY_VIZ_ACT_FLOOR` | `140` | Floor under the activity byte, i.e. resting brightness |
 
 The placement knobs are published inside the geometry payload rather than left
 on the Unity inspector, because **a build has no inspector** — without that,
 every "the brain is off screen" would cost an Editor rebuild.
+
+Two of these defaults are less obvious than they look:
+
+`_OFFSET` parks the brain in the empty area left of the track, under the ROS
+HUD, which also puts it over the camera's flat background instead of grass.
+The axes are the overlay parent's *local* ones and that parent is rotated, so
+they do not read as screen directions: measured against this camera, `+z`
+moves the brain left at 3.1 px/m and `+x` moves it up at 2.5 px/m (on a
+1250 px-wide window). Calibrate with two known offsets rather than guessing.
+
+`_ACT_FLOOR` exists because Unity renders a resting neuron at a hardcoded 0.18
+of its role colour and 0.20 alpha, and the connectome is quiet most of the
+time, so nearly the whole cloud sits at that floor and disappears into the
+background. The byte is rescaled into `[floor, 255]` rather than clamped, so
+a firing neuron still separates from a resting one. The honest fix is a Unity
+field, but this keeps the knob on the side that doesn't need an Editor build.
 
 #### Gotchas
 
