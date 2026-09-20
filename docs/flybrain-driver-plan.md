@@ -373,6 +373,49 @@ plan is worth building. Near zero means go back to step 4 and retune the
 encoder gains — fly.ai found looming often fails to propagate depending on
 tonic and gain, so that's the knob, not the readout.
 
+> **DONE — measured 2026-09-19.** `rl_agent/fly_brain/step5_readout.py`,
+> 100 episodes (100,000 rows), split by episode with 20 held out, ridge with λ
+> chosen on a validation slice of the training episodes only. The 18-minute
+> replay is cached at `/tmp/fly_step5_trace_100ep.npz`, so refits are instant.
+>
+> | Features | R² accel | R² steer |
+> |---|---|---|
+> | descending trace, 1,314 features | 0.176 | 0.620 |
+> | the 4 encoder cues — the brain's whole input | 0.045 | **0.687** |
+> | chase asymmetry alone, 1 feature | 0.000 | 0.660 |
+> | raw 31-D observation (upper reference) | **0.208** | **0.747** |
+>
+> **Steering passes the stated bar and the brain still is not earning its
+> keep.** R² 0.620 is far above zero, but the four scalars fed *into* the brain
+> score 0.687 and a single hand-computed scalar scores 0.660. As a steering
+> channel the connectome is lossy: 0.687 in, 0.620 out. The plan's criterion
+> was necessary, not sufficient — without the input control the 0.620 reads as
+> a success.
+>
+> **Throttle is the opposite, and it vindicates step 6.** The trace scores
+> 0.176 against 0.045 for its own instantaneous input, recovering most of the
+> raw observation's 0.208. The brain is supplying something its input does not
+> have: it is a recurrent system whose state integrates history, and throttle
+> depends on where the car is in a manoeuvre rather than on the current frame.
+> Step 6 already concluded that throttle has no hand-decodable source and must
+> come from the learned readout — that is now measured, not assumed.
+>
+> **The bottleneck is the encoder, not the connectome.** Losses compound in a
+> clear order: 0.747 raw → 0.687 after the encoder compresses 29 rays into 4
+> scalars (−0.060) → 0.620 after the brain (−0.067). No readout can recover
+> what the encoder discarded before the brain ever ran, so retuning gains (the
+> knob this step suggests) cannot close the steering gap. Giving the brain a
+> *retinotopic* input — mapping rays across many LC populations by angle rather
+> than aggregating to four numbers — is the change with room to pay off, since
+> it is the only one that raises the 0.687 ceiling.
+>
+> **What this does and does not license.** Part 3 is worth building: there is a
+> usable readout, throttle genuinely benefits, and step 6's eval row will be
+> measured against SAC on identical geometry. But do not expect the fly policy
+> to beat a raw-observation policy at steering, and treat any such result as a
+> bug. Note also that ridge is linear; SAC in Part 5 is not, so the nonlinear
+> readout has headroom this number does not measure.
+
 ---
 
 ## Part 3 — Drive the car, with no RL yet
