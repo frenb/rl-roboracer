@@ -82,11 +82,10 @@
       "url": "https://packages.unity.com"
     },
     "com.unity.robotics.ros-tcp-connector": {
-      "version": "https://github.com/IdeaMogul/ROS-TCP-Connector.git",
+      "version": "file:com.unity.robotics.ros-tcp-connector",
       "depth": 0,
-      "source": "git",
-      "dependencies": {},
-      "hash": "b3bdb760a1afe29c554279258a28aca9be625722"
+      "source": "embedded",
+      "dependencies": {}
     },
     "com.unity.sysroot": {
       "version": "1.0.0",
