@@ -32,6 +32,11 @@ TRACE_TAU = float(os.environ.get("FLY_TRACE_TAU", "0.1"))
 # Snapshot intensity is a decaying trace too, so the overlay shows a fading
 # flash rather than a one-frame flicker that is invisible at 20 Hz.
 SNAPSHOT_TAU = float(os.environ.get("FLY_SNAPSHOT_TAU", "0.15"))
+# Accumulated trace that counts as full brightness, in spikes. A fresh spike
+# contributes 1.0, so 1.8 means one spike reads a little over half-bright and
+# two in quick succession saturate. See _snapshot_bytes for why this is not
+# the 1/(1-decay) it looks like it should be.
+SNAPSHOT_FULL = float(os.environ.get("FLY_SNAPSHOT_FULL", "1.8"))
 
 
 class FlyBrainService(pb_grpc.FlyBrainServicer):
@@ -189,10 +194,22 @@ class FlyBrainService(pb_grpc.FlyBrainServicer):
 
     # ----------------------------------------------------------------- utils
     def _snapshot_bytes(self):
-        # Normalize against a full trace (1/(1-decay)) so the scale is stable
-        # across frames rather than auto-ranging on the current maximum.
-        ceiling = 1.0 / (1.0 - self._snap_decay)
-        v = np.clip(self._snap / ceiling, 0.0, 1.0) * 255.0
+        # Fixed scale, not auto-ranged on the current maximum, so brightness
+        # means the same thing from frame to frame.
+        #
+        # The scale used to be 1/(1-decay), i.e. full brightness required
+        # firing on EVERY substep. Almost nothing does that except a handful of
+        # tonically-driven cells, so they pinned at 255 while real bursts --
+        # which accumulate one or two spikes' worth -- landed around a byte of
+        # 40 and then all but vanished under the overlay's 1.6 gamma. The
+        # measured result was a static bright core supplying 42% of the light
+        # with the actual spiking invisible underneath it.
+        #
+        # Calibrating to a couple of spikes instead puts a single spike near
+        # half brightness and anything brisker at full, which is what makes
+        # bursts read as bursts. Tonic cells still saturate; they just no
+        # longer own the whole dynamic range.
+        v = np.clip(self._snap / SNAPSHOT_FULL, 0.0, 1.0) * 255.0
         return v.astype(np.uint8).tobytes()
 
 
