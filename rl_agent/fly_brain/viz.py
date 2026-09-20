@@ -63,7 +63,25 @@ def get_config():
         # table gives it no way to ask for a resend. A slow heartbeat is the
         # cheap fix: ~12 KB/s averaged, against 54 KB/s for the activity.
         "geometry_period": _float("FLY_VIZ_GEOMETRY_S", 10.0),
+        # ---- Placement, published in the geometry payload so the overlay can
+        # be moved and resized WITHOUT a Unity rebuild (set the env var and
+        # restart the trainer). A build has no inspector, so without this every
+        # "it's off screen" costs an Editor round trip. Unity falls back to its
+        # own defaults when displaySize is absent/0.
+        "display_size": _float("FLY_VIZ_DISPLAY_SIZE", 12.0),
+        "point_size": _float("FLY_VIZ_POINT_SIZE", 0.10),
+        "offset": os.environ.get("FLY_VIZ_OFFSET", "0,40,0"),
+        "spin": _float("FLY_VIZ_SPIN", 8.0),
+        "edge_alpha": _float("FLY_VIZ_EDGE_ALPHA", 0.22),
     }
+
+
+def _offset(text):
+    try:
+        x, y, z = (float(v) for v in str(text).split(","))
+        return x, y, z
+    except (TypeError, ValueError):
+        return 0.0, 40.0, 0.0
 
 
 class FlyBrainViz(object):
@@ -122,11 +140,17 @@ class FlyBrainViz(object):
         role = np.array([ROLE_CODES.get(l.get("role"), 0) for l in labels], np.uint8)
         side = np.array([SIDE_CODES.get(l.get("side"), 0) for l in labels], np.uint8)
 
+        ox, oy, oz = _offset(self.cfg["offset"])
         return json.dumps({
             "kind": "geometry",
             "stamp": time.time(),
             "n": int(g["n_display"]),
             "nEdges": int(g["n_edges"]),
+            "displaySize": self.cfg["display_size"],
+            "pointSize": self.cfg["point_size"],
+            "offsetX": ox, "offsetY": oy, "offsetZ": oz,
+            "spin": self.cfg["spin"],
+            "edgeAlpha": self.cfg["edge_alpha"],
             "pos": _b64(pos.reshape(-1)),            # float32[n*3], xyz interleaved
             "edgeSrc": _b64(g["edge_src"]),          # int32[nEdges], index into pos
             "edgeDst": _b64(g["edge_dst"]),          # int32[nEdges]
