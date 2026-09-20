@@ -1322,21 +1322,64 @@ activity arrives, so a SAC job doesn't get a frozen brain over the track.
 
 | Topic | Rate | Payload |
 |---|---|---|
-| `fly_brain_geometry` | every 10 s | 184 KB: 3,225 soma positions + 8,000 edges |
-| `fly_brain_activity` | 20 Hz | 4.3 KB: one intensity byte per neuron (~86 KB/s) |
+| `fly_brain_geometry` | every 10 s | 359 KB: 19,225 soma positions (edges off by default) |
+| `fly_brain_activity` | 10 Hz | 25 KB: one intensity byte per neuron (~256 KB/s) |
 
 The display subset is not the whole brain — 166,700 neurons can't be drawn at
-frame rate and would be unreadable. It's 720 sensory, 1,292 descending, 16 named
-command neurons, and 1,200 relay interneurons picked by (weight received from
-sensory) × (weight sent to descending), so the two-hop path from the looming
-detectors to the motor output is actually visible rather than a gap.
+frame rate — but it is not just the driving circuit either. It is two
+populations:
+
+- **The circuit**, 3,225 neurons: 720 sensory, 1,292 descending, 16 named
+  command neurons, and 1,200 relay interneurons picked by (weight received from
+  sensory) × (weight sent to descending), so the two-hop path from the looming
+  detectors to the motor output is visible rather than a gap.
+- **The silhouette**, a seeded uniform sample of 16,000 more
+  (`FLY_CONTEXT_N`). Every neuron in the circuit is a *brain* neuron — the
+  somas are all in the head — so on its own it draws a blob with no body. The
+  sample is uniform rather than spatially even on purpose: neuron density
+  varies enormously between neuropils, and preserving that is what makes the
+  optic lobes read as dense and the ventral nerve cord as sparse.
 
 Every numeric field is base64 of a little-endian buffer, geometry included:
-**184 KB against 348 KB** for the same arrays as JSON numbers, and Unity's
-`JsonUtility` would otherwise allocate and parse ~33,000 boxed floats on each
+**359 KB against ~680 KB** for the same arrays as JSON numbers, and Unity's
+`JsonUtility` would otherwise allocate and parse ~58,000 boxed floats on each
 resend instead of doing one `Convert.FromBase64String` plus a `Buffer.BlockCopy`.
 Positions arrive normalized to a unit box, so Unity applies one scale factor
-instead of raw MaleCNS soma coordinates (which run to ~84,000 on the x axis).
+instead of raw MaleCNS soma coordinates (which run to ~134,000 on the z axis).
+
+The two populations are also what the palette is built around. The circuit
+keeps its per-role colours (cyan sensory, gold command, orange-red descending)
+and dims toward black when quiet. The silhouette instead crosses a *two-colour*
+ramp, cold slate at rest to amber when firing, so active neuropils burn out of
+an otherwise dark cloud. That only reads against a dark background, and the
+sim's camera clears to a flat mid-grey, so the overlay draws its own backdrop
+quad rather than restyling the scene and dragging the track's look with it.
+
+A payload that size needs the patched ROS-TCP connector; see below.
+
+#### The connector's 64 KB message ceiling
+
+`ROSConnection.ReadMessageContents` used to read with
+`while (networkStream.DataAvailable && bytesRemaining > 0)`. `DataAvailable`
+only reports what is buffered *right now*, so the loop exits the moment the
+sender pauses mid-message and hands back a half-filled buffer. Under ~64 KB the
+whole message is normally buffered before the first `Read` and nothing looks
+wrong, which is why this survived for years; the geometry payload hit it on
+every single send and arrived as truncated JSON, with the only symptom being
+
+```
+[FlyBrainViz] geometry parse failed: JSON parse error: Missing a closing quotation mark in string.
+```
+
+in `unity/Builds/instances/0/Player.log` — while activity frames, being small,
+kept flowing and kept the (stale) overlay animating.
+
+The loop now runs until the declared length is satisfied. The package arrived
+as a git dependency and therefore lived in `Library/PackageCache`, which Unity
+regenerates, so it is now **embedded** at
+`unity/Packages/com.unity.robotics.ros-tcp-connector/` with the git entry
+dropped from `manifest.json` and `packages-lock.json`. Anything publishing to
+Unity over ~64 KB depends on this patch.
 
 Geometry is resent on a slow heartbeat rather than once, because the routing
 table below gives Unity no way to ask for a resend — a client that connects or
@@ -1395,14 +1438,24 @@ All optional; the defaults are what the numbers above were measured with.
 | `FLY_BRAIN_TARGET` | `fly-brain:50061` | Where the trainer finds the brain |
 | `FLY_READOUT` | `/saved_models/robotaxi/FlyPyPolicy/0/readout.npz` | Ridge readout |
 | `FLY_VIZ_ENABLED` | `1` | Overlay publishing off with `0` |
-| `FLY_VIZ_HZ` | `20` | Activity publish rate |
+| `FLY_VIZ_HZ` | `10` | Activity publish rate |
 | `FLY_VIZ_GEOMETRY_S` | `10` | Geometry resend period |
-| `FLY_VIZ_DISPLAY_SIZE` / `_POINT_SIZE` / `_OFFSET` / `_SPIN` | `44` / `0.16` / `2,40,130` / `0` | Where and how big the brain is drawn |
-| `FLY_VIZ_AXES` | `x,z,y` | Which connectome axis goes on which Unity axis |
-| `FLY_VIZ_ROTATE` | `90` | Turns the picture in the screen plane, signed degrees |
+| `FLY_VIZ_DISPLAY_SIZE` / `_POINT_SIZE` / `_OFFSET` / `_SPIN` | `60` / `0.09` / `2,40,130` / `0` | Where and how big the brain is drawn |
+| `FLY_VIZ_AXES` | `-z,y,x` | Which connectome axis goes on which Unity axis |
+| `FLY_VIZ_ROTATE` | `0` | Turns the picture in the screen plane, signed degrees |
 | `FLY_VIZ_DEPTH_SCALE` | `0.12` | How much of the camera-facing axis to keep |
 | `FLY_VIZ_EDGES` / `_EDGE_ALPHA` | `0` / `0.40` | Draw connections between neurons |
-| `FLY_VIZ_ACT_FLOOR` | `140` | Floor under the activity byte, i.e. resting brightness |
+| `FLY_VIZ_ACT_FLOOR` | `0` | Floor under the activity byte, i.e. resting brightness |
+| `FLY_CONTEXT_N` | `16000` | Silhouette neurons (on **fly-brain**, needs a restart) |
+
+`FLY_VIZ_AXES` is the one worth explaining. These are the overlay parent's
+*local* axes and that parent is rotated, so they are not the screen axes you
+would guess: **Unity x is screen-vertical** (up at +x), **Unity z is
+screen-horizontal** (left at +z), and Unity y is the one the camera looks down
+and therefore the one thrown away. Against the connectome's own axes —
+x is bilateral width (span 91k), y front-to-back (64k, the thinnest), z the
+body axis (124k, brain low and nerve cord high) — `-z,y,x` stands the animal
+upright with the brain on top, the way fly.ai's render has it.
 
 The placement knobs are published inside the geometry payload rather than left
 on the Unity inspector, because **a build has no inspector** — without that,

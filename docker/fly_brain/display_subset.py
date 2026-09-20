@@ -8,7 +8,12 @@ and the strongest edges among them.
 Step 7 of docs/flybrain-driver-plan.md refines what is shown; the shape of the
 output is fixed by the Geometry RPC and should not change.
 """
+import os
+
 import numpy as np
+
+# How many neurons to draw purely for the silhouette. See _context_sample.
+CONTEXT_N = int(os.environ.get("FLY_CONTEXT_N", "16000"))
 
 # Driven by the encoder (step 4).
 SENSORY_TYPES = ["LC4", "LPLC2", "LPLC1", "LC10a"]
@@ -74,6 +79,33 @@ def _relay_interneurons(brain, sensory, readout, exclude, k=MAX_INTERNEURONS):
     return candidates[keep]
 
 
+def _context_sample(brain, exclude, k=CONTEXT_N):
+    """Neurons drawn only so the nervous system has a recognizable shape.
+
+    Every neuron in the driving circuit is a brain neuron: the feature
+    detectors, the relays and the descending somas all sit in the head. Drawn
+    alone they are a blob with no body, which is why the overlay read as an
+    amorphous cloud. fly.ai's own render shows the whole central nervous
+    system, brain and ventral nerve cord, with the active cells picked out
+    against it, and the nerve cord is most of that picture.
+
+    A uniform draw, deliberately: neuron density varies enormously between
+    neuropils, and preserving that is what makes the optic lobes read as dense
+    and the cord as sparse, the way they do in the reference. Seeded, so the
+    display subset is identical across server restarts and any recorded run
+    stays comparable.
+
+    These carry real activity like every other drawn neuron; they are just not
+    part of the readout path.
+    """
+    pos = np.asarray(brain.positions)
+    ok = np.flatnonzero(np.isfinite(pos).all(axis=1))
+    ok = ok[~np.isin(ok, exclude)]
+    if len(ok) <= k:
+        return ok
+    return np.sort(np.random.default_rng(0).choice(ok, size=k, replace=False))
+
+
 def build(brain, max_edges=MAX_EDGES):
     """Return (idx, positions, edge_src, edge_dst, edge_weight, labels).
 
@@ -89,7 +121,9 @@ def build(brain, max_edges=MAX_EDGES):
 
     core = np.unique(np.concatenate([sensory, command, readout]))
     relay = _relay_interneurons(brain, sensory, readout, exclude=core)
-    idx = np.unique(np.concatenate([core, relay]))
+    circuit = np.unique(np.concatenate([core, relay]))
+    context = _context_sample(brain, exclude=circuit)
+    idx = np.unique(np.concatenate([circuit, context]))
 
     # A few neurons carry no soma position in brain.npz (6 descending ones in
     # the current build). They cannot be drawn, and leaving them in makes every
@@ -99,7 +133,10 @@ def build(brain, max_edges=MAX_EDGES):
     all_positions = np.asarray(brain.positions)
     idx = idx[np.isfinite(all_positions[idx]).all(axis=1)]
 
-    role = np.full(len(idx), "interneuron", dtype=object)
+    # Context first, so anything that is also part of the circuit is relabelled
+    # by the lines below and keeps its brighter role.
+    role = np.full(len(idx), "context", dtype=object)
+    role[np.isin(idx, relay)] = "interneuron"
     role[np.isin(idx, readout)] = "descending"
     role[np.isin(idx, sensory)] = "sensory"
     role[np.isin(idx, command)] = "command"

@@ -37,7 +37,12 @@ ACTIVITY_TOPIC = "fly_brain_activity"
 
 # Roles and sides travel as small ints, not strings: one byte per neuron
 # instead of a repeated type name, and Unity switches on them directly.
-ROLE_CODES = {"interneuron": 0, "sensory": 1, "command": 2, "descending": 3}
+# 4 is the silhouette population, which has no colour of its own in Unity:
+# RoleColor's switch falls through to the interneuron grey, which is what we
+# want it drawn as anyway. Keeping it a distinct code means it can be given
+# its own colour later without another pass over display_subset.
+ROLE_CODES = {"interneuron": 0, "sensory": 1, "command": 2, "descending": 3,
+              "context": 4}
 SIDE_CODES = {"L": 1, "R": 2}
 
 
@@ -58,7 +63,12 @@ def get_config():
         # EVAL and the fly courses are single-env on actor 0, so unlike
         # rollout_viz there is no per-actor fan-out to do here.
         "addr": os.environ.get("FLY_VIZ_ADDR", "ros-server-0:50051"),
-        "hz": max(1.0, _float("FLY_VIZ_HZ", 20.0)),
+        # 10, down from 20: one activity byte per drawn neuron, and the drawn
+        # set grew from 3225 to 19225 when the silhouette population was added,
+        # which would have taken this leg from 86 to 513 KB/s. Spiking is a
+        # decaying trace on the server (FLY_SNAPSHOT_TAU, 0.15 s), so 10 Hz
+        # still catches every flash on its way down.
+        "hz": max(1.0, _float("FLY_VIZ_HZ", 10.0)),
         # Geometry is static, but Unity may connect (or reconnect after a
         # scene reload) long after the first send, and the static routing
         # table gives it no way to ask for a resend. A slow heartbeat is the
@@ -69,11 +79,15 @@ def get_config():
         # restart the trainer). A build has no inspector, so without this every
         # "it's off screen" costs an Editor round trip. Unity falls back to its
         # own defaults when displaySize is absent/0.
-        # Defaults tuned against the sim's top-down camera. 44 m, not more:
-        # rotated 90 the cloud is wider than tall, and the gap left of the
-        # track is only ~200 px, so 50 clipped at the window edge.
-        "display_size": _float("FLY_VIZ_DISPLAY_SIZE", 44.0),
-        "point_size": _float("FLY_VIZ_POINT_SIZE", 0.16),
+        # Defaults tuned against the sim's top-down camera. Upright the
+        # nervous system is ~1.4x taller than wide, so the binding constraint
+        # is the clear strip left of the track (~340 px at 1916 wide) and the
+        # height follows from it; vertically there is room to spare.
+        "display_size": _float("FLY_VIZ_DISPLAY_SIZE", 60.0),
+        # Small: 19225 points in the space 3225 used to have, and the reference
+        # render's grain is what makes neuropil boundaries visible at all.
+        # Large points merge into the flat mass this replaced.
+        "point_size": _float("FLY_VIZ_POINT_SIZE", 0.09),
         # Parks the overlay in the empty area left of the track, under the ROS
         # HUD, which also puts it over the camera's flat background instead of
         # grass. Note the axes are the overlay parent's LOCAL ones and that
@@ -89,31 +103,38 @@ def get_config():
         "edges": os.environ.get("FLY_VIZ_EDGES", "0").lower()
         in ("1", "true", "yes", "on"),
         # Which connectome axis goes on which Unity axis, as signed names for
-        # Unity x,y,z. The camera looks down Unity y, so whatever lands there
-        # is the axis we lose. Measured on the display subset (n=3225):
-        #   connectome x  left-right   (L +14116 vs R -14182, 1.77 sd apart)
-        #   connectome y  sensory -5618 -> descending +7683, the flow axis
-        #   connectome z  thinnest by sd, and the long descending projections
-        # So x stays horizontal, the flow axis becomes screen-vertical, and z
-        # is spent on depth. The sign on y is +, not -, because the sim
-        # camera's up maps to -Z: unnegated is what puts sensory at the top of
-        # the screen with the flow running down to the descending neurons.
-        "axes": os.environ.get("FLY_VIZ_AXES", "x,z,y"),
+        # Unity x,y,z. Note these are the overlay parent's LOCAL axes and that
+        # parent is rotated, so they are not the screen axes you would guess.
+        # Measured against this camera (and matching the offset calibration
+        # below): Unity x is screen-VERTICAL, up at +x; Unity z is screen-
+        # HORIZONTAL, left at +z; Unity y is the one the camera looks down and
+        # therefore the one we throw away.
+        # The connectome's own axes, measured over the display subset:
+        #   connectome x  span  91k, the bilateral width
+        #   connectome y  span  64k, the thinnest: front-to-back
+        #   connectome z  span 124k, the body axis. Brain sits low, nerve cord
+        #                 runs high, neck connective a visible gap between.
+        # So the body axis takes screen-vertical, negated so the brain is on
+        # top with the cord hanging below the way fly.ai's render has it; the
+        # bilateral axis takes screen-horizontal; and the thin front-to-back
+        # axis is the one we can afford to lose to depth.
+        "axes": os.environ.get("FLY_VIZ_AXES", "-z,y,x"),
         # Turn the picture within the screen plane, in signed degrees. Applied
         # after `axes`, so it does not disturb which anatomical axis is which.
-        "rotate": _float("FLY_VIZ_ROTATE", 90.0),
+        # 0 now that the body axis is upright on its own; the 90 this used to
+        # default to was standing up a subset that had no body in it.
+        "rotate": _float("FLY_VIZ_ROTATE", 0.0),
         # How much of the camera-facing axis to keep. 1.0 is anatomically
         # honest but perspective-smears the overlay; see _build_geometry.
         "depth_scale": _float("FLY_VIZ_DEPTH_SCALE", 0.12),
-        # Floor under the published activity byte, 0-255. Unity maps that byte
-        # onto a rest->full ramp whose resting end is a hardcoded 0.18 of the
-        # role colour at 0.20 alpha, which is near-invisible against the sim's
-        # background; the connectome is quiet most of the time, so most of the
-        # cloud sits at that floor. Lifting it here keeps the knob on the side
-        # that does not need an Editor rebuild. Activity still varies, it just
-        # starts somewhere you can see: 140 lands a resting neuron at ~40%
-        # brightness after Unity's 1.6 gamma.
-        "act_floor": int(_float("FLY_VIZ_ACT_FLOOR", 140.0)),
+        # Floor under the published activity byte, 0-255, rescaled rather than
+        # clamped so firing still separates from resting. This was 140 to drag
+        # a quiet connectome up out of the sim's grey background. It is 0 now
+        # that the overlay draws its own dark backdrop and a resting neuron is
+        # legible on its own: the whole point of the new palette is that the
+        # cloud sits cold and only active neuropils go amber, and a floor
+        # lights all of it at once.
+        "act_floor": int(_float("FLY_VIZ_ACT_FLOOR", 0.0)),
     }
 
 
