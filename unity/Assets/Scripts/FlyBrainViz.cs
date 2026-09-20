@@ -80,6 +80,15 @@ public class FlyBrainViz : MonoBehaviour
         public string edgeWeight;  // float32[nEdges], signed
         public string role;        // uint8[n]: 0 inter, 1 sensory, 2 command, 3 descending
         public string side;        // uint8[n]: 0 other, 1 L, 2 R
+        // Placement knobs published by Python so the overlay can be moved and
+        // resized without an Editor rebuild (a build has no inspector). All
+        // optional: displaySize>0 is the "present" sentinel, since JsonUtility
+        // zero-fills absent fields.
+        public float displaySize;
+        public float pointSize;
+        public float offsetX, offsetY, offsetZ;
+        public float spin;
+        public float edgeAlpha;
     }
 
     [Serializable]
@@ -229,7 +238,6 @@ public class FlyBrainViz : MonoBehaviour
     {
         if (_positions == null || _pointMesh == null || !IsVisible()) return;
 
-        transform.hasChanged = false;
         if (spinDegreesPerSecond != 0f) _spin += spinDegreesPerSecond * Time.deltaTime;
 
         var container = _pointObject.transform.parent;
@@ -260,6 +268,17 @@ public class FlyBrainViz : MonoBehaviour
         _n = Mathf.Min(g.n, flat.Length / 3);
         _nEdges = g.nEdges;
         _geometryStamp = g.stamp;
+
+        // Python's placement wins when it sent any, so the overlay can be
+        // repositioned from the trainer's environment instead of a rebuild.
+        if (g.displaySize > 0f)
+        {
+            displaySize = g.displaySize;
+            pointSize = g.pointSize;
+            worldOffset = new Vector3(g.offsetX, g.offsetY, g.offsetZ);
+            spinDegreesPerSecond = g.spin;
+            edgeAlpha = g.edgeAlpha;
+        }
 
         _positions = new Vector3[_n];
         for (int i = 0; i < _n; i++)
