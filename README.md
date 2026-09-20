@@ -8,6 +8,7 @@ RL training stack for the robotaxi Unity gym.
 rl-roboracer/
 ├── docker-compose.yml         # the whole stack
 ├── docker/
+│   ├── fly_brain/             # frozen fly connectome service (Python 3.10)
 │   ├── ros_server/            # ROS noetic + gRPC bridge build context
 │   └── sim_controller/        # CUDA + tf-agents training image build context
 ├── rl_agent/                  # tf-agents Python code that drives training
@@ -313,6 +314,7 @@ docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller `
 | `mongo`          | 27017             | Job / model / leaderboard storage                         |
 | `mongo-express`  | 8081              | Mongo admin UI                                            |
 | `sim-controller` | 6006              | Tensorboard for the live training run                     |
+| `fly-brain`      | 50061             | Frozen fly connectome over gRPC (see Developer notes)     |
 | `dashboard`      | 80                | Golden Layout UI (iframes Tensorboard, logs, jobs, models) |
 | `dashboard`      | 8080              | WebSocket tail of `rl_agent/robotaxi.out`                 |
 
@@ -1226,3 +1228,190 @@ so ABI-sensitive deps rebuild). A few architectural points are worth knowing:
 - **Mad Scientist tab has no live budget gauge** — cost is shown per-proposal
   only; `/madscientist/decide` sets `status=approved` but does **not** trigger
   the orchestrator directly (the Python worker picks it up on its next poll).
+
+### Fly brain (driving the car from a frozen connectome)
+
+An experiment in driving the car with fly.ai's *Drosophila* connectome — 166,700
+neurons and 25,582,938 connections of **fixed, unlearned wiring**. Nothing about
+the brain is trained; the only fitted part is a linear readout of its output.
+The full plan, including the measurements behind each design choice, is
+`docs/flybrain-driver-plan.md`.
+
+```
+31-D observation ──► RayEncoder ──► Step RPC ──► FlyBrain (166,700 neurons, CUDA)
+                                                        │
+   (accel, steer) ◄── ridge readout ◄── 1,314-wide descending-neuron trace
+```
+
+#### Why it's a separate container
+
+`flybrain` needs Python 3.10; sim-controller is pinned to Python 3.8 by
+TF 2.7 / tf-agents 0.11. The two cannot share an interpreter, so the brain runs
+as its own `fly-brain` service and the trainer reaches it over gRPC on `:50061`.
+`rl_agent/fly_brain/client.py` is the only thing that knows this.
+
+The contract is `protos/fly_brain/proto/fly_brain.proto`. Numeric payloads are
+**raw little-endian buffers in `bytes` fields, not JSON** — a step returns 1,314
+floats at 10 Hz and JSON-encoding that every step would be wasteful.
+
+| RPC | Purpose |
+|---|---|
+| `Info`     | Static facts: neuron/connection counts, device, `dt`, trace width |
+| `Reset`    | Clear voltages and reseed. **Required at every episode boundary** |
+| `Step`     | Advance `substeps` times under an injection; return the trace |
+| `Snapshot` | Current overlay activity without advancing the brain |
+| `Geometry` | Static overlay positions + edges. Fetch once |
+| `Cells`    | Resolve cell types or a named group to neuron indices |
+| `Sectors`  | Split a population into k spatial sectors (retinotopic encoder) |
+
+Two facts drive most of the integration. The gym publishes scene data every
+0.1 s and the brain's `dt` is 0.020 s, so **one control step is five brain
+steps** (`SUBSTEPS = 5`, about 13.4 ms). And the brain is **stateful** — voltages
+carry across steps — so a new episode must not inherit the last one's state.
+
+#### Encoder and readout
+
+`rl_agent/fly_brain/encoder.py` turns the 31-D observation into injections
+aimed at the looming detectors (LC4, LPLC2, LPLC1, LC10a). Two quirks of the
+sim are handled there: Unity leaves a ray's distance **untouched on a miss**, so
+an exact 0 is read as maximum openness rather than a wall in your face, and
+closing rate is clamped by car speed to reject impossible jumps.
+
+The readout is a ridge regression fit on the expert demo corpus (step 5), living
+at `/saved_models/robotaxi/FlyPyPolicy/0/readout.npz`. Held-out R² is **0.62 for
+steering** and **0.18 for acceleration**. Note what that second number means in
+practice: predicted accel falls below the course's own 0.05 action floor on
+about half of all frames, so the car is effectively pinned near minimum throttle
+and drives at 1.9–2.4 m/s against SAC's 5.4.
+
+A measured negative result worth not repeating: a *retinotopic* encoder driving
+7 sectors per eye raised the information available to the brain (R² ceiling
+0.687 → 0.873) and made its output **worse** (0.620 → 0.581). Driving sectors
+one at a time, within-eye pairs have cosine similarity 0.476 against 0.460
+across eyes — the brain reads left-versus-right well and sector-versus-sector
+essentially not at all. The flat 4-scalar encoder is the default.
+
+#### Running it
+
+`FlyPyPolicy` (`rl_agent/fly_brain/policy.py`) is an ordinary tf-agents
+`PyPolicy`, so it goes through the **normal EVAL dispatch** next to
+`RandomPyPolicy` and lands a leaderboard row directly comparable to SAC. Queue
+an EVAL job with `model_type: FlyPyPolicy` (it's in the dashboard's job form),
+then run the trainer with `--num-envs 1`.
+
+The policy resets the brain and encoder on every `StepType.FIRST` and seeds the
+reset with the episode index — a fixed per-episode seed, without which the
+spiking noise makes runs irreproducible and incomparable against greedy SAC's
+deterministic `tanh(μ)`. On first use it registers its own `models` record,
+since there is no TRAIN job to have created one.
+
+| Policy | AverageReturn | Goals/episode | Speed |
+|---|---|---|---|
+| `RandomPyPolicy` | ~1.0 | — | — |
+| `FlyPyPolicy` | **6.87** | 8–13 | 1.9–2.4 |
+| SAC `7573_step_87314` | 75.7 | 78–100 | 5.2–5.5 |
+
+So the frozen connectome is worth roughly **7x a random policy and a tenth of
+SAC**. It holds a lane for a few hundred steps rather than crashing at once.
+
+#### The overlay
+
+`rl_agent/fly_brain/viz.py` publishes two topics; `FlyBrainViz.cs` renders them
+(auto-attached by `SimController`, **B** to toggle). It stays hidden until
+activity arrives, so a SAC job doesn't get a frozen brain over the track.
+
+| Topic | Rate | Payload |
+|---|---|---|
+| `fly_brain_geometry` | every 10 s | 184 KB: 3,225 soma positions + 8,000 edges |
+| `fly_brain_activity` | 20 Hz | 4.3 KB: one intensity byte per neuron (~86 KB/s) |
+
+The display subset is not the whole brain — 166,700 neurons can't be drawn at
+frame rate and would be unreadable. It's 720 sensory, 1,292 descending, 16 named
+command neurons, and 1,200 relay interneurons picked by (weight received from
+sensory) × (weight sent to descending), so the two-hop path from the looming
+detectors to the motor output is actually visible rather than a gap.
+
+Every numeric field is base64 of a little-endian buffer, geometry included:
+**184 KB against 348 KB** for the same arrays as JSON numbers, and Unity's
+`JsonUtility` would otherwise allocate and parse ~33,000 boxed floats on each
+resend instead of doing one `Convert.FromBase64String` plus a `Buffer.BlockCopy`.
+Positions arrive normalized to a unit box, so Unity applies one scale factor
+instead of raw MaleCNS soma coordinates (which run to ~84,000 on the x axis).
+
+Geometry is resent on a slow heartbeat rather than once, because the routing
+table below gives Unity no way to ask for a resend — a client that connects or
+reloads its scene after the first send would otherwise draw nothing forever.
+
+#### The ROS routing table (the thing that silently breaks new topics)
+
+`docker/ros_server/ROS/src/niryo_moveit/scripts/unity_node.py` starts the
+ROS-TCP endpoint with a dict deciding **which topics cross the ROS↔Unity bridge
+and in which direction**:
+
+- `RosPublisher(topic, Msg)` — **Unity → ROS**. Unity sends it; the endpoint
+  publishes it into ROS (`car_scene_data`, `sim_status`, `camera/front`).
+- `RosSubscriber(topic, Msg, tcp_server)` — **ROS → Unity**. The endpoint
+  subscribes to the ROS topic itself and forwards each message down the socket
+  to the Unity client (`sim_command`, `policy_rollouts`, both fly-brain topics).
+
+```python
+'fly_brain_geometry': RosSubscriber('fly_brain_geometry', String, tcp_server),
+'fly_brain_activity': RosSubscriber('fly_brain_activity', String, tcp_server),
+```
+
+**This table is static.** The ROS-TCP connector embedded in Unity never sends
+dynamic `RegisterSubscriber` syscommands, so `ros.Subscribe<StringMsg>(...)` in
+C# only registers a callback on the Unity side. If the topic isn't listed here,
+nothing on the ROS side is listening or forwarding: the publish succeeds, no
+error appears anywhere, and the overlay just stays dark. This is the single most
+likely reason a newly added topic does nothing.
+
+It also explains a confusing asymmetry while debugging. `check_rollouts.py`
+(which takes a topic argument) subscribes through ros-server's **gRPC** API, as
+does the publisher — that leg never touches the routing table, so data flows and
+verifies fine while the Unity hop is still missing:
+
+```powershell
+docker compose exec -T -w /python_ws/src sim-controller `
+  python check_rollouts.py ros-server-0:50051 25 fly_brain_activity
+# Received 347 message(s). ~18.0 Hz. OK - data is flowing.
+```
+
+Because only `./rl_agent` is bind-mounted into ros-server, `unity_node.py` is
+baked into the image. **Editing it does nothing until you rebuild**:
+
+```powershell
+docker compose build ros-server
+docker compose -f docker-compose.yml -f compose/scale.yml up -d --force-recreate `
+  ros-server ros-server-1 ros-server-2 ros-server-3
+```
+
+#### Knobs
+
+All optional; the defaults are what the numbers above were measured with.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `FLY_BRAIN_TARGET` | `fly-brain:50061` | Where the trainer finds the brain |
+| `FLY_READOUT` | `/saved_models/robotaxi/FlyPyPolicy/0/readout.npz` | Ridge readout |
+| `FLY_VIZ_ENABLED` | `1` | Overlay publishing off with `0` |
+| `FLY_VIZ_HZ` | `20` | Activity publish rate |
+| `FLY_VIZ_GEOMETRY_S` | `10` | Geometry resend period |
+| `FLY_VIZ_DISPLAY_SIZE` / `_POINT_SIZE` / `_OFFSET` / `_SPIN` | `12` / `0.10` / `0,40,0` / `8` | Where and how big the brain is drawn |
+
+The placement knobs are published inside the geometry payload rather than left
+on the Unity inspector, because **a build has no inspector** — without that,
+every "the brain is off screen" would cost an Editor rebuild.
+
+#### Gotchas
+
+- **GPU contention.** TensorFlow grabs most of the card by default and the brain
+  needs ~210 MB plus working space. `TF_FORCE_GPU_ALLOW_GROWTH=true` on the
+  trainer, and stay at `--num-envs 1` for fly experiments.
+- **Replay stores history-dependent observations.** The trace depends on the
+  brain's voltages, which depend on the whole episode so far. Workable — the
+  trace *is* the observation — but suspect it first if training goes unstable.
+- **This is a demo, not an emulation.** Point neurons, one global parameter set,
+  no dendrites, no neuromodulators, no plasticity, transmitter sign from a rough
+  rule, nothing validated against recordings from real flies. Expect an
+  interesting result, not a good driver.
