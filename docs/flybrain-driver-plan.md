@@ -291,6 +291,68 @@ rushing at you from 1 m should not look alike.
 approaching on the left raises left DNp01, open space on the right raises right
 DNa02.
 
+> **DONE — measured 2026-09-19.** Encoder in `rl_agent/fly_brain/encoder.py`,
+> acceptance test in `rl_agent/fly_brain/step4_check.py`:
+>
+> ```powershell
+> docker compose exec -w /python_ws/src sim-controller python -m fly_brain.step4_check
+> ```
+>
+> All four scenarios pass, side-specifically. Values are the settled trace
+> delta against a symmetric baseline; at `tau=0.1` a trace of 3.0 is about
+> 30 spikes/s, consistent with step 2's +25.2.
+>
+> | Scenario | Same side | Other side |
+> |---|---|---|
+> | wall closing left → DNp01 | **+3.020** | −0.003 |
+> | wall closing right → DNp01 | **+2.983** | +0.078 |
+> | open space left → DNa02 | **+0.444** | −0.004 |
+> | open space right → DNa02 | **+0.333** | −0.043 |
+>
+> **The strongest result is that the chase contrast already correlates −0.808
+> with the expert's steering** across all 500,001 corpus rows, before the brain
+> is involved at all. The encoder is demonstrably not discarding the steering
+> signal, so a weak step-5 R² would indict the brain or the readout, not this.
+> Looming asymmetry correlates only +0.008, as expected on a course whose only
+> obstacles are static walls.
+>
+> Four measured facts that forced the design:
+>
+> - **Rays must be weighted by `cos(angle)`.** The ±90° rays sit at a median
+>   6.3 m and the ±60° rays at 7.4 m, against 25 m straight ahead — they are
+>   pinned to the track wall on both sides, every frame. An unweighted per-side
+>   minimum is therefore the wall and carries no information. `cos` is exactly
+>   0 at ±90° and 0.5 at ±60°. This is the angle weighting the ray-order note
+>   above warns about, so the non-monotonic order genuinely matters now.
+> - **A raw frame-to-frame ray difference is not a closing rate.** 23.5% of
+>   per-ray steps move more than 1.0 m while the 6.7 m/s top speed allows only
+>   0.67 m. The rays rotate with the car, so a ray sliding off a wall edge
+>   reports a discontinuity that is not motion. Since every obstacle is static,
+>   clamping closing to `1.5 × speed` fixes it: looming's p99 fell from 11.8 to
+>   0.77 and its max from 3038 to 17.3. This is why the encoder needs the speed
+>   channel and cannot work from the rays alone.
+> - **A ray reading exactly 0 means "never hit anything", not "obstacle at zero
+>   range".** `CarController.DrawRay` leaves `distToClosestObjects[d]` untouched
+>   on a miss and the array starts zeroed, so a miss reports a *stale* value.
+>   0.035% of readings are exact zeros; the encoder reads them as maximally
+>   open. The staleness is also part of why the raw difference is unusable.
+> - **Gains are calibrated, not guessed.** `LOOM_GAIN=1.04` and
+>   `CHASE_GAIN=1.44` put each cue's corpus p99 at the 0.8 injection strength
+>   step 2 found strong, so ordinary frames use the dynamic range rather than
+>   clipping.
+>
+> **One API trap, now designed out.** `cues()` is the only stateful call.
+> Asking for the cues and then the injection separately advances the frame
+> twice, and the second call sees no change in range, which silently zeroes
+> looming while leaving stateless chase working — a failure that looks like a
+> dead pathway. `encode(obs, cell_idx)` is the single entry point that does
+> both from one advance.
+>
+> **For step 5:** the expert actions are small and off-centre — accel p50 0.012
+> and p99 0.200 against a `[0.05, 1]` spec, steer p50 0.041 within `[-1, 1]`.
+> R² is scale-invariant so this does not distort it, but do not expect the
+> readout to need the full action range.
+
 ### Step 5 — Fit a readout on the existing demo corpus *(desktop)*
 
 **Do this.** Read the expert-demo corpus for job `64168c1b58d4d8ccdb76e721`
