@@ -49,10 +49,20 @@ public class FlyBrainViz : MonoBehaviour
     public Color interneuronColor = new Color(0.65f, 0.65f, 0.72f);
     public Color commandColor = new Color(1.00f, 0.85f, 0.20f);    // DNp01, MDN, ...
     public Color descendingColor = new Color(1.00f, 0.35f, 0.25f);
+    [Tooltip("Role 4, the silhouette population: most of the nervous system, "
+             + "drawn only so the shape is recognizable. Unlike the roles "
+             + "above it does not dim its own colour but crosses from a cold "
+             + "slate at rest to amber when firing, which is what makes "
+             + "active neuropils stand out of the cloud.")]
+    public Color contextRestColor = new Color(0.20f, 0.23f, 0.30f);
+    public Color contextActiveColor = new Color(1.00f, 0.60f, 0.12f);
     [Tooltip("Brightness of a fully silent neuron, as a fraction of its role "
              + "colour. Keeps the structure readable when the brain is quiet.")]
     public float restBrightness = 0.18f;
-    public float minAlpha = 0.20f;
+    // 0.45, not the 0.20 this was against the grey background: over the dark
+    // backdrop a resting neuron has to carry the silhouette, and at 0.20 a
+    // slate point on near-black is nothing at all.
+    public float minAlpha = 0.45f;
     public float maxAlpha = 1.00f;
     [Tooltip("Exponent on intensity. >1 darkens the midrange so only genuinely "
              + "active cells stand out.")]
@@ -61,6 +71,16 @@ public class FlyBrainViz : MonoBehaviour
     [Header("Edges")]
     [Tooltip("Edge opacity as a fraction of its endpoint neuron's alpha.")]
     public float edgeAlpha = 0.22f;
+
+    [Header("Backdrop")]
+    [Tooltip("Panel drawn behind the cloud. The sim's camera background is a "
+             + "flat mid-grey; a connectome whose resting state is near-black "
+             + "is simply invisible against it. Darkening the camera instead "
+             + "would drag the track's look along with it, so the overlay "
+             + "brings its own background.")]
+    public Color backdropColor = new Color(0.04f, 0.05f, 0.09f, 0.94f);
+    [Tooltip("Margin around the cloud's own extent, as a fraction of it.")]
+    public float backdropMargin = 0.10f;
 
     [Header("Staleness")]
     [Tooltip("Hide the overlay if no activity frame arrives within this many "
@@ -106,9 +126,9 @@ public class FlyBrainViz : MonoBehaviour
     private ActivityPayload _pendingActivity;
     private readonly object _lock = new object();
 
-    private GameObject _edgeObject, _pointObject;
-    private Mesh _edgeMesh, _pointMesh;
-    private Material _material;
+    private GameObject _edgeObject, _pointObject, _backdropObject;
+    private Mesh _edgeMesh, _pointMesh, _backdropMesh;
+    private Shader _shader;
 
     private Vector3[] _positions;      // local, already scaled by displaySize
     private byte[] _role;
@@ -334,20 +354,78 @@ public class FlyBrainViz : MonoBehaviour
         _pointMesh.bounds = new Bounds(Vector3.zero,
                                        Vector3.one * (displaySize * 2.5f));
 
+        BuildBackdrop();
+
         ApplyActivity(new byte[_n]);   // draw the resting structure immediately
         Debug.Log($"[FlyBrainViz] geometry: {_n} neurons, {kept} edges "
                   + $"(of {_nEdges} sent)");
     }
 
-    Color RoleColor(byte role)
+    /// <summary>
+    /// A quad behind the cloud, sized to what actually arrived. Fitted to the
+    /// real extent rather than a square of displaySize: the nervous system is
+    /// about 1.4x taller than wide, and a square panel would put a wide dark
+    /// band either side of it.
+    /// </summary>
+    void BuildBackdrop()
     {
+        // Local x and z are the screen plane and local y faces the camera;
+        // see the axis note in viz.py's get_config.
+        float xMin = float.MaxValue, xMax = float.MinValue;
+        float zMin = float.MaxValue, zMax = float.MinValue;
+        float yMin = float.MaxValue;
+        for (int i = 0; i < _n; i++)
+        {
+            Vector3 p = _positions[i];
+            if (p.x < xMin) xMin = p.x;
+            if (p.x > xMax) xMax = p.x;
+            if (p.z < zMin) zMin = p.z;
+            if (p.z > zMax) zMax = p.z;
+            if (p.y < yMin) yMin = p.y;
+        }
+        if (xMin > xMax) return;
+
+        float padX = (xMax - xMin) * backdropMargin;
+        float padZ = (zMax - zMin) * backdropMargin;
+        xMin -= padX; xMax += padX; zMin -= padZ; zMax += padZ;
+        // Just past the deepest neuron, and no further. The camera is a
+        // perspective one, so every metre this sits further away shrinks it on
+        // screen relative to the cloud it is supposed to be backing; parked at
+        // a fixed fraction of displaySize it ends up smaller than the brain.
+        float y = yMin - displaySize * 0.02f;
+
+        _backdropMesh.Clear();
+        _backdropMesh.vertices = new[]
+        {
+            new Vector3(xMin, y, zMin), new Vector3(xMax, y, zMin),
+            new Vector3(xMin, y, zMax), new Vector3(xMax, y, zMax),
+        };
+        _backdropMesh.SetIndices(new[] { 0, 1, 2, 2, 1, 3 },
+                                 MeshTopology.Triangles, 0);
+        _backdropMesh.colors = new[]
+        {
+            backdropColor, backdropColor, backdropColor, backdropColor,
+        };
+        _backdropMesh.RecalculateBounds();
+    }
+
+    /// <summary>Rest and full-activity colours for a role code.</summary>
+    void RoleRamp(byte role, out Color rest, out Color full)
+    {
+        if (role == 4)
+        {
+            rest = contextRestColor;
+            full = contextActiveColor;
+            return;
+        }
         switch (role)
         {
-            case 1: return sensoryColor;
-            case 2: return commandColor;
-            case 3: return descendingColor;
-            default: return interneuronColor;
+            case 1: full = sensoryColor; break;
+            case 2: full = commandColor; break;
+            case 3: full = descendingColor; break;
+            default: full = interneuronColor; break;
         }
+        rest = full * restBrightness;
     }
 
     void ApplyActivity(byte[] act)
@@ -358,8 +436,9 @@ public class FlyBrainViz : MonoBehaviour
             float t = (i < act.Length ? act[i] : (byte)0) / 255f;
             if (intensityGamma != 1f) t = Mathf.Pow(t, intensityGamma);
 
-            Color role = RoleColor(_role[i]);
-            Color lit = Color.Lerp(role * restBrightness, role, t);
+            Color rest, full;
+            RoleRamp(_role[i], out rest, out full);
+            Color lit = Color.Lerp(rest, full, t);
             lit.a = Mathf.Lerp(minAlpha, maxAlpha, t);
 
             _edgeColors[i] = new Color(lit.r, lit.g, lit.b, lit.a * edgeAlpha);
@@ -381,40 +460,47 @@ public class FlyBrainViz : MonoBehaviour
         container.SetParent(transform, false);
         container.localPosition = worldOffset;
 
+        _backdropMesh = new Mesh { name = "FlyBrainBackdrop" };
         _edgeMesh = new Mesh { name = "FlyBrainEdges" };
         _pointMesh = new Mesh { name = "FlyBrainNeurons" };
-        _edgeObject = NewMeshObject("FlyBrainEdges", container, _edgeMesh);
-        _pointObject = NewMeshObject("FlyBrainNeurons", container, _pointMesh);
+        // Explicit queues rather than trusting the transparent sort: these
+        // meshes share one material and the backdrop must lose to everything
+        // drawn on top of it.
+        _backdropObject = NewMeshObject("FlyBrainBackdrop", container,
+                                        _backdropMesh, 3000);
+        _edgeObject = NewMeshObject("FlyBrainEdges", container, _edgeMesh, 3002);
+        _pointObject = NewMeshObject("FlyBrainNeurons", container, _pointMesh, 3003);
     }
 
-    GameObject NewMeshObject(string name, Transform parent, Mesh mesh)
+    GameObject NewMeshObject(string name, Transform parent, Mesh mesh, int queue)
     {
         var go = new GameObject(name);
         go.transform.SetParent(parent, false);
         go.AddComponent<MeshFilter>().sharedMesh = mesh;
         var mr = go.AddComponent<MeshRenderer>();
-        mr.sharedMaterial = OverlayMaterial();
+        // One material per object, not a shared one: renderQueue lives on the
+        // material, and these three need different queues.
+        mr.sharedMaterial = new Material(OverlayShader()) { renderQueue = queue };
         mr.shadowCastingMode = ShadowCastingMode.Off;
         mr.receiveShadows = false;
         return go;
     }
 
-    Material OverlayMaterial()
+    Shader OverlayShader()
     {
-        if (_material != null) return _material;
+        if (_shader != null) return _shader;
         // Same fallback chain as TrajectoryRolloutViz: Sprites/Default is an
         // always-available unlit, vertex-colour-aware, Cull Off shader.
-        var shader = Shader.Find("Sprites/Default");
-        if (shader == null) shader = Shader.Find("Unlit/Color");
-        if (shader == null)
+        _shader = Shader.Find("Sprites/Default");
+        if (_shader == null) _shader = Shader.Find("Unlit/Color");
+        if (_shader == null)
         {
             Debug.LogError("[FlyBrainViz] no usable shader found (Sprites/Default "
                            + "+ Unlit/Color both missing - likely stripped from the "
                            + "build). Add one to 'Always Included Shaders'.");
-            shader = Shader.Find("Legacy Shaders/Diffuse");
+            _shader = Shader.Find("Legacy Shaders/Diffuse");
         }
-        _material = new Material(shader);
-        return _material;
+        return _shader;
     }
 
     bool IsVisible()
@@ -429,5 +515,7 @@ public class FlyBrainViz : MonoBehaviour
             _edgeObject.SetActive(want);
         if (_pointObject != null && _pointObject.activeSelf != want)
             _pointObject.SetActive(want);
+        if (_backdropObject != null && _backdropObject.activeSelf != want)
+            _backdropObject.SetActive(want);
     }
 }
