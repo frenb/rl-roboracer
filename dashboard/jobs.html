@@ -157,6 +157,71 @@
           <input id="f-training-steps" name="training_steps" type="number" min="0" placeholder="20000"
                  class="w-full input-base">
 
+          <!-- EVAL-only block. Same controls as the Models tab's "Eval
+               selected" dialog, so an EVAL queued from either place can
+               say the same things. Each row hides label and control
+               independently because the form is a two-column grid and a
+               wrapper element would break the row alignment - same
+               pattern as Skip first eval above. -->
+          <label id="f-location-label" for="f-location"
+                 class="hidden text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="The SavedModel directory do_job loads. Queuing from the Models tab's 'Eval selected' fills this in from the model record.">Model location</label>
+          <input id="f-location" name="location" type="text"
+                 placeholder="SavedModel dir (see the Models tab)"
+                 class="hidden w-full input-base">
+
+          <label id="f-num-trials-label" for="f-num-trials"
+                 class="hidden text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="EVAL only. Independent trials; each emits one mean-of-N scalar that the Analysis tab pools. Left blank -> run_policy defaults to 3.">Number of trials</label>
+          <input id="f-num-trials" name="num_trials" type="number"
+                 min="1" max="100" step="1" value="3"
+                 class="hidden w-full input-base"
+                 title="Number of independent trials per EVAL job. Default 3.">
+
+          <span id="f-trial-presets-label"
+                class="hidden text-xs font-medium text-slate-600 dark:text-slate-300">Presets</span>
+          <div id="f-trial-presets-wrap" data-role="eval-presets" class="hidden flex flex-wrap gap-2"></div>
+
+          <label id="f-num-eval-episodes-label" for="f-num-eval-episodes"
+                 class="hidden text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="EVAL only. Raw episodes inside one trial, averaged into that trial's scalar. Left blank -> run_policy defaults to 5.">Episodes per trial</label>
+          <input id="f-num-eval-episodes" name="num_eval_episodes" type="number"
+                 min="1" step="1" placeholder="5 (default)"
+                 class="hidden w-full input-base">
+
+          <!-- Curriculum sweep. The trainer walks the inclusive
+               [start, end] stage range of the experiment design's
+               curriculum in a single EVAL job, tagging each stage's
+               results with the absolute stage_idx. Stages are read from
+               the Experiment design picked above - that is the only
+               place they exist, gyms carry none - so the range stays
+               unavailable until a design with curriculum_stages is
+               selected. Per-stage geometry overrides the corner-radius
+               and curvature inputs below, which cannot express the
+               per-edge chicane counts a stage carries. -->
+          <label id="f-curriculum-sweep-label" for="f-curriculum-sweep"
+                 class="hidden text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="EVAL only. Walk a range of curriculum stage geometries from the selected experiment design.">Curriculum sweep</label>
+          <div id="f-curriculum-sweep-wrap" class="hidden flex flex-col gap-2">
+            <label class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer">
+              <input id="f-curriculum-sweep" type="checkbox" class="accent-sky-600">
+              Eval across curriculum stages (ignores corner radius / curvature below)
+            </label>
+            <div id="f-stage-range" class="hidden grid grid-cols-2 gap-2">
+              <label class="flex flex-col gap-1 text-xs text-slate-600 dark:text-slate-300">
+                Start stage
+                <select id="f-stage-start"
+                        class="w-full input-base appearance-none select-chevron pr-8"></select>
+              </label>
+              <label class="flex flex-col gap-1 text-xs text-slate-600 dark:text-slate-300">
+                End stage
+                <select id="f-stage-end"
+                        class="w-full input-base appearance-none select-chevron pr-8"></select>
+              </label>
+            </div>
+            <p id="f-stage-hint" class="hidden m-0 text-[11px] text-slate-500 dark:text-slate-400"></p>
+          </div>
+
           <label for="f-demo-job-id" class="text-xs font-medium text-slate-600 dark:text-slate-300">Demo job ID</label>
           <input id="f-demo-job-id" name="demo_job_id" type="text" placeholder="(only for BC_TRAINING_ONLY)"
                  class="w-full input-base">
@@ -257,6 +322,7 @@
             <option value="donut_camera_no_rays">donut_camera_no_rays (2-D + 84x84 CSI, raycast ablation)</option>
           </select>
           <p id="f-job-hint" class="col-span-2 m-0 text-xs leading-relaxed text-slate-500 dark:text-slate-400"></p>
+          <p id="f-eval-cost" class="hidden col-span-2 m-0 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400"></p>
         </form>
       </div>
       <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
@@ -388,7 +454,7 @@
        (Ctrl+Shift+R on the parent doesn't always force iframe
        subresources to re-fetch). Bump the version string whenever you
        change components.js. -->
-  <script src="/components.js?v=20260607-redraw2"></script>
+  <script src="/components.js?v=20260920-job-dialogs"></script>
   <script>
     (function () {
       const { TableView, formatters, showToast, confirmDialog } = window.RoboracerUI;
@@ -817,7 +883,23 @@
         const course = document.getElementById('f-course').value;
         const noRays = course === 'donut_camera_no_rays';
         const camera = course === 'donut_camera' || noRays;
-        if (jt === 'TRAIN' && camera) {
+        const fly = course === 'fly_donut';
+        if (fly) {
+          hint.textContent = jt === 'TRAIN'
+            ? 'TRAIN on fly_donut is SAC from scratch over the fly connectome\u2019s '
+              + '1314-D descending-neuron trace: the brain replaces the 31-D ray '
+              + 'vector as the observation and SAC learns the readout from reward. '
+              + 'The fly-brain service must be up, and it holds ONE brain, so run '
+              + 'this at --num-envs 1 \u2014 a second env would interleave on the same '
+              + 'voltages with no error raised. No expert demos or BC pretrain '
+              + 'exist for this course.'
+            : (jt === 'EVAL'
+              ? 'EVAL a fly_donut checkpoint only. The observation is the brain\u2019s '
+                + 'trace, so a donut / donut_no_hint checkpoint fails Compat.'
+              : 'DEMO and BC_TRAINING_ONLY are impossible on fly_donut: the '
+                + 'observation is the brain\u2019s own history and cannot be recorded. '
+                + 'Use TRAIN from scratch.');
+        } else if (jt === 'TRAIN' && camera) {
           hint.textContent =
             'TRAIN on ' + course + ' is SAC from scratch: a CNN on the 84×84 CSI ' +
             'image plus the ' + (noRays ? '2-D vector (speed, sideslip only — the ' +
@@ -847,12 +929,114 @@
         } else {
           hint.textContent = '';
         }
-        const skipLab = document.getElementById('f-skip-first-eval-label');
-        const skipWrap = document.getElementById('f-skip-first-eval-wrap');
-        const showSkip = jt === 'TRAIN';
-        if (skipLab) skipLab.classList.toggle('hidden', !showSkip);
-        if (skipWrap) skipWrap.classList.toggle('hidden', !showSkip);
+        showRow(jt === 'TRAIN', 'f-skip-first-eval-label', 'f-skip-first-eval-wrap');
+        // The trial / episode / sweep controls only mean anything to
+        // do_job's EVAL branch, so they follow the job type the same
+        // way Skip first eval follows TRAIN.
+        const isEval = jt === 'EVAL';
+        showRow(isEval, 'f-location-label', 'f-location',
+                'f-num-trials-label', 'f-num-trials',
+                'f-trial-presets-label', 'f-trial-presets-wrap',
+                'f-num-eval-episodes-label', 'f-num-eval-episodes',
+                'f-curriculum-sweep-label', 'f-curriculum-sweep-wrap',
+                'f-eval-cost');
+        if (isEval) refreshEvalCost();
       }
+
+      /** Show or hide a set of form rows by element id. */
+      function showRow(show, ...ids) {
+        for (const id of ids) {
+          const el = document.getElementById(id);
+          if (el) el.classList.toggle('hidden', !show);
+        }
+      }
+
+      /* ---------- EVAL controls (mirrors the Models tab) ------- */
+
+      const numTrialsEl = document.getElementById('f-num-trials');
+      const numEvalEpsEl = document.getElementById('f-num-eval-episodes');
+      const presetsWrap = document.getElementById('f-trial-presets-wrap');
+      const sweepEl = document.getElementById('f-curriculum-sweep');
+      const stageStartEl = document.getElementById('f-stage-start');
+      const stageEndEl = document.getElementById('f-stage-end');
+
+      // Chips are rendered from the shared preset list rather than
+      // written out in markup, so the two dialogs cannot drift.
+      presetsWrap.innerHTML = RoboracerUI.jobOptions.trialPresets.map((p) =>
+        `<button type="button" data-preset="${p.n}" class="eval-preset-chip"`
+        + ` title="${p.title}"><span class="eval-preset-n">${p.n}</span>`
+        + `<span class="eval-preset-tag">${p.tag}</span></button>`).join('');
+
+      function refreshEvalCost() {
+        const costEl = document.getElementById('f-eval-cost');
+        // Blank means "trainer default", which is what the estimate
+        // should describe, so fall back to run_policy's own defaults.
+        const trials = numTrialsEl.value === '' ? 3 : numTrialsEl.value;
+        const est = RoboracerUI.evalCostEstimate(
+          trials,
+          numEvalEpsEl.value === '' ? RoboracerUI.EPISODES_PER_TRIAL_DEFAULT : numEvalEpsEl.value);
+        costEl.textContent = `${est.totalEpisodes} total episodes `
+          + `(${est.trials} trial${est.trials === 1 ? '' : 's'} \u00d7 `
+          + `${est.episodesPerTrial} episodes/trial), roughly ${est.eta} on the eval ros-server.`;
+        presetsWrap.querySelectorAll('button[data-preset]').forEach((btn) => {
+          const on = numTrialsEl.value !== '' && Number(btn.dataset.preset) === est.trials;
+          btn.classList.toggle('is-active', on);
+          btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+      }
+
+      numTrialsEl.addEventListener('input', refreshEvalCost);
+      numEvalEpsEl.addEventListener('input', refreshEvalCost);
+      presetsWrap.addEventListener('click', (ev) => {
+        const btn = ev.target.closest('button[data-preset]');
+        if (!btn) return;
+        numTrialsEl.value = btn.dataset.preset;
+        refreshEvalCost();
+        numTrialsEl.focus();
+        numTrialsEl.select();
+      });
+
+      // Stages live on the experiment design, so the range follows
+      // whatever is picked above rather than any gym or course.
+      let _stageCount = 0;
+      async function populateStagesFromDesign() {
+        const id = String(document.getElementById('f-experiment-design').value || '');
+        let stages = [];
+        if (id) {
+          const designs = await RoboracerUI.fetchJobList('experiment_designs', { force: false });
+          const d = (designs || []).find((x) => String(x._id) === id);
+          if (d && Array.isArray(d.curriculum_stages)) stages = d.curriculum_stages;
+        }
+        _stageCount = RoboracerUI.fillStageSelects(stageStartEl, stageEndEl, stages);
+        sweepEl.disabled = _stageCount === 0;
+        if (_stageCount === 0) sweepEl.checked = false;
+        syncStageRangeVisibility();
+      }
+
+      function syncStageRangeVisibility() {
+        const rangeEl = document.getElementById('f-stage-range');
+        const hintEl = document.getElementById('f-stage-hint');
+        const on = _stageCount > 0 && sweepEl.checked;
+        rangeEl.classList.toggle('hidden', !on);
+        if (_stageCount === 0) {
+          hintEl.textContent = 'The selected experiment design has no '
+            + 'curriculum_stages \u2014 sweep unavailable.';
+          hintEl.classList.remove('hidden');
+        } else if (on) {
+          hintEl.textContent = `${_stageCount} stage${_stageCount === 1 ? '' : 's'} `
+            + `available; per-stage geometry overrides the corner radius / `
+            + `curvature inputs below.`;
+          hintEl.classList.remove('hidden');
+        } else {
+          hintEl.classList.add('hidden');
+        }
+      }
+
+      sweepEl.addEventListener('change', syncStageRangeVisibility);
+      document.getElementById('f-experiment-design').addEventListener('change', () => {
+        populateStagesFromDesign().catch((e) => console.warn('stage hydrate failed:', e));
+      });
+      RoboracerUI.wireStageRange(stageStartEl, stageEndEl);
 
       function openModal() {
         modal.classList.remove('opacity-0', 'pointer-events-none');
@@ -861,6 +1045,11 @@
         dialogEl.classList.add('opacity-100', 'translate-y-0', 'scale-100');
         modal.setAttribute('aria-hidden', 'false');
         document.getElementById('f-job-type').focus();
+        // Fields otherwise persist across opens, which is what you want
+        // when queuing several similar jobs. The sweep is the exception,
+        // same as on the Models tab: leaving it armed would silently
+        // turn the next eval into a multi-stage run.
+        sweepEl.checked = false;
         updateJobHint();
         // Hydrate the reward-design + experiment-design dropdowns
         // each time the modal opens so newly-authored designs show
@@ -870,9 +1059,14 @@
           // Non-fatal - the dropdown just shows the default option.
           console.warn('reward_designs hydrate failed:', err);
         });
-        loadExperimentDesignsIntoDropdown().catch((err) => {
-          console.warn('experiment_designs hydrate failed:', err);
-        });
+        loadExperimentDesignsIntoDropdown()
+          // The curriculum-sweep range reads its stages off whichever
+          // design is selected, so it can only be built once the
+          // picker has been rebuilt.
+          .then(populateStagesFromDesign)
+          .catch((err) => {
+            console.warn('experiment_designs hydrate failed:', err);
+          });
         loadGymsIntoDropdown().catch((err) => {
           console.warn('gyms hydrate failed:', err);
         });
@@ -881,132 +1075,18 @@
       document.getElementById('f-job-type').addEventListener('change', updateJobHint);
       document.getElementById('f-course').addEventListener('change', updateJobHint);
 
-      // ---- Gym dropdown population ------------------------------ *
-      //
-      // Mirrors the experiment/reward design loaders. Gyms are stored
-      // in the MongoDB 'gyms' collection with name + file_path fields.
-      // Only non-archived entries are shown.
-      async function loadGymsIntoDropdown() {
-        const sel = document.getElementById('f-gym');
-        if (!sel) return;
-        let gyms = [];
-        try {
-          const res = await fetch('/get_gyms?force=true');
-          if (res.ok) {
-            const text = await res.text();
-            if (text && text !== 'NO_CHANGES') gyms = JSON.parse(text) || [];
-          }
-        } catch (e) {
-          console.warn('gyms fetch failed:', e);
-        }
-        while (sel.options.length > 1) sel.remove(1);
-        const visible = gyms
-          .filter((g) => !g.archived)
-          .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
-        for (const g of visible) {
-          const opt = document.createElement('option');
-          opt.value = String(g._id);
-          opt.textContent = String(g.name || '(unnamed)');
-          opt.title = String(g.file_path || '');
-          sel.appendChild(opt);
-        }
-      }
+      // The gym / reward-design / experiment-design pickers are
+      // populated by RoboracerUI.loadJobListIntoSelect, which the Eval
+      // dialog on the Models tab uses for the same three collections.
+      const loadRewardDesignsIntoDropdown = () =>
+        RoboracerUI.loadJobListIntoSelect('reward_designs',
+                                          document.getElementById('f-reward-design'));
+      const loadExperimentDesignsIntoDropdown = () =>
+        RoboracerUI.loadJobListIntoSelect('experiment_designs',
+                                          document.getElementById('f-experiment-design'));
+      const loadGymsIntoDropdown = () =>
+        RoboracerUI.loadJobListIntoSelect('gyms', document.getElementById('f-gym'));
 
-      // ---- Experiment-design dropdown population ---------------- *
-      //
-      // Sibling of loadRewardDesignsIntoDropdown below. The schema is
-      // generic so the same code shape can populate either dropdown -
-      // we factor that out to share the canonical-seed-sort + archived-
-      // filter logic.
-      async function loadExperimentDesignsIntoDropdown() {
-        const sel = document.getElementById('f-experiment-design');
-        if (!sel) return;
-        let designs = [];
-        try {
-          const res = await fetch('/get_experiment_designs?force=true');
-          if (res.ok) {
-            const text = await res.text();
-            if (text && text !== 'NO_CHANGES') {
-              designs = JSON.parse(text) || [];
-            }
-          }
-        } catch (e) {
-          console.warn('experiment_designs fetch failed:', e);
-        }
-        // Wipe everything past the first (placeholder) option.
-        while (sel.options.length > 1) sel.remove(1);
-        const visible = designs
-          .filter((d) => !d.archived)
-          .sort((a, b) => {
-            // Canonical "Default" pinned to the top (matches the seed
-            // _id from rl_agent/experiment_designs.DEFAULT_DESIGN_ID).
-            // Then alphabetical by name.
-            const aCan = String(a._id || '') === 'experiment-default';
-            const bCan = String(b._id || '') === 'experiment-default';
-            if (aCan && !bCan) return -1;
-            if (bCan && !aCan) return 1;
-            return String(a.name || '').localeCompare(String(b.name || ''));
-          });
-        for (const d of visible) {
-          const opt = document.createElement('option');
-          opt.value = String(d._id);
-          const ver = d.version ? ` (v${d.version})` : '';
-          opt.textContent = (d.name || '(unnamed)') + ver;
-          sel.appendChild(opt);
-        }
-      }
-
-      // ---- Reward-design dropdown population --------------------
-      //
-      // /get_reward_designs returns the full collection (including
-      // archived rows). We hide archived from the picker so the user
-      // can only train with currently-active designs, while keeping
-      // archived designs alive for backward-compat with existing
-      // model records that reference them.
-      //
-      // The dropdown's first option is the "no design" choice, which
-      // submits an empty reward_design_id and triggers the trainer's
-      // legacy non-design code path. We preserve that option's value
-      // across re-population by clearing only options that follow it.
-      async function loadRewardDesignsIntoDropdown() {
-        const sel = document.getElementById('f-reward-design');
-        if (!sel) return;
-        let designs = [];
-        try {
-          const res = await fetch('/get_reward_designs?force=true');
-          if (res.ok) {
-            const text = await res.text();
-            if (text && text !== 'NO_CHANGES') {
-              designs = JSON.parse(text) || [];
-            }
-          }
-        } catch (e) {
-          // Network-down or 500. Leave the dropdown as just "course
-          // default" so the user can still submit a job without a
-          // reward design.
-          console.warn('reward_designs fetch failed:', e);
-        }
-        // Wipe everything past the first (placeholder) option.
-        while (sel.options.length > 1) sel.remove(1);
-        const visible = designs
-          .filter((d) => !d.archived)
-          .sort((a, b) => {
-            // Canonical seed at the top (same _id check as on the
-            // Reward Design tab). Then alphabetical.
-            const aCan = String(a._id || '') === 'passthrough-course-default';
-            const bCan = String(b._id || '') === 'passthrough-course-default';
-            if (aCan && !bCan) return -1;
-            if (bCan && !aCan) return 1;
-            return String(a.name || '').localeCompare(String(b.name || ''));
-          });
-        for (const d of visible) {
-          const opt = document.createElement('option');
-          opt.value = String(d._id);
-          const ver = d.version ? ` (v${d.version})` : '';
-          opt.textContent = (d.name || '(unnamed)') + ver;
-          sel.appendChild(opt);
-        }
-      }
       function closeModal() {
         modal.classList.add('opacity-0', 'pointer-events-none');
         modal.classList.remove('opacity-100', 'pointer-events-auto');
@@ -1020,105 +1100,54 @@
       });
       modal.querySelectorAll('[data-action="close-modal"]').forEach((b) =>
         b.addEventListener('click', closeModal));
+      // Esc to cancel / Enter to submit, matching the eval dialog.
       document.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Escape' && modal.classList.contains('opacity-100')) closeModal();
+        if (!modal.classList.contains('opacity-100')) return;
+        if (ev.key === 'Escape') closeModal();
+        if (ev.key === 'Enter' && document.activeElement !== submitBtn) {
+          // A <select> owns Enter while its dropdown is open, and
+          // submitting out from under a half-made choice is worse than
+          // making the user click.
+          if (document.activeElement && document.activeElement.tagName === 'SELECT') return;
+          ev.preventDefault();
+          submitBtn.click();
+        }
       });
 
       submitBtn.addEventListener('click', async () => {
         const fd = new FormData(formEl);
-        const payload = {
+        const jobType = fd.get('job_type');
+        // The EVAL rows stay in the form while hidden, so a trial count
+        // typed before switching the job type back to TRAIN would still
+        // be submitted. Read them only when they are the rows on screen.
+        const isEval = jobType === 'EVAL';
+        const sweepOn = isEval && sweepEl.checked && !sweepEl.disabled;
+        const rdSel = document.getElementById('f-reward-design');
+        const edSel = document.getElementById('f-experiment-design');
+        const payload = RoboracerUI.buildJobPayload({
           status: fd.get('status'),
-          job_type: fd.get('job_type'),
+          job_type: jobType,
           model_type: fd.get('model_type'),
           robot_type: fd.get('robot_type'),
-          // Omit when blank (rather than coercing to 0) so do_job's own
-          // per-job-type defaults apply (e.g. DEMO: num_iterations->50000,
-          // training_steps->20000). Sending an explicit 0 previously
-          // silently created a DEMO job that collected zero episodes / ran
-          // zero BC-training steps instead of falling back to the intended
-          // default, since do_job's DEMO branch treated any non-empty-string
-          // value (including 0) as "use it as-is".
-          ...(fd.get('num_iterations') !== ''
-            ? { num_iterations: Number(fd.get('num_iterations')) } : {}),
-          ...(fd.get('training_steps') !== ''
-            ? { training_steps: Number(fd.get('training_steps')) } : {}),
-          demo_job_id: String(fd.get('demo_job_id') || ''),
-          // TRAIN only. Omitted when unchecked so legacy jobs stay
-          // bit-identical (do_job treats missing as false).
-          ...(document.getElementById('f-skip-first-eval')
-              && document.getElementById('f-skip-first-eval').checked
-              && fd.get('job_type') === 'TRAIN'
-            ? { skip_first_eval: true } : {}),
-          // pass_through_actions is hardcoded false in the trainer.
-          pass_through_actions: false,
-          // Track geometry — forwarded to Unity's TrackGenerator on every
-          // episode reset. Only included when the user fills the field in;
-          // omitting them lets do_job use trainer defaults (10.0 / 0.0).
-          ...(fd.get('corner_radius_val') !== ''
-            ? { corner_radius_val: Number(fd.get('corner_radius_val')) } : {}),
-          ...(fd.get('curvature_difficulty_val') !== ''
-            ? { curvature_difficulty_val: Number(fd.get('curvature_difficulty_val')) } : {}),
-          // Course selector. Only stamp a course_type when the user picked a
-          // concrete course; "trainer default" (and blank) are omitted so the
-          // trainer's ROBOTAXI_COURSE_TYPE env-var fallback still applies and
-          // old jobs stay byte-identical - same "omit when default" convention
-          // as reward_design / experiment_design below. do_job treats a
-          // missing/"trainer default" value as the default course.
-          ...((() => {
-            const c = String(fd.get('course_type') || '');
-            return (c && c !== 'trainer default') ? { course_type: c } : {};
-          })()),
-        };
-        // Gym — record which Unity scene / gym this job runs against.
-        // gym_file_path is stamped directly on the job doc so do_job
-        // can signal the Unity supervisor without a MongoDB round-trip.
-        const gymId = String(fd.get('gym_id') || '');
-        if (gymId) {
-          payload.gym_id = gymId;
-          const gymSel = document.getElementById('f-gym');
-          if (gymSel && gymSel.selectedIndex >= 0) {
-            const selOpt = gymSel.options[gymSel.selectedIndex];
-            payload.gym_name      = selOpt.textContent || '';
-            payload.gym_file_path = selOpt.title || ''; // title holds file_path
-          }
-        }
-        // Reward design only applies to TRAIN jobs - the trainer's
-        // EVAL / DEMO / BC branches don't look at this field. We
-        // still stamp it on every job_type if the user picked one,
-        // because the field is harmless on non-TRAIN docs and it
-        // preserves the user's intent if they restart a non-TRAIN
-        // job as TRAIN later. Empty string -> no design -> course
-        // default code path in do_job.
-        const rdId = String(fd.get('reward_design_id') || '');
-        if (rdId) {
-          payload.reward_design_id = rdId;
-          // Stamp a human-friendly name too so the Jobs / Models
-          // tables can render the design without a second fetch.
-          // Read it off the picked <option>'s text - that's already
-          // formatted as "name (vN)".
-          const sel = document.getElementById('f-reward-design');
-          if (sel && sel.selectedIndex >= 0) {
-            const label = sel.options[sel.selectedIndex].textContent || '';
-            // Trim the trailing " (vN)" we appended on hydrate so the
-            // stored value is just the human-friendly design name.
-            payload.reward_design_name = label.replace(/\s*\(v\d+\)\s*$/, '');
-          }
-        }
-        // Same handling for experiment_design_id. TRAIN uses every field
-        // on the design; DEMO uses ONLY curriculum_stages (if the design
-        // has any) to split collection across track-difficulty stages;
-        // EVAL ignores the field entirely. We stamp it on every job_type
-        // regardless, for the same "intent preservation if restarted as a
-        // different job_type" rationale as reward_design.
-        const edId = String(fd.get('experiment_design_id') || '');
-        if (edId) {
-          payload.experiment_design_id = edId;
-          const sel2 = document.getElementById('f-experiment-design');
-          if (sel2 && sel2.selectedIndex >= 0) {
-            const label = sel2.options[sel2.selectedIndex].textContent || '';
-            payload.experiment_design_name = label.replace(/\s*\(v\d+\)\s*$/, '');
-          }
-        }
+          num_iterations: fd.get('num_iterations'),
+          training_steps: fd.get('training_steps'),
+          num_trials: isEval ? fd.get('num_trials') : '',
+          num_eval_episodes: isEval ? fd.get('num_eval_episodes') : '',
+          location: isEval ? fd.get('location') : '',
+          demo_job_id: fd.get('demo_job_id'),
+          skip_first_eval: document.getElementById('f-skip-first-eval').checked,
+          corner_radius_val: fd.get('corner_radius_val'),
+          curvature_difficulty_val: fd.get('curvature_difficulty_val'),
+          course_type: fd.get('course_type'),
+          gym: RoboracerUI.selectedGym(document.getElementById('f-gym')),
+          reward_design: { id: String(rdSel.value || ''),
+                           name: RoboracerUI.selectedName(rdSel) },
+          experiment_design: { id: String(edSel.value || ''),
+                               name: RoboracerUI.selectedName(edSel) },
+          eval_all_stages: sweepOn,
+          eval_stage_start: sweepOn ? stageStartEl.value : '',
+          eval_stage_end: sweepOn ? stageEndEl.value : '',
+        });
         try {
           const res = await fetch('/add_job', {
             method: 'POST',

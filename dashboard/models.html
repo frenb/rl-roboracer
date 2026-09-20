@@ -85,7 +85,7 @@
               flex items-center justify-center p-4
               opacity-0 transition-opacity duration-200 pointer-events-none">
     <div role="dialog" aria-modal="true" aria-labelledby="eval-modal-title"
-         class="w-full max-w-[440px] max-h-[calc(100vh-2rem)]
+         class="w-full max-w-[520px] max-h-[calc(100vh-2rem)]
                 bg-white dark:bg-slate-900
                 border border-slate-200 dark:border-slate-700
                 rounded-2xl shadow-card-lg
@@ -120,20 +120,71 @@
                  class="w-full input-base"
                  title="Number of independent trials per EVAL job. Default 3.">
 
-          <!-- Preset chips. Each cell label nudges the user toward a
-               sensible value without locking them into the chip's
-               number - the free-form input above is still the source
-               of truth and the chip row is just a one-click shortcut.
-               The values were chosen by what each n actually buys you
-               on the Analysis tab:
-                  3   = quick smoke test (default; CI is wide)
-                  10  = meaningful CI; minimum for any real claim
-                  30  = CLT comfort; t-based and bootstrap CIs match
-                  50  = tight estimate; good for write-ups / publication
-               The currently-active chip (matching the input's exact
-               value) gets a filled / primary-tinted style; the others
-               read as secondary buttons.
-            -->
+          <!-- Preset chips. A one-click shortcut only: the free-form
+               input above stays the source of truth, and the chip
+               matching its exact value renders filled. The row is
+               built from RoboracerUI.jobOptions.trialPresets so the
+               Jobs tab offers the same four. -->
+          <span class="text-xs font-medium text-slate-600 dark:text-slate-300">Presets</span>
+          <div data-role="eval-presets" class="flex flex-wrap gap-2"></div>
+
+          <label for="f-eval-num-eval-episodes"
+                 class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="Raw episodes inside one trial, averaged into that trial's scalar. Left blank -> run_policy defaults to 5.">Episodes per trial</label>
+          <input id="f-eval-num-eval-episodes" name="num_eval_episodes" type="number"
+                 min="1" step="1" placeholder="5 (default)"
+                 class="w-full input-base">
+
+          <!-- The four pickers below default to "From each model",
+               which reads the field off each selected model record
+               rather than forcing one value across the selection. That
+               is what an eval almost always wants: the job has to
+               match the checkpoint it loads. The explicit options
+               exist for the cases where it does not, and so that this
+               dialog can express everything the Jobs tab can.
+
+               Model type in particular used to be hardcoded to
+               SacAgent here, which quietly mislabelled every eval of a
+               GreedyPolicy / RandomPyPolicy / FlyPyPolicy checkpoint
+               and sent do_job down the wrong dispatch branch. -->
+          <label for="f-eval-model-type"
+                 class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="Which policy class do_job loads. Leave on 'From each model' unless you are deliberately re-typing a checkpoint.">Model type</label>
+          <select id="f-eval-model-type"
+                  class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="" selected>From each model</option>
+          </select>
+
+          <label for="f-eval-course"
+                 class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="Which observation/reward course the eval env is built with. Must match what the checkpoint was trained on or the eval trips EvalSpecMismatchError.">Course</label>
+          <select id="f-eval-course"
+                  class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="" selected>From each model</option>
+          </select>
+
+          <label for="f-eval-reward-design"
+                 class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="Recorded on the job for provenance; do_job's EVAL branch does not read it.">Reward design</label>
+          <select id="f-eval-reward-design"
+                  class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="" selected>From each model</option>
+          </select>
+
+          <label for="f-eval-experiment-design"
+                 class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="Supplies the curriculum_stages a sweep walks. Overriding it evaluates the model against another design's stage geometries.">Experiment design</label>
+          <select id="f-eval-experiment-design"
+                  class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="" selected>From each model</option>
+          </select>
+
+          <label for="f-eval-robot-type"
+                 class="text-xs font-medium text-slate-600 dark:text-slate-300">Robot type</label>
+          <select id="f-eval-robot-type"
+                  class="w-full input-base appearance-none select-chevron pr-8">
+          </select>
+
           <!-- Gym selector — record which Unity scene / gym this eval
                runs against. Populated from /get_gyms on modal open. -->
           <label for="f-eval-gym"
@@ -202,50 +253,9 @@
                class="hidden text-[11px] text-slate-500 dark:text-slate-400"></p>
           </div>
 
-          <span class="text-xs font-medium text-slate-600 dark:text-slate-300">
-            Presets
-          </span>
-          <div data-role="eval-presets" class="flex flex-wrap gap-2">
-            <!-- Short ALL-CAPS tags so all four chips fit on one row
-                 in the ~280px form column without wrapping. The
-                 longer-form rationale ("quick smoke test", "CLT
-                 comfort", ...) lives in the per-chip title= tooltip
-                 below, so hover reveals the full meaning. -->
-            <button type="button" data-preset="3"
-                    class="eval-preset-chip"
-                    title="Quick smoke test (matches run_policy's max_episodes default of 3). Wide CIs; OK for sanity checking a checkpoint.">
-              <span class="eval-preset-n">3</span>
-              <span class="eval-preset-tag">smoke</span>
-            </button>
-            <button type="button" data-preset="10"
-                    class="eval-preset-chip"
-                    title="Standard - meaningful CI. Minimum n for any honest model-vs-model comparison; CI widths roughly halve vs n=3.">
-              <span class="eval-preset-n">10</span>
-              <span class="eval-preset-tag">std</span>
-            </button>
-            <button type="button" data-preset="30"
-                    class="eval-preset-chip"
-                    title="Tight CI / CLT comfort - t-based and bootstrap CIs typically agree above this. Good default for serious comparisons.">
-              <span class="eval-preset-n">30</span>
-              <span class="eval-preset-tag">tight</span>
-            </button>
-            <button type="button" data-preset="50"
-                    class="eval-preset-chip"
-                    title="Publication-grade - very tight CI. Costs ~50 x num_eval_episodes raw episodes per model, so expect a long wait.">
-              <span class="eval-preset-n">50</span>
-              <span class="eval-preset-tag">paper</span>
-            </button>
-          </div>
         </form>
-        <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-3 leading-relaxed">
-          With <span data-role="eval-modal-total-episodes" class="font-semibold">15</span>
-          total episodes per model
-          (<span data-role="eval-modal-trials-echo">3</span>
-          trial<span data-role="eval-modal-trials-echo-plural">s</span> &times; 5 episodes/trial),
-          expect roughly
-          <span data-role="eval-modal-eta" class="font-semibold">~30&ndash;90 s</span>
-          per model on the eval ros-server.
-        </p>
+        <p id="f-eval-cost"
+           class="text-[11px] text-slate-500 dark:text-slate-400 mt-3 leading-relaxed"></p>
       </div>
       <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
         <button data-action="close-eval-modal" class="btn-base btn-secondary">Cancel</button>
@@ -402,7 +412,7 @@
   <!-- Cache-busted (see comment in jobs.html). Bump ?v=... when you
        edit components.js so the iframe inside GoldenLayout actually
        fetches the new file. -->
-  <script src="/components.js?v=20260607-redraw2"></script>
+  <script src="/components.js?v=20260920-job-dialogs"></script>
   <script>
     (function () {
       const { TableView, formatters, showToast, confirmDialog } = window.RoboracerUI;
@@ -892,113 +902,74 @@
       const evalSubmitBtn   = evalModal.querySelector('[data-action="submit-eval"]');
       const evalCountEl     = evalModal.querySelector('[data-role="eval-modal-count"]');
       const evalPluralEl    = evalModal.querySelector('[data-role="eval-modal-plural"]');
-      const evalTrialsEcho  = evalModal.querySelector('[data-role="eval-modal-trials-echo"]');
-      const evalTrialsEchoPluralEl = evalModal.querySelector('[data-role="eval-modal-trials-echo-plural"]');
-      const evalTotalEpsEl  = evalModal.querySelector('[data-role="eval-modal-total-episodes"]');
-      const evalEtaEl       = evalModal.querySelector('[data-role="eval-modal-eta"]');
+      const evalCostEl      = document.getElementById('f-eval-cost');
+      const evalNumEpsEl    = document.getElementById('f-eval-num-eval-episodes');
+      const evalPresetsWrap = evalModal.querySelector('[data-role="eval-presets"]');
 
-      // Episodes per trial is currently fixed at the trainer default
-      // (run_policy's num_eval_episodes=5). If we expose an input for
-      // it later, derive these from the form too.
-      const EPISODES_PER_TRIAL = 5;
-      // Eval cost is dominated by env-step wall time; ~2-6s/episode on
-      // ros-server-0 in practice. The footer line just gives the user
-      // a rough sense of "is 50 trials going to take an hour?" before
-      // they click submit.
-      const SECS_PER_EPISODE_LOW = 2;
-      const SECS_PER_EPISODE_HIGH = 6;
+      // Chips come from the shared preset list so the Jobs tab's EVAL
+      // form offers the same four and neither can drift.
+      evalPresetsWrap.innerHTML = RoboracerUI.jobOptions.trialPresets.map((p) =>
+        `<button type="button" data-preset="${p.n}" class="eval-preset-chip"`
+        + ` title="${p.title}"><span class="eval-preset-n">${p.n}</span>`
+        + `<span class="eval-preset-tag">${p.tag}</span></button>`).join('');
 
-      function clampTrialCount() {
-        const raw = Number(evalNumTrialsEl.value);
-        if (!Number.isFinite(raw) || raw < 1) return 1;
-        if (raw > 100) return 100;
-        return Math.floor(raw);
+      // The static option lists are rendered from the same source the
+      // Jobs tab reads, appended after each picker's "From each model"
+      // placeholder.
+      function fillStaticOptions(sel, values, selected) {
+        if (!sel) return;
+        for (const v of values) {
+          const opt = document.createElement('option');
+          if (typeof v === 'string') { opt.value = v; opt.textContent = v; }
+          else { opt.value = v.value; opt.textContent = v.label; }
+          if (selected !== undefined && opt.value === selected) opt.selected = true;
+          sel.appendChild(opt);
+        }
       }
+      fillStaticOptions(document.getElementById('f-eval-model-type'),
+                        RoboracerUI.jobOptions.modelTypes);
+      fillStaticOptions(document.getElementById('f-eval-course'),
+                        RoboracerUI.jobOptions.courses);
+      fillStaticOptions(document.getElementById('f-eval-robot-type'),
+                        RoboracerUI.jobOptions.robotTypes, 'robotaxi');
 
-      // Preset chips. Reusing the same query selector list at every
-      // refresh is fine - there are only 4 nodes and they're inside a
-      // modal that's only visible for short stretches. Caching the
-      // NodeList up front instead would be a micro-optimisation that
-      // would break if we ever rebuild the chip row dynamically.
-      const evalPresetButtons = () =>
-        evalModal.querySelectorAll('[data-role="eval-presets"] button[data-preset]');
-
-      function refreshActivePreset() {
-        const n = clampTrialCount();
-        evalPresetButtons().forEach((btn) => {
-          const matches = Number(btn.dataset.preset) === n;
+      function refreshEvalModalFooter() {
+        const est = RoboracerUI.evalCostEstimate(
+          evalNumTrialsEl.value,
+          evalNumEpsEl.value === '' ? RoboracerUI.EPISODES_PER_TRIAL_DEFAULT : evalNumEpsEl.value);
+        evalCostEl.textContent = `${est.totalEpisodes} total episodes per model `
+          + `(${est.trials} trial${est.trials === 1 ? '' : 's'} \u00d7 `
+          + `${est.episodesPerTrial} episodes/trial), roughly ${est.eta} `
+          + `per model on the eval ros-server.`;
+        evalPresetsWrap.querySelectorAll('button[data-preset]').forEach((btn) => {
+          const matches = Number(btn.dataset.preset) === est.trials;
           btn.classList.toggle('is-active', matches);
           btn.setAttribute('aria-pressed', matches ? 'true' : 'false');
         });
       }
 
-      function refreshEvalModalFooter() {
-        const n = clampTrialCount();
-        const totalEps = n * EPISODES_PER_TRIAL;
-        evalTrialsEcho.textContent = String(n);
-        evalTrialsEchoPluralEl.textContent = n === 1 ? '' : 's';
-        evalTotalEpsEl.textContent = String(totalEps);
-        const lowMin = (totalEps * SECS_PER_EPISODE_LOW / 60);
-        const highMin = (totalEps * SECS_PER_EPISODE_HIGH / 60);
-        // Pick a tidy time unit. Under a minute: seconds. Otherwise
-        // minutes with one decimal so 15s vs 90s reads differently.
-        const fmt = (mins) => mins < 1
-          ? `${Math.round(mins * 60)}s`
-          : `${mins.toFixed(mins < 10 ? 1 : 0)}m`;
-        evalEtaEl.textContent = `~${fmt(lowMin)}–${fmt(highMin)}`;
-        refreshActivePreset();
-      }
-
       evalNumTrialsEl.addEventListener('input', refreshEvalModalFooter);
+      evalNumEpsEl.addEventListener('input', refreshEvalModalFooter);
 
-      // Preset click handler. Fills the number input from the chip's
-      // data-preset value, then re-runs the same refresh path the
-      // input's 'input' listener uses (footer + active-chip recompute).
-      // We dispatch an explicit 'input' event so any future listeners
-      // attached to the input itself stay in sync; in the current
-      // code refreshEvalModalFooter is wired to 'input' so this
-      // works without an explicit call.
-      evalModal.addEventListener('click', (ev) => {
-        const btn = ev.target.closest('[data-role="eval-presets"] button[data-preset]');
+      evalPresetsWrap.addEventListener('click', (ev) => {
+        const btn = ev.target.closest('button[data-preset]');
         if (!btn) return;
-        const n = Number(btn.dataset.preset);
-        if (!Number.isFinite(n) || n < 1) return;
-        evalNumTrialsEl.value = String(n);
-        evalNumTrialsEl.dispatchEvent(new Event('input', { bubbles: true }));
-        // Briefly refocus the number input so Enter still submits and
-        // the user can tweak the value (e.g. 30 -> 35) without
-        // re-clicking it. select() lets a typed digit replace the
-        // preset value cleanly.
+        evalNumTrialsEl.value = btn.dataset.preset;
+        refreshEvalModalFooter();
+        // Refocus so Enter still submits and a typed digit replaces the
+        // preset rather than appending to it.
         evalNumTrialsEl.focus();
         evalNumTrialsEl.select();
       });
 
-      // ---- Gym dropdown population (eval modal) ----------------- *
-      async function loadGymsIntoEvalDropdown() {
-        const sel = document.getElementById('f-eval-gym');
-        if (!sel) return;
-        let gyms = [];
-        try {
-          const res = await fetch('/get_gyms?force=true');
-          if (res.ok) {
-            const text = await res.text();
-            if (text && text !== 'NO_CHANGES') gyms = JSON.parse(text) || [];
-          }
-        } catch (e) {
-          console.warn('gyms fetch failed:', e);
-        }
-        while (sel.options.length > 1) sel.remove(1);
-        const visible = gyms
-          .filter((g) => !g.archived)
-          .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
-        for (const g of visible) {
-          const opt = document.createElement('option');
-          opt.value = String(g._id);
-          opt.textContent = String(g.name || '(unnamed)');
-          opt.title = String(g.file_path || '');
-          sel.appendChild(opt);
-        }
-      }
+      const loadGymsIntoEvalDropdown = () =>
+        RoboracerUI.loadJobListIntoSelect('gyms', document.getElementById('f-eval-gym'));
+      const loadEvalDesignDropdowns = () => Promise.all([
+        RoboracerUI.loadJobListIntoSelect('reward_designs',
+                                          document.getElementById('f-eval-reward-design')),
+        RoboracerUI.loadJobListIntoSelect('experiment_designs',
+                                          document.getElementById('f-eval-experiment-design')),
+      ]);
 
       // Curriculum-stage state for the Start/End dropdowns. Stages come from
       // the SELECTED model(s)' experiment-design curriculum_stages - the real
@@ -1006,49 +977,39 @@
       // count across the selection; EDs can differ in length and the trainer
       // clamps each model to its own ED's range at eval time.
       let _evalStageCount = 0;
+      let _evalSelection = [];
       async function populateEvalStages(rows) {
         const startSel = document.getElementById('f-eval-stage-start');
         const endSel   = document.getElementById('f-eval-stage-end');
         const toggleEl = document.getElementById('f-eval-all-stages');
         if (!startSel || !endSel) return;
-        _evalStageCount = 0;
-        let repStages = null;   // longest stage array in the selection (for labels)
+        let repStages = [];   // longest stage array in play (drives the labels)
         try {
-          const designs = await _fetchExpDesignsCached();
+          const designs = await RoboracerUI.fetchJobList('experiment_designs',
+                                                         { force: false });
           const byId = new Map((designs || []).map((d) => [String(d._id), d]));
-          for (const m of (rows || [])) {
-            const ed = m && m.experiment_design_id
-              ? byId.get(String(m.experiment_design_id)) : null;
-            const cs = ed && Array.isArray(ed.curriculum_stages)
-              ? ed.curriculum_stages : null;
-            if (cs && cs.length > _evalStageCount) {
-              _evalStageCount = cs.length;
-              repStages = cs;
-            }
+          // An explicit design override replaces the per-model lookup:
+          // the sweep then walks that design's stages for every model.
+          const override = String(
+            document.getElementById('f-eval-experiment-design').value || '');
+          const ids = override
+            ? [override]
+            : (rows || []).map((m) => m && m.experiment_design_id).filter(Boolean);
+          for (const id of ids) {
+            const ed = byId.get(String(id));
+            const cs = (ed && Array.isArray(ed.curriculum_stages))
+              ? ed.curriculum_stages : [];
+            // Longest wins: designs in a mixed selection can differ in
+            // length and the trainer clamps each model to its own.
+            if (cs.length > repStages.length) repStages = cs;
           }
         } catch (e) {
           console.warn('populateEvalStages: ED fetch failed:', e);
         }
-        // Rebuild both dropdowns with identical options 0..count-1.
-        startSel.innerHTML = '';
-        endSel.innerHTML = '';
-        for (let k = 0; k < _evalStageCount; k++) {
-          const s = (repStages && repStages[k]) ? repStages[k] : {};
-          const cr = (s.corner_radius != null) ? s.corner_radius : '?';
-          const geom = `r=${cr} chic ${s.chicanes_north || 0}/`
-            + `${s.chicanes_east || 0}/${s.chicanes_south || 0}/${s.chicanes_west || 0}`;
-          const label = `Stage ${k} — ${geom}`;
-          const o1 = document.createElement('option');
-          o1.value = String(k); o1.textContent = label;
-          const o2 = document.createElement('option');
-          o2.value = String(k); o2.textContent = label;
-          startSel.appendChild(o1); endSel.appendChild(o2);
-        }
-        const has = _evalStageCount > 0;
-        if (has) { startSel.value = '0'; endSel.value = String(_evalStageCount - 1); }
+        _evalStageCount = RoboracerUI.fillStageSelects(startSel, endSel, repStages);
         if (toggleEl) {
-          toggleEl.disabled = !has;
-          if (!has) toggleEl.checked = false;
+          toggleEl.disabled = _evalStageCount === 0;
+          if (_evalStageCount === 0) toggleEl.checked = false;
         }
         syncEvalStageRangeVisibility();
       }
@@ -1064,13 +1025,15 @@
         if (rangeEl) rangeEl.classList.toggle('hidden', !on);
         if (hintEl) {
           if (!has) {
-            hintEl.textContent = 'Selected model(s) have no curriculum stages '
+            hintEl.textContent = 'No curriculum stages available '
               + '(no experiment design with curriculum_stages) — sweep unavailable.';
             hintEl.classList.remove('hidden');
           } else if (on) {
+            const src = document.getElementById('f-eval-experiment-design').value
+              ? 'the selected experiment design' : "the model's experiment design";
             hintEl.textContent = `${_evalStageCount} stage`
-              + `${_evalStageCount === 1 ? '' : 's'} from the model's experiment `
-              + `design; per-stage geometry overrides the corner/curvature inputs.`;
+              + `${_evalStageCount === 1 ? '' : 's'} from ${src}; per-stage `
+              + `geometry overrides the corner/curvature inputs.`;
             hintEl.classList.remove('hidden');
           } else {
             hintEl.classList.add('hidden');
@@ -1079,6 +1042,7 @@
       }
 
       function openEvalModal(rows) {
+        _evalSelection = Array.isArray(rows) ? rows : [];
         const selectionCount = Array.isArray(rows) ? rows.length : (Number(rows) || 0);
         evalCountEl.textContent = String(selectionCount);
         evalPluralEl.textContent = selectionCount === 1 ? '' : 's';
@@ -1088,11 +1052,16 @@
         if (allStagesEl) allStagesEl.checked = false;
         // Populate the Start/End stage dropdowns from the selected models'
         // experiment-design curriculum (async; reflects toggle when done).
-        populateEvalStages(Array.isArray(rows) ? rows : [])
+        populateEvalStages(_evalSelection)
           .catch((e) => console.warn('stage hydrate failed:', e));
         syncEvalStageRangeVisibility();
         refreshEvalModalFooter();
         loadGymsIntoEvalDropdown().catch((e) => console.warn('gyms hydrate failed:', e));
+        // Rebuilding the design pickers resets them to "From each
+        // model", so the stage range has to be recomputed after.
+        loadEvalDesignDropdowns()
+          .then(() => populateEvalStages(_evalSelection))
+          .catch((e) => console.warn('design hydrate failed:', e));
         evalModal.classList.remove('opacity-0', 'pointer-events-none');
         evalModal.classList.add('opacity-100', 'pointer-events-auto');
         evalDialogEl.classList.remove('opacity-0', '-translate-y-3', 'scale-[0.98]');
@@ -1256,26 +1225,13 @@
       const expConfigTableBody  = expConfigModal.querySelector('[data-role="ed-config-table"] tbody');
       const expConfigLoadingEl  = expConfigModal.querySelector('[data-role="ed-config-loading"]');
 
-      // Two caches the modal needs. Both are populated lazily on first
-      // open, with a small TTL so edits-via-the-Experiment-Design-tab
-      // propagate eventually (no polling - this is rare-click data).
-      let _expDesignsCache = null;
-      let _expDesignsCacheTs = 0;
+      // The design list comes from RoboracerUI.fetchJobList, shared
+      // with the eval dialog's stage range and the Jobs tab's pickers.
+      // The schema is only needed here, so it keeps its own cache;
+      // both are lazy on first open with no polling, since this is
+      // rare-click data.
       let _expSchemaCache = null;
-      const _EXP_CACHE_TTL_MS = 30000;
 
-      async function _fetchExpDesignsCached() {
-        if (_expDesignsCache && (Date.now() - _expDesignsCacheTs < _EXP_CACHE_TTL_MS)) {
-          return _expDesignsCache;
-        }
-        const res = await fetch('/get_experiment_designs?force=true');
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const txt = await res.text();
-        if (txt === 'NO_CHANGES') return _expDesignsCache || [];
-        _expDesignsCache = JSON.parse(txt) || [];
-        _expDesignsCacheTs = Date.now();
-        return _expDesignsCache;
-      }
       async function _fetchExpSchemaCached() {
         if (_expSchemaCache) return _expSchemaCache;
         const res = await fetch('/get_experiment_design_schema');
@@ -1302,7 +1258,7 @@
         const fetchToken = (openExperimentDesignModal._token = (openExperimentDesignModal._token || 0) + 1);
         try {
           const [designs, schema] = await Promise.all([
-            _fetchExpDesignsCached(),
+            RoboracerUI.fetchJobList('experiment_designs', { force: false }),
             _fetchExpSchemaCached(),
           ]);
           if (fetchToken !== openExperimentDesignModal._token) return;
@@ -1537,16 +1493,15 @@
       // range coherent (start <= end) as the user changes either endpoint.
       document.getElementById('f-eval-all-stages')
         ?.addEventListener('change', syncEvalStageRangeVisibility);
-      (function wireEvalStageRange() {
-        const ss = document.getElementById('f-eval-stage-start');
-        const se = document.getElementById('f-eval-stage-end');
-        ss?.addEventListener('change', () => {
-          if (se && Number(ss.value) > Number(se.value)) se.value = ss.value;
+      RoboracerUI.wireStageRange(document.getElementById('f-eval-stage-start'),
+                                 document.getElementById('f-eval-stage-end'));
+      // An experiment-design override changes which curriculum the
+      // sweep walks, so the stage range has to be rebuilt from it.
+      document.getElementById('f-eval-experiment-design')
+        .addEventListener('change', () => {
+          populateEvalStages(_evalSelection)
+            .catch((e) => console.warn('stage hydrate failed:', e));
         });
-        se?.addEventListener('change', () => {
-          if (ss && Number(se.value) < Number(ss.value)) ss.value = se.value;
-        });
-      })();
 
       evalSubmitBtn.addEventListener('click', async () => {
         const sel = table.getSelectedRows();
@@ -1554,99 +1509,93 @@
           closeEvalModal();
           return;
         }
-        const numTrials = clampTrialCount();
-        // Read optional track geometry fields from the form. Empty
-        // string (user left blank) means "use trainer default" — we
-        // omit the field from the payload rather than sending 0.
-        const cornerRadiusRaw = document.getElementById('f-eval-corner-radius').value;
-        const curvatureDiffRaw = document.getElementById('f-eval-curvature-difficulty').value;
-        const trackOverrides = {};
-        if (cornerRadiusRaw !== '') trackOverrides.corner_radius_val = Number(cornerRadiusRaw);
-        if (curvatureDiffRaw !== '') trackOverrides.curvature_difficulty_val = Number(curvatureDiffRaw);
-        // Gym selection — also stamp file_path so do_job can signal
-        // the Unity supervisor without a MongoDB lookup.
-        const gymSel = document.getElementById('f-eval-gym');
-        const gymId = gymSel ? gymSel.value : '';
-        if (gymId) {
-          trackOverrides.gym_id = gymId;
-          if (gymSel.selectedIndex >= 0) {
-            const selOpt = gymSel.options[gymSel.selectedIndex];
-            trackOverrides.gym_name      = selOpt.textContent || '';
-            trackOverrides.gym_file_path = selOpt.title || '';
-          }
-        }
-        // Curriculum sweep toggle — when set, each EVAL job walks every
-        // curriculum stage from the model's experiment design (do_job resolves
-        // the stages from experiment_design_id). The corner-radius/curvature
-        // overrides are then ignored by the trainer (each stage stamps its
-        // own geometry).
+        // Each picker's blank value means "from each model", so the
+        // per-model fallback is applied later, in submitEvalJobs.
+        const val = (id) => String(document.getElementById(id).value || '');
         const evalAllStages = !!document.getElementById('f-eval-all-stages')?.checked;
-        // Inclusive [start, end] stage range (only when the sweep is on).
-        // null => let the trainer default (start=0 / end=last).
-        let stageStart = null, stageEnd = null;
-        if (evalAllStages) {
-          const ss = document.getElementById('f-eval-stage-start');
-          const se = document.getElementById('f-eval-stage-end');
-          stageStart = (ss && ss.value !== '') ? Number(ss.value) : null;
-          stageEnd   = (se && se.value !== '') ? Number(se.value) : null;
-        }
+        const form = {
+          num_trials: RoboracerUI.clampTrialCount(
+            document.getElementById('f-eval-num-trials').value),
+          num_eval_episodes: document.getElementById('f-eval-num-eval-episodes').value,
+          corner_radius_val: document.getElementById('f-eval-corner-radius').value,
+          curvature_difficulty_val: document.getElementById('f-eval-curvature-difficulty').value,
+          robot_type: val('f-eval-robot-type'),
+          model_type: val('f-eval-model-type'),
+          course_type: val('f-eval-course'),
+          gym: RoboracerUI.selectedGym(document.getElementById('f-eval-gym')),
+          reward_design: {
+            id: val('f-eval-reward-design'),
+            name: RoboracerUI.selectedName(document.getElementById('f-eval-reward-design')),
+          },
+          experiment_design: {
+            id: val('f-eval-experiment-design'),
+            name: RoboracerUI.selectedName(document.getElementById('f-eval-experiment-design')),
+          },
+          eval_all_stages: evalAllStages,
+          // Blank lets the trainer default to the full range (0..last).
+          eval_stage_start: evalAllStages
+            ? document.getElementById('f-eval-stage-start').value : '',
+          eval_stage_end: evalAllStages
+            ? document.getElementById('f-eval-stage-end').value : '',
+        };
         closeEvalModal();
-        await submitEvalJobs(sel, numTrials, trackOverrides, evalAllStages,
-                             stageStart, stageEnd);
+        await submitEvalJobs(sel, form);
       });
 
-      async function submitEvalJobs(rows, numTrials, trackOverrides = {}, evalAllStages = false,
-                                    stageStart = null, stageEnd = null) {
-        const results = await Promise.all(rows.map((m) =>
-          fetch('/add_job', {
+      /**
+       * Queue one EVAL job per selected model.
+       *
+       * The jobs differ only in the fields that belong to the model --
+       * its SavedModel location, and whichever of model type / course /
+       * designs the form left on "From each model". Everything else in
+       * `form` applies uniformly across the selection.
+       *
+       * Course in particular has to follow the model: do_job builds the
+       * eval env from it, and a 31-dim no-hint checkpoint evaluated
+       * against the default 32-dim donut trips EvalSpecMismatchError.
+       * Models predating the course_type stamp carry none, and do_job
+       * then defaults to donut, which is how they were trained.
+       */
+      async function submitEvalJobs(rows, form) {
+        const results = await Promise.all(rows.map((m) => {
+          const payload = RoboracerUI.buildJobPayload({
+            status: 'NOT_STARTED',
+            job_type: 'EVAL',
+            location: m.location,
+            robot_type: form.robot_type,
+            model_type: form.model_type || m.model_type || 'SacAgent',
+            course_type: form.course_type || m.course_type || '',
+            num_trials: form.num_trials,
+            num_eval_episodes: form.num_eval_episodes,
+            corner_radius_val: form.corner_radius_val,
+            curvature_difficulty_val: form.curvature_difficulty_val,
+            gym: form.gym,
+            reward_design: form.reward_design.id
+              ? form.reward_design
+              : { id: String(m.reward_design_id || ''),
+                  name: String(m.reward_design_name || '') },
+            experiment_design: form.experiment_design.id
+              ? form.experiment_design
+              : { id: String(m.experiment_design_id || ''),
+                  name: String(m.experiment_design_name || '') },
+            eval_all_stages: form.eval_all_stages,
+            eval_stage_start: form.eval_stage_start,
+            eval_stage_end: form.eval_stage_end,
+          });
+          return fetch('/add_job', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              status: 'NOT_STARTED',
-              job_type: 'EVAL',
-              iterations: 200,
-              model_type: 'SacAgent',
-              location: m.location,
-              // Curriculum sweep: opt-in flag + the design whose
-              // curriculum_stages the trainer walks. Omitted (no-op) unless
-              // the checkbox is set; if the model has no experiment_design_id
-              // the trainer logs + falls back to a single-geometry eval.
-              ...(evalAllStages ? {
-                eval_all_stages: true,
-                ...(stageStart != null ? { eval_stage_start: stageStart } : {}),
-                ...(stageEnd != null ? { eval_stage_end: stageEnd } : {}),
-                ...(m.experiment_design_id
-                    ? { experiment_design_id: String(m.experiment_design_id) }
-                    : {}),
-              } : {}),
-              // Stamp the model's training-time course onto the EVAL job so
-              // do_job builds the matching env/observation (32-dim donut vs
-              // 31-dim donut_no_hint). Without this the EVAL env would fall
-              // back to the trainer's default course and a no-hint model
-              // would trip EvalSpecMismatchError. Omitted for legacy models
-              // that predate the course_type stamp (do_job then defaults to
-              // donut, matching how those were trained).
-              ...(m.course_type ? { course_type: String(m.course_type) } : {}),
-              // Lets the trainer's run_policy use a non-default
-              // max_episodes. robotaxi.py's do_job EVAL branch reads
-              // this field and passes it through; legacy trainers
-              // that don't know the field will just ignore it (the
-              // job document field is purely additive).
-              num_trials: numTrials,
-              // Track geometry — forwarded to Unity's TrackGenerator on
-              // every episode reset. Omitted when blank so the trainer
-              // falls back to its defaults (corner_radius=10, curvature=0).
-              ...trackOverrides,
-            }),
+            body: JSON.stringify(payload),
           })
             .then((r) => r.ok ? null : `HTTP ${r.status}`)
-            .catch((e) => String(e))
-        ));
+            .catch((e) => String(e));
+        }));
         const errors = results.filter((e) => e !== null);
+        const n = form.num_trials;
         if (errors.length === 0) {
           showToast({
             type: 'success',
-            message: `${rows.length} EVAL job${rows.length === 1 ? '' : 's'} queued (${numTrials} trial${numTrials === 1 ? '' : 's'} each).`,
+            message: `${rows.length} EVAL job${rows.length === 1 ? '' : 's'} queued (${n} trial${n === 1 ? '' : 's'} each).`,
           });
           table.clearSelection();
         } else {
