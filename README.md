@@ -1397,8 +1397,9 @@ All optional; the defaults are what the numbers above were measured with.
 | `FLY_VIZ_ENABLED` | `1` | Overlay publishing off with `0` |
 | `FLY_VIZ_HZ` | `20` | Activity publish rate |
 | `FLY_VIZ_GEOMETRY_S` | `10` | Geometry resend period |
-| `FLY_VIZ_DISPLAY_SIZE` / `_POINT_SIZE` / `_OFFSET` / `_SPIN` | `50` / `0.16` / `-8,40,130` / `0` | Where and how big the brain is drawn |
+| `FLY_VIZ_DISPLAY_SIZE` / `_POINT_SIZE` / `_OFFSET` / `_SPIN` | `44` / `0.16` / `2,40,130` / `0` | Where and how big the brain is drawn |
 | `FLY_VIZ_AXES` | `x,z,y` | Which connectome axis goes on which Unity axis |
+| `FLY_VIZ_ROTATE` | `90` | Turns the picture in the screen plane, signed degrees |
 | `FLY_VIZ_DEPTH_SCALE` | `0.12` | How much of the camera-facing axis to keep |
 | `FLY_VIZ_EDGES` / `_EDGE_ALPHA` | `0` / `0.40` | Draw connections between neurons |
 | `FLY_VIZ_ACT_FLOOR` | `140` | Floor under the activity byte, i.e. resting brightness |

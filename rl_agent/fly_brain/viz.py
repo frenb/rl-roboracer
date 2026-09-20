@@ -25,6 +25,7 @@ rather than queued (same rationale as rollout_viz).
 """
 import base64
 import json
+import math
 import os
 import threading
 import time
@@ -68,15 +69,17 @@ def get_config():
         # restart the trainer). A build has no inspector, so without this every
         # "it's off screen" costs an Editor round trip. Unity falls back to its
         # own defaults when displaySize is absent/0.
-        # Defaults tuned against the sim's top-down camera.
-        "display_size": _float("FLY_VIZ_DISPLAY_SIZE", 50.0),
+        # Defaults tuned against the sim's top-down camera. 44 m, not more:
+        # rotated 90 the cloud is wider than tall, and the gap left of the
+        # track is only ~200 px, so 50 clipped at the window edge.
+        "display_size": _float("FLY_VIZ_DISPLAY_SIZE", 44.0),
         "point_size": _float("FLY_VIZ_POINT_SIZE", 0.16),
         # Parks the overlay in the empty area left of the track, under the ROS
         # HUD, which also puts it over the camera's flat background instead of
         # grass. Note the axes are the overlay parent's LOCAL ones and that
         # parent is rotated: measured against this camera, +z moves the brain
         # left at 3.1 px/m and +x moves it up at 2.5 px/m (at 1250 px wide).
-        "offset": os.environ.get("FLY_VIZ_OFFSET", "-8,40,130"),
+        "offset": os.environ.get("FLY_VIZ_OFFSET", "2,40,130"),
         # 0, not a slow turntable: the sim camera looks straight down, so a
         # spin about Unity's y would swing the brain in the screen plane and
         # left/right would stop meaning left/right.
@@ -96,6 +99,9 @@ def get_config():
         # camera's up maps to -Z: unnegated is what puts sensory at the top of
         # the screen with the flow running down to the descending neurons.
         "axes": os.environ.get("FLY_VIZ_AXES", "x,z,y"),
+        # Turn the picture within the screen plane, in signed degrees. Applied
+        # after `axes`, so it does not disturb which anatomical axis is which.
+        "rotate": _float("FLY_VIZ_ROTATE", 90.0),
         # How much of the camera-facing axis to keep. 1.0 is anatomically
         # honest but perspective-smears the overlay; see _build_geometry.
         "depth_scale": _float("FLY_VIZ_DEPTH_SCALE", 0.12),
@@ -191,6 +197,18 @@ class FlyBrainViz(object):
         # the mean, so the long descending projections down the nerve cord do
         # not drag the centre off the brain.
         pos = pos - np.median(pos, axis=0)
+
+        # Spin within the screen plane. Separate from `axes` on purpose: that
+        # picks which anatomical axis is which, this only turns the picture,
+        # so the two can be changed without reasoning about each other. Signed
+        # degrees, so -90 turns the other way.
+        rot = float(self.cfg["rotate"])
+        if rot:
+            a = math.radians(rot)
+            ca, sa = math.cos(a), math.sin(a)
+            x, z = pos[:, 0].copy(), pos[:, 2].copy()
+            pos[:, 0] = ca * x - sa * z
+            pos[:, 2] = sa * x + ca * z
 
         # Scale the two on-screen axes together, by their shared max, so the
         # anatomy keeps its true aspect and nothing needs clipping. Taking the
