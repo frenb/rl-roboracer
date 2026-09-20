@@ -59,6 +59,19 @@ function Get-JobStatusJson {
     param([string]$Id)
 
     if ($Id) {
+        # Validate before interpolating. An id that isn't a 24-char hex string
+        # makes mongosh throw a bare "BSONError: input must be a 24 character
+        # hex string", which docker compose then decorates with its own
+        # "debug this Compose error" hint - between them you cannot tell that
+        # the real problem was the argument you typed. The usual cause is a
+        # stray token landing on $JobId, which is positional: `-Watch.` binds
+        # the trailing period here.
+        if ($Id -notmatch '^[0-9a-fA-F]{24}$') {
+            Write-Host "  Not a job id: '$Id'" -ForegroundColor Red
+            Write-Host "  Expected 24 hex characters. If you did not mean to pass one," -ForegroundColor Red
+            Write-Host "  re-run with no -JobId and the current IN_PROGRESS job is found for you." -ForegroundColor Red
+            return
+        }
         $js = "printjson(db.jobs.findOne({_id: ObjectId('$Id')}, " +
               "{status:1, job_type:1, gym_name:1, percent_complete:1, " +
               "started_at:1, ended_at:1, notes:1}));"
@@ -102,6 +115,15 @@ if [ -n "$CURRENT_TRAJ" ] && [ -n "$CURRENT_CRASHES" ] && [ "$CURRENT_TRAJ" -gt 
     RATE=$(awk -v c="$CURRENT_CRASHES" -v t="$CURRENT_TRAJ" 'BEGIN{printf "%.3f", (c/t)*1000}')
     echo "current_job_crashes_per_1k_steps=$RATE"
 fi
+# The counters above come from collect_expert_demos and so only ever appear
+# for a DEMO job; a TRAIN job would otherwise report nothing but "unknown"
+# twice and a log tail. These are the TRAIN loop's own progress lines.
+LAST_TRAIN=$(grep -oP 'TRAIN end:\s+iter=\d+/\d+ train_step=\d+.*' "$LOG" | tail -1)
+[ -n "$LAST_TRAIN" ] && echo "train_progress: $LAST_TRAIN"
+LAST_EVAL=$(grep -oP 'EVAL end:.*' "$LOG" | tail -1)
+[ -n "$LAST_EVAL" ] && echo "last_eval: $LAST_EVAL"
+LAST_STAGE=$(grep -oP '\[curriculum\].*stage \d+.*' "$LOG" | tail -1)
+[ -n "$LAST_STAGE" ] && echo "curriculum: $LAST_STAGE"
 echo "(note: crash-pos lines below may include earlier jobs too, if this trainer process has picked up more than one job since it last (re)started - only current_job_crashes above is scoped to just the current job)"
 echo '--- recent [crash-pos] lines (log-wide, may span multiple jobs) ---'
 grep 'crash-pos' "$LOG" 2>/dev/null | tail -__SAMPLES__ || echo '(none yet)'
