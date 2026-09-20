@@ -1351,9 +1351,17 @@ The two populations are also what the palette is built around. The circuit
 keeps its per-role colours (cyan sensory, gold command, orange-red descending)
 and dims toward black when quiet. The silhouette instead crosses a *two-colour*
 ramp, cold slate at rest to amber when firing, so active neuropils burn out of
-an otherwise dark cloud. That only reads against a dark background, and the
-sim's camera clears to a flat mid-grey, so the overlay draws its own backdrop
-quad rather than restyling the scene and dragging the track's look with it.
+an otherwise dark cloud.
+
+That reads only against a dark background, and it assumes the scene gives it
+one. **The overlay draws no background of its own.** If the view camera goes
+back to clearing with the skybox, a resting connectome on mid-grey is close to
+invisible. Note the camera's *Background* colour field has no effect while
+Clear Flags is `Skybox` (`m_ClearFlags: 1`); it is the skybox the top-down
+camera sees the underside of. Changing the skybox **material** instead would
+also change what the car's CSI camera renders — `JetRacerCsiIntrinsics` pins
+that camera to `CameraClearFlags.Skybox` — and therefore what every policy
+observes, so prefer the view camera's Clear Flags.
 
 A payload that size needs the patched ROS-TCP connector; see below.
 
