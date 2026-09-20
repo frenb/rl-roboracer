@@ -68,6 +68,10 @@ COURSE_OBSERVATION_SIZES = {
     "donut": 32,
     "donut_no_hint": 31,
 }
+# Courses in COURSES_WITHOUT_DEMOS are deliberately absent above: their demo
+# pipeline never runs, so a width here would be dead weight that looks
+# authoritative. fly_donut's real width comes from the brain service's own
+# trace_len at course construction, never from a literal.
 # Vector courses use COURSE_OBSERVATION_SIZES (an int). donut_camera is a
 # dict {vector: 31, image: 84x84x3} — do not call set_observation_size for
 # it (that helper only knows a flat width). Networks / BC are Phase 6–7.
@@ -78,15 +82,41 @@ COURSE_OBS_KIND = {
     # Raycast ablation arm of donut_camera: same image, vector narrowed to
     # 2 dims (speed, sideslip). Also dict, so demo/BC is skipped the same way.
     "donut_camera_no_rays": "dict",
+    # Flat float vector, just a very wide one.
+    "fly_donut": "vector",
 }
+
+# Courses with no expert demo corpus, which therefore cannot run DEMO or
+# BC_TRAINING_ONLY. do_job refuses those job types here (see the guard in
+# robotaxi.do_job); TRAIN from scratch and EVAL are fine.
+#
+# The camera courses are listed because their demos need a dict TFRecord
+# layout that does not exist yet (Phase 7) - a solvable problem. fly_donut is
+# listed for a stronger reason: its observation is the brain's own decaying
+# state, so it depends on the entire episode so far and cannot be
+# reconstructed from a recorded scene. There is no TFRecord layout that fixes
+# that, which is why this set is keyed on the course rather than on
+# COURSE_OBS_KIND.
+COURSES_WITHOUT_DEMOS = frozenset({
+    "donut_camera",
+    "donut_camera_no_rays",
+    "fly_donut",
+})
 
 
 def apply_course_observation_size(course_type):
-    """Point the demo/BC pipeline at a vector course, or skip dict courses."""
-    if COURSE_OBS_KIND.get(course_type, "vector") == "dict":
+    """Point the demo/BC pipeline at a course, or skip where it cannot run.
+
+    Gated on the demo corpus rather than the observation kind, because this
+    helper exists only to width-match demo read/write and BC. For a course
+    with no corpus the call is at best pointless and at worst noisy:
+    set_observation_size builds its spec from hardcoded 32-element bounds, so
+    asking it for fly_donut's 1314 raises before it can do anything useful.
+    """
+    if course_type in COURSES_WITHOUT_DEMOS:
         print(
             f"collect_training_data: skip set_observation_size "
-            f"(course={course_type} is dict obs; demo/BC is Phase 7)",
+            f"(course={course_type} has no demo corpus)",
             flush=True)
         return
     set_observation_size(COURSE_OBSERVATION_SIZES.get(course_type, 32))

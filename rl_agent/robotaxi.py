@@ -1434,9 +1434,13 @@ def main(
     print(f"[env_spawn] course_type={_course_type}", flush=True)
     _dict_obs_course = (
         collect_training_data.COURSE_OBS_KIND.get(_course_type) == "dict")
-    if _dict_obs_course:
-        # Phase 6: CNN towers, SAC from scratch. Vector TFRecords / BC / AWAC
-        # would be the wrong spec (Phase 7).
+    # Separate from _dict_obs_course, which selects the CNN towers below. What
+    # matters here is whether an expert corpus exists at this observation
+    # width: the camera courses are dict and have none yet (Phase 7), and
+    # fly_donut is a flat vector course that can never have one, since its
+    # observation is the brain's own history. Keying the skip on the obs kind
+    # would let fly_donut load 31-D TFRecords against a 1314-D spec.
+    if _course_type in collect_training_data.COURSES_WITHOUT_DEMOS:
         print(
             f"main: {_course_type} TRAIN from scratch "
             "(skip expert TFRecords, BC pretrain, AWAC)",
@@ -4558,13 +4562,15 @@ def do_job(job, num_envs=1):
         print(f"do_job: set_observation_size failed (non-fatal): {_e}",
               flush=True)
     print(f"do_job: course_type={_job_course_type}", flush=True)
-    # Phase 6: TRAIN/EVAL are allowed on donut_camera (Conv-SAC). DEMO/BC
-    # still need a dict TFRecord layout (Phase 7).
-    if (collect_training_data.COURSE_OBS_KIND.get(_job_course_type) == "dict"
-            and job.get("job_type") in ("DEMO", "BC")):
+    # TRAIN/EVAL are allowed on every course. DEMO/BC are not: the camera
+    # courses need a dict TFRecord layout that does not exist yet (Phase 7),
+    # and fly_donut's observation is the brain's own history and so cannot be
+    # recorded at all. See COURSES_WITHOUT_DEMOS for the distinction.
+    if (_job_course_type in collect_training_data.COURSES_WITHOUT_DEMOS
+            and job.get("job_type") in ("DEMO", "BC", "BC_TRAINING_ONLY")):
         err = (
-            f"course '{_job_course_type}' DEMO/BC is Phase 7 "
-            "(dict TFRecords). Use TRAIN from scratch."
+            f"course '{_job_course_type}' has no demo corpus - "
+            "DEMO / BC_TRAINING_ONLY are unsupported. Use TRAIN from scratch."
         )
         print(f"do_job: refusing {job.get('job_type')}: {err}", flush=True)
         update_job(job["_id"], err, "eval_error")

@@ -37,6 +37,35 @@ class BaseCourse(ABC):
     def scene_data_array(self, scene_data):
         """Converts scene data to observation array"""
         pass
+
+    def policy_vector(self, data_arr):
+        """The part of ``scene_data_array()`` the policy is allowed to see.
+
+        The env puts this on the TimeStep while rewards, stuck detection and
+        demo metrics keep using the full ``data_arr``, so a course can narrow
+        the observation (donut_camera_no_rays) or replace it outright
+        (fly_donut, whose observation is a neural trace rather than a slice of
+        the scene) without disturbing anything that reads the scene vector.
+
+        Whatever this returns must match ``observation_spec`` - or, for dict
+        courses, ``observation_spec["vector"]``. Identity by default.
+        """
+        return data_arr
+
+    def on_episode_start(self):
+        """Called by ``RobotaxiEnv._reset()`` before the first observation.
+
+        For courses whose observation carries state across steps (fly_donut's
+        brain voltages), this is where that state is cleared. It is deliberately
+        NOT ``reset_after_episode``, which runs from ``reward_success`` /
+        ``reward_failure`` *before* the terminal observation is packed - clearing
+        there would make the last observation of an episode a reading of an
+        already-reset state. Nor is it ``do_reset_blocking``, which
+        ``_reset()`` skips whenever the course already triggered the Unity
+        reset at episode end, i.e. on exactly the episodes that failed.
+        """
+        pass
+
     
     # ------------------------------------------------------------------
     # Reward methods come in two layers:

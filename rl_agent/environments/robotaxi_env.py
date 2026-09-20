@@ -48,6 +48,14 @@ class RobotaxiEnv(py_environment.PyEnvironment):
             # 2 dims (speed, sideslip). scene_data_array() stays 31-D.
             self.course = donut_course_camera_no_rays.DonutCourseCameraNoRays(
                 api, self)
+        elif course_type == 'fly_donut':
+            # Part 5 of docs/flybrain-driver-plan.md: the policy observes the
+            # fly connectome's descending-neuron trace instead of the ray
+            # vector, so SAC learns the readout from reward. scene_data_array()
+            # stays 31-D. Imported lazily so no other course pays for grpc or
+            # a connection attempt to the fly-brain service.
+            from environments.courses.fly_donut_course import FlyDonutCourse
+            self.course = FlyDonutCourse(api, self)
         else:
             self.course = simple_course.SimpleCourse(api, self)
         # Derived from the course rather than a course_type list so a new dict
@@ -239,14 +247,26 @@ class RobotaxiEnv(py_environment.PyEnvironment):
 
     def _pack_observation(self, data_arr, data=None):
         vec = np.asarray(data_arr, dtype=np.float32)
+        # Only the policy's view goes on the TimeStep. Callers that compute
+        # rewards / stuck detection keep using the full data_arr, so a course
+        # that narrows the observation (donut_camera_no_rays) or replaces it
+        # with something that isn't a slice of the scene at all (fly_donut)
+        # cannot disturb them. Identity for donut / donut_no_hint.
+        #
+        # This runs for flat specs too, not just dict ones: the early return
+        # this used to take meant a vector course had no way to change what
+        # the policy saw.
+        pol = np.asarray(self.course.policy_vector(vec), dtype=np.float32)
         if not self._dict_obs:
-            return vec
+            if not self._obs_shape_logged:
+                self._obs_shape_logged = True
+                print(
+                    f'[{self._course_type}] obs '
+                    f'vector{tuple(pol.shape)} (of scene{tuple(vec.shape)})',
+                    flush=True)
+            return pol
         src = data if data is not None else self.data
         image = self._front_camera_image(src)
-        # Only the policy's slice goes on the TimeStep. Callers that compute
-        # rewards / stuck detection keep using the full data_arr, so narrowing
-        # the observation (donut_camera_no_rays) cannot disturb them.
-        pol = np.asarray(self.course.policy_vector(vec), dtype=np.float32)
         if not self._obs_shape_logged:
             self._obs_shape_logged = True
             print(
@@ -259,12 +279,21 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         return {'vector': pol, 'image': image}
 
     def _as_obs_time_step(self, time_step, data_arr, data=None):
-        if not self._dict_obs:
-            return time_step
+        # The course's reward_* methods build the TimeStep with the raw scene
+        # vector on it. Replace that with the policy's view unconditionally:
+        # for donut / donut_no_hint policy_vector is the identity and this is
+        # the same np.float32 array the course already put there, and for a
+        # course whose observation is not a slice of the scene at all it is
+        # the only place the substitution can happen.
         return time_step._replace(observation=self._pack_observation(data_arr, data))
 
     def _reset(self):
         self._episode_ended = False
+        # Before the first observation of the episode, so a course carrying
+        # state inside its observation starts clean. See
+        # BaseCourse.on_episode_start for why it is neither of the two
+        # reset hooks that already existed.
+        self.course.on_episode_start()
         # Skip the Unity reset if it was already triggered immediately on
         # episode end (see donut_course.reward_failure). This avoids a
         # redundant 4-second reset wait when the trainer eventually calls
