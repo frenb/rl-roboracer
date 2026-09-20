@@ -1243,6 +1243,47 @@ The full plan, including the measurements behind each design choice, is
    (accel, steer) ◄── ridge readout ◄── 1,314-wide descending-neuron trace
 ```
 
+#### Two terms this section uses
+
+**Ridge training** (the *ridge readout*, or just *the ridge*) — the only fitted
+part of the whole pipeline. The 1,314-wide trace is mapped to `(accel, steer)`
+by ridge regression, i.e. L2-regularized linear least squares, fit **offline on
+the expert demo corpus**. The target is what the PID expert did on each frame,
+so this is behaviour cloning, not reinforcement learning: no reward is involved
+and no gradient reaches the connectome, whose wiring stays frozen throughout.
+Held-out R² is 0.62 for steering and 0.18 for acceleration; see *Encoder and
+readout* below for why that second number is what caps the policy at 6.87.
+
+The contrast worth holding onto: the `fly_donut` course replaces this fitted
+linear map with SAC's actor, which learns the *same* readout from reward
+instead. Everything upstream of the arrow — encoder, brain, trace — is
+identical; only who fits the last step changes. That is the whole point of
+Part 5 of the plan.
+
+**Lane work** — the unbuilt change that would let more than one environment
+train against the brain at the same time. The `fly-brain` service holds **one**
+`FlyBrain` with a single voltage array behind a single lock, and `Reset` and
+`Step` both mutate it. Two environments sharing it do not race and do not
+error; they *interleave*, and each reads a trace shaped by the other's rays. It
+shows up only as a slow, silent drift: a determinism check run while an eval
+happened to be mid-job returned `max|Δtrace| = 1.6` for a fixed seed instead of
+the usual `0.0`, and nothing anywhere logged a complaint.
+
+A *lane* is one column of a batched brain — `FlyBrain` already stores voltages
+as `(n_neurons, batch)`, and `Trace(aggregate="batch")` already returns one
+column per fly. The work is the four things that don't exist yet: coalescing
+the N concurrent `Step` calls into one batched step (you cannot advance a
+single column — `step()` moves them all), a **per-lane `Reset`** for the
+asynchronous episode boundaries (today's `reset()` clears every column and
+reseeds globally), sending explicit zeros for lanes whose cue is inactive
+rather than dropping the population, and plumbing the existing `actor_index`
+through to the course, where it currently stops at log prefixing. You need
+`num_envs + 1` lanes, since multi-env runs build a separate eval env.
+
+Until that exists, **every fly job runs at `--num-envs 1`**. Note also that
+batching is not free: measured 13.3 → 8.4 ms per fly going from batch 1 to 8,
+so it buys about 1.6x, not 8x.
+
 #### Why it's a separate container
 
 `flybrain` needs Python 3.10; sim-controller is pinned to Python 3.8 by
@@ -1297,7 +1338,8 @@ essentially not at all. The flat 4-scalar encoder is the default.
 `PyPolicy`, so it goes through the **normal EVAL dispatch** next to
 `RandomPyPolicy` and lands a leaderboard row directly comparable to SAC. Queue
 an EVAL job with `model_type: FlyPyPolicy` (it's in the dashboard's job form),
-then run the trainer with `--num-envs 1`.
+then run the trainer with `--num-envs 1` — see *lane work* above for why that
+is a correctness requirement and not just a throughput choice.
 
 The policy resets the brain and encoder on every `StepType.FIRST` and seeds the
 reset with the episode index — a fixed per-episode seed, without which the
