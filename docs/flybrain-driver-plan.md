@@ -620,22 +620,22 @@ shows geometry arriving once and activity arriving steadily at 20 Hz.
 > python check_rollouts.py ros-server-0:50051 25 fly_brain_activity
 >   Received 347 message(s). ~18.0 Hz. OK - data is flowing.
 > python check_rollouts.py ros-server-0:50051 25 fly_brain_geometry
->   Received 2 message(s). 166131 chars each. OK - data is flowing.
+>   Received 2 message(s). OK - data is flowing.
 > ```
 >
 > Three decisions worth keeping:
 >
 > - **Every numeric field is base64 of a little-endian buffer, geometry
->   included** — not just the activity bytes the plan called for. The subset as
->   JSON number arrays is 207 KB against 120 KB packed, and Unity's
->   `JsonUtility` would otherwise allocate and parse 24,000 floats on each
->   resend; `Convert.FromBase64String` plus a `Buffer.BlockCopy` is one
->   allocation.
+>   included** — not just the activity bytes the plan called for. Measured at
+>   the final 3,225-neuron subset: **184 KB against 348 KB** for the same arrays
+>   as JSON numbers, and Unity's `JsonUtility` would otherwise allocate and
+>   parse ~33,000 boxed floats on each resend; `Convert.FromBase64String` plus a
+>   `Buffer.BlockCopy` is one allocation.
 > - **Geometry is resent every 10 s, not once.** The routing table is static
 >   and gives Unity no way to ask for a resend, so a client that connects (or
 >   reloads its scene) after the first send would otherwise never draw
->   anything. At 166 KB that averages ~17 KB/s against the activity stream's
->   ~54 KB/s.
+>   anything. At 184 KB that averages ~18 KB/s against the activity stream's
+>   ~86 KB/s (4.3 KB per frame at 20 Hz).
 > - **Positions are normalized to a unit box before publishing**, so the Unity
 >   side is one scale factor instead of raw MaleCNS soma coordinates (which run
 >   to ~84,000 on the x axis).
