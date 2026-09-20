@@ -802,9 +802,26 @@ and each reads a trace shaped by the other's rays, silently and with no error.
 
 So this step runs at `--num-envs 1` until the service grows lanes. The
 groundwork is already there: `FlyBrain(batch=N)` exists and `Info` already
-reports `batch`, so the work is a `lane` field on `StepRequest` / `ResetRequest`
-routing into a batch column, not a second brain (~1.2 ms per fly per step
-against 13.4 ms for a lone one).
+reports `batch`, `Trace` takes `aggregate="batch"` to keep one column per fly,
+and `FlyBrain._amount` already broadcasts a per-lane amount vector. So the work
+is lane routing, not a second brain.
+
+**Measured batch scaling, and it is much worse than the ~1.2 ms/fly this
+document used to claim** (one control step = 5 substeps, RTX 4090 Laptop):
+
+| batch | ms / control step | ms per fly | speedup vs serial |
+|---|---|---|---|
+| 1 | 13.3 | 13.3 | — |
+| 2 | 21.4 | 10.7 | 1.24x |
+| 4 | 37.5 | 9.4 | 1.42x |
+| 8 | 66.8 | 8.4 | 1.59x |
+
+Eight flies cost five lone flies, not one. The synaptic input is a sparse
+matmul over 166,700 neurons and it scales close to linearly in the batch
+dimension, so batching buys ~1.6x at best, not Nx. It still beats stepping N
+brains serially, and N separate `FlyBrain` objects would also cost N times the
+GPU weights, so batching remains the right design — just do not expect the
+brain to become free.
 
 > **This is not theoretical — it was triggered by accident during step 10.**
 > A determinism check run from a shell while a `FlyPyPolicy` eval happened to
@@ -885,8 +902,11 @@ step**, about 20 minutes of pure brain compute over an 87k-step run. That fits
 a 10 Hz sim-time budget easily, but `Time.timeScale` (3 in `SimController`, 5 in
 `BootStrap`) pushes the real control rate to 30–50 Hz, i.e. a 20–33 ms
 wall-clock budget. 13.4 ms fits with less headroom than is comfortable, so
-batch across actors (`FlyBrain(batch=N)`, ~1.2 ms per fly per step) before
-raising `--num-envs`.
+batch across actors (`FlyBrain(batch=N)`) before raising `--num-envs` — but see
+the measured batch-scaling table in step 10 before assuming that is cheap; it
+buys about 1.6x at batch 8, not 8x. In practice the step-10 run measured
+0.23 s/iteration with 0.09 s of that in collect, so the Unity round trip, not
+the brain, is the thing setting the pace at one env.
 
 **Noise makes the brain non-deterministic.** The same rays give a different
 trace twice. Seed per episode on reset so runs are reproducible, and see the
