@@ -1353,6 +1353,16 @@ and dims toward black when quiet. The silhouette instead crosses a *two-colour*
 ramp, cold slate at rest to amber when firing, so active neuropils burn out of
 an otherwise dark cloud.
 
+`FLY_SNAPSHOT_FULL` is the one that decides whether the overlay looks alive.
+It sets what counts as maximum brightness, in accumulated spikes. It was
+originally `1/(1-decay)` = 8.0, i.e. "fires on every substep" — which only a
+few tonically-driven cells ever do, so measured over 200 frames **591 neurons
+sat pinned at 255 and supplied 42% of all the light on screen**, while genuine
+bursts (1–2 spikes' worth) landed near a byte of 40 and disappeared under the
+1.6 display gamma. The spiking was there the whole time; it was three stops
+too dim to see against a static core. At 1.8 nothing is permanently saturated
+and the median neuron's variation over time is 4.5x larger.
+
 That reads only against a dark background, and it assumes the scene gives it
 one. **The overlay draws no background of its own.** If the view camera goes
 back to clearing with the skybox, a resting connectome on mid-grey is close to
@@ -1454,6 +1464,7 @@ All optional; the defaults are what the numbers above were measured with.
 | `FLY_VIZ_DEPTH_SCALE` | `0.12` | How much of the camera-facing axis to keep |
 | `FLY_VIZ_EDGES` / `_EDGE_ALPHA` | `0` / `0.40` | Draw connections between neurons |
 | `FLY_VIZ_ACT_FLOOR` | `0` | Floor under the activity byte, i.e. resting brightness |
+| `FLY_SNAPSHOT_TAU` / `_FULL` | `0.15` / `1.8` | Overlay decay time, and the accumulated trace that counts as full brightness (**fly-brain**, needs a restart) |
 | `FLY_CONTEXT_N` | `16000` | Silhouette neurons (on **fly-brain**, needs a restart) |
 
 `FLY_VIZ_AXES` is the one worth explaining. These are the overlay parent's
