@@ -710,8 +710,139 @@ introduced a new observation shape. Rewards keep using the full
 `scene_data_array()`, so the reward design is untouched and results stay
 comparable.
 
-**You are done when.** A short job trains without shape errors and TensorBoard
-shows a moving `avg_return`.
+**It targets the channel behaviour cloning could not fit.** Step 5's ridge
+reached R² 0.620 on steering but only 0.176 on throttle, and the throttle
+prediction falls below the course's own 0.05 action floor on ~54% of frames, so
+the car sits pinned near minimum throttle at 1.9–2.4 m/s against SAC's 5.4.
+Learning the readout from reward instead of regressing it onto expert actions is
+the direct answer to that, which is why this step is worth more than tuning the
+ridge further.
+
+**You are done when.** A short job trains without shape errors, the actor log
+prints `[fly_donut] obs vector(1314,)` once, and TensorBoard shows a moving
+`avg_return`.
+
+#### Implementation plan
+
+**The shape of it.** `FlyDonutCourse(DonutCourseNoHint)`, the same subclassing
+move `donut_course_camera.py` already makes for a new observation shape.
+`scene_data_array()` stays the 31-D no-hint vector, so rewards, stuck detection,
+curriculum and demo metrics keep indexing `data_arr` exactly as they do today.
+Only what the policy sees changes. The seam for that already exists:
+`policy_vector(data_arr)`, introduced for the camera ablation, is documented as
+"slice of `scene_data_array()` the policy is allowed to see".
+
+**1. `rl_agent/environments/courses/fly_donut_course.py`** (new).
+
+* `__init__` builds a `FlyBrainClient`, a `RayEncoder` and `resolve_cells(client)`,
+  then replaces `observation_spec` with a flat `BoundedArraySpec(shape=(N,),
+  dtype=float32)` where `N = client.info.trace_len`. Read the width off the
+  service rather than hardcoding 1314, and fail loudly at construction if it
+  disagrees, the way `FlyPyPolicy.__init__` already checks `trace_len` against
+  its readout. Bounds: the trace is a non-negative decaying spike trace, so
+  `minimum=0.0` and a `maximum` derived from `TRACE_TAU` (the saturation value
+  of the trace, not a guess).
+* `get_empty_state()` returns `np.zeros(N, np.float32)`.
+* `policy_vector(data_arr)` is `FlyPyPolicy._action` minus the ridge readout —
+  `self._enc.encode(data_arr, self._cells)`, then `self._client.step(inject,
+  substeps=SUBSTEPS, want_snapshot=self._viz.enabled)`, feed the overlay, return
+  the trace. SAC replaces the readout, which is the whole point of Part 5. Wiring
+  `FlyBrainViz` in here is why the overlay was built before this step.
+* `on_episode_start()` calls `super()`, then `client.reset(seed=episode)` and
+  `enc.reset()` with a per-episode counter, mirroring what the policy does on
+  `StepType.FIRST`.
+
+> **Correction from implementing it.** This section first said to hang the
+> brain reset off `reset_after_episode()`. That is wrong: it runs from
+> `reward_success` / `reward_failure` *before* the terminal observation is
+> packed, so the last observation of every episode would be a reading of an
+> already-cleared brain. `do_reset_blocking()` is worse — `_reset()` skips it
+> whenever the course already triggered the Unity reset at episode end, i.e. on
+> exactly the episodes that failed. The fix is a new `BaseCourse.on_episode_start()`
+> hook called at the top of `RobotaxiEnv._reset()`, which always runs and runs
+> at the right moment.
+>
+> The env needed a second change for the same reason. `_as_obs_time_step()`
+> also returned early for flat specs, so on non-dict courses the TimeStep's
+> observation came from the course's own `ts.transition(np.array(data_arr, ...))`
+> and never passed through `_pack_observation` at all. Both early returns are
+> gone; every observation now goes through `policy_vector`, which is the
+> identity for `donut` / `donut_no_hint` and returns the same `np.float32`
+> array those courses already built.
+
+**2. `base_course.py`** gains a default `policy_vector(self, data_arr): return
+data_arr`. It only exists on `DonutCourseCamera` today.
+
+**3. `robotaxi_env.py`**, two changes. Register `elif course_type ==
+'fly_donut'`. Then in `_pack_observation`, the early `if not self._dict_obs:
+return vec` has to route through `policy_vector` as well — right now the policy
+slice is applied *only* to dict observations, so a flat course cannot replace
+what the policy sees. With the base default from (2) in place that generalization
+is a no-op for `donut` and `donut_no_hint`.
+
+**4. `collect_training_data.py`** gains `"fly_donut": <trace_len>` in
+`COURSE_OBSERVATION_SIZES` and `"fly_donut": "vector"` in `COURSE_OBS_KIND`.
+**DEMO and BC_TRAINING_ONLY must then be refused**, because no demo corpus
+exists at this width and none can: the trace depends on the brain's own history,
+so a recorded observation cannot be reconstructed from a stored scene. `do_job`'s
+existing guard keys off `COURSE_OBS_KIND == "dict"`, which will not catch a
+vector course — widen it to an explicit "no demo corpus" set covering both.
+Like `donut_camera`, this is SAC from scratch with no expert bootstrap.
+
+**5. Dashboard.** One line in `jobOptions.courses` in `dashboard/components.js`,
+and a `fly_donut` branch in `updateJobHint` in `jobs.html` saying TRAIN-only,
+alongside the existing camera matrix.
+
+#### The blocker: the service holds exactly one brain
+
+`FlyBrainService.__init__` creates a single `self.brain` behind a single
+`self.lock`, and both `Reset` and `Step` mutate that one set of voltages. Two
+environments sharing it do not race — the lock prevents that — they *interleave*,
+and each reads a trace shaped by the other's rays, silently and with no error.
+
+So this step runs at `--num-envs 1` until the service grows lanes. The
+groundwork is already there: `FlyBrain(batch=N)` exists and `Info` already
+reports `batch`, so the work is a `lane` field on `StepRequest` / `ResetRequest`
+routing into a batch column, not a second brain (~1.2 ms per fly per step
+against 13.4 ms for a lone one).
+
+> **This is not theoretical — it was triggered by accident during step 10.**
+> A determinism check run from a shell while a `FlyPyPolicy` eval happened to
+> be mid-job reported `max|trace - trace2| = 1.6` for the same seed, against
+> the `0.0` recorded in the verified-interface-facts section. Nothing errored
+> on either side. The first step after a `Reset` still matched exactly (the
+> reset wins the race), and the divergence grew with step count as the two
+> consumers interleaved. Re-run with the brain idle, it was `0.0` again. So
+> the failure mode is a slow drift with no signal, and it silently
+> contaminated a leaderboard row.
+
+**One lane is exactly enough at `--num-envs 1`, and not one more.** `main()`
+only builds a separate eval env when `num_envs > 1`; below that `eval_env = env`,
+literally the same object, so the collect loop and the periodic evals share one
+course instance and one brain client and never overlap. At `num_envs > 1` the
+dedicated eval env is a second consumer, so the lane work gates both raising
+`--num-envs` *and* the multi-env eval path — there is no configuration where more
+envs works without it.
+
+#### Sizing and other details
+
+**Networks and replay.** 1314-D into the existing 512×512 actor and critic takes
+the first layer from 31×512 ≈ 16k weights to 1314×512 ≈ 673k — still small, but
+worth asking whether 512 is the right width for an input this wide. Replay at the
+default `replay_buffer_capacity_val=75000` holds 75,000 × 1314 × 4 B ≈ 394 MB of
+observations, which is comfortable.
+
+**Use `reset_after_episode()`, not `do_reset_blocking()`.** `RobotaxiEnv._reset()`
+skips `do_reset_blocking()` when `_reset_pending` is set, because the course
+already triggered the Unity reset at episode end. A brain reset hung off it would
+be skipped on exactly the episodes that ended in failure — most of them, early in
+training. `reset_after_episode()` is called from both `reward_success` and
+`reward_failure`, so it always fires.
+
+**Watch the replay caveat first if training is unstable.** The trace depends on
+the brain's voltages, which depend on the whole episode so far, so off-policy
+replay learns from features it cannot exactly reconstruct. See the note at the
+end of this document.
 
 ### Step 11 — Train it and compare honestly *(sim)*
 
