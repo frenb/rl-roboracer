@@ -24,6 +24,20 @@
  *   showToast({type, message, duration})  -> renders a transient toast
  *   confirmDialog({title, message, ...})  -> Promise<boolean>
  *
+ *   jobOptions                            -> option lists for the job dialogs
+ *                                            (statuses, job/model/robot types,
+ *                                            courses, trial presets)
+ *   fetchJobList(kind, {force})           -> cached /get_gyms | /get_reward_designs
+ *                                            | /get_experiment_designs
+ *   loadJobListIntoSelect(kind, sel)      -> repopulate a picker from that list
+ *   selectedName(sel) / selectedGym(sel)  -> read a picker back for a payload
+ *   clampTrialCount(v)                    -> 1..100
+ *   evalCostEstimate(trials, epsPerTrial) -> {totalEpisodes, eta} footer line
+ *   fillStageSelects(start, end, stages)  -> curriculum Start/End pickers
+ *   wireStageRange(start, end)            -> keep start <= end
+ *   buildJobPayload(fields)               -> the /add_job document, one definition
+ *                                            shared by both job dialogs
+ *
  *   class TableView                       -> declarative table component
  *
  * TableView usage example:
@@ -52,7 +66,7 @@
   // DevTools console which build of components.js is actually running.
   // Bump alongside the ?v=... query string in jobs/models/leaderboard/
   // analysis HTML when shipping a change to this file.
-  console.log('[RoboracerUI] components.js v20260530-design-name-full loaded');
+  console.log('[RoboracerUI] components.js v20260920-job-dialogs loaded');
 
   /* ---------- formatters ---------------------------------------- */
 
@@ -1576,6 +1590,317 @@
     }
   }
 
+  /* ---------- job dialogs: shared options, loaders, payload ------ *
+   *
+   * The Jobs tab's "New job" dialog and the Models tab's "Eval
+   * selected" dialog both create documents in the same `jobs`
+   * collection, and /add_job inserts req.body verbatim with no schema.
+   * They used to share nothing: the gym loader was copy-pasted into
+   * both files, the experiment-design cache was forked under two
+   * names, and the two payloads disagreed on key names. That drift is
+   * invisible until the trainer reads a job and finds the wrong keys,
+   * so the option lists, the loaders and the payload shape all live
+   * here now and both dialogs go through them.
+   */
+
+  const jobOptions = {
+    statuses: ['NOT_STARTED', 'IN_PROGRESS', 'DONE'],
+    jobTypes: ['TRAIN', 'DEMO', 'EVAL', 'BC_TRAINING_ONLY'],
+    modelTypes: ['SacAgent', 'GreedyPolicy', 'RandomPyPolicy', 'FlyPyPolicy'],
+    robotTypes: ['robotaxi', 'niryo'],
+    // Value is what the trainer sees; label is what the picker shows.
+    // "trainer default" is a sentinel, not a course: it is stripped in
+    // buildJobPayload so the trainer's ROBOTAXI_COURSE_TYPE env-var
+    // fallback still applies.
+    courseDefault: 'trainer default',
+    courses: [
+      { value: 'trainer default', label: 'trainer default (donut, 32-dim)' },
+      { value: 'donut', label: 'donut (32-dim)' },
+      { value: 'donut_no_hint', label: 'donut_no_hint (31-dim, no angle-to-goal)' },
+      { value: 'donut_camera', label: 'donut_camera (31-D + 84x84 CSI)' },
+      { value: 'donut_camera_no_rays',
+        label: 'donut_camera_no_rays (2-D + 84x84 CSI, raycast ablation)' },
+      { value: 'fly_donut',
+        label: 'fly_donut (1314-D fly connectome trace)' },
+    ],
+    // Trial-count chips on the eval form, and what each n buys you on
+    // the Analysis tab.
+    trialPresets: [
+      { n: 3, tag: 'smoke', title: 'Quick smoke test. Wide CIs; OK for sanity checking a checkpoint.' },
+      { n: 10, tag: 'std', title: 'Standard - meaningful CI. Minimum n for an honest model-vs-model comparison.' },
+      { n: 30, tag: 'tight', title: 'Tight CI / CLT comfort - t-based and bootstrap CIs typically agree above this.' },
+      { n: 50, tag: 'paper', title: 'Publication-grade. Costs ~50 x num_eval_episodes raw episodes per model.' },
+    ],
+  };
+
+  const JOB_LIST_SOURCES = {
+    gyms: { url: '/get_gyms' },
+    reward_designs: { url: '/get_reward_designs', pinned: 'passthrough-course-default' },
+    experiment_designs: { url: '/get_experiment_designs', pinned: 'experiment-default' },
+  };
+  const JOB_LIST_TTL_MS = 30000;
+  const _jobListCache = new Map();
+
+  /**
+   * Fetch one of the pickers' backing collections, cached.
+   *
+   * `force` bypasses the cache for user-initiated opens (all three
+   * calls are cheap and a newly-authored design should appear without
+   * a page reload). The endpoints answer the literal string
+   * 'NO_CHANGES' when nothing moved since the last poll, which is not
+   * JSON and must not reach JSON.parse.
+   *
+   * Never throws: a picker that cannot reach the server should still
+   * let you submit a job, it just shows its placeholder option.
+   */
+  async function fetchJobList(kind, { force = false } = {}) {
+    const src = JOB_LIST_SOURCES[kind];
+    if (!src) throw new Error(`unknown job list: ${kind}`);
+    const hit = _jobListCache.get(kind);
+    if (!force && hit && (Date.now() - hit.at) < JOB_LIST_TTL_MS) return hit.rows;
+    let rows = hit ? hit.rows : [];
+    try {
+      const res = await fetch(`${src.url}?force=true`);
+      if (res.ok) {
+        const text = await res.text();
+        if (text && text !== 'NO_CHANGES') rows = JSON.parse(text) || [];
+      }
+    } catch (e) {
+      console.warn(`${kind} fetch failed:`, e);
+    }
+    _jobListCache.set(kind, { at: Date.now(), rows });
+    return rows;
+  }
+
+  /**
+   * Repopulate a picker from one of those collections.
+   *
+   * Archived rows are hidden so you can only start work against a
+   * currently-active design, while archived ones stay resolvable for
+   * existing model records that reference them. The canonical seeded
+   * design is pinned above the alphabetical rest.
+   *
+   * Everything from index 1 on is replaced and the placeholder option
+   * at index 0 is preserved -- that option carries the "no design /
+   * no gym" value which selects the trainer's legacy code path, so
+   * wiping it would change what an untouched form submits.
+   */
+  async function loadJobListIntoSelect(kind, sel, { force = true } = {}) {
+    if (!sel) return;
+    const src = JOB_LIST_SOURCES[kind];
+    const rows = await fetchJobList(kind, { force });
+    while (sel.options.length > 1) sel.remove(1);
+    const visible = rows
+      .filter((r) => !r.archived)
+      .sort((a, b) => {
+        const aCan = src.pinned && String(a._id || '') === src.pinned;
+        const bCan = src.pinned && String(b._id || '') === src.pinned;
+        if (aCan && !bCan) return -1;
+        if (bCan && !aCan) return 1;
+        return String(a.name || '').localeCompare(String(b.name || ''));
+      });
+    for (const r of visible) {
+      const opt = document.createElement('option');
+      opt.value = String(r._id);
+      const ver = r.version ? ` (v${r.version})` : '';
+      opt.textContent = (r.name || '(unnamed)') + ver;
+      // Gyms stash their build path here so a submit can stamp
+      // gym_file_path without a second round-trip; do_job needs it to
+      // signal the Unity supervisor.
+      if (kind === 'gyms') opt.title = String(r.file_path || '');
+      sel.appendChild(opt);
+    }
+  }
+
+  /** The picked option's text, with the " (vN)" suffix hydrate added removed. */
+  function selectedName(sel) {
+    if (!sel || sel.selectedIndex < 0) return '';
+    const label = sel.options[sel.selectedIndex].textContent || '';
+    return label.replace(/\s*\(v\d+\)\s*$/, '');
+  }
+
+  /** The picked gym as the three keys a job document carries. */
+  function selectedGym(sel) {
+    const id = sel ? String(sel.value || '') : '';
+    if (!id) return null;
+    const opt = sel.options[sel.selectedIndex];
+    return {
+      id,
+      name: (opt && opt.textContent) || '',
+      file_path: (opt && opt.title) || '',   // title holds file_path
+    };
+  }
+
+  function clampTrialCount(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 1) return 1;
+    return Math.min(100, Math.floor(n));
+  }
+
+  // run_policy's own default for episodes-per-trial when the job
+  // document omits num_eval_episodes.
+  const EPISODES_PER_TRIAL_DEFAULT = 5;
+  // Eval cost is dominated by env-step wall time; ~2-6s/episode on
+  // ros-server-0 in practice. The footer line exists to answer "is
+  // this going to take an hour?" before you click submit.
+  const SECS_PER_EPISODE_LOW = 2;
+  const SECS_PER_EPISODE_HIGH = 6;
+
+  /** {trials, episodesPerTrial, totalEpisodes, eta} for the footer line. */
+  function evalCostEstimate(numTrials, episodesPerTrial) {
+    const trials = clampTrialCount(numTrials);
+    const eps = Math.max(1, Math.floor(Number(episodesPerTrial) || EPISODES_PER_TRIAL_DEFAULT));
+    const totalEpisodes = trials * eps;
+    // Tidy unit: under a minute reads in seconds, so 15s and 90s don't
+    // both render as "0m".
+    const fmt = (mins) => (mins < 1
+      ? `${Math.round(mins * 60)}s`
+      : `${mins.toFixed(mins < 10 ? 1 : 0)}m`);
+    const eta = `~${fmt(totalEpisodes * SECS_PER_EPISODE_LOW / 60)}`
+      + `\u2013${fmt(totalEpisodes * SECS_PER_EPISODE_HIGH / 60)}`;
+    return { trials, episodesPerTrial: eps, totalEpisodes, eta };
+  }
+
+  /**
+   * Fill a pair of Start/End stage pickers from a curriculum.
+   *
+   * Stages only ever come from an experiment design's
+   * curriculum_stages -- gyms carry none. The two pickers share one
+   * option set because the eval runs the inclusive [start, end] range,
+   * and they are cleared outright rather than kept past index 0: there
+   * is no meaningful "no stage" placeholder, an empty curriculum means
+   * the whole sweep is unavailable.
+   */
+  function fillStageSelects(startSel, endSel, stages) {
+    const list = Array.isArray(stages) ? stages : [];
+    if (!startSel || !endSel) return 0;
+    startSel.innerHTML = '';
+    endSel.innerHTML = '';
+    list.forEach((s, k) => {
+      const st = s || {};
+      const cr = (st.corner_radius != null) ? st.corner_radius : '?';
+      const label = `Stage ${k} \u2014 r=${cr} chic ${st.chicanes_north || 0}/`
+        + `${st.chicanes_east || 0}/${st.chicanes_south || 0}/${st.chicanes_west || 0}`;
+      for (const sel of [startSel, endSel]) {
+        const opt = document.createElement('option');
+        opt.value = String(k);
+        opt.textContent = label;
+        sel.appendChild(opt);
+      }
+    });
+    if (list.length) {
+      startSel.value = '0';
+      endSel.value = String(list.length - 1);
+    }
+    return list.length;
+  }
+
+  /** Keep a Start/End stage pair ordered after either one changes. */
+  function wireStageRange(startSel, endSel) {
+    if (!startSel || !endSel) return;
+    startSel.addEventListener('change', () => {
+      if (Number(startSel.value) > Number(endSel.value)) endSel.value = startSel.value;
+    });
+    endSel.addEventListener('change', () => {
+      if (Number(endSel.value) < Number(startSel.value)) startSel.value = endSel.value;
+    });
+  }
+
+  /** '' / null / non-numeric -> undefined, so the caller can omit the key. */
+  function optionalNumber(v) {
+    if (v === '' || v === null || v === undefined) return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  }
+
+  /**
+   * Build the job document both dialogs POST to /add_job.
+   *
+   * The governing convention is **omit rather than zero**. do_job
+   * applies its own per-job-type defaults for a missing field
+   * (num_iterations -> 50000, training_steps -> 20000, corner radius
+   * 10 / curvature 0), but treats any present value including 0 as
+   * deliberate. Sending an explicit 0 for a blank box is how a DEMO
+   * job once ended up collecting zero episodes. Omitting also keeps
+   * documents byte-identical to legacy jobs for untouched fields.
+   *
+   * Note `num_iterations`, not `iterations`: the trainer reads the
+   * former and never reads the latter, so the `iterations: 200` the
+   * eval dialog used to send was dead weight in every EVAL document.
+   */
+  function buildJobPayload(o) {
+    const jobType = o.job_type;
+    const course = String(o.course_type || '');
+    const payload = {
+      status: o.status || 'NOT_STARTED',
+      job_type: jobType,
+      model_type: o.model_type,
+      robot_type: o.robot_type || 'robotaxi',
+      demo_job_id: String(o.demo_job_id || ''),
+      // Hardcoded false in the trainer; kept so documents from both
+      // dialogs have the same shape.
+      pass_through_actions: false,
+    };
+
+    const numbers = {
+      num_iterations: optionalNumber(o.num_iterations),
+      training_steps: optionalNumber(o.training_steps),
+      num_trials: optionalNumber(o.num_trials),
+      num_eval_episodes: optionalNumber(o.num_eval_episodes),
+      corner_radius_val: optionalNumber(o.corner_radius_val),
+      curvature_difficulty_val: optionalNumber(o.curvature_difficulty_val),
+    };
+    for (const [k, v] of Object.entries(numbers)) {
+      if (v !== undefined) payload[k] = v;
+    }
+
+    // TRAIN-only, and omitted when off so legacy documents stay
+    // bit-identical (do_job treats missing as false).
+    if (o.skip_first_eval && jobType === 'TRAIN') payload.skip_first_eval = true;
+
+    if (course && course !== jobOptions.courseDefault) payload.course_type = course;
+
+    // EVAL against a saved checkpoint.
+    if (o.location) payload.location = String(o.location);
+
+    if (o.gym && o.gym.id) {
+      payload.gym_id = o.gym.id;
+      payload.gym_name = o.gym.name || '';
+      payload.gym_file_path = o.gym.file_path || '';
+    }
+
+    // Both designs are stamped on every job_type when picked, not just
+    // the type that reads them. TRAIN uses the reward design and every
+    // field of the experiment design; DEMO uses only the latter's
+    // curriculum_stages; EVAL reads curriculum_stages for a sweep. The
+    // field is harmless on the others and preserves the user's intent
+    // if the job is later restarted as a different type.
+    if (o.reward_design && o.reward_design.id) {
+      payload.reward_design_id = o.reward_design.id;
+      if (o.reward_design.name) payload.reward_design_name = o.reward_design.name;
+    }
+    if (o.experiment_design && o.experiment_design.id) {
+      payload.experiment_design_id = o.experiment_design.id;
+      if (o.experiment_design.name) {
+        payload.experiment_design_name = o.experiment_design.name;
+      }
+    }
+
+    // Curriculum sweep: the trainer walks the inclusive stage range of
+    // the experiment design's curriculum instead of one fixed
+    // geometry, so the corner-radius / curvature values above are
+    // ignored in this mode (each stage stamps its own, including the
+    // per-edge chicane counts those two inputs cannot express).
+    if (o.eval_all_stages) {
+      payload.eval_all_stages = true;
+      const s = optionalNumber(o.eval_stage_start);
+      const e = optionalNumber(o.eval_stage_end);
+      if (s !== undefined) payload.eval_stage_start = s;
+      if (e !== undefined) payload.eval_stage_end = e;
+    }
+    return payload;
+  }
+
   /* ---------- exports ------------------------------------------- */
 
   global.RoboracerUI = {
@@ -1585,5 +1910,16 @@
     TableView,
     FreshnessIndicator,
     DataWebSocket,
+    jobOptions,
+    fetchJobList,
+    loadJobListIntoSelect,
+    selectedName,
+    selectedGym,
+    clampTrialCount,
+    evalCostEstimate,
+    fillStageSelects,
+    wireStageRange,
+    buildJobPayload,
+    EPISODES_PER_TRIAL_DEFAULT,
   };
 })(window);
