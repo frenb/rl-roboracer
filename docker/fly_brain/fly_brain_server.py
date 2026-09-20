@@ -84,12 +84,24 @@ class FlyBrainService(pb_grpc.FlyBrainServicer):
         return pb.ResetReply()
 
     def Step(self, request, context):
-        inject = [(np.frombuffer(g.idx, np.int32), float(g.amount))
-                  for g in request.inject]
-        for idx, _ in inject:
+        xp = self.brain.xp
+        inject, dense = [], []
+        for g in request.inject:
+            idx = np.frombuffer(g.idx, np.int32)
             if len(idx) and (idx.min() < 0 or idx.max() >= self.brain.n):
                 context.abort(grpc.StatusCode.INVALID_ARGUMENT,
                               "inject index out of range [0, %d)" % self.brain.n)
+            if g.amounts:
+                amounts = np.frombuffer(g.amounts, np.float32)
+                if len(amounts) != len(idx):
+                    context.abort(grpc.StatusCode.INVALID_ARGUMENT,
+                                  "amounts (%d) and idx (%d) differ in length"
+                                  % (len(amounts), len(idx)))
+                # Converted once, outside the substep loop.
+                dense.append((xp.asarray(idx),
+                              xp.asarray(amounts).reshape(-1, 1)))
+            else:
+                inject.append((idx, float(g.amount)))
         substeps = request.substeps or 1
 
         eye = self._eye
@@ -99,6 +111,11 @@ class FlyBrainService(pb_grpc.FlyBrainServicer):
         total = 0
         with self.lock:
             for _ in range(substeps):
+                # Per-neuron drive goes straight into the voltage array:
+                # FlyBrain._amount reshapes any array to (1, batch) and reads
+                # it as one value per fly, so step(inject=...) cannot do this.
+                for gi, ga in dense:
+                    self.brain.v[gi] += ga
                 fired = self.brain.step(eye, inject=inject)
                 self.trace.observe(fired)
                 total += len(fired)
@@ -147,6 +164,28 @@ class FlyBrainService(pb_grpc.FlyBrainServicer):
             idx = self.brain.cells(list(request.types),
                                    side=request.side or None)
         return pb.CellsReply(idx=np.asarray(idx, np.int32).tobytes())
+
+    def Sectors(self, request, context):
+        k = int(request.k)
+        if k < 1:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "k must be >= 1")
+        pos = np.asarray(self.brain.positions)
+        per_sector = [[] for _ in range(k)]
+        for t in request.types:
+            idx = np.asarray(self.brain.cells([t], side=request.side or None))
+            if not len(idx):
+                continue
+            # Sort each type along its own principal axis, then take matching
+            # slices, so a sector holds comparable positions from every type
+            # instead of one type filling it.
+            c = pos[idx] - pos[idx].mean(0)
+            axis = np.linalg.svd(c, full_matrices=False)[2][0]
+            order = np.argsort(c @ axis)
+            for s, part in enumerate(np.array_split(idx[order], k)):
+                per_sector[s].append(part)
+        out = [np.concatenate(p).astype(np.int32) if p else np.zeros(0, np.int32)
+               for p in per_sector]
+        return pb.SectorsReply(idx=[a.tobytes() for a in out])
 
     # ----------------------------------------------------------------- utils
     def _snapshot_bytes(self):

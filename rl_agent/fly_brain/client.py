@@ -45,17 +45,22 @@ class FlyBrainClient(object):
         """Advance the brain one control step. Returns (trace, snapshot, spikes).
 
         `inject` is a sequence of (indices, amount) pairs, one per driven
-        population, mirroring FlyBrain.step. The amount is a scalar; see the
-        Injection message for why it cannot be per-neuron.
+        population, mirroring FlyBrain.step. `amount` is normally a scalar; an
+        array of one value per neuron is also accepted and takes the server's
+        dense path, which is what the retinotopic encoder uses.
 
         `trace` is float32[info.trace_len]; `snapshot` is uint8[info.n_display]
         or None.
         """
-        groups = [
-            pb.Injection(idx=np.ascontiguousarray(idx, np.int32).tobytes(),
-                         amount=float(amount))
-            for idx, amount in inject
-        ]
+        groups = []
+        for idx, amount in inject:
+            idx_b = np.ascontiguousarray(idx, np.int32).tobytes()
+            if np.ndim(amount) == 0:
+                groups.append(pb.Injection(idx=idx_b, amount=float(amount)))
+            else:
+                groups.append(pb.Injection(
+                    idx=idx_b,
+                    amounts=np.ascontiguousarray(amount, np.float32).tobytes()))
         reply = self._stub.Step(
             pb.StepRequest(inject=groups, substeps=int(substeps),
                            eye_drive=float(eye_drive),
@@ -76,6 +81,14 @@ class FlyBrainClient(object):
             timeout=self.timeout,
         )
         return np.frombuffer(reply.idx, np.int32)
+
+    def sectors(self, types, side=None, k=7):
+        """Split a population into k spatial sectors. Returns a list of arrays."""
+        reply = self._stub.Sectors(
+            pb.SectorsRequest(types=types, side=side or "", k=int(k)),
+            timeout=self.timeout,
+        )
+        return [np.frombuffer(b, np.int32) for b in reply.idx]
 
     def geometry(self):
         """Static overlay data. Fetch once; it never changes."""

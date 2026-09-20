@@ -180,3 +180,157 @@ def resolve_cells(client):
     """Look up the four populations' neuron indices over gRPC, once."""
     return {name: client.cells(types=types, side=side)
             for name, (types, side) in POPULATION_CELLS.items()}
+
+
+# --------------------------------------------------------------------------
+# Retinotopic encoder
+# --------------------------------------------------------------------------
+# Step 5 measured the four-scalar encoder above as the binding constraint: a
+# ridge fit on its four cues scores R2 0.687 for steering against 0.747 on the
+# raw rays, and the brain then returns 0.620. No readout recovers what the
+# encoder discarded, so raising that 0.687 is the only change with room to pay
+# off.
+#
+# This keeps the same two cues but stops collapsing each side to one number.
+# The rays are split into angular sectors and every sector drives its own slice
+# of the LC populations, which is what "retinotopic" means here: nearby
+# directions excite nearby cells instead of the whole eye at once.
+#
+# Two deliberate differences from the four-scalar version:
+#   - No cos(angle) weighting. That existed to stop the +-90 wall returns
+#     swamping a single per-side aggregate. With one channel per sector the
+#     readout can simply down-weight the lateral sectors, and cos weighting
+#     would instead delete them.
+#   - Openness is a left-right contrast between mirrored sectors, not an
+#     absolute level. Absolute levels were tried first and cost 0.13 of
+#     steering R2 against the flat encoder (0.488 vs 0.620) despite handing the
+#     brain a far better input. The reason is measured: driving any single
+#     sector produces a largely common-mode descending response, with
+#     within-eye similarity 0.476 against across-eye 0.460, so the brain barely
+#     distinguishes sectors but reads left/right contrast well. Absolute
+#     openness is ~0.6 on both sides and buries that contrast in common mode;
+#     mirroring restores it at full amplitude while keeping sector resolution.
+
+SECTORS_PER_SIDE = 7  # 14 rays per side -> 2 rays per sector
+
+
+def _sector_ray_groups(k=SECTORS_PER_SIDE):
+    """Ray indices per sector, ordered lateral -> medial, for each side.
+
+    Returns [(side, ray_indices), ...]. The 0 deg ray joins the innermost
+    sector of both sides: it is the single most important direction and
+    belongs to neither eye exclusively.
+    """
+    groups = []
+    for side, mask in (("L", LEFT), ("R", RIGHT)):
+        rays = np.flatnonzero(mask)
+        # Sort by |angle| descending so sector 0 is the most lateral.
+        rays = rays[np.argsort(-np.abs(RAY_ANGLES_DEG[rays]))]
+        for s, part in enumerate(np.array_split(rays, k)):
+            part = list(part)
+            if s == k - 1:
+                part.append(int(np.flatnonzero(RAY_ANGLES_DEG == 0.0)[0]))
+            groups.append((side, np.array(part, np.int64)))
+    return groups
+
+
+SECTOR_GROUPS = _sector_ray_groups()
+N_SECTORS = len(SECTOR_GROUPS)
+
+# Calibrated the same way as the four-scalar gains: corpus p99 -> MAX_AMOUNT.
+# Measured p99 was 0.74 for per-sector looming and 0.72 for the openness
+# contrast, whose median is 0 -- only the more open side of each mirrored pair
+# is driven at all.
+RETINO_LOOM_GAIN = 1.09
+RETINO_OPEN_GAIN = 1.11
+
+
+class RetinotopicEncoder(object):
+    """Per-sector looming and openness. Same cue definitions, finer resolution."""
+
+    def __init__(self, dt=DT, r_open=R_OPEN, max_amount=MAX_AMOUNT,
+                 loom_gain=RETINO_LOOM_GAIN, open_gain=RETINO_OPEN_GAIN):
+        self.dt = float(dt)
+        self.r_open = float(r_open)
+        self.max_amount = float(max_amount)
+        self.loom_gain = float(loom_gain)
+        self.open_gain = float(open_gain)
+        self._prev = None
+
+    def reset(self):
+        self._prev = None
+
+    def cues(self, obs):
+        """Returns (loom, openness), each float32[N_SECTORS]."""
+        obs = np.asarray(obs, dtype=np.float32)
+        if obs.shape[-1] != 2 + N_RAYS:
+            raise ValueError("expected the %d-D observation, got %d"
+                             % (2 + N_RAYS, obs.shape[-1]))
+        speed = float(obs[0])
+        rays = obs[RAY_SLICE]
+
+        r = np.where(rays <= R_NO_RETURN, self.r_open, rays)
+        r = np.maximum(r, R_FLOOR)
+
+        if self._prev is None:
+            inv_tau = np.zeros(N_RAYS, np.float32)
+        else:
+            cap = CLOSING_SLACK * max(abs(speed), SPEED_FLOOR)
+            inv_tau = np.clip((self._prev - r) / self.dt, 0.0, cap) / r
+        self._prev = r
+
+        open_ray = np.clip(r / self.r_open, 0.0, 1.0)
+        loom = np.empty(N_SECTORS, np.float32)
+        raw_open = np.empty(N_SECTORS, np.float32)
+        for i, (_, group) in enumerate(SECTOR_GROUPS):
+            loom[i] = inv_tau[group].max()
+            raw_open[i] = open_ray[group].mean()
+
+        # Mirror sector s of one eye against sector s of the other, and keep
+        # only the positive part on each side. Exactly the flat encoder's chase
+        # contrast, computed per sector instead of per side.
+        k = N_SECTORS // 2
+        d = raw_open[:k] - raw_open[k:]
+        openness = np.concatenate([np.maximum(d, 0.0), np.maximum(-d, 0.0)])
+        return loom, openness.astype(np.float32)
+
+    def features(self, obs):
+        """Both cue vectors concatenated, for fitting a readout directly."""
+        loom, openness = self.cues(obs)
+        return np.concatenate([loom, openness])
+
+    def inject(self, cues, sector_cells):
+        """Dense per-neuron injections, one per cue type.
+
+        `sector_cells` maps "loom"/"open" to a list of N_SECTORS index arrays.
+        Every sector's drive is packed into a single dense injection so the
+        brain pays one scatter per cue type instead of one per sector, which
+        measured 7.75 ms against 21.66 ms per control step.
+        """
+        loom, openness = cues
+        out = []
+        for name, vals, gain in (("loom", loom, self.loom_gain),
+                                 ("open", openness, self.open_gain)):
+            idx, amt = [], []
+            for s, cells in enumerate(sector_cells[name]):
+                a = min(float(vals[s]) * gain, self.max_amount)
+                if a <= 0.0 or not len(cells):
+                    continue
+                idx.append(cells)
+                amt.append(np.full(len(cells), a, np.float32))
+            if idx:
+                out.append((np.concatenate(idx), np.concatenate(amt)))
+        return out
+
+    def encode(self, obs, sector_cells):
+        cues = self.cues(obs)
+        return cues, self.inject(cues, sector_cells)
+
+
+def resolve_sector_cells(client, k=SECTORS_PER_SIDE):
+    """Neuron indices per sector, ordered to match SECTOR_GROUPS (L then R)."""
+    out = {"loom": [], "open": []}
+    for side in ("L", "R"):
+        out["loom"] += client.sectors(["LC4", "LPLC2"], side=side, k=k)
+        out["open"] += client.sectors(["LC10a"], side=side, k=k)
+    return out

@@ -14,10 +14,12 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1f\x66ly_brain/proto/fly_brain.proto\x12\tfly_brain\":\n\x0c\x43\x65llsRequest\x12\r\n\x05types\x18\x01 \x03(\t\x12\x0c\n\x04side\x18\x02 \x01(\t\x12\r\n\x05group\x18\x03 \x01(\t\"\x19\n\nCellsReply\x12\x0b\n\x03idx\x18\x01 \x01(\x0c\"\r\n\x0bInfoRequest\"\xb6\x01\n\tInfoReply\x12\x11\n\tn_neurons\x18\x01 \x01(\x05\x12\x15\n\rn_connections\x18\x02 \x01(\x03\x12\x0e\n\x06\x64\x65vice\x18\x03 \x01(\t\x12\n\n\x02\x64t\x18\x04 \x01(\x02\x12\r\n\x05tonic\x18\x05 \x01(\x02\x12\x0c\n\x04gain\x18\x06 \x01(\x02\x12\x11\n\ttrace_len\x18\x07 \x01(\x05\x12\x11\n\ttrace_tau\x18\x08 \x01(\x02\x12\r\n\x05\x62\x61tch\x18\t \x01(\x05\x12\x11\n\tn_display\x18\n \x01(\x05\"\x1c\n\x0cResetRequest\x12\x0c\n\x04seed\x18\x01 \x01(\x05\"\x0c\n\nResetReply\"(\n\tInjection\x12\x0b\n\x03idx\x18\x01 \x01(\x0c\x12\x0e\n\x06\x61mount\x18\x02 \x01(\x02\"o\n\x0bStepRequest\x12$\n\x06inject\x18\x01 \x03(\x0b\x32\x14.fly_brain.Injection\x12\x10\n\x08substeps\x18\x03 \x01(\x05\x12\x11\n\teye_drive\x18\x04 \x01(\x02\x12\x15\n\rwant_snapshot\x18\x05 \x01(\x08\"<\n\tStepReply\x12\r\n\x05trace\x18\x01 \x01(\x0c\x12\x10\n\x08snapshot\x18\x02 \x01(\x0c\x12\x0e\n\x06spikes\x18\x03 \x01(\x05\"\x11\n\x0fSnapshotRequest\"!\n\rSnapshotReply\x12\x10\n\x08\x61\x63tivity\x18\x01 \x01(\x0c\"\x11\n\x0fGeometryRequest\"\x94\x01\n\rGeometryReply\x12\x11\n\tpositions\x18\x01 \x01(\x0c\x12\x10\n\x08\x65\x64ge_src\x18\x02 \x01(\x0c\x12\x10\n\x08\x65\x64ge_dst\x18\x03 \x01(\x0c\x12\x13\n\x0b\x65\x64ge_weight\x18\x04 \x01(\x0c\x12\x13\n\x0blabels_json\x18\x05 \x01(\t\x12\x11\n\tn_display\x18\x06 \x01(\x05\x12\x0f\n\x07n_edges\x18\x07 \x01(\x05\x32\xec\x02\n\x08\x46lyBrain\x12\x34\n\x04Info\x12\x16.fly_brain.InfoRequest\x1a\x14.fly_brain.InfoReply\x12\x37\n\x05Reset\x12\x17.fly_brain.ResetRequest\x1a\x15.fly_brain.ResetReply\x12\x34\n\x04Step\x12\x16.fly_brain.StepRequest\x1a\x14.fly_brain.StepReply\x12@\n\x08Snapshot\x12\x1a.fly_brain.SnapshotRequest\x1a\x18.fly_brain.SnapshotReply\x12@\n\x08Geometry\x12\x1a.fly_brain.GeometryRequest\x1a\x18.fly_brain.GeometryReply\x12\x37\n\x05\x43\x65lls\x12\x17.fly_brain.CellsRequest\x1a\x15.fly_brain.CellsReplyb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1f\x66ly_brain/proto/fly_brain.proto\x12\tfly_brain\"8\n\x0eSectorsRequest\x12\r\n\x05types\x18\x01 \x03(\t\x12\x0c\n\x04side\x18\x02 \x01(\t\x12\t\n\x01k\x18\x03 \x01(\x05\"\x1b\n\x0cSectorsReply\x12\x0b\n\x03idx\x18\x01 \x03(\x0c\":\n\x0c\x43\x65llsRequest\x12\r\n\x05types\x18\x01 \x03(\t\x12\x0c\n\x04side\x18\x02 \x01(\t\x12\r\n\x05group\x18\x03 \x01(\t\"\x19\n\nCellsReply\x12\x0b\n\x03idx\x18\x01 \x01(\x0c\"\r\n\x0bInfoRequest\"\xb6\x01\n\tInfoReply\x12\x11\n\tn_neurons\x18\x01 \x01(\x05\x12\x15\n\rn_connections\x18\x02 \x01(\x03\x12\x0e\n\x06\x64\x65vice\x18\x03 \x01(\t\x12\n\n\x02\x64t\x18\x04 \x01(\x02\x12\r\n\x05tonic\x18\x05 \x01(\x02\x12\x0c\n\x04gain\x18\x06 \x01(\x02\x12\x11\n\ttrace_len\x18\x07 \x01(\x05\x12\x11\n\ttrace_tau\x18\x08 \x01(\x02\x12\r\n\x05\x62\x61tch\x18\t \x01(\x05\x12\x11\n\tn_display\x18\n \x01(\x05\"\x1c\n\x0cResetRequest\x12\x0c\n\x04seed\x18\x01 \x01(\x05\"\x0c\n\nResetReply\"9\n\tInjection\x12\x0b\n\x03idx\x18\x01 \x01(\x0c\x12\x0e\n\x06\x61mount\x18\x02 \x01(\x02\x12\x0f\n\x07\x61mounts\x18\x03 \x01(\x0c\"o\n\x0bStepRequest\x12$\n\x06inject\x18\x01 \x03(\x0b\x32\x14.fly_brain.Injection\x12\x10\n\x08substeps\x18\x03 \x01(\x05\x12\x11\n\teye_drive\x18\x04 \x01(\x02\x12\x15\n\rwant_snapshot\x18\x05 \x01(\x08\"<\n\tStepReply\x12\r\n\x05trace\x18\x01 \x01(\x0c\x12\x10\n\x08snapshot\x18\x02 \x01(\x0c\x12\x0e\n\x06spikes\x18\x03 \x01(\x05\"\x11\n\x0fSnapshotRequest\"!\n\rSnapshotReply\x12\x10\n\x08\x61\x63tivity\x18\x01 \x01(\x0c\"\x11\n\x0fGeometryRequest\"\x94\x01\n\rGeometryReply\x12\x11\n\tpositions\x18\x01 \x01(\x0c\x12\x10\n\x08\x65\x64ge_src\x18\x02 \x01(\x0c\x12\x10\n\x08\x65\x64ge_dst\x18\x03 \x01(\x0c\x12\x13\n\x0b\x65\x64ge_weight\x18\x04 \x01(\x0c\x12\x13\n\x0blabels_json\x18\x05 \x01(\t\x12\x11\n\tn_display\x18\x06 \x01(\x05\x12\x0f\n\x07n_edges\x18\x07 \x01(\x05\x32\xab\x03\n\x08\x46lyBrain\x12\x34\n\x04Info\x12\x16.fly_brain.InfoRequest\x1a\x14.fly_brain.InfoReply\x12\x37\n\x05Reset\x12\x17.fly_brain.ResetRequest\x1a\x15.fly_brain.ResetReply\x12\x34\n\x04Step\x12\x16.fly_brain.StepRequest\x1a\x14.fly_brain.StepReply\x12@\n\x08Snapshot\x12\x1a.fly_brain.SnapshotRequest\x1a\x18.fly_brain.SnapshotReply\x12@\n\x08Geometry\x12\x1a.fly_brain.GeometryRequest\x1a\x18.fly_brain.GeometryReply\x12\x37\n\x05\x43\x65lls\x12\x17.fly_brain.CellsRequest\x1a\x15.fly_brain.CellsReply\x12=\n\x07Sectors\x12\x19.fly_brain.SectorsRequest\x1a\x17.fly_brain.SectorsReplyb\x06proto3')
 
 
 
+_SECTORSREQUEST = DESCRIPTOR.message_types_by_name['SectorsRequest']
+_SECTORSREPLY = DESCRIPTOR.message_types_by_name['SectorsReply']
 _CELLSREQUEST = DESCRIPTOR.message_types_by_name['CellsRequest']
 _CELLSREPLY = DESCRIPTOR.message_types_by_name['CellsReply']
 _INFOREQUEST = DESCRIPTOR.message_types_by_name['InfoRequest']
@@ -31,6 +33,20 @@ _SNAPSHOTREQUEST = DESCRIPTOR.message_types_by_name['SnapshotRequest']
 _SNAPSHOTREPLY = DESCRIPTOR.message_types_by_name['SnapshotReply']
 _GEOMETRYREQUEST = DESCRIPTOR.message_types_by_name['GeometryRequest']
 _GEOMETRYREPLY = DESCRIPTOR.message_types_by_name['GeometryReply']
+SectorsRequest = _reflection.GeneratedProtocolMessageType('SectorsRequest', (_message.Message,), {
+  'DESCRIPTOR' : _SECTORSREQUEST,
+  '__module__' : 'fly_brain.proto.fly_brain_pb2'
+  # @@protoc_insertion_point(class_scope:fly_brain.SectorsRequest)
+  })
+_sym_db.RegisterMessage(SectorsRequest)
+
+SectorsReply = _reflection.GeneratedProtocolMessageType('SectorsReply', (_message.Message,), {
+  'DESCRIPTOR' : _SECTORSREPLY,
+  '__module__' : 'fly_brain.proto.fly_brain_pb2'
+  # @@protoc_insertion_point(class_scope:fly_brain.SectorsReply)
+  })
+_sym_db.RegisterMessage(SectorsReply)
+
 CellsRequest = _reflection.GeneratedProtocolMessageType('CellsRequest', (_message.Message,), {
   'DESCRIPTOR' : _CELLSREQUEST,
   '__module__' : 'fly_brain.proto.fly_brain_pb2'
@@ -126,32 +142,36 @@ _FLYBRAIN = DESCRIPTOR.services_by_name['FlyBrain']
 if _descriptor._USE_C_DESCRIPTORS == False:
 
   DESCRIPTOR._options = None
-  _CELLSREQUEST._serialized_start=46
-  _CELLSREQUEST._serialized_end=104
-  _CELLSREPLY._serialized_start=106
-  _CELLSREPLY._serialized_end=131
-  _INFOREQUEST._serialized_start=133
-  _INFOREQUEST._serialized_end=146
-  _INFOREPLY._serialized_start=149
-  _INFOREPLY._serialized_end=331
-  _RESETREQUEST._serialized_start=333
-  _RESETREQUEST._serialized_end=361
-  _RESETREPLY._serialized_start=363
-  _RESETREPLY._serialized_end=375
-  _INJECTION._serialized_start=377
-  _INJECTION._serialized_end=417
-  _STEPREQUEST._serialized_start=419
-  _STEPREQUEST._serialized_end=530
-  _STEPREPLY._serialized_start=532
-  _STEPREPLY._serialized_end=592
-  _SNAPSHOTREQUEST._serialized_start=594
-  _SNAPSHOTREQUEST._serialized_end=611
-  _SNAPSHOTREPLY._serialized_start=613
-  _SNAPSHOTREPLY._serialized_end=646
-  _GEOMETRYREQUEST._serialized_start=648
-  _GEOMETRYREQUEST._serialized_end=665
-  _GEOMETRYREPLY._serialized_start=668
-  _GEOMETRYREPLY._serialized_end=816
-  _FLYBRAIN._serialized_start=819
-  _FLYBRAIN._serialized_end=1183
+  _SECTORSREQUEST._serialized_start=46
+  _SECTORSREQUEST._serialized_end=102
+  _SECTORSREPLY._serialized_start=104
+  _SECTORSREPLY._serialized_end=131
+  _CELLSREQUEST._serialized_start=133
+  _CELLSREQUEST._serialized_end=191
+  _CELLSREPLY._serialized_start=193
+  _CELLSREPLY._serialized_end=218
+  _INFOREQUEST._serialized_start=220
+  _INFOREQUEST._serialized_end=233
+  _INFOREPLY._serialized_start=236
+  _INFOREPLY._serialized_end=418
+  _RESETREQUEST._serialized_start=420
+  _RESETREQUEST._serialized_end=448
+  _RESETREPLY._serialized_start=450
+  _RESETREPLY._serialized_end=462
+  _INJECTION._serialized_start=464
+  _INJECTION._serialized_end=521
+  _STEPREQUEST._serialized_start=523
+  _STEPREQUEST._serialized_end=634
+  _STEPREPLY._serialized_start=636
+  _STEPREPLY._serialized_end=696
+  _SNAPSHOTREQUEST._serialized_start=698
+  _SNAPSHOTREQUEST._serialized_end=715
+  _SNAPSHOTREPLY._serialized_start=717
+  _SNAPSHOTREPLY._serialized_end=750
+  _GEOMETRYREQUEST._serialized_start=752
+  _GEOMETRYREQUEST._serialized_end=769
+  _GEOMETRYREPLY._serialized_start=772
+  _GEOMETRYREPLY._serialized_end=920
+  _FLYBRAIN._serialized_start=923
+  _FLYBRAIN._serialized_end=1350
 # @@protoc_insertion_point(module_scope)
