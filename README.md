@@ -727,13 +727,17 @@ subclasses `DonutCourse` and slices column 0 off the observation spec,
 #### Selecting the course per job
 
 The dashboard **New-job** form has a **Course** selector (`trainer default`,
-`donut`, `donut_no_hint`, `donut_camera`). The choice is stored as `course_type` on the job
+`donut`, `donut_no_hint`, `donut_camera`, `donut_camera_no_rays`, `fly_donut`).
+The choice is stored as `course_type` on the job
 document and threaded through the whole pipeline:
 
 - `do_job()` resolves `_job_course_type` (job doc → `ROBOTAXI_COURSE_TYPE`
   env → `donut`), then points the demo/BC pipeline at the matching width via
   `collect_training_data.set_observation_size(...)` and passes
   `course_type=...` to every `make_env()` (DEMO/EVAL) and to `main()` (TRAIN).
+  Courses in `COURSES_WITHOUT_DEMOS` (the two camera courses and `fly_donut`)
+  skip that width call and are refused DEMO / BC_TRAINING_ONLY outright, since
+  no expert corpus exists at their observation shape.
 - `main()` re-resolves the course (so direct callers work too) and builds the
   collect/eval envs and the actor/critic network at the right width.
 - The Jobs table shows a **Course** column (legacy jobs are backfilled to
@@ -1355,6 +1359,43 @@ since there is no TRAIN job to have created one.
 
 So the frozen connectome is worth roughly **7x a random policy and a tenth of
 SAC**. It holds a lane for a few hundred steps rather than crashing at once.
+
+#### Training against the brain: the `fly_donut` course
+
+Everything above runs the connectome behind a *fitted* readout. The `fly_donut`
+course hands that last step to SAC instead — the 1,314-wide trace becomes the
+observation and the actor learns the mapping from reward. It exists because the
+ridge could not fit throttle (R² 0.18), which is what pins the car near minimum
+throttle and caps it at 6.87.
+
+`FlyDonutCourse` subclasses `DonutCourseNoHint` and leaves `scene_data_array()`
+as the 31-D vector, so rewards, stuck detection, the curriculum and the per-step
+stats read exactly what they read on `donut_no_hint`. Only `policy_vector()`
+changes. Its observation spec is a flat `(1314,)` bounded `[0, 5.52]`, both read
+from the service's `Info` at construction rather than from any literal. The
+episode reset hangs off `BaseCourse.on_episode_start()`, called at the top of
+`RobotaxiEnv._reset()` — the only hook that fires after the terminal observation
+is packed *and* on episodes that ended in failure.
+
+Two constraints are structural rather than temporary:
+
+- **No demos, ever.** The trace depends on the brain's voltages and so on the
+  whole episode to date, so a recorded observation cannot be reconstructed from
+  a stored scene. `fly_donut` is in `COURSES_WITHOUT_DEMOS`, so `do_job` refuses
+  DEMO and BC_TRAINING_ONLY. TRAIN is from scratch with no expert bootstrap,
+  like the camera courses.
+- **`--num-envs 1`**, for the reason under *lane work* above.
+
+To run one: pick `fly_donut` in the dashboard's job form with job type TRAIN and
+the `fly-brain` service up. The actor prints
+`[fly_donut] obs vector(1314,) (of scene(31,))` once, which is the line
+confirming the brain is in the observation path. Measured at ~0.23 s/iteration
+(0.09 collect, 0.14 learner), putting the 87k-step budget `donut_no_hint` was
+measured on at roughly 5.6 hours.
+
+**If training destabilizes, suspect replay first.** The observation is
+history-dependent, so off-policy replay is learning from features it cannot
+exactly reconstruct.
 
 #### The overlay
 
