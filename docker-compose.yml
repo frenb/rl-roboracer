@@ -257,6 +257,56 @@ services:
   # bringing the rest of the stack up never accidentally racks up
   # Anthropic / Cursor bills.
   #
+  # fly.ai connectome service. See docs/flybrain-driver-plan.md.
+  #
+  # Its own service because flybrain needs Python 3.10+ while sim-controller
+  # is Python 3.8 (TF 2.7 / tf-agents 0.11) - the two cannot share an
+  # interpreter. The trainer reaches it over gRPC on :50061 via
+  # rl_agent/fly_brain/client.py.
+  #
+  # Shares the single reserved NVIDIA device with sim-controller. The
+  # connectome only needs ~210 MB of VRAM of the card's 16 GB, but TensorFlow
+  # grabs the rest by default - set TF_FORCE_GPU_ALLOW_GROWTH=true on the
+  # trainer before running both at once.
+  fly-brain:
+    image: fly_brain:latest
+    build:
+      context: ./docker/fly_brain
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - FLY_DATA=/fly_data
+      - FLY_DEVICE=cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      # The ~260 MB prebuilt connectome. A named volume so `flybrain download`
+      # is paid once and survives image rebuilds.
+      - type: volume
+        source: flydata
+        target: /fly_data
+      # Live-edit the scripts without rebuilding, same as ./rl_agent ->
+      # /python_ws/src on sim-controller.
+      - type: bind
+        source: ./docker/fly_brain
+        target: /fly_brain
+      # The .proto lives with the other contracts; codegen runs in here and
+      # writes the stubs back out through the bind mount above.
+      - type: bind
+        source: ./protos
+        target: /protos
+        read_only: true
+    ports:
+      # gRPC. Exposed on the host so debug clients can run outside Compose.
+      - "50061:50061"
+    networks:
+      default:
+
   # See:
   #   docker/madscientist/Dockerfile            - container image
   #   docker/madscientist/entrypoint.sh         - boot + gating
@@ -378,3 +428,7 @@ volumes:
   # archive moves are instant renames. Resolves to the Compose volume
   # name "<project>_tmpdata" (rl-roboracer_tmpdata).
   tmpdata:
+
+  # The fly.ai connectome (~260 MB: weights.npz + brain.npz), downloaded once
+  # by `flybrain download` and reused across fly-brain image rebuilds.
+  flydata:

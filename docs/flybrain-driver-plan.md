@@ -1,0 +1,490 @@
+# Driving the sim car with a fruit fly connectome
+
+Twelve steps in a fixed order, in five parts. Each part ends with something you
+can look at, so you never build two things before finding out the first one
+works. Parts 1 and 2 need no Unity at all, and Part 2 is a cheap go/no-go on
+the whole idea.
+
+The idea in one line: [fly.ai](https://github.com/alextitonis/fly.ai)'s
+`flybrain` is a frozen 166,700-neuron *reservoir*, and our SAC trainer becomes
+the *readout* that fly.ai normally fits with ridge regression.
+
+```
+31-D obs  ->  encoder  ->  fly connectome (FROZEN)  ->  descending-neuron trace  ->  readout  ->  [accel, steer]
+              (Part 2)      166,700 neurons                  1,314 outputs         ridge (Part 2)
+                                    |                                              SAC   (Part 5)
+                                    +-> spike snapshot -> Unity overlay (Part 4)
+```
+
+Nothing inside the brain ever trains. Its weights are the MaleCNS v1.0 wiring
+diagram, fixed at load time. The only learned thing is what we read off the
+1,314 descending neurons, which is exactly how `flybrain/reservoir.py` is meant
+to be used.
+
+Sibling docs: [`trajectory-rollout-viz.md`](trajectory-rollout-viz.md) is the
+overlay this plan copies, and
+[`csi-camera-observation-guide.md`](csi-camera-observation-guide.md) is the
+precedent for adding a course with a new observation shape.
+
+---
+
+## Verified interface facts
+
+These were read out of the code, not assumed. Getting any of them wrong
+produces a plausible-looking car that drives badly for reasons you won't find.
+
+**Action spec** (`donut_course.py:136`) is `shape=(2,)` ordered
+**`[acceleration, steering]`** — acceleration first:
+
+```
+minimum = [0.05, -1.0]      maximum = [1.0, 1.0]
+```
+
+`robotaxi.py` independently confirms `action[:, 0]` is "the force channel".
+Writing steering into slot 0 sends steering commands to the throttle.
+
+**Observation layout** for `donut_no_hint` (31-D) is speed, sideslip, then the
+29 rays:
+
+| Index | Content |
+|---|---|
+| 0 | speed |
+| 1 | sideslip (`goal_2`, angle from velocity to heading) |
+| 2–30 | 29 ray distances |
+| 16 | forward clearance (the 0° ray) |
+
+The 32-D base `donut` course has one extra leading column
+(`dist_from_traj`, the goal-angle hint), so every index above shifts by one.
+If you port index constants from anything written against the 32-D vector,
+shift them down.
+
+**The rays are contiguous but NOT sorted by angle.** In index order:
+
+```
+idx:    2    3    4     5     6  ...  15   16   17  ...  27   28   29   30
+deg:  -90  -30  -60  -27.5  -25  ... -2.5    0  2.5  ...  27.5  60   30   90
+```
+
+Two transpositions: indices 3/4 and 28/29. A plain left/right split survives
+this, because both swaps are within one side — left is 2–15, forward is 16,
+right is 17–30. It stops being safe the moment the encoder weights a ray by its
+angle, which a good encoder should. Angles come from
+`CarController.SetUpDirectionToAngle()`.
+
+**Control rate is 10 Hz in simulated time.** `SceneDataPublisher` publishes
+every 0.1 s, so one env step is 0.1 s of sim time and the brain should run
+**K = 0.1 / dt = 5 substeps** per control step at the default `dt=0.020`. (Note
+the source comment on that line says "20Hz" and is wrong; `0.1f` is 10 Hz.)
+Wall-clock rate is faster because `Time.timeScale` is 3–5, which matters for
+throughput but not for how many brain steps a control step deserves.
+
+---
+
+## Why this mapping is a good fit
+
+The fly's two documented, *working* visual pathways happen to be the two things
+a racing policy needs:
+
+| Fly pathway | Neuron types | Racing equivalent |
+|---|---|---|
+| Looming → escape | LC4, LPLC2 → DNp01 | obstacle close and closing → turn away |
+| Courtship pursuit → steering | LC10a → DNa02 | free space is that way → steer toward |
+
+Both are side-specific (left stimulation moves left outputs only), which is
+what makes steering decodable at all. fly.ai measured both: left LC4+LPLC2
+raised left DNp01 by 17–25 spikes/s, and left LC10a raised left DNa02 by
+1.4–3.7 spikes/s, with the other side unchanged.
+
+**The named command neurons are single cells.** Step 1 found DNa02, DNp01 and
+DNg100 are exactly **one neuron per side** (MDN is two). At 50 Hz a single
+neuron contributes 0–3 spikes per control step, so any hand decoder reading an
+instantaneous rate off DNa02 is reading a near-binary signal. Use the decaying
+`Trace` rather than a per-step rate, and treat this as another reason the
+learned readout over all **1,314** descending neurons (L 656 / R 648 / M 10) is
+the route more likely to work than hand decoding.
+
+**Do not use the photoreceptor/eye route.** fly.ai's own findings 1 and 2 are
+that vision does nothing with Fly64's settings, and that the photoreceptor
+signal dies at the first relay because histamine is inhibitory and real lamina
+neurons are graded, which a spiking point-neuron model can't reproduce. The
+working path injects the feature-detector neurons directly.
+
+**Target `donut_no_hint`, not `donut`.** The 32-D course's leading column is
+the goal-angle hint, which would do the steering for you and teach you nothing
+about the wiring.
+
+---
+
+## Part 1 — Get the brain running and prove it responds
+
+Desktop only. No Unity, no training.
+
+### Step 1 — Stand up a `fly-brain` container *(desktop)*
+
+**Do this.** Add a `fly-brain` service to `docker-compose.yml` on a Python 3.11
+CUDA base. Install `flybrain[gpu]`, run `flybrain download` into a persistent
+`$FLY_DATA` volume, then `flybrain info`. Time 100 `brain.step()` calls.
+
+**Why it matters.** `flybrain` needs Python 3.10+ and `sim-controller` is
+Python 3.8, so it cannot live in the trainer. Timing it now tells you whether
+the plan is affordable before you write integration code.
+
+**You are done when.** `flybrain info` reports CUDA working, the build reports
+exactly **166,700 neurons and 25,582,938 connections**, and a step costs
+roughly 1–4 ms. If you see 9–15 ms you are on CPU and everything downstream gets
+ten times slower.
+
+> **DONE — measured 2026-09-19.** Counts match exactly. `device='cuda'`,
+> **2.67 ms/step** (374 steps/s), so K=5 costs **13.4 ms per env step**. That is
+> slower than fly.ai's 1.4 ms on an RTX 4060, most likely because a single
+> unbatched sparse multiply is launch-latency bound and WSL2 GPU passthrough
+> adds overhead — batching across actors should amortize it.
+>
+> Useful things step 1 established for later steps:
+> - `tonic`, `gain`, `decay`, `noise_amp`, `noise_hz`, `refractory_steps` are
+>   plain settable attributes on the brain, so step 2 sets them directly.
+> - `positions`, `indices`, `indptr`, `weights`, `cell_type`, `side` and
+>   `superclass` are all exposed — step 7's overlay export needs no extra work.
+> - `flybrain` exports `Trace`, `Readout`, `run`, `fit_ridge`, `fit_logistic`,
+>   `ENCODER` and `FeatureDetectors` at the top level.
+> - Every neuron type this plan needs resolves: LC4 (L71/R55), LPLC2 (L94/R91),
+>   LPLC1 (L68/R66), LC10a (L135/R140).
+
+### Step 2 — Reproduce fly.ai's one solid result *(desktop)*
+
+**Do this.** Copy the settings out of `inject.py` (tonic 0.14, gain 3.0 — read
+them from the file rather than trusting this doc). Stimulate
+`brain.cells(["LC4","LPLC2"], side="L")` and check left DNp01 rises while right
+DNp01 does not. Repeat with `LC10a` → DNa02.
+
+**Why it matters.** This is the only part of the fly.ai stack with a measured,
+side-specific, reproducible effect, and the entire encoder rests on it. If it
+doesn't reproduce, your parameters are wrong and everything after this is noise
+you'll spend a week misinterpreting.
+
+**You are done when.** Left DNp01 gains roughly 17–25 spikes/s over baseline
+with the right side flat, across a few noise seeds.
+
+> **DONE — measured 2026-09-19** (`docker/fly_brain/step2_inject.py`). All four
+> side-specificity checks pass, bilaterally:
+>
+> | Stimulus (×0.8) | Same side | Other side |
+> |---|---|---|
+> | loom_L → DNp01 | **+25.2** | +0.1 |
+> | loom_R → DNp01 | **+24.8** | +0.4 |
+> | chase_L → DNa02 | **+3.9** | −0.1 |
+> | chase_R → DNa02 | **+3.0** | −0.2 |
+>
+> fly.ai's published "+17 to +25" turns out to be the strength sweep, not
+> seed noise: ×0.3 gives +17.0 and ×0.8 gives +25.2. Same for chase, where
+> ×0.3 gives +1.8 and ×0.8 gives +3.9 against their +1.4–3.7.
+>
+> **Right-side stimulation works too**, which inject.py never tested — it only
+> ever drives the left. Our encoder depends on both, so this was worth checking.
+>
+> Three things that change later steps:
+> - **The pip release already defaults to `tonic=0.14, gain=3.0`.** No setting
+>   required. Running Fly64's `0.18 / 1.5` for contrast roughly halves every
+>   effect (DNp01 +12.1 instead of +25.2) and triples the resting rate to
+>   3.2 Hz, so the defaults are the regime you want.
+> - **`brain.side` is identical to inject.py's feather-derived sides**, so
+>   `flybrain download` is sufficient and the 1.1 GB `flybrain build` is not
+>   needed.
+> - **`brain.groups` ships curated motor groups**: `steer_L/R`, `forward_L/R`,
+>   `escape_L/R`, `backward_L/R`, `punch_L/R`, `kick_L/R`. Prefer these over
+>   hand-picking cell types in steps 6 and 10.
+
+### Step 3 — Wrap it in a small service *(desktop)* — DONE
+
+**Do this.** Expose the calls over gRPC, to match the rest of the stack.
+
+**Why it matters.** The brain is *stateful* — voltages carry across steps — so
+episodes must reset it, and each actor needs its own copy. `FlyBrain(batch=N)`
+shares one sparse multiply across actors at about 1.2 ms per fly per step.
+
+**You are done when.** A test client can reset, step 100 times, and get a trace
+of the right shape.
+
+#### What was built
+
+| Piece | Path |
+| --- | --- |
+| Contract | `protos/fly_brain/proto/fly_brain.proto` |
+| Server | `docker/fly_brain/fly_brain_server.py` |
+| Overlay subset | `docker/fly_brain/display_subset.py` |
+| Codegen | `docker/fly_brain/gen_protos.sh` |
+| Trainer client | `rl_agent/fly_brain/client.py` |
+
+Six RPCs, not four: `Info` and `Cells` were added. `Cells` resolves cell types
+or a named group to neuron indices, which the step-4 encoder needs and only the
+brain side can answer.
+
+The container's `CMD` is the server, so bringing it up is enough:
+
+```powershell
+docker compose up -d fly-brain
+docker compose exec -w /python_ws/src sim-controller python -m fly_brain.client
+```
+
+#### Verified facts
+
+- **Latency is a non-issue.** Warm, 100 steps of `k=5` from the trainer:
+  **9.6 ms per control step (104 Hz)** against a 100 ms budget. The brain alone
+  is 9.0 ms in-process, so gRPC costs about **0.6 ms** — comfortably inside the
+  "well under a millisecond" this step asked for, with 10x headroom. Overlay
+  bookkeeping is free (0.03 ms), so snapshots can ride along on every step.
+- **A newly *created* container costs about 30 ms/step extra for the first
+  ~100 steps.** CuPy compiles kernels on first use, so the first run after
+  `up --force-recreate` or a rebuild sits at ~40 ms/step (25 Hz). The cache
+  lives in the container filesystem, so a plain `restart` keeps it and comes
+  back at ~10 ms. Still inside budget either way, but the smoke test does a
+  warmup pass before timing, and a training run should too.
+- **It is exactly reproducible.** Same seed and injections twice gives
+  `max|trace - trace2| = 0.0`.
+- **The trace is 1,314 wide, not 1,304.** `brain.cells(["descending_neuron"])`
+  returns 1,314. Other places in this doc saying 1,304 are off by ten; size the
+  readout from `Info.trace_len`, never from a literal.
+- **The display subset is 2,034 neurons and 8,000 edges**, which step 7 can
+  refine without touching the contract.
+
+#### Two things that constrain later steps
+
+**Injection amounts are per-population, not per-neuron.** `FlyBrain._amount`
+reshapes any array to `(1, batch)` and reads it as one value *per fly*, so
+`stimulate(idx, array_of_len_k)` fails with "Out shape is mismatched". The
+contract therefore takes a repeated `Injection{idx, scalar amount}`. A step-4
+encoder wanting graded drive emits several Injections, one per sector — which
+is how the four scalars in step 4 were going to work anyway.
+
+**The gRPC toolchain is pinned and must stay that way.** sim-controller is
+Python 3.8 with grpcio 1.51.1 / protobuf 3.20.1, and protobuf 4.x codegen will
+not load on a 3.x runtime. `grpcio-tools` is therefore pinned to **1.48.2**, the
+last release whose protobuf floor is below 4.0 — 1.51.1 requires protobuf
+>=4.21.6 and fails to resolve. Regenerate only via `gen_protos.sh` inside the
+fly-brain container, then copy `docker/fly_brain/gen/fly_brain/proto/*` to
+`rl_agent/fly_brain/proto/`. Codegen uses `-I /protos` so the emitted import is
+`from fly_brain.proto import ...`, matching `virtual_endpoint`.
+
+---
+
+## Part 2 — Find out whether there's any signal, with no Unity
+
+This part is the cheap go/no-go. If the connectome carries nothing useful for
+driving, you learn it here in an afternoon instead of after building a bridge,
+an overlay and a training course.
+
+### Step 4 — Write the encoder: 29 rays into fly neurons *(desktop)*
+
+**Do this.** From the ray block (indices 2–30, angles above), compute four
+scalars per control step: left looming, right looming, left chase, right chase.
+Looming on a side is large when the nearest obstacle on that side is close *and*
+closing — keep the previous frame's ranges to get the closing rate. Chase on a
+side is large when that side holds the most open space. Inject looming into
+`["LC4","LPLC2"]` and chase into `["LC10a"]` on the matching side.
+
+**Why it matters.** This is the whole translation between our world and the
+fly's, and the only part with no reference implementation to copy. Closing rate
+matters because LPLC2 is a *looming* detector: a static wall at 1 m and a wall
+rushing at you from 1 m should not look alike.
+
+**You are done when.** Synthetic scans move the expected side — a wall
+approaching on the left raises left DNp01, open space on the right raises right
+DNa02.
+
+### Step 5 — Fit a readout on the existing demo corpus *(desktop)*
+
+**Do this.** Read the expert-demo corpus for job `64168c1b58d4d8ccdb76e721`
+(the baked-in default for both `donut` and `donut_no_hint`) through
+`collect_training_data.convert_tfrecord_to_trajectory`, which already drops the
+leading column for you. Replay each observation through the frozen brain,
+collect the descending trace, and `Readout.fit(activity, actions, kind="ridge")`
+against the recorded expert `[accel, steer]`. Report held-out R² per channel.
+
+**Why it matters.** This is fly-brain behaviour cloning with zero new data
+collection, no Unity, no live loop and no RL — and it answers the only question
+that matters before you build anything else: does the trace contain enough about
+the scene to recover an expert action? Do it before Part 3, not after.
+
+**You are done when.** You have held-out R² for steering and acceleration. A
+steering R² meaningfully above zero means the encoder works and the rest of the
+plan is worth building. Near zero means go back to step 4 and retune the
+encoder gains — fly.ai found looming often fails to propagate depending on
+tonic and gain, so that's the knob, not the readout.
+
+---
+
+## Part 3 — Drive the car, with no RL yet
+
+### Step 6 — Run a `FlyPyPolicy` through the existing EVAL path *(sim)*
+
+**Do this.** Wrap encoder → brain → readout in a `PyPolicy` with the course's
+own action spec, and run it through the normal EVAL dispatch the way
+`RandomPyPolicy` already does (`robotaxi.py` has a `model_type ==
+"RandomPyPolicy"` branch and writes it a Models-tab row). Use the step-5 readout
+if it worked, otherwise a hand decoder: steering from the left/right `steer_L` /
+`steer_R` group difference. Run with `--num-envs 1`.
+
+**Throttle has no hand-decodable source — use the learned readout for it.**
+Step 2 measured DNg100 (forward walking) at +0.0 to +0.1 under every stimulus
+and strength tested, so the "throttle from DNg100" idea does not survive
+contact with the data. Neither looming nor chase drives it. Either hold
+acceleration at a constant while you validate steering, or take throttle from
+the step-5 ridge readout over all descending neurons, which does not depend on
+any one neuron carrying the signal.
+
+**Why it matters.** This buys the entire measurement apparatus for free —
+AverageReturn, goals per episode, crashes per 1k steps, and a leaderboard row
+directly comparable to SAC on identical geometry. That is a far better
+experiment than "does it drive", and it costs less than a bespoke harness.
+
+**You are done when.** You have an eval row for the fly policy next to your SAC
+baseline. **Expect it to drive poorly**, especially on the hand decoder — fly.ai
+tried exactly this for their Wiz character and reported three calibration
+attempts that all failed their pre-set criteria. A weak number here is
+information; Part 5 is the path that doesn't assume the textbook mapping.
+
+**Before recording any number you'd want to compare:** greedy SAC eval takes
+`tanh(μ)` from a distribution, while the fly readout is a point estimate with
+spiking noise underneath. Fix the noise seed per episode, or average the trace
+over the substeps, or the two variances aren't comparable.
+
+---
+
+## Part 4 — The overlay
+
+Build this before training, because watching the brain is how you'll debug
+everything in Part 5.
+
+### Step 7 — Export the display subset once *(desktop)*
+
+**Do this.** Pick a few thousand neurons: both sides of LC4, LPLC2, LPLC1 and
+LC10a, all 1,314 descending neurons, the named command neurons (DNa02, DNp01,
+DNg100, MDN), and a sample of the strongest interneurons between them. Take soma
+positions from `brain.npz`. Keep only the strongest few thousand edges *among
+that subset*. `flybrain export --web` already does most of this for the browser
+build — start there rather than writing your own.
+
+**Why it matters.** 166,700 neurons and 25.6 million edges can't be drawn at
+frame rate and nobody could read them anyway. A curated few thousand showing
+sensory inputs, motor outputs and the paths between is both drawable and
+legible.
+
+**You are done when.** You have one JSON file of positions and edge pairs,
+comfortably under a few MB.
+
+### Step 8 — Publish geometry once, activity continuously *(sim)*
+
+**Do this.** Add two topics: `fly_brain_geometry` (the step 7 file, published
+once when Unity connects) and `fly_brain_activity` (per-neuron intensity as
+base64 `uint8`, at 20 Hz). **Both must be added to the static routing table in
+`docker/ros_server/ROS/src/niryo_moveit/scripts/unity_node.py` as
+`RosSubscriber` entries** or Unity will never receive them.
+
+**Why it matters.** That routing table is static — the embedded ROS-TCP
+connector doesn't register subscribers dynamically — and it's the single most
+likely reason a new topic silently does nothing. Splitting static geometry from
+per-frame activity keeps the stream small: 5,000 neurons as `uint8` is 5 KB a
+frame, about 130 KB/s after base64. Sending float JSON every frame, or resending
+geometry, recreates the saturation we already hit with the camera feed.
+
+**You are done when.** `rl_agent/check_rollouts.py`, pointed at the new topic,
+shows geometry arriving once and activity arriving steadily at 20 Hz.
+
+### Step 9 — Render it in Unity *(sim)*
+
+**Do this.** Write `unity/Assets/Scripts/FlyBrainViz.cs` modeled directly on
+`TrajectoryRolloutViz.cs` — self-subscribing `MonoBehaviour`, lazily grabbing
+`ROSConnection.instance`, JSON-parsing a `StringMsg`. Build one `Mesh` with
+`MeshTopology.Lines` for edges and points for neurons on the geometry message,
+then update only vertex colors per activity frame. `sshfighter/`'s dashboard is
+the reference for *what* to show; `TrajectoryRolloutViz` is the reference for
+*how* to wire and draw it here.
+
+**Why it matters.** `TrajectoryRolloutViz` already solved subscribing, stale
+payload handling and pooled rendering in this codebase. Uploading the mesh once
+and animating only colors keeps a few thousand neurons free at frame rate.
+
+**You are done when.** Driving the car lights up the correct side: approach a
+wall on the left and the left looming cluster and its path to DNp01 flare.
+
+---
+
+## Part 5 — Add the reinforcement learning
+
+Steps 5 and 6 fit a readout on expert actions, which is behaviour cloning. This
+part is the actual RL: SAC learns the readout from reward.
+
+### Step 10 — Add a `fly_donut` course *(sim)*
+
+**Do this.** Copy `donut_course_no_hint.py` to a `fly_donut` course whose
+`observation_spec` is the descending-neuron trace instead of the 31-D vector.
+Register it in `robotaxi_env.py`, add its width to `COURSE_OBSERVATION_SIZES` in
+`collect_training_data.py`, and call the brain service from the observation
+path. Reset the brain whenever the episode resets.
+
+**Why it matters.** Everything else in the trainer — SAC, replay, eval, the
+leaderboard — then works unchanged, exactly as it did when `donut_camera`
+introduced a new observation shape. Rewards keep using the full
+`scene_data_array()`, so the reward design is untouched and results stay
+comparable.
+
+**You are done when.** A short job trains without shape errors and TensorBoard
+shows a moving `avg_return`.
+
+### Step 11 — Train it and compare honestly *(sim)*
+
+**Do this.** Train `fly_donut` and compare against `donut_no_hint` on
+`eval/goals_per_episode_this_eval` at an equal step budget.
+
+**Why it matters.** Use the reward-invariant metric, not `avg_return` — we
+already found that comparing returns across jobs with different reward designs
+is meaningless. `donut_no_hint` reached 86.94 avg return and is the bar.
+
+**You are done when.** You have goals-per-episode for both at the same budget.
+
+### Step 12 — Run the scrambled-wiring control *(sim)*
+
+**Do this.** Rebuild the brain with degree-preserving shuffled weights, keeping
+neuron count, connection count and encoder identical. Train again at the same
+budget.
+
+**Why it matters.** Without this you cannot claim the fly connectome did
+anything — a 166,700-unit random recurrent network is a perfectly good reservoir
+on its own, and that's precisely the open question in fly.ai's own roadmap.
+Their talking-flies control came out ambiguous: scrambled wiring carried nothing
+at 20 ms and as much as the real brain at 2 ms.
+
+**You are done when.** You have four numbers — `donut_no_hint` SAC, the step-5
+ridge readout, the real connectome under SAC, and the scrambled connectome under
+SAC — at one budget. That comparison is the actual result of this project.
+
+---
+
+## Things that will bite
+
+**GPU contention.** TensorFlow grabs most of the card by default and the brain
+wants ~210 MB plus working space. Set `TF_FORCE_GPU_ALLOW_GROWTH=true` on the
+trainer before the first joint run, or the brain service will fail to allocate.
+Run fly experiments at `--num-envs 1` until you've measured throughput.
+
+**Throughput.** Measured: K=5 substeps at 2.67 ms is **13.4 ms per control
+step**, about 20 minutes of pure brain compute over an 87k-step run. That fits
+a 10 Hz sim-time budget easily, but `Time.timeScale` (3 in `SimController`, 5 in
+`BootStrap`) pushes the real control rate to 30–50 Hz, i.e. a 20–33 ms
+wall-clock budget. 13.4 ms fits with less headroom than is comfortable, so
+batch across actors (`FlyBrain(batch=N)`, ~1.2 ms per fly per step) before
+raising `--num-envs`.
+
+**Noise makes the brain non-deterministic.** The same rays give a different
+trace twice. Seed per episode on reset so runs are reproducible, and see the
+eval-variance note in step 6 before recording comparisons.
+
+**Replay stores history-dependent observations.** The trace depends on the
+brain's voltages, which depend on the whole episode so far, so off-policy replay
+learns from features it can't exactly reconstruct. Workable — the trace *is* the
+observation — but if training is unstable, suspect this first.
+
+**fly.ai is explicit that this is a demo, not an emulation.** Point neurons, one
+global parameter set, no dendrites, no neuromodulators, no plasticity,
+transmitter sign from a rough rule, nothing validated against recordings from
+real flies. Expect an interesting result, not a good driver.

@@ -1,0 +1,124 @@
+syntax = "proto3";
+
+// Contract between the trainer (sim-controller, Python 3.8) and the frozen
+// fly.ai connectome (fly-brain, Python 3.10). See docs/flybrain-driver-plan.md.
+//
+// Numeric payloads are raw little-endian buffers in `bytes` fields, not JSON.
+// A step returns a 1,304-float trace at 10 Hz; JSON-encoding that every step
+// would be wasteful. Each such field documents its dtype and shape.
+package fly_brain;
+
+service FlyBrain {
+  // Static facts: neuron/connection counts, device, dt, trace width.
+  rpc Info(InfoRequest) returns (InfoReply);
+
+  // Clear voltages and reseed. Call at every episode boundary: the brain is
+  // stateful, so a new episode must not inherit the previous one's voltages.
+  rpc Reset(ResetRequest) returns (ResetReply);
+
+  // Advance the brain `substeps` times under a fixed injection and return the
+  // decaying descending-neuron trace.
+  rpc Step(StepRequest) returns (StepReply);
+
+  // Current overlay activity without advancing the brain.
+  rpc Snapshot(SnapshotRequest) returns (SnapshotReply);
+
+  // Static overlay geometry. Fetch once; it never changes.
+  rpc Geometry(GeometryRequest) returns (GeometryReply);
+
+  // Resolve cell types or a named group to neuron indices. The step-4 encoder
+  // needs these to aim its injections, and only this side can answer.
+  rpc Cells(CellsRequest) returns (CellsReply);
+}
+
+message CellsRequest {
+  // MaleCNS cell types or superclasses, e.g. ["LC4", "LPLC2"]. Mutually
+  // exclusive with `group`.
+  repeated string types = 1;
+  // "L" or "R"; empty means both. Only applies to `types`.
+  string side = 2;
+  // A name from brain.groups, e.g. "steer_L".
+  string group = 3;
+}
+
+message CellsReply {
+  bytes idx = 1;  // int32[k], indices into the full brain
+}
+
+message InfoRequest {}
+
+message InfoReply {
+  int32 n_neurons = 1;
+  int64 n_connections = 2;
+  string device = 3;
+  float dt = 4;
+  float tonic = 5;
+  float gain = 6;
+  // Width of StepReply.trace, i.e. how many descending neurons are read out.
+  int32 trace_len = 7;
+  float trace_tau = 8;
+  int32 batch = 9;
+  // Number of neurons in the overlay display subset.
+  int32 n_display = 10;
+}
+
+message ResetRequest {
+  // Fixed per episode so runs are reproducible despite the brain's noise.
+  int32 seed = 1;
+}
+
+message ResetReply {}
+
+// One population driven at one strength, matching FlyBrain.step(inject=...).
+//
+// The amount is deliberately a scalar rather than one value per neuron:
+// flybrain's `_amount` reshapes any array to (1, batch) and treats it as
+// per-fly, so per-neuron drive is not expressible. An encoder wanting a
+// graded response emits several Injections instead, one per sector.
+message Injection {
+  bytes idx = 1;     // int32[k], indices into the full brain
+  float amount = 2;  // extra voltage added to every neuron in idx, this step
+}
+
+message StepRequest {
+  // Empty means no injection; the eye drive alone still runs.
+  repeated Injection inject = 1;
+
+  // Brain steps to run for this one control step. At the gym's 10 Hz and the
+  // brain's dt=0.020 this is 5 (see the plan's "Verified interface facts").
+  int32 substeps = 3;
+
+  // Constant photoreceptor drive, as inject.py holds it at 0.45. Omit (0) to
+  // leave the eyes dark.
+  float eye_drive = 4;
+
+  // Include overlay activity in the reply, saving a second round trip.
+  bool want_snapshot = 5;
+}
+
+message StepReply {
+  bytes trace = 1;      // float32[trace_len], decaying descending-neuron trace
+  bytes snapshot = 2;   // uint8[n_display], empty unless want_snapshot
+  // Total spikes across the whole brain during this call. Cheap health signal:
+  // a run of zeros means the brain has gone silent.
+  int32 spikes = 3;
+}
+
+message SnapshotRequest {}
+
+message SnapshotReply {
+  bytes activity = 1;   // uint8[n_display]
+}
+
+message GeometryRequest {}
+
+message GeometryReply {
+  bytes positions = 1;    // float32[n_display, 3], soma positions
+  bytes edge_src = 2;     // int32[n_edges], index into the display subset
+  bytes edge_dst = 3;     // int32[n_edges]
+  bytes edge_weight = 4;  // float32[n_edges], signed connection weight
+  // JSON array of {"type": ..., "side": ..., "role": ...} per display neuron.
+  string labels_json = 5;
+  int32 n_display = 6;
+  int32 n_edges = 7;
+}

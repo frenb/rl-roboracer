@@ -82,3 +82,7 @@ unity/crashlytics-build.properties
 # Packages produced by Unity Asset Store
 unity/[Aa]ssets/AssetStoreTools*
 
+
+# fly-brain protoc scratch output. The stubs that matter are copied to
+# rl_agent/fly_brain/proto/ and committed, same as virtual_endpoint.
+docker/fly_brain/gen/
