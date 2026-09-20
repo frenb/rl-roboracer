@@ -29,6 +29,28 @@ service FlyBrain {
   // Resolve cell types or a named group to neuron indices. The step-4 encoder
   // needs these to aim its injections, and only this side can answer.
   rpc Cells(CellsRequest) returns (CellsReply);
+
+  // Split a population into k spatial sectors for the retinotopic encoder.
+  rpc Sectors(SectorsRequest) returns (SectorsReply);
+}
+
+message SectorsRequest {
+  repeated string types = 1;
+  string side = 2;
+  int32 k = 3;
+}
+
+message SectorsReply {
+  // k arrays of int32 neuron indices, ordered along the population's principal
+  // spatial axis.
+  //
+  // Each cell type is sorted and split separately, then the matching slices
+  // are merged, so a sector holds comparable positions from every type rather
+  // than one type dominating. CAVEAT: the sign of the principal axis is
+  // arbitrary, so this is a consistent partition into distinct channels --
+  // that sector 0 is the *lateral* one is unverified. The readout learns the
+  // assignment either way.
+  repeated bytes idx = 1;
 }
 
 message CellsRequest {
@@ -78,6 +100,14 @@ message ResetReply {}
 message Injection {
   bytes idx = 1;     // int32[k], indices into the full brain
   float amount = 2;  // extra voltage added to every neuron in idx, this step
+
+  // float32[k], one value per neuron, overriding `amount` when non-empty.
+  //
+  // Served by a direct scatter into the voltage array rather than
+  // FlyBrain.step(inject=...), which cannot express it. This exists for the
+  // retinotopic encoder: packing every sector into one dense injection
+  // measured 7.75 ms per control step against 21.66 ms for 28 scalar ones.
+  bytes amounts = 3;
 }
 
 message StepRequest {

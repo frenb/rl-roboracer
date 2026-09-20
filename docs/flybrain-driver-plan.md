@@ -415,6 +415,60 @@ tonic and gain, so that's the knob, not the readout.
 > to beat a raw-observation policy at steering, and treat any such result as a
 > bug. Note also that ridge is linear; SAC in Part 5 is not, so the nonlinear
 > readout has headroom this number does not measure.
+>
+> #### The retinotopic encoder: a measured negative result
+>
+> The conclusion above — "the bottleneck is the encoder" — was tested directly
+> and **turned out to be wrong**. `RetinotopicEncoder` splits the rays into 7
+> angular sectors per side and drives a matching slice of each LC population,
+> instead of collapsing each side to one number. Run it with
+> `FLY_ENCODER=retino`.
+>
+> | Encoder | Cue dim | Ceiling: R² steer on the cues | After the brain |
+> |---|---|---|---|
+> | flat, 4 scalars | 4 | 0.687 | **0.620** |
+> | retinotopic, absolute openness | 28 | 0.869 | 0.488 |
+> | retinotopic, mirrored contrast | 28 | **0.873** | 0.581 |
+>
+> **A much better input produced a worse output.** Raising the encoder ceiling
+> from 0.687 to 0.873 — past the raw observation's 0.747, because the cues are
+> a nonlinear transform carrying temporal memory the raw single frame lacks —
+> moved the brain's output *down*, from 0.620 to 0.581. Keep the flat encoder;
+> `ENCODER` defaults to it.
+>
+> Two diagnostics explain it, and rule out the obvious guess:
+>
+> - **Not saturation.** Spikes per step (72.9k vs 73.4k), trace mean (0.323 vs
+>   0.339) and trace variance across frames (0.228 vs 0.234) are all
+>   indistinguishable between the two encoders. Scaling the drive down 10x
+>   changes nothing either.
+> - **The brain cannot express within-eye sector structure.** Driving one
+>   sector at a time and comparing the descending responses, within-eye pairs
+>   have mean cosine similarity **0.476** against **0.460** across eyes — the
+>   response to any single sector is largely common-mode, and two sectors of
+>   the same eye are no more alike than one from each eye. The connectome reads
+>   left-versus-right well and sector-versus-sector essentially not at all.
+>
+> That also explains the absolute-openness variant being worst: absolute
+> openness sits near 0.6 on both sides, so the left/right contrast the brain
+> *can* read is buried in common mode. Mirroring the sectors restored most of
+> the loss (0.488 → 0.581) without beating the flat encoder, which already
+> delivers that contrast at full amplitude.
+>
+> **Scope of the conclusion.** This falsifies retinotopy *for the partition
+> available here*, which sorts each population along the principal axis of its
+> soma positions. The prebuilt connectome exposes only soma coordinates —
+> `positions`, `cell_type`, `side`, `superclass`, `groups` — and no receptive
+> field, so a true retinotopic map cannot be built from it. A second, weaker
+> confound remains: splitting the contrast over 7 sectors drives ~20 cells per
+> channel where the flat encoder drives all ~135, so lower per-channel drive
+> may contribute alongside the separability result.
+>
+> **The real conclusion is that the brain, not the encoder, is the binding
+> constraint for steering.** Handed a 0.873 input it returns 0.581; handed a
+> 0.687 input it returns 0.620. More input information does not become more
+> output information, so effort is better spent on the nonlinear readout in
+> Part 5 than on further encoder work.
 
 ---
 

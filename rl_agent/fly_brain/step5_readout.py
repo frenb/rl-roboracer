@@ -27,8 +27,15 @@ N_EPISODES = int(os.environ.get("FLY_EPISODES", "100"))
 HELDOUT_EPISODES = max(1, N_EPISODES // 5)
 
 CORPUS = "/tfrecords/job_64168c1b58d4d8ccdb76e721"
-CACHE = "/tmp/fly_step5_trace_%dep.npz" % N_EPISODES
-OUT = "/tmp/fly_readout_%dep.npz" % N_EPISODES
+
+# "flat" is the four-scalar encoder, "retino" the per-sector one. flat is the
+# default because it measured better end to end (steering R2 0.620 against
+# 0.581) despite handing the brain a much poorer input -- see the step 5 notes
+# in docs/flybrain-driver-plan.md.
+ENCODER = os.environ.get("FLY_ENCODER", "flat")
+_SUFFIX = "%dep%s" % (N_EPISODES, "" if ENCODER == "flat" else "_" + ENCODER)
+CACHE = "/tmp/fly_step5_trace_%s.npz" % _SUFFIX
+OUT = "/tmp/fly_readout_%s.npz" % _SUFFIX
 
 LAMBDAS = (1e-2, 1e-1, 1.0, 10.0, 1e2, 1e3, 1e4, 1e5)
 
@@ -49,14 +56,44 @@ def load_corpus(n_rows):
     return np.stack(obs)[:, 1:], np.stack(act)
 
 
+def make_encoder(client):
+    """(encoder, target) for the configured encoder. Both expose encode()."""
+    if ENCODER == "flat":
+        from fly_brain.encoder import RayEncoder, resolve_cells
+        return RayEncoder(), resolve_cells(client)
+    from fly_brain.encoder import RetinotopicEncoder, resolve_sector_cells
+    return RetinotopicEncoder(), resolve_sector_cells(client)
+
+
+def encoder_features(obs):
+    """The encoder's own cues -- the brain's entire input, as a feature matrix.
+
+    The control that matters: a frozen reservoir is only worth its cost where
+    it returns more than it was handed.
+    """
+    if ENCODER == "flat":
+        from fly_brain.encoder import POPULATIONS, RayEncoder
+        enc = RayEncoder()
+        out = np.empty((len(obs), len(POPULATIONS)), np.float32)
+        get = lambda o: [enc.cues(o)[k] for k in POPULATIONS]
+    else:
+        from fly_brain.encoder import RetinotopicEncoder
+        enc = RetinotopicEncoder()
+        out = np.empty((len(obs), enc.features(obs[0]).shape[0]), np.float32)
+        get = enc.features
+    for i, o in enumerate(obs):
+        if i % EPISODE_LEN == 0:
+            enc.reset()
+        out[i] = get(o)
+    return out
+
+
 def replay(obs):
     """Push every observation through the frozen brain, one episode at a time."""
     from fly_brain.client import FlyBrainClient, SUBSTEPS
-    from fly_brain.encoder import RayEncoder, resolve_cells
 
     client = FlyBrainClient()
-    cells = resolve_cells(client)
-    enc = RayEncoder()
+    enc, cells = make_encoder(client)
 
     n = len(obs)
     traces = np.empty((n, client.info.trace_len), np.float32)
@@ -117,8 +154,8 @@ def _r2(y, pred):
 
 def main():
     n_rows = N_EPISODES * EPISODE_LEN
-    print("step 5: %d episodes (%d rows), %d held out"
-          % (N_EPISODES, n_rows, HELDOUT_EPISODES))
+    print("step 5: encoder=%s, %d episodes (%d rows), %d held out"
+          % (ENCODER, N_EPISODES, n_rows, HELDOUT_EPISODES))
 
     if os.path.exists(CACHE):
         print("loading cached traces from %s" % CACHE)
@@ -142,22 +179,11 @@ def main():
     # Controls. Without these the trace's R2 is uninterpretable: the question
     # is not "is it above zero" but "does the brain add anything to what the
     # encoder already hands it".
-    from fly_brain.encoder import POPULATIONS, RayEncoder
-    enc = RayEncoder()
-    cues = np.empty((len(obs), len(POPULATIONS)), np.float32)
-    for i, o in enumerate(obs):
-        if i % EPISODE_LEN == 0:
-            enc.reset()
-        c = enc.cues(o)
-        cues[i] = [c[k] for k in POPULATIONS]
-    chase = (cues[:, POPULATIONS.index("chase_L")]
-             - cues[:, POPULATIONS.index("chase_R")]).reshape(-1, 1)
-
+    cues = encoder_features(obs)
     feature_sets = [
         ("descending trace, 1314 features", traces),
-        ("the 4 encoder cues = the brain's whole input", cues),
-        ("chase asymmetry alone, 1 feature", chase),
-        ("raw 31-D observation (upper reference)", obs),
+        ("the %d encoder cues = the brain's whole input" % cues.shape[1], cues),
+        ("raw 31-D observation (reference)", obs),
     ]
 
     print()

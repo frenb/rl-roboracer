@@ -44,6 +44,11 @@ class FlyBrainStub(object):
                 request_serializer=fly__brain_dot_proto_dot_fly__brain__pb2.CellsRequest.SerializeToString,
                 response_deserializer=fly__brain_dot_proto_dot_fly__brain__pb2.CellsReply.FromString,
                 )
+        self.Sectors = channel.unary_unary(
+                '/fly_brain.FlyBrain/Sectors',
+                request_serializer=fly__brain_dot_proto_dot_fly__brain__pb2.SectorsRequest.SerializeToString,
+                response_deserializer=fly__brain_dot_proto_dot_fly__brain__pb2.SectorsReply.FromString,
+                )
 
 
 class FlyBrainServicer(object):
@@ -94,6 +99,13 @@ class FlyBrainServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def Sectors(self, request, context):
+        """Split a population into k spatial sectors for the retinotopic encoder.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_FlyBrainServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -126,6 +138,11 @@ def add_FlyBrainServicer_to_server(servicer, server):
                     servicer.Cells,
                     request_deserializer=fly__brain_dot_proto_dot_fly__brain__pb2.CellsRequest.FromString,
                     response_serializer=fly__brain_dot_proto_dot_fly__brain__pb2.CellsReply.SerializeToString,
+            ),
+            'Sectors': grpc.unary_unary_rpc_method_handler(
+                    servicer.Sectors,
+                    request_deserializer=fly__brain_dot_proto_dot_fly__brain__pb2.SectorsRequest.FromString,
+                    response_serializer=fly__brain_dot_proto_dot_fly__brain__pb2.SectorsReply.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -236,5 +253,22 @@ class FlyBrain(object):
         return grpc.experimental.unary_unary(request, target, '/fly_brain.FlyBrain/Cells',
             fly__brain_dot_proto_dot_fly__brain__pb2.CellsRequest.SerializeToString,
             fly__brain_dot_proto_dot_fly__brain__pb2.CellsReply.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def Sectors(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/fly_brain.FlyBrain/Sectors',
+            fly__brain_dot_proto_dot_fly__brain__pb2.SectorsRequest.SerializeToString,
+            fly__brain_dot_proto_dot_fly__brain__pb2.SectorsReply.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
