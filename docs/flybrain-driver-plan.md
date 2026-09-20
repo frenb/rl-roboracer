@@ -507,6 +507,45 @@ information; Part 5 is the path that doesn't assume the textbook mapping.
 spiking noise underneath. Fix the noise seed per episode, or average the trace
 over the substeps, or the two variances aren't comparable.
 
+> **DONE.** `rl_agent/fly_brain/policy.py` wraps encoder → brain → step-5 ridge
+> readout as a `FlyPyPolicy`; `robotaxi.py` gained a `run_flypolicy()` and a
+> `model_type == "FlyPyPolicy"` EVAL branch alongside the RandomPyPolicy one.
+> The policy resets the brain and the encoder on every `StepType.FIRST` and
+> seeds the reset with the episode index, which is the per-episode fixed seed
+> the note above asks for. Its readout lives at
+> `/saved_models/robotaxi/FlyPyPolicy/0/readout.npz`, and the first run
+> registers its own `models` record because there is no TRAIN job to have
+> created one.
+>
+> **It drives. Badly, but unmistakably better than chance.** 2 trials x 3
+> episodes on `donut_no_hint`:
+>
+> | Policy | AverageReturn | Goals/episode | Episode length | Speed |
+> |---|---|---|---|---|
+> | RandomPyPolicy | ~1.0 | — | — | — |
+> | **FlyPyPolicy** | **6.87** | 8.0 / 12.7 | 297 / 394 | 1.93 / 2.43 |
+> | SAC `7573_step_87314` | 75.7 | 78–100 | 1105–1383 | 5.2–5.5 |
+>
+> So the frozen connectome is worth about **7x a random policy and about a
+> tenth of SAC**. It holds a lane well enough to collect 8–13 goals before
+> crashing, rather than the ~1 goal random scores. The plan predicted "expect
+> it to drive poorly" and that is what happened, but the failure mode is
+> informative: the car is not crashing at once, it is driving slowly and
+> eventually leaving the track.
+>
+> **Throttle is the weaker of the two channels, as step 5 predicted.** The
+> readout's accel prediction (R² 0.176) sits below the course's own 0.05
+> action floor on ~54% of frames, so the clip to the action spec is doing real
+> work and the car is effectively pinned near minimum throttle half the time —
+> hence 1.9–2.4 m/s against SAC's 5.4. Steering (R² 0.620) is what is keeping
+> it on the track.
+>
+> **Caveat on comparability.** This ran on the current `unity/Builds/latest`
+> build, not the `wCourseJetRacer2026.09.06-v10` build the SAC row was measured
+> on. Same course type and same reward, but the geometry is not guaranteed
+> identical, so treat the SAC column as a scale reference rather than a
+> controlled head-to-head until it is re-run on one build.
+
 ---
 
 ## Part 4 — The overlay

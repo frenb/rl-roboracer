@@ -108,6 +108,7 @@
         SacAgent: 'indigo',
         GreedyPolicy: 'neutral',
         RandomPyPolicy: 'neutral',
+        FlyPyPolicy: 'warning',
       })[type] || 'neutral';
       return badge(tone, type || '?');
     },
