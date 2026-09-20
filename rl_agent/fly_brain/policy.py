@@ -17,6 +17,7 @@ from tf_agents.trajectories import time_step as ts
 
 from fly_brain.client import FlyBrainClient, SUBSTEPS
 from fly_brain.encoder import RayEncoder, resolve_cells
+from fly_brain.viz import FlyBrainViz
 
 DEFAULT_READOUT = os.environ.get(
     "FLY_READOUT", "/saved_models/robotaxi/FlyPyPolicy/0/readout.npz")
@@ -56,6 +57,10 @@ class FlyPyPolicy(py_policy.PyPolicy):
         self._cells = resolve_cells(self._client)
         self._substeps = int(substeps)
         self._episode = 0
+        self._steps = 0
+        # The overlay rides along on the step we already make: asking for the
+        # snapshot here costs one 2 KB field instead of a second round trip.
+        self._viz = FlyBrainViz(self._client)
 
         self._lo = np.asarray(action_spec.minimum, np.float32)
         self._hi = np.asarray(action_spec.maximum, np.float32)
@@ -75,7 +80,10 @@ class FlyPyPolicy(py_policy.PyPolicy):
             self._episode += 1
 
         _, inject = self._enc.encode(row, self._cells)
-        trace, _, _ = self._client.step(inject, substeps=self._substeps)
+        trace, snap, spikes = self._client.step(
+            inject, substeps=self._substeps, want_snapshot=self._viz.enabled)
+        self._steps += 1
+        self._viz.submit(snap, step=self._steps, spikes=spikes)
 
         act = ((trace - self._mu) / self._sd) @ self._w + self._ym
         # The corpus the readout was fit on holds accel values below the
@@ -86,4 +94,5 @@ class FlyPyPolicy(py_policy.PyPolicy):
                                       policy_state)
 
     def close(self):
+        self._viz.stop()
         self._client.close()

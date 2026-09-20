@@ -103,6 +103,10 @@ public class SimController : MonoBehaviour
         gameObject.AddComponent(typeof(CameraViewSwitcher));
         // One CSI frame per cmd_id on camera/front (Phase 1).
         gameObject.AddComponent(typeof(CsiFramePublisher));
+        // Auto-attach the fly-connectome overlay. It self-subscribes to
+        // fly_brain_geometry/fly_brain_activity and stays hidden until a fly
+        // policy is actually driving. Toggle with the B key.
+        gameObject.AddComponent(typeof(FlyBrainViz));
         // // Publish camera frames for computer vision.
         // if (publishedCamera != null)
         // {

@@ -570,6 +570,31 @@ legible.
 **You are done when.** You have one JSON file of positions and edge pairs,
 comfortably under a few MB.
 
+> **DONE.** `docker/fly_brain/display_subset.py`, served by the `Geometry` RPC
+> rather than written to a file — the overlay needs it over the wire anyway and
+> a file would be a second thing to keep in sync. **3,225 neurons and 8,000
+> edges**, in 166 KB on the wire: 720 sensory (LC4/LPLC2/LPLC1/LC10a), 1,292
+> descending, 16 named command neurons, and 1,197 relay interneurons.
+>
+> Two corrections came out of actually rendering it:
+>
+> - **Six descending neurons carry no soma position in `brain.npz`.** They are
+>   0.3% of the subset and they made *every* drawn position NaN, because the
+>   centre and extent used to normalize are means and maxima over all of them.
+>   They are now dropped in `build()`, before the slot map and edge list, so
+>   `n_display` means "what can actually be drawn" and no consumer has to
+>   defend itself.
+> - **The first version had no interneurons at all.** `idx` was the union of
+>   sensory, command and readout, so the "interneuron" role existed in the code
+>   and matched nothing: the overlay drew inputs and outputs with empty space
+>   between them, and step 9's "its path to DNp01" had no path to light up.
+>   `_relay_interneurons()` now scores candidates by (weight received from
+>   sensory) x (weight sent to descending) and keeps the top 1,200. That buys
+>   585 sensory→relay edges and 940 relay→descending edges, so the two-hop path
+>   is visible. Candidates are restricted to actual targets of the sensory
+>   populations, which keeps this a few thousand row scans instead of a pass
+>   over all 25.6M connections — startup stayed at 2.0 s.
+
 ### Step 8 — Publish geometry once, activity continuously *(sim)*
 
 **Do this.** Add two topics: `fly_brain_geometry` (the step 7 file, published
@@ -588,6 +613,40 @@ geometry, recreates the saturation we already hit with the camera feed.
 **You are done when.** `rl_agent/check_rollouts.py`, pointed at the new topic,
 shows geometry arriving once and activity arriving steadily at 20 Hz.
 
+> **DONE.** `rl_agent/fly_brain/viz.py`. Both topics are registered in
+> `unity_node.py`. Verified with the now topic-aware `check_rollouts.py`:
+>
+> ```
+> python check_rollouts.py ros-server-0:50051 25 fly_brain_activity
+>   Received 347 message(s). ~18.0 Hz. OK - data is flowing.
+> python check_rollouts.py ros-server-0:50051 25 fly_brain_geometry
+>   Received 2 message(s). 166131 chars each. OK - data is flowing.
+> ```
+>
+> Three decisions worth keeping:
+>
+> - **Every numeric field is base64 of a little-endian buffer, geometry
+>   included** — not just the activity bytes the plan called for. The subset as
+>   JSON number arrays is 207 KB against 120 KB packed, and Unity's
+>   `JsonUtility` would otherwise allocate and parse 24,000 floats on each
+>   resend; `Convert.FromBase64String` plus a `Buffer.BlockCopy` is one
+>   allocation.
+> - **Geometry is resent every 10 s, not once.** The routing table is static
+>   and gives Unity no way to ask for a resend, so a client that connects (or
+>   reloads its scene) after the first send would otherwise never draw
+>   anything. At 166 KB that averages ~17 KB/s against the activity stream's
+>   ~54 KB/s.
+> - **Positions are normalized to a unit box before publishing**, so the Unity
+>   side is one scale factor instead of raw MaleCNS soma coordinates (which run
+>   to ~84,000 on the x axis).
+>
+> The publish is a blocking gRPC round trip and `FlyPyPolicy` calls it from
+> inside its action loop, so it goes through a background thread holding only
+> the newest frame. A dead ros-server costs the driving loop nothing and stale
+> frames are dropped rather than queued. The snapshot rides along on the `Step`
+> the policy already makes (`want_snapshot`), so the overlay costs no extra
+> round trip. Off with `FLY_VIZ_ENABLED=0`.
+
 ### Step 9 — Render it in Unity *(sim)*
 
 **Do this.** Write `unity/Assets/Scripts/FlyBrainViz.cs` modeled directly on
@@ -604,6 +663,31 @@ and animating only colors keeps a few thousand neurons free at frame rate.
 
 **You are done when.** Driving the car lights up the correct side: approach a
 wall on the left and the left looming cluster and its path to DNp01 flare.
+
+> **WRITTEN, NOT YET SEEN.** `unity/Assets/Scripts/FlyBrainViz.cs`, auto-
+> attached by `SimController` alongside `HudOverlay`/`TrajectoryRolloutViz`, so
+> there is no scene setup to remember. Toggle with the B key; it stays hidden
+> until activity actually arrives, so a SAC job doesn't get a frozen brain
+> floating over the track.
+>
+> Two meshes share one `Sprites/Default` material (the same always-available,
+> vertex-colour-aware, `Cull Off` shader `TrajectoryRolloutViz` settled on):
+> a `MeshTopology.Lines` mesh whose vertices *are* the neurons, so each edge
+> interpolates between its endpoints' colours and lights from the firing end;
+> and a quad per neuron, billboarded toward the camera in `LateUpdate`, because
+> `MeshTopology.Points` renders single pixels that are unreadable at this
+> scale. Activity frames rewrite only `mesh.colors` — the vertex buffers are
+> uploaded once. Role sets the hue (sensory cyan, interneuron grey, command
+> amber, descending red) and intensity sets brightness and alpha, so the
+> structure stays legible while the brain is quiet.
+>
+> **This cannot be verified from here.** There is no headless Unity build in
+> this repo — `PromoteLatestBuild.ps1` promotes a folder the Editor produced.
+> Verifying needs: build from the Unity Editor into `unity/Builds/<name>/`, run
+> `scripts/PromoteLatestBuild.ps1`, then `scripts/Start-Clients.ps1`, and run a
+> `FlyPyPolicy` EVAL job. The ros-server image also has to be rebuilt for the
+> routing-table change (`docker compose build ros-server`), since
+> `unity_node.py` is baked in rather than bind-mounted.
 
 ---
 

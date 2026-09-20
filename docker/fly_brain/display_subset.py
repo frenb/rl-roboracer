@@ -18,6 +18,60 @@ COMMAND_TYPES = ["DNa02", "DNp01", "DNg100", "MDN", "DNp10", "DNg13", "pIP10"]
 READOUT_SUPERCLASS = "descending_neuron"
 
 MAX_EDGES = 8000
+# How many relay interneurons to show between the sensory and descending
+# layers. Without these the overlay draws inputs and outputs with nothing in
+# between, and step 9's "the looming cluster and its path to DNp01 flare" has
+# no path to light up.
+MAX_INTERNEURONS = 1200
+
+
+def _relay_interneurons(brain, sensory, readout, exclude, k=MAX_INTERNEURONS):
+    """The k neurons carrying the most sensory -> descending two-hop weight.
+
+    Scored as (total |weight| received from `sensory`) x (total |weight| sent to
+    `readout`), so a neuron must both listen to the feature detectors and talk
+    to the motor output to appear. Candidates are restricted to actual targets
+    of `sensory`, which keeps this to a few thousand row scans instead of a
+    pass over all 25.6M connections.
+    """
+    indptr = np.asarray(brain.indptr)
+    indices = np.asarray(brain.indices)
+    weights = np.asarray(brain.weights)
+
+    # Hop 1: everything the sensory populations project onto.
+    cols, ws = [], []
+    for s in sensory:
+        lo, hi = indptr[s], indptr[s + 1]
+        if hi > lo:
+            cols.append(indices[lo:hi])
+            ws.append(np.abs(weights[lo:hi]))
+    if not cols:
+        return np.zeros(0, np.int64)
+    from_sensory = np.bincount(np.concatenate(cols),
+                               weights=np.concatenate(ws).astype(np.float64),
+                               minlength=brain.n)
+
+    candidates = np.flatnonzero(from_sensory > 0)
+    candidates = candidates[~np.isin(candidates, exclude)]
+    if not len(candidates):
+        return np.zeros(0, np.int64)
+
+    # Hop 2: of those, how strongly each drives the descending population.
+    is_readout = np.zeros(brain.n, bool)
+    is_readout[readout] = True
+    to_readout = np.zeros(len(candidates), np.float64)
+    for j, c in enumerate(candidates):
+        lo, hi = indptr[c], indptr[c + 1]
+        if hi > lo:
+            sel = is_readout[indices[lo:hi]]
+            if sel.any():
+                to_readout[j] = np.abs(weights[lo:hi][sel]).sum()
+
+    score = from_sensory[candidates] * to_readout
+    keep = np.flatnonzero(score > 0)
+    if len(keep) > k:
+        keep = keep[np.argsort(-score[keep])[:k]]
+    return candidates[keep]
 
 
 def build(brain, max_edges=MAX_EDGES):
@@ -33,7 +87,17 @@ def build(brain, max_edges=MAX_EDGES):
     command = np.flatnonzero(np.isin(ct, COMMAND_TYPES))
     readout = np.asarray(brain.cells([READOUT_SUPERCLASS]))
 
-    idx = np.unique(np.concatenate([sensory, command, readout]))
+    core = np.unique(np.concatenate([sensory, command, readout]))
+    relay = _relay_interneurons(brain, sensory, readout, exclude=core)
+    idx = np.unique(np.concatenate([core, relay]))
+
+    # A few neurons carry no soma position in brain.npz (6 descending ones in
+    # the current build). They cannot be drawn, and leaving them in makes every
+    # downstream centre/extent NaN, so drop them here - before the slot map and
+    # the edge list are built - instead of asking each consumer to defend
+    # itself. n_display then matches what the overlay can actually show.
+    all_positions = np.asarray(brain.positions)
+    idx = idx[np.isfinite(all_positions[idx]).all(axis=1)]
 
     role = np.full(len(idx), "interneuron", dtype=object)
     role[np.isin(idx, readout)] = "descending"
@@ -45,7 +109,7 @@ def build(brain, max_edges=MAX_EDGES):
         for i, r in zip(idx, role)
     ]
 
-    positions = np.asarray(brain.positions)[idx].astype(np.float32)
+    positions = all_positions[idx].astype(np.float32)
 
     # CSR slice restricted to the subset, then the strongest edges by |weight|.
     indptr = np.asarray(brain.indptr)

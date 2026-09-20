@@ -298,9 +298,15 @@ class _DirectPublisher:
         self._stub = ros_service_pb2_grpc.RosNodeStub(self._channel)
         self._fail_count = 0
 
-    def publish_rollout(self, payload_json):
+    def publish(self, topic, payload_json):
+        """Publish a JSON string as a std_msgs/String on any topic.
+
+        The topic must also be registered as a RosSubscriber in unity_node.py's
+        static routing table, or the message is accepted here and silently
+        never reaches Unity.
+        """
         req = self._pb2.PublishRequest(
-            topic="policy_rollouts",
+            topic=topic,
             msg_type="std_msgs/String",
             data=json.dumps({"data": payload_json}))
         try:
@@ -310,6 +316,9 @@ class _DirectPublisher:
         except Exception:
             self._fail_count += 1
             raise
+
+    def publish_rollout(self, payload_json):
+        self.publish("policy_rollouts", payload_json)
 
     def is_healthy(self):
         return self._fail_count < self.MAX_CONSECUTIVE_FAILURES
