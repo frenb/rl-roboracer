@@ -200,6 +200,12 @@ $script:ActiveCwd     = $null
 # Gym switching compares the dashboard's desired source against this so
 # we only restart when the requested build genuinely differs.
 $script:ActiveGymSource = $GymSource
+# ...and when it was last built. Comparing the path alone is not enough:
+# rebuilding a gym IN PLACE (same folder, same name) leaves the path
+# identical, so the swap is skipped and the actor keeps running the old
+# binary. Nothing reports this - the job just runs against a stale build
+# and every change appears to have had no effect.
+$script:ActiveGymStamp = $null
 
 function Set-ActiveExePath {
     param([string]$NewPath)
@@ -235,6 +241,40 @@ function Set-ActiveExePath {
 Set-ActiveExePath -NewPath $Path
 
 # ---- Gym hot-swap helpers -------------------------------------------
+function Get-GymSourceStamp {
+    <#
+      When a gym build was last written, used to notice an in-place
+      rebuild that leaves the path unchanged.
+
+      Reads one file rather than walking the build: a Unity build folder
+      holds thousands of files and this runs on every poll. Unity rewrites
+      globalgamemanagers on every build, so it dates the build as well as
+      a full scan would; the exe itself is useless here because it is the
+      unchanged player stub (it dates from the Unity release, not the
+      build). Returns $null when the source is missing, which compares
+      equal to nothing and so never triggers a spurious swap.
+    #>
+    param([string]$SourceExePath)
+
+    if (-not $SourceExePath) { return $null }
+    try {
+        $dir  = Split-Path -Parent $SourceExePath
+        $data = Join-Path $dir (
+            (Split-Path -Leaf $SourceExePath) -replace '\.exe$', '_Data')
+        foreach ($candidate in @(
+            (Join-Path $data 'globalgamemanagers'),
+            (Join-Path $data 'resources.assets'),
+            $SourceExePath)) {
+            if (Test-Path -LiteralPath $candidate) {
+                return (Get-Item -LiteralPath $candidate).LastWriteTimeUtc
+            }
+        }
+    } catch {
+        # Treated as "unknown", i.e. fall back to comparing paths only.
+    }
+    return $null
+}
+
 function Get-DesiredGymPath {
     # Ask the dashboard for the file_path the current job wants.
     # Falls back to '' on any error so the caller can treat a missing
@@ -317,6 +357,9 @@ function Switch-ToGym {
 
     Set-ActiveExePath -NewPath $instanceExe
     $script:ActiveGymSource = $SourceExePath
+    # Read AFTER the mirror, so a build finishing mid-robocopy is noticed on
+    # the next poll rather than being recorded as already-installed.
+    $script:ActiveGymStamp = Get-GymSourceStamp $SourceExePath
 }
 
 # Grid-positioning plumbing. Loaded only once, even if the wrapper
@@ -460,16 +503,26 @@ try {
         # into this actor's per-index instance dir and restart Unity from
         # the copy. Compares against $script:ActiveGymSource (the source
         # the running binary was mirrored from) so an identical request
-        # doesn't trigger a needless restart. Only runs when
-        # GymPollSeconds > 0 and enough time has elapsed.
+        # doesn't trigger a needless restart, AND against its build time,
+        # so rebuilding that same source in place is still picked up.
+        # Only runs when GymPollSeconds > 0 and enough time has elapsed.
         if ($GymPollSeconds -gt 0) {
             $now = [DateTime]::UtcNow
             if (($now - $gymLastChecked).TotalSeconds -ge $GymPollSeconds) {
                 $gymLastChecked = $now
                 $desiredSource = Get-DesiredGymPath
-                if ($desiredSource -and $desiredSource -ne $script:ActiveGymSource) {
+                $desiredStamp  = Get-GymSourceStamp $desiredSource
+                $rebuiltInPlace = ($desiredSource -eq $script:ActiveGymSource) `
+                                  -and ($null -ne $desiredStamp) `
+                                  -and ($desiredStamp -ne $script:ActiveGymStamp)
+                if ($desiredSource -and
+                    (($desiredSource -ne $script:ActiveGymSource) -or $rebuiltInPlace)) {
                     if (Test-Path -LiteralPath $desiredSource) {
-                        Write-Host ("[$Index] GYM SWITCH: {0} -> {1}" -f $script:ActiveGymSource, $desiredSource)
+                        if ($rebuiltInPlace) {
+                            Write-Host ("[$Index] GYM REBUILT IN PLACE: {0} (built {1:u})" -f $desiredSource, $desiredStamp)
+                        } else {
+                            Write-Host ("[$Index] GYM SWITCH: {0} -> {1}" -f $script:ActiveGymSource, $desiredSource)
+                        }
                         # Kill the running Unity process cleanly before switching.
                         $current = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
                         if ($current) {
