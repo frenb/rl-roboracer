@@ -32,6 +32,11 @@ def main():
         # a topic must be listed here as a RosSubscriber (ROS -> Unity) for
         # Unity's TrajectoryRolloutViz to ever receive it.
         'policy_rollouts': RosSubscriber('policy_rollouts', String, tcp_server),
+        # Fly-brain overlay (see rl_agent/fly_brain/viz.py). Same static-table
+        # caveat as policy_rollouts above. Geometry is resent on a slow
+        # heartbeat so a Unity client that connects late still gets it.
+        'fly_brain_geometry': RosSubscriber('fly_brain_geometry', String, tcp_server),
+        'fly_brain_activity': RosSubscriber('fly_brain_activity', String, tcp_server),
     })
     
     rospy.spin()
