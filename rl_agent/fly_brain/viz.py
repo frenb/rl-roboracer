@@ -68,12 +68,48 @@ def get_config():
         # restart the trainer). A build has no inspector, so without this every
         # "it's off screen" costs an Editor round trip. Unity falls back to its
         # own defaults when displaySize is absent/0.
-        "display_size": _float("FLY_VIZ_DISPLAY_SIZE", 12.0),
-        "point_size": _float("FLY_VIZ_POINT_SIZE", 0.10),
+        # Defaults tuned against the sim's top-down camera: 12 m was legible
+        # but small, and the neurons/edges washed out against the grass.
+        "display_size": _float("FLY_VIZ_DISPLAY_SIZE", 25.0),
+        "point_size": _float("FLY_VIZ_POINT_SIZE", 0.16),
         "offset": os.environ.get("FLY_VIZ_OFFSET", "0,40,0"),
-        "spin": _float("FLY_VIZ_SPIN", 8.0),
-        "edge_alpha": _float("FLY_VIZ_EDGE_ALPHA", 0.22),
+        # 0, not a slow turntable: the sim camera looks straight down, so a
+        # spin about Unity's y would swing the brain in the screen plane and
+        # left/right would stop meaning left/right.
+        "spin": _float("FLY_VIZ_SPIN", 0.0),
+        "edge_alpha": _float("FLY_VIZ_EDGE_ALPHA", 0.40),
+        # Which connectome axis goes on which Unity axis, as signed names for
+        # Unity x,y,z. The camera looks down Unity y, so whatever lands there
+        # is the axis we lose. Measured on the display subset (n=3225):
+        #   connectome x  left-right   (L +14116 vs R -14182, 1.77 sd apart)
+        #   connectome y  sensory -5618 -> descending +7683, the flow axis
+        #   connectome z  thinnest by sd, and the long descending projections
+        # So x stays horizontal, the flow axis becomes screen-vertical, and z
+        # is spent on depth. The sign on y is +, not -, because the sim
+        # camera's up maps to -Z: unnegated is what puts sensory at the top of
+        # the screen with the flow running down to the descending neurons.
+        "axes": os.environ.get("FLY_VIZ_AXES", "x,z,y"),
+        # How much of the camera-facing axis to keep. 1.0 is anatomically
+        # honest but perspective-smears the overlay; see _build_geometry.
+        "depth_scale": _float("FLY_VIZ_DEPTH_SCALE", 0.12),
     }
+
+
+def _axis_map(spec):
+    """Parse "x,z,-y" into (source index per Unity axis, sign per Unity axis)."""
+    names = {"x": 0, "y": 1, "z": 2}
+    try:
+        parts = [p.strip().lower() for p in str(spec).split(",")]
+        if len(parts) != 3:
+            raise ValueError(spec)
+        idx, sign = [], []
+        for p in parts:
+            s = -1.0 if p.startswith("-") else 1.0
+            idx.append(names[p.lstrip("+-")])
+            sign.append(s)
+        return idx, np.array(sign, np.float32)
+    except (KeyError, ValueError):
+        return [0, 2, 1], np.array([1.0, 1.0, -1.0], np.float32)
 
 
 def _offset(text):
@@ -127,14 +163,32 @@ class FlyBrainViz(object):
         g = self._client.geometry()
         pos = np.asarray(g["positions"], np.float32)
 
+        # Reorient before normalizing so the sim's top-down camera sees the
+        # informative plane rather than looking down the sensory->descending
+        # axis. See the "axes" note in get_config.
+        idx, sign = _axis_map(self.cfg["axes"])
+        pos = pos[:, idx] * sign
+
         # Normalize to a unit box centred on the origin so the Unity side is a
         # single scale factor rather than hard-coded connectome coordinates
         # (which are raw MaleCNS nanometre-ish soma positions).
         centre = pos.mean(axis=0)
         pos = pos - centre
-        extent = float(np.abs(pos).max())
+        # A percentile, not the max: a handful of descending cells project far
+        # down the nerve cord (z spans 106k against a 7.6k sd), and dividing by
+        # that outlier shrinks the actual brain to a dot.
+        extent = float(np.percentile(np.abs(pos), 99.0))
         if extent > 0:
             pos = pos / extent
+        # Clip rather than let the ~1% beyond the percentile run free. The sim
+        # camera is perspective, so a neuron left at 3.5 units of depth sits
+        # ~88 m up at displaySize 25 -- close enough to the camera that it
+        # projects way off to the side and the brain smears into a radial fan.
+        pos = np.clip(pos, -1.0, 1.0)
+        # Flatten depth. A top-down camera throws that axis away anyway, and
+        # squashing it keeps near and far neurons at nearly the same projected
+        # scale, so the overlay reads as a clean diagram instead of a cone.
+        pos[:, 1] *= self.cfg["depth_scale"]
 
         labels = json.loads(g["labels_json"])
         role = np.array([ROLE_CODES.get(l.get("role"), 0) for l in labels], np.uint8)
