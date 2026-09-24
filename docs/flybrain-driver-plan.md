@@ -21,6 +21,11 @@ diagram, fixed at load time. The only learned thing is what we read off the
 1,314 descending neurons, which is exactly how `flybrain/reservoir.py` is meant
 to be used.
 
+**If you want to know how the built system works rather than why it was built
+this way, read [`fly-brain-driver-how-it-works.md`](fly-brain-driver-how-it-works.md)
+instead.** This document is the decision record: what was measured at each step
+and which ideas turned out to be wrong. That one is the walkthrough.
+
 Sibling docs: [`trajectory-rollout-viz.md`](trajectory-rollout-viz.md) is the
 overlay this plan copies, and
 [`csi-camera-observation-guide.md`](csi-camera-observation-guide.md) is the
