@@ -66,7 +66,12 @@ public class CurriculumStageButtons : MonoBehaviour
              + "rightMargin regardless of which line is longest.")]
     public float titleWidth = 220f;
 
-    private bool _panelOn = true;
+    // Starts collapsed. The stage buttons are a manual override for poking at
+    // track geometry without a trainer attached - useful, but not what anyone
+    // is looking at during a run, and the expanded panel is five buttons deep
+    // in the corner of every screenshot. The collapsed line still says which
+    // key opens it.
+    private bool _panelOn = false;
     // -1 = no manual switch clicked yet this session (a real running
     // CurriculumScheduler may be at any stage - we don't try to read it
     // back, so this only tracks button-driven switches).
@@ -86,13 +91,18 @@ public class CurriculumStageButtons : MonoBehaviour
     void EnsureAssets()
     {
         if (_assetsReady) return;
-        _buttonStyle = new GUIStyle(GUI.skin.button) { fontSize = 14 };
-        _activeButtonStyle = new GUIStyle(GUI.skin.button) { fontSize = 14, fontStyle = FontStyle.Bold };
+        // fontSize 0 means "use the skin font's own size", which is exactly
+        // what the ROS connection panel (HUDPanel) does - it sets no size at
+        // all. Inheriting rather than naming a number is what makes the two
+        // match: a hard-coded 12 or 14 would only agree with it until the
+        // skin changed, and there is nothing to notice when it drifts.
+        _buttonStyle = new GUIStyle(GUI.skin.button) { fontSize = 0 };
+        _activeButtonStyle = new GUIStyle(GUI.skin.button) { fontSize = 0, fontStyle = FontStyle.Bold };
         _activeButtonStyle.normal.textColor = new Color(0.55f, 1f, 0.65f);
         _activeButtonStyle.hover.textColor = new Color(0.55f, 1f, 0.65f);
         _titleStyle = new GUIStyle(GUI.skin.label)
         {
-            fontSize = 12,
+            fontSize = 0,
             fontStyle = FontStyle.Bold,
         };
         _titleStyle.normal.textColor = new Color(0.8f, 0.85f, 0.95f);
@@ -104,29 +114,42 @@ public class CurriculumStageButtons : MonoBehaviour
         if (stages == null || stages.Length == 0) return;
         EnsureAssets();
 
-        // Anchor to the screen's right edge (not a fixed pixel x) so the
-        // panel stays pinned there across resolutions, sitting to the right
-        // of the HUD's screen-center panel (see HudOverlay.panelWidth).
-        float panelW = Mathf.Max(titleWidth, buttonWidth);
-        float x = Screen.width - rightMargin - panelW;
-
-        float y = topMargin;
-        GUI.Label(new Rect(x, y, titleWidth, 18f),
-                  _panelOn ? "curriculum stage (C to hide)" : "(C to show stages)",
-                  _titleStyle);
-        if (!_panelOn) return;
-        y += 20f;
-
-        for (int i = 0; i < stages.Length; i++)
+        // Logical pixels from here down (see OverlayUi), so the panel keeps
+        // its apparent size instead of shrinking on a large display. The
+        // try/finally is not decoration: the collapsed-panel path returns from
+        // the middle of the block, and IMGUI state is global, so leaking the
+        // scale would rescale every overlay that draws after this one.
+        Matrix4x4 guiPrev = OverlayUi.Begin();
+        try
         {
-            var s = stages[i];
-            var style = (i == _activeStage) ? _activeButtonStyle : _buttonStyle;
-            string label = "Stage " + s.label;
-            if (GUI.Button(new Rect(x, y, buttonWidth, buttonHeight), label, style))
+            // Anchor to the screen's right edge (not a fixed pixel x) so the
+            // panel stays pinned there across resolutions, sitting to the right
+            // of the HUD's screen-center panel (see HudOverlay.panelWidth).
+            float panelW = Mathf.Max(titleWidth, buttonWidth);
+            float x = OverlayUi.LogicalWidth - rightMargin - panelW;
+
+            float y = topMargin;
+            GUI.Label(new Rect(x, y, titleWidth, 18f),
+                      _panelOn ? "curriculum stage (C to hide)" : "(C to show stages)",
+                      _titleStyle);
+            if (!_panelOn) return;
+            y += 20f;
+
+            for (int i = 0; i < stages.Length; i++)
             {
-                ApplyStage(i);
+                var s = stages[i];
+                var style = (i == _activeStage) ? _activeButtonStyle : _buttonStyle;
+                string label = "Stage " + s.label;
+                if (GUI.Button(new Rect(x, y, buttonWidth, buttonHeight), label, style))
+                {
+                    ApplyStage(i);
+                }
+                y += buttonHeight + spacing;
             }
-            y += buttonHeight + spacing;
+        }
+        finally
+        {
+            OverlayUi.End(guiPrev);
         }
     }
 
