@@ -104,13 +104,15 @@ services:
   #
   #   docker compose -f docker-compose.yml -f compose/scale.yml \
   #     exec sim-controller bash -c \
-  #     'cd /python_ws/src && python robotaxi.py --num-envs 4 \
-  #      2>&1 | tee robotaxi.out'
+  #     'cd /python_ws/src && python -u robotaxi.py --num-envs 4 \
+  #      2>&1 | tee /tmp/trainer.log'
   #
-  # The trailing `tee robotaxi.out` keeps the dashboard log panel
-  # working - the dashboard tails /python_ws/src/robotaxi.out which
-  # the base command also wrote. Without `tee`, the file stays stale
-  # and the dashboard log view shows old data.
+  # The trailing `tee /tmp/trainer.log` is what feeds the dashboard log
+  # panel - the dashboard tails that path (see the 2026-07-19 comment in
+  # dashboard/src/server.ts). Without the `tee` the panel has nothing to
+  # show. Do NOT tee to robotaxi.out instead: only the BASE compose
+  # command writes that file, so under this overlay it is never written
+  # and the panel would sit on a stale file forever.
   sim-controller:
     # IMPORTANT: keep this in sync with docker-compose.yml's
     # sim-controller command for the tensorboard part. When this

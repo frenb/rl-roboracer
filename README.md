@@ -177,7 +177,7 @@ Once all four Unity windows are up, kick off training:
 
 ```powershell
 docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller `
-  bash -c 'cd /python_ws/src && python -u robotaxi.py --num-envs 4 2>&1 | tee robotaxi.out'
+  bash -c 'cd /python_ws/src && python -u robotaxi.py --num-envs 4 2>&1 | tee /tmp/trainer.log'
 ```
 
 Two important pieces in that command:
@@ -185,14 +185,21 @@ Two important pieces in that command:
 - `python -u` forces unbuffered stdout. When Python detects that stdout
   is a pipe (which it is when piped to `tee`), it switches from
   line-buffered to ~8 KB block-buffered, holding back lines until the
-  buffer fills. With `-u`, every `[actor-N]` line lands in `robotaxi.out`
-  (and the dashboard's live log view) the moment it's emitted.
-- `| tee robotaxi.out` feeds the dashboard's live log panel —
-  `dashboard/src/server.ts` tails `/python_ws/src/robotaxi.out` over a
-  WebSocket. The `compose/scale.yml` overlay disables sim-controller's
-  default auto-run of the single-env trainer (so it doesn't compete with
-  your multi-env exec for MongoDB jobs), which means without the `tee`
-  the file stays stale and the dashboard panel shows old data.
+  buffer fills. With `-u`, every `[actor-N]` line lands in
+  `/tmp/trainer.log` (and the dashboard's live log view) the moment it's
+  emitted.
+- `| tee /tmp/trainer.log` feeds the dashboard's live log panel —
+  `dashboard/src/server.ts` tails `/tmp/trainer.log` over a WebSocket.
+  The `compose/scale.yml` overlay disables sim-controller's default
+  auto-run of the single-env trainer (so it doesn't compete with your
+  multi-env exec for MongoDB jobs), which means without the `tee` the
+  dashboard panel has nothing to show.
+
+  Use `/tmp/trainer.log`, not the older `robotaxi.out`. The panel was
+  switched to it on 2026-07-19 (see the comment in `server.ts`) because
+  `robotaxi.out` is only written by the base compose command, so the
+  first manual restart left the panel frozen on a stale file with no
+  indication anything was wrong.
 
 TensorBoard at `http://localhost:6006/` will show one run with `metrics/`,
 `eval/`, `train/`, and `learner/train/` summaries. The dashboard at
@@ -281,7 +288,7 @@ Same parameters as the `*-Stack` versions (`-N`, `-StaggerSeconds`,
 # even with -N 1 you start the trainer manually:
 .\scripts\Start-Stack.ps1 -N 1
 docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller `
-  bash -c 'cd /python_ws/src && python -u robotaxi.py 2>&1 | tee robotaxi.out'
+  bash -c 'cd /python_ws/src && python -u robotaxi.py 2>&1 | tee /tmp/trainer.log'
 
 # Tile small popup windows for quick visual inspection of multi-actor runs
 .\scripts\Start-Stack.ps1 -Popup
@@ -316,7 +323,7 @@ docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller `
 | `sim-controller` | 6006              | Tensorboard for the live training run                     |
 | `fly-brain`      | 50061             | Frozen fly connectome over gRPC (see Developer notes)     |
 | `dashboard`      | 80                | Golden Layout UI (iframes Tensorboard, logs, jobs, models) |
-| `dashboard`      | 8080              | WebSocket tail of `rl_agent/robotaxi.out`                 |
+| `dashboard`      | 8080              | WebSocket tail of `sim-controller:/tmp/trainer.log`       |
 
 ## Rebuilding the gRPC stubs
 
@@ -432,7 +439,7 @@ Compare `buffer_size=X/300000` on the very first `TRAIN end:` line after the
 job is resumed:
 
 ```powershell
-docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller bash -c "grep 'TRAIN end' /python_ws/src/robotaxi.out | head -3"
+docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller bash -c "grep 'TRAIN end' /tmp/trainer.log | head -3"
 ```
 
 | Code version | Expected first buffer_size |
