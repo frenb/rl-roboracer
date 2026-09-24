@@ -251,6 +251,18 @@ class FlyBrainViz(object):
         role = np.array([ROLE_CODES.get(l.get("role"), 0) for l in labels], np.uint8)
         side = np.array([SIDE_CODES.get(l.get("side"), 0) for l in labels], np.uint8)
 
+        # Cell type per neuron, for the overlay's hover label. Sent as a table
+        # of distinct names plus a uint16 index each, rather than a type string
+        # per neuron: the context sample is drawn from the whole brain and
+        # carries a long tail of types, so the repeated strings would be most
+        # of the payload while the table is a few KB. uint16 because the
+        # distinct count runs to a few hundred - well past a byte, nowhere near
+        # 65k - and the index array is then ~2 bytes per neuron.
+        type_names = sorted({str(l.get("type", "")) for l in labels})
+        type_slot = {t: i for i, t in enumerate(type_names)}
+        type_idx = np.array([type_slot[str(l.get("type", ""))] for l in labels],
+                            np.uint16)
+
         # Edges are off by default. 8000 lines over a bright sim background
         # read as a dark scribble that buries the neurons; the reference
         # renders this connectome as a bare point cloud for the same reason.
@@ -270,6 +282,14 @@ class FlyBrainViz(object):
             "offsetX": ox, "offsetY": oy, "offsetZ": oz,
             "spin": self.cfg["spin"],
             "edgeAlpha": self.cfg["edge_alpha"],
+            # Provenance only -- the flattening is already baked into `pos`
+            # above and Unity must NOT apply it again. It is sent so the
+            # overlay's live depth control can report the absolute
+            # FLY_VIZ_DEPTH_SCALE its multiplier works out to, instead of a
+            # bare multiplier the user has to do arithmetic on. Unity treats
+            # <=0 as absent (JsonUtility zero-fills), so an older trainer just
+            # falls back to showing the multiplier.
+            "depthScale": self.cfg["depth_scale"],
             "pos": _b64(pos.reshape(-1)),            # float32[n*3], xyz interleaved
             # Always a string, never absent: Unity base64-decodes these
             # unconditionally and null would throw in BuildMeshes.
@@ -278,6 +298,8 @@ class FlyBrainViz(object):
             "edgeWeight": _b64(g["edge_weight"] if edges_on else empty32),
             "role": _b64(role),                      # uint8[n], see ROLE_CODES
             "side": _b64(side),                      # uint8[n], see SIDE_CODES
+            "typeNames": type_names,                 # distinct cell types
+            "typeIdx": _b64(type_idx),               # uint16[n] into typeNames
         })
 
     def _publisher(self):
