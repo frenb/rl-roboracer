@@ -745,7 +745,7 @@ def build_train_env(num_envs, course_type='donut'):
     # disabled or not yet constructed.
     from rollout_viz import pause_viz, resume_viz
     # actor_index=i wraps each worker's stdout/stderr with [actor-N] so
-    # robotaxi.out (and the dashboard log view) become legible when
+    # the trainer log (and the dashboard log view) become legible when
     # multiple workers are emitting interleaved per-step prints.
     pause_viz()
     try:
@@ -1148,6 +1148,24 @@ def _demo_recording_course(course_type):
     return DEMO_RECORDING_COURSE.get(course_type, course_type)
 
 
+# Only the procedural "TrackGen*" Unity builds ship a TrackGenerator. The
+# hand-built w-course / JetRacer gyms have fixed geometry and silently drop
+# the corner_radius / chicane fields we send on every reset.
+_TRACKGEN_GYM_PREFIX = "trackgen"
+
+
+def _gym_has_track_generator(gym_name):
+    """Whether this gym rebuilds its track from our geometry knobs.
+
+    Returns None for an unnamed gym so callers can stay quiet instead of
+    guessing.
+    """
+    name = str(gym_name or "").strip()
+    if not name:
+        return None
+    return name.lower().startswith(_TRACKGEN_GYM_PREFIX)
+
+
 def main(
     job_id="",
     num_envs=1,
@@ -1327,6 +1345,9 @@ def main(
     chicanes_east_val=0,
     chicanes_south_val=0,
     chicanes_west_val=0,
+    # Name of the gym this job runs against, used only to tell whether the
+    # track knobs above will actually reach a TrackGenerator.
+    gym_name_val=None,
     # Per-step env discount returned by the course on non-terminal steps;
     # compounds with gamma_val (effective discount = gamma * env_discount).
     # Default 0.90 preserves legacy behavior; set 1.0 (via an experiment
@@ -1375,13 +1396,17 @@ def main(
     # Track / curriculum knobs are applied live: configure_env() below stamps
     # them onto every env, and the course forwards them to Unity's
     # TrackGenerator on each episode reset. Log the effective values for
-    # provenance (a non-default value here = a non-default procedural track).
+    # provenance (a non-default value here = a non-default procedural track),
+    # and say so when the gym has no TrackGenerator to receive them.
+    _has_trackgen = _gym_has_track_generator(gym_name_val)
     print(
         f"[track-curriculum] corner_radius={corner_radius_val}, "
         f"curvature_difficulty={curvature_difficulty_val}, "
         f"chicanes(N/E/S/W)={chicanes_north_val}/{chicanes_east_val}/"
         f"{chicanes_south_val}/{chicanes_west_val} "
-        f"(applied on each Unity reset by TrackGenerator).",
+        + ("(applied on each Unity reset by TrackGenerator)."
+           if _has_trackgen is not False else
+           f"(IGNORED: gym {gym_name_val!r} has fixed geometry)."),
         flush=True)
     # ---- Startup phase timing (measurement only) --------------------
     # Lightweight wall-clock instrumentation for the cold-start /
@@ -1584,6 +1609,13 @@ def main(
                   f"curvature_difficulty={_init_cd}, "
                   f"chicanes(N/E/S/W)={_init_ch_n}/{_init_ch_e}/{_init_ch_s}/{_init_ch_w}",
                   flush=True)
+            if _has_trackgen is False:
+                print(f"[curriculum] WARNING: gym {gym_name_val!r} has no "
+                      f"TrackGenerator, so no stage's geometry is ever "
+                      f"applied - every stage trains and evaluates on the "
+                      f"same fixed track, and the promotions logged below "
+                      f"change nothing but this log. Use a TrackGen* gym "
+                      f"for a real curriculum.", flush=True)
         except Exception as _e:  # noqa: BLE001
             print(f"[curriculum] failed to parse curriculum_stages_val: {_e}; "
                   f"falling back to fixed track geometry.", flush=True)
@@ -2109,7 +2141,7 @@ def main(
         tf_agent.set_demo_iter(iter(_demo_only_ds))
         print("main: AWAC demo iterator attached (expert-only stream).",
               flush=True)
-    # Log the resolved buffer composition so robotaxi.out makes the
+    # Log the resolved buffer composition so the trainer log makes the
     # active mode explicit even when the experiment_design overlay
     # changed defaults silently.
     if demo_min_keep > 0:
@@ -2240,7 +2272,7 @@ def main(
 
     print_replay_buffer_size(reverb_replay,table_name,replay_buffer_capacity)
     # If we're in two-table mode, also log the demo table's size so
-    # robotaxi.out shows the actual loaded count for both tables.
+    # the trainer log shows the actual loaded count for both tables.
     if demo_replay is not None:
         try:
             demo_size = demo_replay.py_client.server_info()[
@@ -2545,7 +2577,7 @@ def main(
             print("metric.result():" + str(metric.result()))
 
         # Single-line structured summary, easy to grep for in
-        # robotaxi.out (search 'EVAL end:' to step through eval points
+        # the trainer log (search 'EVAL end:' to step through eval points
         # in time-order and read off training progress without scrolling
         # past per-step ACTION traces).
         avg_return = results.get('AverageReturn')
@@ -2904,7 +2936,7 @@ def main(
         #
         # Logged with TRAIN begin / TRAIN end lines mirroring the
         # EVAL begin / EVAL end lines emitted by get_eval_metrics()
-        # above, so robotaxi.out reads as a clean alternating sequence
+        # above, so the trainer log reads as a clean alternating sequence
         # of TRAIN / EVAL events. Grep 'TRAIN end:' for a per-iter
         # timing+loss+buffer trace, or 'EVAL end:' for the periodic
         # policy-quality snapshots.
@@ -3006,7 +3038,7 @@ def main(
                 _do_eval = (step % eval_interval == 0)
         if _do_eval:
             # In-training eval is bracketed by EVAL CYCLE begin / end
-            # markers so robotaxi.out reads as a clean nested sequence:
+            # markers so the trainer log reads as a clean nested sequence:
             #
             #   TRAIN begin / TRAIN end                <- training iter
             #   EVAL CYCLE begin                       <- entering eval phase
@@ -4983,7 +5015,7 @@ def do_job(job, num_envs=1):
                 # Archived designs still work for backward-compat with
                 # in-flight jobs, but log the fact so a user wondering
                 # "why is my training still using that design?" can
-                # find the answer in robotaxi.out.
+                # find the answer in the trainer log.
                 print(
                     f"do_job: reward design {rd_id_raw} is archived; "
                     "using it for this job anyway. Unarchive on the "
@@ -5209,6 +5241,7 @@ def do_job(job, num_envs=1):
             chicanes_east_val=_job_int("chicanes_east_val", 0),
             chicanes_south_val=_job_int("chicanes_south_val", 0),
             chicanes_west_val=_job_int("chicanes_west_val", 0),
+            gym_name_val=job.get("gym_name") or "",
         )
         if is_resume:
             print(
@@ -5313,7 +5346,26 @@ def do_job(job, num_envs=1):
         # still allowed to propagate and surface as a real crash, since
         # those usually indicate a deeper problem the user should see.
         try:
-            if model_type == "RandomPyPolicy":
+            if model_type in ("RandomPyPolicy", "FlyPyPolicy") and location:
+                # Both baselines construct their policy from scratch - the
+                # connectome plus the step-5 readout for FlyPyPolicy, nothing
+                # at all for RandomPyPolicy - and neither run_*() takes a
+                # path. A job carrying a location would therefore score the
+                # baseline while looking like it evaluated the snapshot the
+                # user picked. Refuse instead of quietly measuring the wrong
+                # policy.
+                err_msg = (
+                    f"{model_type} EVAL builds its policy from scratch and "
+                    f"cannot load a saved snapshot, but this job carries "
+                    f"location={location!r}. Running it would have scored the "
+                    f"{model_type} baseline under that checkpoint's name. "
+                    f"Re-create the job with model_type='SacAgent' to "
+                    f"evaluate the checkpoint, or clear the location to "
+                    f"measure the {model_type} baseline.")
+                print(f"EVAL rejected for job {job['_id']}: {err_msg}",
+                      flush=True)
+                update_job(job["_id"], err_msg, "eval_error")
+            elif model_type == "RandomPyPolicy":
                 run_randompolicy(
                     job_id=job["_id"],
                     num_trials=num_trials,
@@ -6700,11 +6752,14 @@ def _seed_canonical_experiment_design():
             default_design_fields,
         )
         # Bump this when SCHEMA defaults change in a meaningful way
-        # (e.g., we tune the canonical actor_learning_rate down). The
-        # upsert below uses the bump to refresh the on-disk copy;
-        # otherwise it's a no-op so users' edits to Default are
-        # preserved across restarts.
-        SEED_VERSION = 1
+        # (e.g., we tune the canonical actor_learning_rate down), AND
+        # when SCHEMA gains fields - adding a field without a bump
+        # leaves the seeded doc describing an older, smaller trainer.
+        # That is what happened between v1 and v2: SCHEMA grew from 24
+        # fields to 39 (AWAC, curriculum, track geometry) and the v1
+        # doc kept only the original 24. The upsert below uses the bump
+        # to refresh the on-disk copy; otherwise it's a no-op.
+        SEED_VERSION = 2
         existing = db.experiment_designs.find_one({"_id": DEFAULT_DESIGN_ID})
         if existing and existing.get("version", 0) >= SEED_VERSION:
             return  # already current
@@ -6738,6 +6793,47 @@ def _seed_canonical_experiment_design():
         print(f"experiment_designs: seed upsert failed (continuing): {e}", flush=True)
 
 
+def _publish_experiment_design_schema():
+    """Publish the trainer's experiment-design SCHEMA into Mongo.
+
+    The dashboard renders its Experiment Design form (and validates
+    writes to it) from a field list it used to keep as a hand-copied
+    JS mirror of ``experiment_designs.SCHEMA``. That mirror drifted to
+    24 of 39 fields and silently dropped the rest; see
+    docs/experiment-designs-tab-plan.md. Publishing through Mongo -
+    the channel both containers already share - means the dashboard
+    reads the real thing and nobody has to remember to copy anything.
+
+    Deliberately UNVERSIONED and unconditional, unlike
+    _seed_canonical_experiment_design above: this is a derived cache of
+    whatever SCHEMA currently says, not user data, so it should be
+    overwritten on every start. A version guard here is precisely what
+    let the canonical Default sit stale for three weeks.
+
+    Best-effort: the dashboard falls back to its built-in copy if this
+    document is missing, so a failure here degrades rather than breaks.
+    """
+    try:
+        from experiment_designs import get_schema_for_endpoint
+        fields = get_schema_for_endpoint()
+        db.schema_registry.update_one(
+            {"_id": "experiment_design"},
+            {"$set": {
+                "fields": fields,
+                "updated_at": datetime.datetime.now(datetime.timezone.utc),
+            }},
+            upsert=True,
+        )
+        n_fields = sum(1 for f in fields if f.get("kind") == "field")
+        print(
+            f"schema_registry: published experiment_design schema "
+            f"({n_fields} fields, {len(fields)} entries)", flush=True)
+    except Exception as e:
+        print(
+            f"schema_registry: publish failed (dashboard will use its "
+            f"built-in fallback): {e}", flush=True)
+
+
 def run_jobs_loop(num_envs=1):
     """Poll MongoDB for jobs and dispatch them indefinitely.
 
@@ -6756,6 +6852,9 @@ def run_jobs_loop(num_envs=1):
     # idempotent across container restarts.
     _seed_canonical_reward_designs()
     _seed_canonical_experiment_design()
+    # Not a seed: re-published every start so the dashboard's form
+    # always matches this trainer's SCHEMA. See the docstring.
+    _publish_experiment_design_schema()
     print(f"Polling for jobs (num_envs={num_envs})...")
     queue_paused_logged = False
     while True:
@@ -6821,7 +6920,7 @@ def run_jobs_loop(num_envs=1):
                     flush=True)
                 # Trim the traceback to its last few frames so the
                 # one-line dashboard rendering stays useful. Operators
-                # who need the full thing have stdout/robotaxi.out.
+                # who need the full thing have stdout / the trainer log.
                 tb_lines = tb_text.strip().splitlines()
                 tail = "\n".join(tb_lines[-6:]) if tb_lines else str(exc)
                 err_summary = f"{type(exc).__name__}: {exc}\n...\n{tail}"
