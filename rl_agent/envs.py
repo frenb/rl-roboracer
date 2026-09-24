@@ -68,8 +68,8 @@ class _PrefixedStream:
 
     Multi-actor training spawns one ParallelPyEnvironment worker per
     actor; the workers inherit the parent's stdout/stderr (Linux + spawn
-    multiprocessing), so all per-actor prints land in
-    sim-controller's ``robotaxi.out`` interleaved without any
+    multiprocessing), so all per-actor prints land in sim-controller's
+    trainer log (``/tmp/trainer.log``) interleaved without any
     per-source label. Wrapping each worker's streams with this class
     gives every emitted line a stable ``[actor-N] `` prefix so the
     dashboard log view (and the raw file) become readable.
@@ -150,7 +150,7 @@ def _silence_grpc_blockingio_errors(loop):
         BlockingIOError: [Errno 11] Resource temporarily unavailable
         ERROR:asyncio:Exception in callback PollerCompletionQueue._handle_events(...)
 
-    that drown out the actual training output in robotaxi.out. We
+    that drown out the actual training output in the trainer log. We
     install a filter that drops just this exception class and lets
     everything else fall through to the default handler. Genuine
     BlockingIOError from elsewhere would also be silenced, but at the
@@ -225,7 +225,7 @@ def make_env(grpc_addr='ros-server-0:50051', course_type=None,
         to prefix every line with ``[actor-N] ``. Single-actor callers
         leave this ``None`` so the existing un-decorated logs are
         preserved; multi-actor callers pass the per-factory index so
-        ``robotaxi.out`` can be read back un-multiplexed even though
+        the trainer log can be read back un-multiplexed even though
         all N workers share the parent's stdout.
 
     Returns:

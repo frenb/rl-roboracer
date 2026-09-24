@@ -83,7 +83,7 @@ REWARD_DESIGN_NAMESPACE_BUILTINS = {
     "map": map,
     "max": max,
     "min": min,
-    "print": print,                   # users can debug-print to robotaxi.out
+    "print": print,                   # debug-print to /tmp/trainer.log
     "range": range,
     "round": round,
     "set": set,
@@ -221,7 +221,7 @@ def _safe_call(user_fn, fn_name, default_value, penalty_reward, *args, **kwargs)
     try:
         result = user_fn(*args, **kwargs)
     except Exception:
-        # Single-line traceback so robotaxi.out doesn't blow up.
+        # Single-line traceback so the trainer log doesn't blow up.
         tb = "\n".join(traceback.format_exc().splitlines()[-3:])
         print(
             f"[reward_design] {fn_name} raised; using penalty reward "

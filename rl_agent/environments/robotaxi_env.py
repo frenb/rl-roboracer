@@ -20,7 +20,7 @@ from environments.courses import (
 #
 # or persistently in docker-compose.yml's sim-controller `environment:`
 # block. Under multi-env training each actor emits one ACTION line per
-# env step, so this is a major contributor to robotaxi.out volume
+# env step, so this is a major contributor to trainer-log volume
 # (~tens of lines per second per actor) once you've already verified
 # per-actor routing is working and don't need the per-step trace
 # anymore.
