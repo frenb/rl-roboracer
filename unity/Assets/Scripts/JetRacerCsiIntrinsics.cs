@@ -48,7 +48,13 @@ public class JetRacerCsiIntrinsics : MonoBehaviour
         _cam.clearFlags = CameraClearFlags.Skybox;
         // Prefab mask 63 is layers 0–5. Kit asphalt is on layer 6 ("Road"),
         // so P-view was seeing the Default ground instead of Tarmac_c.
-        _cam.cullingMask = ~0;
+        //
+        // Everything EXCEPT the fly-brain overlay. This camera is what
+        // CsiFramePublisher reads for `camera/front`, so anything it renders
+        // can reach a policy as observation. A debug overlay appearing in
+        // training input would be a silent data bug, not a visible one, so the
+        // overlay gets a layer and this mask excludes it.
+        _cam.cullingMask = ~0 & ~FlyBrainViz.OverlayLayerMask;
     }
 
     void OnDisable()
