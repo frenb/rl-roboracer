@@ -107,6 +107,11 @@ public class SimController : MonoBehaviour
         // fly_brain_geometry/fly_brain_activity and stays hidden until a fly
         // policy is actually driving. Toggle with the B key.
         gameObject.AddComponent(typeof(FlyBrainViz));
+        // Keep the top-down view framed on the course whatever shape the
+        // window is. Lives on the overhead camera rather than here, since it
+        // drives that camera's transform. Display only - the policy's camera
+        // input comes from JetRacerCsiCamera via its own RenderTexture.
+        AttachOverheadFit();
         // // Publish camera frames for computer vision.
         // if (publishedCamera != null)
         // {
@@ -117,6 +122,25 @@ public class SimController : MonoBehaviour
         Debug.Log("ros.rosIPAddress=" + ros.rosIPAddress);
         Debug.Log("ros.overrideUnityIP=" + ros.overrideUnityIP);
         ros.Subscribe<SimCommand>(simCommandTopic, onCommand);
+    }
+
+    /// <summary>
+    /// Put OverheadCameraFit on the top-down camera. By name rather than
+    /// Camera.main, because CameraViewSwitcher can leave the on-car camera as
+    /// the active one and this must only ever drive the overhead view.
+    /// </summary>
+    private void AttachOverheadFit()
+    {
+        // Fully qualified: RosMessageTypes.NiryoMoveit is in scope here and
+        // has its own Camera message type (CsiFramePublisher publishes one).
+        var go = GameObject.Find("Main Camera");
+        if (go == null || go.GetComponent<UnityEngine.Camera>() == null)
+        {
+            Debug.LogWarning("[SimController] no 'Main Camera' to frame the course with");
+            return;
+        }
+        if (go.GetComponent<OverheadCameraFit>() == null)
+            go.AddComponent<OverheadCameraFit>();
     }
 
     private void DestroyObjects()
