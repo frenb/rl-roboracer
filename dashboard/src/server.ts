@@ -1759,51 +1759,113 @@ export const createServer = (config): express.Application => {
   // dashboard form (and the future research-planning agent) can
   // introspect what fields exist without reading trainer source.
   //
-  // IMPORTANT: the EXPERIMENT_DESIGN_SCHEMA constant below MUST be
-  // kept in sync with rl_agent/experiment_designs.py::SCHEMA. The
-  // Python module is the source of truth for what the trainer
-  // honours; this JS mirror exists because the dashboard container
-  // doesn't run Python and we don't want a docker-exec dependency.
-  // When you add a field there, add it here too.
+  // FALLBACK ONLY - not the source of truth, and not something to keep
+  // in sync by hand.
+  //
+  // The trainer publishes the real field list into
+  // schema_registry/experiment_design on every start
+  // (robotaxi.py::_publish_experiment_design_schema), and
+  // withExperimentDesignSchema below prefers it. This constant is what
+  // the dashboard serves when that document is missing - a fresh
+  // database, or a trainer that has not booted since the collection was
+  // created. The endpoint reports which one it used as `source`.
+  //
+  // It is allowed to go stale; that is the point of the fallback. If you
+  // find yourself wanting to edit it, regenerate instead (the generator
+  // is in docs/experiment-designs-tab-plan.md Step 1) - this block began
+  // life as a hand-maintained mirror, drifted to 24 of 39 fields, and
+  // silently dropped every AWAC, curriculum and track-geometry value
+  // posted to /add_experiment_design. Part 2 of that doc is why it is
+  // now only a fallback.
   const EXPERIMENT_DESIGN_SCHEMA: any[] = [
     { kind: 'section', label: 'Reinforcement learning loop' },
-    { kind: 'field', name: 'num_iterations',              type: 'int',   default: 50000,  min: 1,      max: 10000000, doc: 'Total SAC training iterations after BC pretrain. Each iter = one collect step + one gradient update.', paper_ref: null, kwarg: 'num_iterations_val' },
-    { kind: 'field', name: 'initial_collect_steps',       type: 'int',   default: 500,    min: 0,      max: 100000,   doc: 'Pre-RL random-policy collection steps to seed the replay buffer with diverse experience.',         paper_ref: null, kwarg: 'initial_collect_steps_val' },
-    { kind: 'field', name: 'collect_steps_per_iteration', type: 'int',   default: 1,      min: 1,      max: 100,      doc: 'Env steps collected per training iteration (between gradient updates).',                            paper_ref: null, kwarg: 'collect_steps_per_iteration_val' },
-    { kind: 'field', name: 'eval_interval',               type: 'int',   default: 5000,   min: 1,      max: 100000,   doc: 'How often (in train_steps) to pause training and run an in-loop eval cycle.',                       paper_ref: null, kwarg: 'eval_interval_val' },
-    { kind: 'field', name: 'num_eval_episodes',           type: 'int',   default: 10,     min: 1,      max: 500,      doc: 'Eval episodes per in-loop eval cycle.',                                                              paper_ref: null, kwarg: 'num_eval_episodes_val' },
-    { kind: 'field', name: 'log_interval',                type: 'int',   default: 5000,   min: 100,    max: 100000,   doc: 'TensorBoard scalar write cadence (in train_steps).',                                                 paper_ref: null, kwarg: 'log_interval_val' },
-    { kind: 'field', name: 'policy_save_interval',        type: 'int',   default: 50,     min: 1,      max: 10000,    doc: 'How often (in train_steps) the PolicySavedModelTrigger writes a checkpoint.',                       paper_ref: null, kwarg: 'policy_save_interval_val' },
+    { kind: 'field', name: 'num_iterations',               type: 'int',    default: 50000,  min: 1,      max: 10000000,  doc: 'Total SAC training iterations after BC pretrain. Each iter = one collect step + one gradient update.', paper_ref: null, kwarg: 'num_iterations_val' },
+    { kind: 'field', name: 'env_discount',                 type: 'float',  default: 0.9,    min: 0.0,    max: 1.0,       doc: 'Per-step discount the env returns on non-terminal transitions; compounds with gamma (effective discount = gamma * env_discount). Legacy default 0.90 yields a short ~9-step horizon at gamma=0.99; set 1.0 to let gamma alone govern the horizon (better for speed / lap objectives).', paper_ref: null, kwarg: 'env_discount_val' },
+    { kind: 'field', name: 'initial_collect_steps',        type: 'int',    default: 500,    min: 0,      max: 100000,    doc: 'Pre-RL random-policy collection steps to seed the replay buffer with diverse experience.', paper_ref: null, kwarg: 'initial_collect_steps_val' },
+    { kind: 'field', name: 'collect_steps_per_iteration',  type: 'int',    default: 1,      min: 1,      max: 100,       doc: 'Env steps collected per training iteration (between gradient updates).', paper_ref: null, kwarg: 'collect_steps_per_iteration_val' },
+    { kind: 'field', name: 'eval_interval',                type: 'int',    default: 5000,   min: 1,      max: 100000,    doc: 'How often (in train_steps) to pause training and run an in-loop eval cycle.', paper_ref: null, kwarg: 'eval_interval_val' },
+    { kind: 'field', name: 'num_eval_episodes',            type: 'int',    default: 10,     min: 1,      max: 500,       doc: 'Eval episodes per in-loop eval cycle.', paper_ref: null, kwarg: 'num_eval_episodes_val' },
+    { kind: 'field', name: 'eval_time_fraction',           type: 'float',  default: 0.25,   min: 0.0,    max: 1.0,       doc: 'Target fraction of training wall-clock spent in eval. When in (0,1), the loop uses a time-budgeted eval cadence (train ~(1-frac)/frac x each eval\'s wall-clock between evals) and eval_interval only bootstraps the first eval. Set 0.0 or 1.0 to disable budgeting and fall back to the step%eval_interval gate. Overridden at runtime by the EVAL_TIME_FRACTION env var.', paper_ref: null, kwarg: 'eval_time_fraction_val' },
+    { kind: 'field', name: 'eval_train_interval_sec',      type: 'int',    default: 0,      min: 0,      max: 86400,     doc: 'Fixed TRAINING wall-clock seconds between evals. When > 0 it takes precedence over eval_time_fraction: an eval fires after every N seconds of training time, a constant \'eval every N minutes\' cadence independent of eval duration (unlike the time-fraction budget, whose train gap scales with eval length). 0 disables (use eval_time_fraction / eval_interval). Overridden at runtime by the EVAL_TRAIN_INTERVAL_SEC env var.', paper_ref: null, kwarg: 'eval_train_interval_sec_val' },
+    { kind: 'field', name: 'log_interval',                 type: 'int',    default: 5000,   min: 100,    max: 100000,    doc: 'TensorBoard scalar write cadence (in train_steps).', paper_ref: null, kwarg: 'log_interval_val' },
+    { kind: 'field', name: 'policy_save_interval',         type: 'int',    default: 50,     min: 1,      max: 10000,     doc: 'How often (in train_steps) the PolicySavedModelTrigger writes a checkpoint.', paper_ref: null, kwarg: 'policy_save_interval_val' },
     { kind: 'section', label: 'Behavior cloning pretrain' },
-    { kind: 'field', name: 'bc_pretrain_steps',           type: 'int',   default: 5000,   min: 0,      max: 1000000,  doc: 'BC gradient steps run on the actor before SAC starts. Set 0 to skip and run pure SAC.',             paper_ref: null, kwarg: 'bc_pretrain_steps_val' },
+    { kind: 'field', name: 'bc_pretrain_steps',            type: 'int',    default: 5000,   min: 0,      max: 1000000,   doc: 'BC gradient steps run on the actor before SAC starts. Set 0 to skip and run pure SAC.', paper_ref: null, kwarg: 'bc_pretrain_steps_val' },
     { kind: 'section', label: 'Replay buffer' },
-    { kind: 'field', name: 'replay_buffer_capacity',      type: 'int',   default: 75000,  min: 1000,   max: 10000000, doc: 'Max samples held in the online Reverb table (RL collection). Over capacity, FIFO eviction.',         paper_ref: null,       kwarg: 'replay_buffer_capacity_val' },
-    { kind: 'field', name: 'batch_size',                  type: 'int',   default: 256,    min: 1,      max: 16384,    doc: 'SAC gradient-update batch size, also used by the BC pretrain phase.',                                paper_ref: null,       kwarg: 'batch_size_val' },
-    { kind: 'field', name: 'demo_prefill_count',          type: 'int',   default: 50000,  min: 0,      max: 10000000, doc: 'Expert-demonstration steps to prefill the buffer with at job start. 0 = no demo prefill (pure SAC from random init).', paper_ref: '1707.08817', kwarg: 'demo_prefill_count_val' },
-    { kind: 'field', name: 'demo_min_keep',               type: 'int',   default: 0,      min: 0,      max: 10000000, doc: 'Demo samples PROTECTED from FIFO eviction. 0 = single-table mode (demos pre-fill the online buffer and get FIFO-displaced by RL data over time, current default). >0 = two-table mode where this many demo samples live in a separate Reverb table that never gets new writes, so they stay forever.', paper_ref: '1704.03732', kwarg: 'demo_min_keep_val' },
-    { kind: 'field', name: 'demo_sample_ratio',           type: 'float', default: 0.0,    min: 0.0,    max: 1.0,      doc: 'Two-table mode only (demo_min_keep > 0): fraction of each training batch drawn from the demo table vs the online table. 0.0 = pure online sampling (demos kept but never sampled). 1.0 = pure demo sampling. Typical 0.1-0.3 for DDPGfD-style demo over-sampling.', paper_ref: '1707.08817', kwarg: 'demo_sample_ratio_val' },
+    { kind: 'field', name: 'replay_buffer_capacity',       type: 'int',    default: 75000,  min: 1000,   max: 10000000,  doc: 'Max samples held in the online Reverb table (RL collection). Over capacity, FIFO eviction.', paper_ref: null, kwarg: 'replay_buffer_capacity_val' },
+    { kind: 'field', name: 'batch_size',                   type: 'int',    default: 256,    min: 1,      max: 16384,     doc: 'SAC gradient-update batch size, also used by the BC pretrain phase.', paper_ref: null, kwarg: 'batch_size_val' },
+    { kind: 'field', name: 'demo_prefill_count',           type: 'int',    default: 50000,  min: 0,      max: 10000000,  doc: 'Expert-demonstration steps to prefill the buffer with at job start. 0 = no demo prefill (pure SAC from random init).', paper_ref: '1707.08817', kwarg: 'demo_prefill_count_val' },
+    { kind: 'field', name: 'demo_min_keep',                type: 'int',    default: 0,      min: 0,      max: 10000000,  doc: 'Demo samples PROTECTED from FIFO eviction. 0 = single-table mode (demos pre-fill the online buffer and get FIFO-displaced by RL data over time, current default). >0 = two-table mode where this many demo samples live in a separate Reverb table that never gets new writes, so they stay forever.', paper_ref: '1704.03732', kwarg: 'demo_min_keep_val' },
+    { kind: 'field', name: 'demo_sample_ratio',            type: 'float',  default: 0.0,    min: 0.0,    max: 1.0,       doc: 'Two-table mode only (demo_min_keep > 0): fraction of each training batch drawn from the demo table vs the online table. 0.0 = pure online sampling (demos kept but never sampled - acts like demo_min_keep=0). 1.0 = pure demo sampling (online experience kept but never sampled, mostly useful for ablations). Typical 0.1-0.3 for DDPGfD-style demo over-sampling.', paper_ref: '1707.08817', kwarg: 'demo_sample_ratio_val' },
     { kind: 'section', label: 'SAC optimizer' },
-    { kind: 'field', name: 'actor_learning_rate',         type: 'float', default: 3e-5,   min: 1e-7,   max: 1.0,      doc: 'Adam learning rate for the actor network.',                                                          paper_ref: null, kwarg: 'actor_learning_rate_val' },
-    { kind: 'field', name: 'critic_learning_rate',        type: 'float', default: 3e-5,   min: 1e-7,   max: 1.0,      doc: 'Adam learning rate for the critic (twin Q-network).',                                                paper_ref: null, kwarg: 'critic_learning_rate_val' },
-    { kind: 'field', name: 'alpha_learning_rate',         type: 'float', default: 3e-5,   min: 1e-7,   max: 1.0,      doc: 'Adam learning rate for the temperature parameter (entropy coefficient).',                            paper_ref: null, kwarg: 'alpha_learning_rate_val' },
-    { kind: 'field', name: 'target_update_tau',           type: 'float', default: 0.005,  min: 0.0,    max: 1.0,      doc: 'Polyak averaging factor for the target critic. Typical SAC value 0.005.',                            paper_ref: null, kwarg: 'target_update_tau_val' },
-    { kind: 'field', name: 'target_update_period',        type: 'int',   default: 1,      min: 1,      max: 10000,    doc: 'Update the target critic every N train_steps (Polyak averaging cadence).',                          paper_ref: null, kwarg: 'target_update_period_val' },
-    { kind: 'field', name: 'gamma',                       type: 'float', default: 0.99,   min: 0.0,    max: 1.0,      doc: 'Discount factor for future rewards in the Bellman target.',                                          paper_ref: null, kwarg: 'gamma_val' },
-    { kind: 'field', name: 'reward_scale_factor',         type: 'float', default: 1.0,    min: 0.0,    max: 1000.0,   doc: 'Multiplier applied to environment rewards before they enter the Q-target. SAC is sensitive to this.', paper_ref: null, kwarg: 'reward_scale_factor_val' },
+    { kind: 'field', name: 'actor_learning_rate',          type: 'float',  default: 3e-05,  min: 1e-07,  max: 1.0,       doc: 'Adam learning rate for the actor network.', paper_ref: null, kwarg: 'actor_learning_rate_val' },
+    { kind: 'field', name: 'critic_learning_rate',         type: 'float',  default: 3e-05,  min: 1e-07,  max: 1.0,       doc: 'Adam learning rate for the critic (twin Q-network).', paper_ref: null, kwarg: 'critic_learning_rate_val' },
+    { kind: 'field', name: 'alpha_learning_rate',          type: 'float',  default: 3e-05,  min: 1e-07,  max: 1.0,       doc: 'Adam learning rate for the temperature parameter (entropy coefficient).', paper_ref: null, kwarg: 'alpha_learning_rate_val' },
+    { kind: 'field', name: 'target_update_tau',            type: 'float',  default: 0.005,  min: 0.0,    max: 1.0,       doc: 'Polyak averaging factor for the target critic. Typical SAC value 0.005.', paper_ref: null, kwarg: 'target_update_tau_val' },
+    { kind: 'field', name: 'target_update_period',         type: 'int',    default: 1,      min: 1,      max: 10000,     doc: 'Update the target critic every N train_steps (Polyak averaging cadence).', paper_ref: null, kwarg: 'target_update_period_val' },
+    { kind: 'field', name: 'gamma',                        type: 'float',  default: 0.99,   min: 0.0,    max: 1.0,       doc: 'Discount factor for future rewards in the Bellman target.', paper_ref: null, kwarg: 'gamma_val' },
+    { kind: 'field', name: 'awac_lambda',                  type: 'float',  default: 0.0,    min: 0.0,    max: 10.0,      doc: 'AWAC advantage-weighted BC regularization weight on the SAC actor loss. 0 = off (plain SAC). >0 adds, each step, an advantage-weighted imitation term sampled from the protected demo table so the demos shape the policy directly (not just the critic) - inherits expert survival without the BC-pretrain degradation. Requires demo_min_keep > 0.', paper_ref: 'AWAC (Nair et al. 2020)', kwarg: 'awac_lambda_val' },
+    { kind: 'field', name: 'awac_beta',                    type: 'float',  default: 1.0,    min: 0.01,   max: 100.0,     doc: 'AWAC advantage temperature in exp(A/beta). Lower = sharper preference for expert actions the critic rates above the current policy. Only used when awac_lambda > 0.', paper_ref: null, kwarg: 'awac_beta_val' },
+    { kind: 'field', name: 'awac_weight_clip',             type: 'float',  default: 20.0,   min: 1.0,    max: 1000.0,    doc: 'Upper clip on the AWAC weight exp(A/beta) for numerical stability. Only used when awac_lambda > 0.', paper_ref: null, kwarg: 'awac_weight_clip_val' },
+    { kind: 'field', name: 'awac_lambda_decay_steps',      type: 'int',    default: 0,      min: 0,      max: 10000000,  doc: 'If > 0, linearly decay awac_lambda to 0 over this many train steps (strong demo-imitation early for survival, then let RL refine speed). 0 = constant awac_lambda. Only used when awac_lambda > 0.', paper_ref: null, kwarg: 'awac_lambda_decay_steps_val' },
+    { kind: 'field', name: 'reward_scale_factor',          type: 'float',  default: 1.0,    min: 0.0,    max: 1000.0,    doc: 'Multiplier applied to environment rewards before they enter the Q-target. SAC is sensitive to this.', paper_ref: null, kwarg: 'reward_scale_factor_val' },
     { kind: 'section', label: 'Network architecture' },
-    { kind: 'field', name: 'actor_fc_layers_x',           type: 'int',   default: 512,    min: 1,      max: 8192,     doc: 'First-layer width of the actor MLP.',                                                                paper_ref: null, kwarg: 'actor_fc_layer_params_x' },
-    { kind: 'field', name: 'actor_fc_layers_y',           type: 'int',   default: 512,    min: 1,      max: 8192,     doc: 'Second-layer width of the actor MLP.',                                                               paper_ref: null, kwarg: 'actor_fc_layer_params_y' },
-    { kind: 'field', name: 'critic_fc_layers_x',          type: 'int',   default: 512,    min: 1,      max: 8192,     doc: 'First-layer width of the critic joint MLP (after obs+action concatenation).',                       paper_ref: null, kwarg: 'critic_joint_fc_layer_params_x' },
-    { kind: 'field', name: 'critic_fc_layers_y',          type: 'int',   default: 512,    min: 1,      max: 8192,     doc: 'Second-layer width of the critic joint MLP.',                                                        paper_ref: null, kwarg: 'critic_joint_fc_layer_params_y' },
+    { kind: 'field', name: 'actor_fc_layers_x',            type: 'int',    default: 512,    min: 1,      max: 8192,      doc: 'First-layer width of the actor MLP.', paper_ref: null, kwarg: 'actor_fc_layer_params_x' },
+    { kind: 'field', name: 'actor_fc_layers_y',            type: 'int',    default: 512,    min: 1,      max: 8192,      doc: 'Second-layer width of the actor MLP.', paper_ref: null, kwarg: 'actor_fc_layer_params_y' },
+    { kind: 'field', name: 'critic_fc_layers_x',           type: 'int',    default: 512,    min: 1,      max: 8192,      doc: 'First-layer width of the critic joint MLP (after obs+action concatenation).', paper_ref: null, kwarg: 'critic_joint_fc_layer_params_x' },
+    { kind: 'field', name: 'critic_fc_layers_y',           type: 'int',    default: 512,    min: 1,      max: 8192,      doc: 'Second-layer width of the critic joint MLP.', paper_ref: null, kwarg: 'critic_joint_fc_layer_params_y' },
+    { kind: 'section', label: 'Track / environment (curriculum)' },
+    { kind: 'field', name: 'curriculum_stages',            type: 'json',   default: null,   min: null,   max: null,      doc: '[Curriculum] Optional list of track-difficulty stages the trainer advances through automatically based on policy performance. Each entry is a dict with keys: corner_radius (float), curvature_difficulty (float, DEPRECATED - logging/back-compat only, default 0.0), chicanes_north/chicanes_east/chicanes_south/chicanes_west (int, absolute chicane count on each track edge for this stage, default 0 - these are what actually drive chicane placement as of 2026-07-18), advance_goals (float, goals/ep threshold to advance), and consecutive (int, number of consecutive eval cycles above the threshold before advancing). The last stage has no advance_goals (terminal). None = fixed track (current behaviour, fully back-compat). Example: [{"corner_radius": 14, "advance_goals": 20, "consecutive": 3}, {"corner_radius": 10, "chicanes_south": 1, "advance_goals": 40, "consecutive": 3}, {"corner_radius": 7.5, "chicanes_north": 1, "chicanes_east": 1, "chicanes_south": 2, "chicanes_west": 1}]', paper_ref: null, kwarg: 'curriculum_stages_val' },
+    { kind: 'field', name: 'curriculum_start_stage',       type: 'int',    default: 0,      min: 0,      max: 63,        doc: '[Curriculum] 0-based index of the stage the curriculum STARTS on (default 0 = normal bottom-up curriculum). Set to len(curriculum_stages)-1 to start (and stay) on the final/hardest geometry - e.g. to fine-tune a warm-started policy directly on the terminal stage without re-climbing the ladder (the terminal stage has no advance_goals, so the scheduler never advances past it). Clamped into [0, n_stages-1]; ignored when curriculum_stages is unset.', paper_ref: null, kwarg: 'curriculum_start_stage_val' },
+    { kind: 'field', name: 'corner_radius',                type: 'float',  default: 10.0,   min: 2.0,    max: 20.0,      doc: '[Curriculum / track geometry] Centreline turn radius (m) of the procedurally-generated track corners. Smaller = tighter, harder turns; larger = gentler. This is the primary curriculum lever: schedule a sequence of arms/jobs with DECREASING corner_radius to progressively harden the track. Applied live in the simulator: the trainer forwards it on every episode reset and Unity\'s TrackGenerator rebuilds the track at this radius.', paper_ref: null, kwarg: 'corner_radius_val' },
+    { kind: 'field', name: 'curvature_difficulty',         type: 'float',  default: 0.0,    min: 0.0,    max: 1.0,       doc: 'DEPRECATED (2026-07-18) - no longer drives chicane count, kept for logging/back-compat only. Use chicanes_north/chicanes_east/chicanes_south/chicanes_west instead, which set an absolute chicane count per edge instead of a single 0..1 density applied to one edge.', paper_ref: null, kwarg: 'curvature_difficulty_val' },
+    { kind: 'field', name: 'chicanes_north',               type: 'int',    default: 0,      min: 0,      max: 5,         doc: '[Curriculum / track geometry] Number of chicane bumps on the NORTH edge (top edge) of the procedurally-generated track, for a FIXED (non-curriculum) job. Curriculum jobs set this per-stage via curriculum_stages instead. Applied live: forwarded on every episode reset and used by Unity\'s TrackGenerator to rebuild the track.', paper_ref: null, kwarg: 'chicanes_north_val' },
+    { kind: 'field', name: 'chicanes_east',                type: 'int',    default: 0,      min: 0,      max: 5,         doc: '[Curriculum / track geometry] Number of chicane bumps on the EAST edge (right edge) of the procedurally-generated track, for a FIXED (non-curriculum) job. Curriculum jobs set this per-stage via curriculum_stages instead.', paper_ref: null, kwarg: 'chicanes_east_val' },
+    { kind: 'field', name: 'chicanes_south',               type: 'int',    default: 0,      min: 0,      max: 5,         doc: '[Curriculum / track geometry] Number of chicane bumps on the SOUTH edge (bottom edge) of the procedurally-generated track, for a FIXED (non-curriculum) job. Curriculum jobs set this per-stage via curriculum_stages instead.', paper_ref: null, kwarg: 'chicanes_south_val' },
+    { kind: 'field', name: 'chicanes_west',                type: 'int',    default: 0,      min: 0,      max: 5,         doc: '[Curriculum / track geometry] Number of chicane bumps on the WEST edge (left edge) of the procedurally-generated track, for a FIXED (non-curriculum) job. Curriculum jobs set this per-stage via curriculum_stages instead.', paper_ref: null, kwarg: 'chicanes_west_val' },
   ];
+
+  // Resolve the experiment-design field list, preferring the copy the
+  // trainer publishes into schema_registry on every start (see
+  // robotaxi.py::_publish_experiment_design_schema) and falling back to
+  // the constant above.
+  //
+  // EVERY consumer must go through here - the GET endpoint, the
+  // unknown-key validator, and both write copy loops. If the endpoint
+  // served the trainer's list while the validator kept using the
+  // constant, a field the trainer had just added would be rendered by
+  // the form, posted back by the user, and then rejected as an unknown
+  // key by the same server that advertised it.
+  function withExperimentDesignSchema(
+    cb: (fields: any[], source: string) => void,
+  ): void {
+    dbo.collection('schema_registry').findOne(
+      { _id: 'experiment_design' } as any,
+      (err: any, doc: any) => {
+        if (err) {
+          console.error('schema_registry read failed; using built-in fallback:', err);
+        } else if (doc && Array.isArray(doc.fields) && doc.fields.length) {
+          cb(doc.fields, 'trainer');
+          return;
+        }
+        cb(EXPERIMENT_DESIGN_SCHEMA, 'fallback');
+      });
+  }
 
   app.get('/get_experiment_design_schema', (req, res) => {
     // Self-describing schema for the experiment_designs collection.
     // Returns the field list in form-render order. Consumers (the
-    // New-Job form, the future Experiment Design tab UI, the
-    // research-planning agent) use this to build inputs / validate
-    // submissions without reading trainer source.
-    res.json({ fields: EXPERIMENT_DESIGN_SCHEMA });
+    // New-Job form, the Experiment Design tab UI, the research-planning
+    // agent) use this to build inputs / validate submissions without
+    // reading trainer source.
+    //
+    // `source` tells you where the list came from: 'trainer' means the
+    // running trainer published it, 'fallback' means this build's
+    // built-in copy, which may be older than the trainer. Surfacing it
+    // here is what turns a silent drift back into a visible one.
+    withExperimentDesignSchema((fields, source) => {
+      res.json({ fields, source });
+    });
   });
 
   app.get('/get_experiment_designs', (req, res) => {
@@ -1820,6 +1882,59 @@ export const createServer = (config): express.Application => {
     res.status(200).send('NO_CHANGES');
   });
 
+  // Keys the write endpoints accept that are not schema fields.
+  //
+  // version / created_at / updated_at are server-managed: they're
+  // accepted and ignored so a read-modify-write caller (GET a design,
+  // tweak it, POST it back) isn't rejected for echoing them.
+  const EXPERIMENT_DESIGN_META_KEYS = new Set([
+    '_id', 'name', 'description', 'author', 'archived', 'fields',
+    'version', 'created_at', 'updated_at',
+  ]);
+
+  // Body keys that are neither metadata nor a known field. The copy
+  // loops below only pick up names they recognise, so without this
+  // check an unrecognised key is dropped and the caller still gets a
+  // success - which is the bug that motivated
+  // docs/experiment-designs-tab-plan.md. Returning them lets a typo or
+  // a dashboard/trainer schema mismatch surface as an error instead of
+  // as an experiment whose results quietly mean something else.
+  function unknownExperimentDesignKeys(body: any, schemaFields: any[]): string[] {
+    const known = new Set<string>();
+    for (const entry of schemaFields) {
+      if (entry.kind === 'field') known.add(entry.name);
+    }
+    const nested = body.fields && typeof body.fields === 'object';
+    const bad: string[] = [];
+    for (const k of Object.keys(body)) {
+      if (EXPERIMENT_DESIGN_META_KEYS.has(k)) continue;
+      // In the flat shape top-level keys double as field overrides; in
+      // the nested shape they don't, so an unknown one is still wrong.
+      if (!nested && known.has(k)) continue;
+      bad.push(k);
+    }
+    if (nested) {
+      for (const k of Object.keys(body.fields)) {
+        if (!known.has(k)) bad.push('fields.' + k);
+      }
+    }
+    return bad;
+  }
+
+  function rejectUnknownKeys(body: any, res: any, schemaFields: any[]): boolean {
+    const unknown = unknownExperimentDesignKeys(body, schemaFields);
+    if (!unknown.length) return false;
+    res.status(400).json({
+      error: 'unknown experiment-design field(s): ' + unknown.join(', '),
+      unknown_keys: unknown,
+      hint: 'Not in the experiment-design schema, so they would have been '
+          + 'silently dropped. Check for a typo, or for a dashboard build '
+          + 'older than the trainer. GET /get_experiment_design_schema '
+          + 'lists every field this build accepts.',
+    });
+    return true;
+  }
+
   app.post('/add_experiment_design', (req, res) => {
     // Body shape: { name, description, ...field_overrides, author?, archived? }
     // Field overrides are spread directly onto the doc so any key
@@ -1833,35 +1948,41 @@ export const createServer = (config): express.Application => {
       res.status(400).json({ error: "name is required" });
       return;
     }
-    const now = new Date();
-    const doc: any = {
-      name: String(body.name),
-      description: String(body.description || ''),
-      author: String(body.author || ''),
-      archived: !!body.archived,
-      version: 1,
-      created_at: now,
-      updated_at: now,
-    };
-    // Allow callers to omit the field-override block entirely (= all
-    // nulls = trainer defaults), or pass them as a flat top-level
-    // spread. We accept both shapes for ergonomics.
-    const fieldOverrides = body.fields && typeof body.fields === 'object'
-      ? body.fields
-      : body;
-    for (const entry of EXPERIMENT_DESIGN_SCHEMA) {
-      if (entry.kind !== 'field') continue;
-      const name = entry.name;
-      if (fieldOverrides[name] !== undefined) doc[name] = fieldOverrides[name];
-    }
-    dbo.collection("experiment_designs").insertOne(doc, function(err, result) {
-      if (err) {
-        console.error('add_experiment_design failed:', err);
-        res.status(500).json({ error: String(err.message || err) });
-        return;
+    // Validate and copy against the SAME field list the GET endpoint
+    // serves, so the form can never offer a field this handler would
+    // reject or drop.
+    withExperimentDesignSchema((schemaFields) => {
+      if (rejectUnknownKeys(body, res, schemaFields)) return;
+      const now = new Date();
+      const doc: any = {
+        name: String(body.name),
+        description: String(body.description || ''),
+        author: String(body.author || ''),
+        archived: !!body.archived,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+      };
+      // Allow callers to omit the field-override block entirely (= all
+      // nulls = trainer defaults), or pass them as a flat top-level
+      // spread. We accept both shapes for ergonomics.
+      const fieldOverrides = body.fields && typeof body.fields === 'object'
+        ? body.fields
+        : body;
+      for (const entry of schemaFields) {
+        if (entry.kind !== 'field') continue;
+        const name = entry.name;
+        if (fieldOverrides[name] !== undefined) doc[name] = fieldOverrides[name];
       }
-      console.log('experiment_design inserted', result.insertedId);
-      res.json(result);
+      dbo.collection("experiment_designs").insertOne(doc, function(err, result) {
+        if (err) {
+          console.error('add_experiment_design failed:', err);
+          res.status(500).json({ error: String(err.message || err) });
+          return;
+        }
+        console.log('experiment_design inserted', result.insertedId);
+        res.json(result);
+      });
     });
   });
 
@@ -1874,38 +1995,43 @@ export const createServer = (config): express.Application => {
       res.status(400).json({ error: "_id is required" });
       return;
     }
-    let idFilter;
-    try {
-      idFilter = { "_id": ObjectID(body._id) };
-    } catch (e) {
-      idFilter = { "_id": String(body._id) };  // canonical "Default" uses string _id
-    }
-    const update: any = {
-      "$set": { updated_at: new Date() },
-      "$inc": { version: 1 },
-    };
-    if (body.name        !== undefined) update["$set"].name        = String(body.name);
-    if (body.description !== undefined) update["$set"].description = String(body.description);
-    if (body.archived    !== undefined) update["$set"].archived    = !!body.archived;
-    const fieldOverrides = body.fields && typeof body.fields === 'object'
-      ? body.fields
-      : body;
-    for (const entry of EXPERIMENT_DESIGN_SCHEMA) {
-      if (entry.kind !== 'field') continue;
-      const name = entry.name;
-      if (fieldOverrides[name] !== undefined) update["$set"][name] = fieldOverrides[name];
-    }
-    dbo.collection("experiment_designs").updateOne(
-      idFilter, update, { upsert: false },
-      function(err, result) {
-        if (err) {
-          console.error('update_experiment_design failed:', err);
-          res.status(500).json({ error: String(err.message || err) });
-          return;
-        }
-        console.log('experiment_design updated', body._id, result);
-        res.json(result);
-      });
+    // Same resolved field list as the GET endpoint - see the comment
+    // on withExperimentDesignSchema.
+    withExperimentDesignSchema((schemaFields) => {
+      if (rejectUnknownKeys(body, res, schemaFields)) return;
+      let idFilter;
+      try {
+        idFilter = { "_id": ObjectID(body._id) };
+      } catch (e) {
+        idFilter = { "_id": String(body._id) };  // canonical "Default" uses string _id
+      }
+      const update: any = {
+        "$set": { updated_at: new Date() },
+        "$inc": { version: 1 },
+      };
+      if (body.name        !== undefined) update["$set"].name        = String(body.name);
+      if (body.description !== undefined) update["$set"].description = String(body.description);
+      if (body.archived    !== undefined) update["$set"].archived    = !!body.archived;
+      const fieldOverrides = body.fields && typeof body.fields === 'object'
+        ? body.fields
+        : body;
+      for (const entry of schemaFields) {
+        if (entry.kind !== 'field') continue;
+        const name = entry.name;
+        if (fieldOverrides[name] !== undefined) update["$set"][name] = fieldOverrides[name];
+      }
+      dbo.collection("experiment_designs").updateOne(
+        idFilter, update, { upsert: false },
+        function(err, result) {
+          if (err) {
+            console.error('update_experiment_design failed:', err);
+            res.status(500).json({ error: String(err.message || err) });
+            return;
+          }
+          console.log('experiment_design updated', body._id, result);
+          res.json(result);
+        });
+    });
   });
 
   app.post('/archive_experiment_design', (req, res) => {

@@ -1183,3 +1183,36 @@ html.dark .ed-paper-chip {
   align-items: center;
   min-width: 0;
 }
+
+/* JSON-typed fields (curriculum_stages) get a textarea instead of the
+ * number input every other non-bool type uses, plus a slot underneath
+ * for a parse error. The row aligns to the top so the label doesn't
+ * float in the middle of a tall box, and the wrap stacks so the error
+ * sits under the textarea rather than beside it. */
+.ed-field-row--json {
+  align-items: start;
+}
+.ed-field-row--json .ed-field-input-wrap {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.25rem;
+}
+.ed-field-textarea {
+  width: 100%;
+  min-height: 6rem;
+  resize: vertical;
+  /* Stage arrays are wide; scroll rather than wrap mid-token. */
+  white-space: pre;
+  overflow-x: auto;
+}
+.ed-field-textarea.is-invalid {
+  border-color: rgb(220 38 38);        /* red-600 */
+}
+.ed-field-error {
+  font-size: 0.65rem;
+  font-family: 'JetBrains Mono', monospace;
+  color: rgb(185 28 28);               /* red-700 */
+}
+html.dark .ed-field-error {
+  color: rgb(252 165 165);             /* red-300 */
+}

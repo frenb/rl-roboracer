@@ -227,12 +227,44 @@
         }
       }
 
+      // The track-geometry knobs are applied by Unity's TrackGenerator,
+      // which only the TrackGen* builds ship. The trainer already warns
+      // about this at run time ("[curriculum] WARNING: gym ... has no
+      // TrackGenerator"); saying it here costs nothing and saves finding
+      // out from a log four hours into a run.
+      const TRACKGEN_SECTION_NOTE =
+        '<div class="text-[11px] leading-relaxed rounded-lg px-3 py-2 mb-3' +
+        ' border border-amber-300 dark:border-amber-700' +
+        ' bg-amber-50 dark:bg-amber-900/30' +
+        ' text-amber-800 dark:text-amber-200 flex items-start gap-2">' +
+        '<span class="font-semibold tracking-tight whitespace-nowrap">Needs a TrackGen gym.</span>' +
+        '<span>These values are applied by Unity&rsquo;s ' +
+        '<code class="font-mono text-[11px]">TrackGenerator</code>, which only gyms named ' +
+        '<strong>TrackGen&hellip;</strong> ship. On the hand-built <strong>W-course</strong> and ' +
+        '<strong>wCourseJetRacer</strong> builds the track geometry is fixed and everything in this ' +
+        'section is ignored &mdash; a curriculum will still log stage promotions, but every stage ' +
+        'trains and evaluates on exactly the same track. The trainer prints the same warning at ' +
+        'run time.</span></div>';
+
+      // Which section holds the geometry knobs. Derived from the schema
+      // (the section that contains curriculum_stages) rather than matched
+      // on the label text, so renaming the section doesn't drop the note.
+      function _trackgenSectionLabel() {
+        let last = null;
+        for (const e of schema || []) {
+          if (e.kind === 'section') last = e.label;
+          else if (e.kind === 'field' && e.name === 'curriculum_stages') return last;
+        }
+        return null;
+      }
+
       function _renderForm() {
         if (!schema) {
           formHost.innerHTML = '<div class="rd-empty">Schema loading…</div>';
           return;
         }
         const parts = [];
+        const trackgenSection = _trackgenSectionLabel();
         // Group fields by their preceding section label. Walk in order
         // so the form ordering matches the schema (which itself matches
         // the trainer's mental model of "BC -> replay -> SAC -> arch").
@@ -251,6 +283,9 @@
                 `<span class="ed-section-chev" aria-hidden="true">›</span>` +
               `</summary>` +
               `<div class="ed-section-body">`);
+            if (trackgenSection !== null && entry.label === trackgenSection) {
+              parts.push(TRACKGEN_SECTION_NOTE);
+            }
             openSection = true;
             continue;
           }
@@ -283,6 +318,18 @@
                               class="w-4 h-4 rounded border-slate-300 dark:border-slate-600
                                      bg-white dark:bg-slate-800 text-indigo-500
                                      focus:ring-1 focus:ring-indigo-400">`;
+        } else if (t === 'json') {
+          // curriculum_stages is an array of stage objects. It must NOT
+          // fall through to the number input below: an input[type=number]
+          // sanitises any non-numeric value to '', which _onFieldInput
+          // reads as "use the default" and deletes the override - so
+          // pasting a stage array and saving was a silent no-op.
+          inputHtml =
+            `<textarea data-field-name="${escapeAttr(name)}" data-field-type="json" rows="6"${ro}
+                       spellcheck="false"
+                       placeholder="JSON array; leave empty to use the trainer default"
+                       class="w-full input-base text-sm font-mono ed-field-input ed-field-textarea"></textarea>` +
+            `<div class="ed-field-error" data-error-for="${escapeAttr(name)}" hidden></div>`;
         } else {
           const step = t === 'int' ? '1' : 'any';
           const numAttrs = ` step="${step}"`;
@@ -300,7 +347,7 @@
           ? ` [${entry.min}, ${entry.max}]`
           : '';
         return `
-          <div class="ed-field-row" title="${escapeAttr(entry.doc || '')}">
+          <div class="ed-field-row${t === 'json' ? ' ed-field-row--json' : ''}" title="${escapeAttr(entry.doc || '')}">
             <label for="ed-field-${escapeAttr(name)}" class="ed-field-label">
               <code class="ed-field-name">${escapeHtml(name)}</code>${paperChip}
               <span class="ed-field-meta">${escapeHtml(t)}${range}</span>
@@ -311,17 +358,58 @@
           </div>`;
       }
 
+      // Build an Error carrying the server's own message. The write
+      // endpoints answer a rejected key with {error, unknown_keys,
+      // hint}; without this the toast would read "HTTP 400" and hide
+      // the one thing the caller needs - which key was wrong.
+      async function _errorFromResponse(res) {
+        let detail = '';
+        try {
+          const body = await res.clone().json();
+          detail = (body && (body.error || body.message)) || '';
+          if (body && body.hint) detail += ` (${body.hint})`;
+        } catch (_e) { /* non-JSON error body */ }
+        return new Error(detail || `HTTP ${res.status}`);
+      }
+
+      // Show / clear the parse error under a json field's textarea.
+      // Field names are Python identifiers, so they're safe to splice
+      // into a selector without escaping.
+      function _setJsonError(name, msg) {
+        const box = formHost.querySelector(`[data-error-for="${name}"]`);
+        const ta = formHost.querySelector(`textarea[data-field-name="${name}"]`);
+        if (box) {
+          box.textContent = msg;
+          box.hidden = !msg;
+        }
+        if (ta) ta.classList.toggle('is-invalid', !!msg);
+      }
+
       function _onFieldInput(ev) {
         const el = ev.target;
         const name = el.getAttribute('data-field-name');
         if (!name) return;
+        const isJson = el.getAttribute('data-field-type') === 'json';
+        // A textarea holding only whitespace means "no override", same
+        // as an empty number input.
+        const isEmpty = isJson
+          ? String(el.value || '').trim() === ''
+          : (el.value === '' || el.value === null);
         if (el.type === 'checkbox') {
           editorState.overrides[name] = el.checked ? 'true' : 'false';
-        } else if (el.value === '' || el.value === null) {
+        } else if (isEmpty) {
           // Empty input -> "use trainer default" -> remove from overrides.
           delete editorState.overrides[name];
+          if (isJson) _setJsonError(name, '');
         } else {
           editorState.overrides[name] = el.value;
+          // Validate as you type so a malformed array surfaces here
+          // rather than at Save time.
+          if (isJson) {
+            let msg = '';
+            try { JSON.parse(el.value); } catch (err) { msg = 'Invalid JSON: ' + err.message; }
+            _setJsonError(name, msg);
+          }
         }
         refreshButtons();
       }
@@ -333,8 +421,16 @@
           if (el.type === 'checkbox') {
             el.checked = (val === 'true' || val === true);
           } else {
-            // Empty -> show placeholder default.
+            // Empty -> show placeholder default. State always holds the
+            // field's text form, including json fields (see selectDesign).
             el.value = (val === undefined || val === null) ? '' : String(val);
+            if (el.getAttribute('data-field-type') === 'json') {
+              let msg = '';
+              if (el.value.trim() !== '') {
+                try { JSON.parse(el.value); } catch (err) { msg = 'Invalid JSON: ' + err.message; }
+              }
+              _setJsonError(name, msg);
+            }
           }
         });
       }
@@ -469,8 +565,16 @@
           if (entry.kind !== 'field') continue;
           const v = d[entry.name];
           if (v !== undefined && v !== null) {
-            editorState.overrides[entry.name] = String(v);
-            editorState.originalOverrides[entry.name] = String(v);
+            // json fields hold arrays/objects. String() would render one
+            // as "[object Object],[object Object]" and, because the save
+            // path writes the override map straight back, editing any
+            // OTHER field and saving would overwrite the stored stages
+            // with that garbage. Keep them as JSON text instead.
+            const text = entry.type === 'json'
+              ? JSON.stringify(v, null, 2)
+              : String(v);
+            editorState.overrides[entry.name] = text;
+            editorState.originalOverrides[entry.name] = text;
           }
         }
         nameInput.value = editorState.name;
@@ -632,22 +736,41 @@
           const raw = editorState.overrides[entry.name];
           if (raw === undefined || raw === null || raw === '') continue;
           let val;
-          try {
-            if (entry.type === 'int') {
-              const n = Number(raw);
-              if (!Number.isFinite(n)) continue;
-              val = Math.trunc(n);
-            } else if (entry.type === 'float') {
-              const n = Number(raw);
-              if (!Number.isFinite(n)) continue;
-              val = n;
-            } else if (entry.type === 'bool') {
-              val = (raw === 'true' || raw === true);
-            } else {
-              val = raw;
+          if (entry.type === 'json') {
+            if (String(raw).trim() === '') continue;
+            // Parse rather than pass the text through: the endpoint
+            // stores whatever it is given, so an unparsed string would
+            // land in Mongo as a string and the trainer would ignore
+            // it. Abort the save instead of dropping the field, which
+            // is the silent-loss behaviour this tab is being fixed for.
+            try {
+              val = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+            } catch (err) {
+              _setJsonError(entry.name, 'Invalid JSON: ' + err.message);
+              showToast({
+                type: 'error',
+                message: `${entry.name}: invalid JSON, nothing was saved - ${err.message}`,
+              });
+              return;
             }
-          } catch (_e) {
-            continue;
+          } else {
+            try {
+              if (entry.type === 'int') {
+                const n = Number(raw);
+                if (!Number.isFinite(n)) continue;
+                val = Math.trunc(n);
+              } else if (entry.type === 'float') {
+                const n = Number(raw);
+                if (!Number.isFinite(n)) continue;
+                val = n;
+              } else if (entry.type === 'bool') {
+                val = (raw === 'true' || raw === true);
+              } else {
+                val = raw;
+              }
+            } catch (_e) {
+              continue;
+            }
           }
           payload[entry.name] = val;
         }
@@ -664,7 +787,7 @@
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(payload),
             });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            if (!res.ok) throw await _errorFromResponse(res);
             try {
               const body = await res.clone().json();
               assignedId = body && (body.insertedId || (body.ops && body.ops[0] && body.ops[0]._id)) || null;
@@ -676,7 +799,7 @@
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(payload),
             });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            if (!res.ok) throw await _errorFromResponse(res);
           }
           showToast({ type: 'success', message: 'Experiment design saved.' });
           await pollOnce(true);
