@@ -86,3 +86,11 @@ unity/[Aa]ssets/AssetStoreTools*
 # fly-brain protoc scratch output. The stubs that matter are copied to
 # rl_agent/fly_brain/proto/ and committed, same as virtual_endpoint.
 docker/fly_brain/gen/
+
+# Scratch captures and one-off debug scripts (self-labelled "Scratch:" /
+# "temporary" in their headers). Kept out of the tree rather than deleted so
+# they survive a clean, but they are not part of the project.
+_tmp_*
+
+# Written by scripts/Monitor-Job.ps1 each time it polls.
+scripts/_monitor_logstats_tmp.sh
