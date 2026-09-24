@@ -109,11 +109,56 @@ public class HUDPanel : MonoBehaviour
         scrollRect = new Rect();
     }
 
+    // ---- rl-roboracer local change -------------------------------------
+    //
+    // Scale this panel with the window, like the project's own overlays.
+    // IMGUI draws in raw pixels, so a panel authored at 1080p is unreadable
+    // on a large display - which this one was, while the HUD and the
+    // fly-brain legends beside it had been fixed.
+    //
+    // The constants are duplicated from Assets/Scripts/OverlayUi.cs rather
+    // than referenced: this file is inside the Unity.Robotics.ROSTCPConnector
+    // assembly definition, and an asmdef assembly cannot depend on the
+    // predefined Assembly-CSharp where OverlayUi lives. Keep the two in step -
+    // if OverlayUi's reference height or clamps change, change them here too,
+    // or this panel will drift out of size with everything around it.
+    const float UiReferenceHeight = 1080f;
+    const float UiMinScale = 0.55f;
+    const float UiMaxScale = 3.0f;
+
+    static float UiScale
+    {
+        get
+        {
+            float h = Screen.height;
+            if (h < 1f) return 1f;
+            return Mathf.Clamp(h / UiReferenceHeight, UiMinScale, UiMaxScale);
+        }
+    }
+
     void OnGUI()
     {
         if (!isEnabled)
             return;
 
+        // try/finally because GUI.matrix is global IMGUI state: leaving it set
+        // would silently rescale every overlay that draws after this one.
+        Matrix4x4 guiPrev = GUI.matrix;
+        float s = UiScale;
+        GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity,
+                                   new Vector3(s, s, 1f));
+        try
+        {
+            DrawHud();
+        }
+        finally
+        {
+            GUI.matrix = guiPrev;
+        }
+    }
+
+    void DrawHud()
+    {
         // Initialize main HUD
         GUILayout.BeginVertical("box");
 

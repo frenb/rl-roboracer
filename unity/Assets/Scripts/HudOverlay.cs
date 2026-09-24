@@ -111,7 +111,13 @@ public class HudOverlay : MonoBehaviour
         try { speed = car.GetSpeed(); } catch { speed = 0f; }
         float force = car.acceleration;
 
-        float cx = Screen.width * 0.5f;
+        // Logical pixels from here down (see OverlayUi): every size in this
+        // method is "at 1080p" and the matrix maps it onto the real window, so
+        // the HUD holds its apparent size instead of shrinking to nothing on a
+        // large display.
+        Matrix4x4 guiPrev = OverlayUi.Begin();
+
+        float cx = OverlayUi.LogicalWidth * 0.5f;
         float top = topMargin;
         float headerH = 22f;
         float contentTop = top + headerH;
@@ -145,7 +151,16 @@ public class HudOverlay : MonoBehaviour
         Rect wheelRect = new Rect(cx - wheelSize * 0.5f, contentTop,
                                   wheelSize, wheelSize);
         Matrix4x4 m = GUI.matrix;
-        GUIUtility.RotateAroundPivot(wheelDeg, wheelRect.center);
+        // Composed onto the right of the overlay scale rather than via
+        // GUIUtility.RotateAroundPivot, which left-multiplies and so treats
+        // its pivot as a screen-space point. Under OverlayUi's scale the
+        // wheel's centre in logical pixels is not its centre in screen
+        // pixels, so the wheel orbited that offset instead of spinning in
+        // place. Right-multiplying rotates in the same space the rect is
+        // expressed in, whatever the outer scale happens to be.
+        GUI.matrix = m
+            * Matrix4x4.TRS(wheelRect.center, Quaternion.Euler(0f, 0f, wheelDeg), Vector3.one)
+            * Matrix4x4.TRS(-wheelRect.center, Quaternion.identity, Vector3.one);
         GUI.DrawTexture(wheelRect, _wheelTex);
         GUI.matrix = m;
 
@@ -182,6 +197,8 @@ public class HudOverlay : MonoBehaviour
         float csiY = contentTop + wheelSize + 86f + stageRowH;
         GUI.Label(new Rect(cx - panelWidth * 0.5f, csiY, panelWidth, 18f),
                   csi, _labelStyle);
+
+        OverlayUi.End(guiPrev);
     }
 
     void EnsureAssets()
