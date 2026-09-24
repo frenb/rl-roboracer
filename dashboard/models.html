@@ -102,7 +102,10 @@
       <div class="px-6 py-6 overflow-y-auto">
         <p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed mb-5">
           One EVAL job will be queued for each selected model, using the
-          model&rsquo;s saved <code>location</code>. The trainer in
+          model&rsquo;s saved <code>location</code> &mdash; except for the
+          baselines the trainer rebuilds from scratch
+          (<code>FlyPyPolicy</code>, <code>RandomPyPolicy</code>), which are
+          queued without one. The trainer in
           sim-controller picks them up on its next poll. Set the number
           of <strong>trials</strong> &mdash; each trial runs
           <code>num_eval_episodes</code> raw episodes (default 5) and
@@ -162,6 +165,13 @@
                   class="w-full input-base appearance-none select-chevron pr-8">
             <option value="" selected>From each model</option>
           </select>
+
+          <!-- Rules that apply to the from-scratch baselines rather than
+               to saved checkpoints. Stays hidden unless the selection
+               resolves to one, so an ordinary SacAgent eval looks
+               exactly as it did. Filled by refreshEvalPolicyNote. -->
+          <p id="f-eval-policy-note"
+             class="hidden col-span-2 m-0 text-xs leading-relaxed rounded-md px-3 py-2"></p>
 
           <label for="f-eval-reward-design"
                  class="text-xs font-medium text-slate-600 dark:text-slate-300"
@@ -933,6 +943,92 @@
       fillStaticOptions(document.getElementById('f-eval-robot-type'),
                         RoboracerUI.jobOptions.robotTypes, 'robotaxi');
 
+      /* ---------- from-scratch baselines -------------------------
+       *
+       * do_job constructs these two rather than loading a SavedModel:
+       * RandomPyPolicy out of nothing, FlyPyPolicy out of the frozen
+       * connectome plus the step-5 ridge readout. Neither run_*() takes
+       * a path, so a job carrying a `location` scores the baseline under
+       * that checkpoint's name - which job 6ab07220 did on 2026-09-20,
+       * before do_job grew a guard that now refuses the combination.
+       *
+       * This dialog sent `m.location` unconditionally, so every
+       * FlyPyPolicy eval queued from the Models tab failed on pickup and
+       * the only way to run one was the Jobs tab with the field blanked
+       * by hand. Resolving the location per row fixes that.
+       * --------------------------------------------------------- */
+
+      const SCRATCH_BUILT_POLICIES = new Set(['RandomPyPolicy', 'FlyPyPolicy']);
+
+      // FlyPyPolicy encodes the rays itself - speed at index 0, the 29
+      // rays at 2..30 - so it needs the 31-D no-hint vector and nothing
+      // else. fly_donut is the trap worth naming: it is the fly course,
+      // but the observation there has already been replaced by the
+      // 1314-D trace, and RayEncoder.cues() raises on anything but 31.
+      const FLY_POLICY_COURSE = 'donut_no_hint';
+
+      /**
+       * What each selected row will actually be evaluated as, once the
+       * "From each model" placeholders have fallen back to the record.
+       * Both the note and the submit path read this, so what the dialog
+       * warns about and what it sends cannot disagree.
+       */
+      function resolveEvalTargets(rows, overrides) {
+        const readSel = (id) => String(document.getElementById(id).value || '');
+        const modelOverride  = overrides ? overrides.model_type
+                                         : readSel('f-eval-model-type');
+        const courseOverride = overrides ? overrides.course_type
+                                         : readSel('f-eval-course');
+        return (rows || []).map((m) => {
+          const modelType = modelOverride || m.model_type || 'SacAgent';
+          return {
+            row: m,
+            modelType,
+            courseType: courseOverride || m.course_type || '',
+            fromScratch: SCRATCH_BUILT_POLICIES.has(modelType),
+          };
+        });
+      }
+
+      /**
+       * Reasons the selection cannot be submitted as configured.
+       * Only FlyPyPolicy has one: RandomPyPolicy samples the action spec
+       * and so runs on any course.
+       */
+      function evalTargetProblems(targets) {
+        const wrongCourse = targets.filter(
+          (t) => t.modelType === 'FlyPyPolicy' && t.courseType !== FLY_POLICY_COURSE);
+        if (!wrongCourse.length) return [];
+        const seen = [...new Set(wrongCourse.map((t) => t.courseType || '(unset)'))];
+        return [`FlyPyPolicy can only be evaluated on ${FLY_POLICY_COURSE}, because it `
+                + `encodes the 31-D ray vector itself. ${wrongCourse.length} of `
+                + `${targets.length} selected would run on ${seen.join(', ')}. `
+                + `Set Course to ${FLY_POLICY_COURSE}.`];
+      }
+
+      /** Explain the baseline rules in the dialog, when they apply. */
+      function refreshEvalPolicyNote() {
+        const el = document.getElementById('f-eval-policy-note');
+        if (!el) return;
+        const targets  = resolveEvalTargets(_evalSelection);
+        const scratch  = targets.filter((t) => t.fromScratch);
+        const problems = evalTargetProblems(targets);
+        const warn = 'bg-amber-50 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200';
+        const info = 'bg-sky-50 text-sky-800 dark:bg-sky-900/30 dark:text-sky-200';
+        el.classList.remove(...warn.split(' '), ...info.split(' '));
+        if (!scratch.length) { el.classList.add('hidden'); return; }
+        const kinds = [...new Set(scratch.map((t) => t.modelType))].join(' / ');
+        el.classList.remove('hidden');
+        el.classList.add(...(problems.length ? warn : info).split(' '));
+        el.textContent = problems.length
+          ? problems.join(' ')
+          : `${kinds} is rebuilt from scratch, not loaded from a checkpoint, so `
+            + `${scratch.length === 1 ? 'this job' : 'these jobs'} will be queued `
+            + `without a location. FlyPyPolicy additionally needs the fly-brain `
+            + `service up and the readout at `
+            + `/saved_models/robotaxi/FlyPyPolicy/0/readout.npz.`;
+      }
+
       function refreshEvalModalFooter() {
         const est = RoboracerUI.evalCostEstimate(
           evalNumTrialsEl.value,
@@ -1056,6 +1152,7 @@
           .catch((e) => console.warn('stage hydrate failed:', e));
         syncEvalStageRangeVisibility();
         refreshEvalModalFooter();
+        refreshEvalPolicyNote();
         loadGymsIntoEvalDropdown().catch((e) => console.warn('gyms hydrate failed:', e));
         // Rebuilding the design pickers resets them to "From each
         // model", so the stage range has to be recomputed after.
@@ -1299,7 +1396,7 @@
             const defText = String(entry.default == null ? '' : entry.default);
             const ovText = hasOverride
               ? '<span class="text-indigo-600 dark:text-indigo-300 font-semibold">' +
-                escapeHtmlLocal(String(overrideVal)) + '</span>'
+                formatOverrideValueLocal(overrideVal) + '</span>'
               : '<span class="text-slate-400 dark:text-slate-500">—</span>';
             rows.push(
               '<tr class="border-t border-slate-100 dark:border-slate-800">' +
@@ -1340,6 +1437,19 @@
         return String(s == null ? '' : s)
           .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
           .replace(/"/g, '&quot;');
+      }
+      // Object-valued overrides (curriculum_stages) stringify to
+      // "[object Object]", so disclose them as JSON behind a summary
+      // rather than letting ~750 characters dominate the table.
+      function formatOverrideValueLocal(val) {
+        if (val === null || typeof val !== 'object') return escapeHtmlLocal(String(val));
+        const n = Array.isArray(val) ? val.length : Object.keys(val).length;
+        return '<details><summary class="cursor-pointer select-none">' +
+          n + (n === 1 ? ' entry' : ' entries') + '</summary>' +
+          '<pre class="font-mono text-[11px] leading-relaxed mt-1 p-2 rounded-md ' +
+          'bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 ' +
+          'max-h-64 overflow-auto whitespace-pre m-0">' +
+          escapeHtmlLocal(JSON.stringify(val, null, 2)) + '</pre></details>';
       }
 
       sourceModal.addEventListener('click', (ev) => {
@@ -1503,6 +1613,13 @@
             .catch((e) => console.warn('stage hydrate failed:', e));
         });
 
+      // Both pickers feed resolveEvalTargets, so either can turn the
+      // baseline note on, off, or from advice into a blocking warning.
+      document.getElementById('f-eval-model-type')
+        .addEventListener('change', refreshEvalPolicyNote);
+      document.getElementById('f-eval-course')
+        .addEventListener('change', refreshEvalPolicyNote);
+
       evalSubmitBtn.addEventListener('click', async () => {
         const sel = table.getSelectedRows();
         if (!sel.length) {
@@ -1538,8 +1655,17 @@
           eval_stage_end: evalAllStages
             ? document.getElementById('f-eval-stage-end').value : '',
         };
+        // Checked before closing, so a rejected selection can be fixed
+        // in the dialog rather than rebuilt from scratch.
+        const targets  = resolveEvalTargets(sel, form);
+        const problems = evalTargetProblems(targets);
+        if (problems.length) {
+          refreshEvalPolicyNote();
+          showToast({ type: 'error', message: problems.join(' ') });
+          return;
+        }
         closeEvalModal();
-        await submitEvalJobs(sel, form);
+        await submitEvalJobs(targets, form);
       });
 
       /**
@@ -1555,16 +1681,24 @@
        * against the default 32-dim donut trips EvalSpecMismatchError.
        * Models predating the course_type stamp carry none, and do_job
        * then defaults to donut, which is how they were trained.
+       *
+       * Takes resolveEvalTargets() output rather than raw rows, so the
+       * model type and course it sends are the ones the dialog's note
+       * and its pre-submit check already agreed on.
        */
-      async function submitEvalJobs(rows, form) {
-        const results = await Promise.all(rows.map((m) => {
+      async function submitEvalJobs(targets, form) {
+        const results = await Promise.all(targets.map(
+            ({ row: m, modelType, courseType, fromScratch }) => {
           const payload = RoboracerUI.buildJobPayload({
             status: 'NOT_STARTED',
             job_type: 'EVAL',
-            location: m.location,
+            // Dropped for the from-scratch baselines, which do_job
+            // refuses outright when a location is present.
+            // buildJobPayload omits the key entirely when falsy.
+            location: fromScratch ? '' : m.location,
             robot_type: form.robot_type,
-            model_type: form.model_type || m.model_type || 'SacAgent',
-            course_type: form.course_type || m.course_type || '',
+            model_type: modelType,
+            course_type: courseType,
             num_trials: form.num_trials,
             num_eval_episodes: form.num_eval_episodes,
             corner_radius_val: form.corner_radius_val,
@@ -1592,16 +1726,21 @@
         }));
         const errors = results.filter((e) => e !== null);
         const n = form.num_trials;
+        const total = targets.length;
         if (errors.length === 0) {
+          const scratch = targets.filter((t) => t.fromScratch).length;
           showToast({
             type: 'success',
-            message: `${rows.length} EVAL job${rows.length === 1 ? '' : 's'} queued (${n} trial${n === 1 ? '' : 's'} each).`,
+            message: `${total} EVAL job${total === 1 ? '' : 's'} queued `
+              + `(${n} trial${n === 1 ? '' : 's'} each)`
+              + (scratch ? `; ${scratch} baseline job${scratch === 1 ? '' : 's'} `
+                           + `queued without a location.` : '.'),
           });
           table.clearSelection();
         } else {
           showToast({
             type: 'error',
-            message: `${errors.length} of ${rows.length} submissions failed: ${errors[0]}`,
+            message: `${errors.length} of ${total} submissions failed: ${errors[0]}`,
           });
         }
       }
@@ -1719,7 +1858,14 @@
       // submitEvalJobs), not the single live env_spec (which only reflects
       // whichever course last ran and would misfire when, e.g., a 31-dim
       // donut_no_hint model is compared against a 32-dim donut env).
-      const COURSE_OBS_SIZES = { donut: 32, donut_no_hint: 31 };
+      // fly_donut is the fly connectome's descending-neuron trace. 1314 is a
+      // mirror like the other two, not the source of truth: FlyDonutCourse
+      // reads the width off the brain service's own trace_len at construction
+      // and fails loudly if they disagree. Without an entry here a fly_donut
+      // model falls through to the live-env comparison below, which reflects
+      // whichever course ran last - so it would read "incompatible" against a
+      // 31-D or 32-D env the moment any other course runs.
+      const COURSE_OBS_SIZES = { donut: 32, donut_no_hint: 31, fly_donut: 1314 };
       const COURSE_OBS_DICT = {
         donut_camera: {
           vector: { shape: [31], dtype: 'float32' },
