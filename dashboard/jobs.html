@@ -312,15 +312,15 @@
                width (see rl_agent/robotaxi.py do_job). -->
           <label for="f-course"
                  class="text-xs font-medium text-slate-600 dark:text-slate-300"
-                 title="Which course/observation the job trains against. 'trainer default' uses the trainer's ROBOTAXI_COURSE_TYPE env var (then donut). 'donut_no_hint' drops the goal-derived angle-to-goal element (31-dim obs) for real-robot transfer. 'donut_camera' is 31-D + 84x84 CSI (Conv-SAC, train from scratch). 'donut_camera_no_rays' is the raycast ablation of donut_camera: same image, vector cut to 2-D (speed, sideslip).">Course</label>
+                 title="Which course/observation the job trains against. 'trainer default' is a sentinel rather than a course: it omits course_type entirely so the trainer falls back to its ROBOTAXI_COURSE_TYPE env var (then donut). Each option's observation shape is in its label, and the note under the picker says what the selected job type can and cannot do on that course.">Course</label>
+          <!-- Options are filled from RoboracerUI.jobOptions.courses below,
+               which is the list the Models tab's eval dialog already renders
+               from. They were hardcoded here until 2026-09-21, which is how
+               fly_donut came to be selectable on the Models tab and missing
+               on this one while updateJobHint carried a fly_donut branch that
+               could never fire. -->
           <select id="f-course" name="course_type"
-                  class="w-full input-base appearance-none select-chevron pr-8">
-            <option value="trainer default" selected>trainer default (donut, 32-dim)</option>
-            <option value="donut">donut (32-dim)</option>
-            <option value="donut_no_hint">donut_no_hint (31-dim, no angle-to-goal)</option>
-            <option value="donut_camera">donut_camera (31-D + 84x84 CSI)</option>
-            <option value="donut_camera_no_rays">donut_camera_no_rays (2-D + 84x84 CSI, raycast ablation)</option>
-          </select>
+                  class="w-full input-base appearance-none select-chevron pr-8"></select>
           <p id="f-job-hint" class="col-span-2 m-0 text-xs leading-relaxed text-slate-500 dark:text-slate-400"></p>
           <p id="f-eval-cost" class="hidden col-span-2 m-0 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400"></p>
         </form>
@@ -338,7 +338,7 @@
        the code snapshot - only the model record does, post-training).
        The header notes that the trainer may have loaded a different
        version at job pickup time if the design has since been edited;
-       robotaxi.out's "installed reward design version=N" line is the
+       the trainer log's "installed reward design version=N" line is the
        authoritative answer. -->
   <div data-role="rd-source-modal" aria-hidden="true"
        class="fixed inset-0 z-[100] modal-blur bg-slate-900/40 dark:bg-slate-950/65
@@ -374,8 +374,8 @@
           <code class="font-mono text-[11px]">/get_reward_designs</code>.
           The trainer captures the code at job pickup, so if the design has
           been edited since this job was queued the trainer is using a
-          different version. Check
-          <code class="font-mono text-[11px]">robotaxi.out</code> for
+          different version. Check the Logs panel, or
+          <code class="font-mono text-[11px]">sim-controller:/tmp/trainer.log</code>, for
           <code class="font-mono text-[11px]">installed reward design name=… version=N</code>.
         </p>
         <pre data-role="rd-source-code"
@@ -884,7 +884,28 @@
         const noRays = course === 'donut_camera_no_rays';
         const camera = course === 'donut_camera' || noRays;
         const fly = course === 'fly_donut';
-        if (fly) {
+        const mt = document.getElementById('f-model-type').value;
+        // FlyPyPolicy EVAL is the one combination the Models tab cannot
+        // produce, because "Eval selected" always fills in a location and
+        // do_job refuses FlyPyPolicy + location (it builds its policy from
+        // the connectome + readout and never opens the path, so the job
+        // would score the fly baseline under the checkpoint's name). Checked
+        // before the course branches because the model type is the thing
+        // that constrains the rest. See docs/fly-brain-driver-how-it-works.md.
+        if (jt === 'EVAL' && mt === 'FlyPyPolicy') {
+          hint.textContent =
+            'FlyPyPolicy EVAL measures the frozen connectome + step-5 ridge '
+            + 'readout. Leave Model location EMPTY \u2014 the policy is built from '
+            + 'scratch and a location makes do_job refuse the job. Use course '
+            + 'donut_no_hint, NOT fly_donut: this policy encodes the 31-D ray '
+            + 'vector itself, so the 1314-D trace raises a shape error. '
+            + 'Requires the fly-brain service and the readout at '
+            + '/saved_models/robotaxi/FlyPyPolicy/0/readout.npz.'
+            + (course === 'fly_donut'
+               ? ' \u26a0 Course is fly_donut \u2014 switch it to donut_no_hint.' : '')
+            + (course === 'donut' || course === 'trainer default'
+               ? ' \u26a0 The encoder needs the 31-D no-hint vector; donut is 32-D.' : '');
+        } else if (fly) {
           hint.textContent = jt === 'TRAIN'
             ? 'TRAIN on fly_donut is SAC from scratch over the fly connectome\u2019s '
               + '1314-D descending-neuron trace: the brain replaces the 31-D ray '
@@ -1072,8 +1093,25 @@
         });
       }
 
+      // Rendered rather than written out in the markup so a course added to
+      // jobOptions.courses reaches both job dialogs at once. Runs at parse
+      // time, before the first openModal, because updateJobHint reads the
+      // picker's value.
+      (function fillCourseOptions() {
+        const sel = document.getElementById('f-course');
+        for (const c of RoboracerUI.jobOptions.courses) {
+          const opt = document.createElement('option');
+          opt.value = c.value;
+          opt.textContent = c.label;
+          if (c.value === RoboracerUI.jobOptions.courseDefault) opt.selected = true;
+          sel.appendChild(opt);
+        }
+      })();
+
       document.getElementById('f-job-type').addEventListener('change', updateJobHint);
       document.getElementById('f-course').addEventListener('change', updateJobHint);
+      // The hint reads model type too, for the FlyPyPolicy EVAL case.
+      document.getElementById('f-model-type').addEventListener('change', updateJobHint);
 
       // The gym / reward-design / experiment-design pickers are
       // populated by RoboracerUI.loadJobListIntoSelect, which the Eval
@@ -1248,6 +1286,19 @@
           .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
           .replace(/"/g, '&quot;');
       }
+      // Object-valued overrides (curriculum_stages) stringify to
+      // "[object Object]", so disclose them as JSON behind a summary
+      // rather than letting ~750 characters dominate the table.
+      function _formatOverrideValue(val) {
+        if (val === null || typeof val !== 'object') return _escapeHtml(String(val));
+        const n = Array.isArray(val) ? val.length : Object.keys(val).length;
+        return '<details><summary class="cursor-pointer select-none">' +
+          n + (n === 1 ? ' entry' : ' entries') + '</summary>' +
+          '<pre class="font-mono text-[11px] leading-relaxed mt-1 p-2 rounded-md ' +
+          'bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 ' +
+          'max-h-64 overflow-auto whitespace-pre m-0">' +
+          _escapeHtml(JSON.stringify(val, null, 2)) + '</pre></details>';
+      }
 
       async function openRewardDesignModal(designId) {
         rdNameEl.textContent = '(loading…)';
@@ -1321,7 +1372,7 @@
             const def = String(entry.default == null ? '' : entry.default);
             const ov = has
               ? '<span class="text-indigo-600 dark:text-indigo-300 font-semibold">' +
-                _escapeHtml(String(val)) + '</span>'
+                _formatOverrideValue(val) + '</span>'
               : '<span class="text-slate-400 dark:text-slate-500">—</span>';
             rows.push(
               '<tr class="border-t border-slate-100 dark:border-slate-800">' +
