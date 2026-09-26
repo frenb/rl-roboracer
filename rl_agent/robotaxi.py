@@ -5428,6 +5428,10 @@ def do_job(job, num_envs=1):
             update_job(job["_id"], err_msg, "eval_error")
         debug_print(model_type)
         debug_print(location)
+        # Keep TensorBoard's live view to the training job alone. Runs
+        # on the spec-mismatch path too, since that branch falls through
+        # to here and still leaves a directory behind.
+        archive_eval_active_dir(job["_id"])
     else:
         return
     # End-of-job trailer.
@@ -5829,6 +5833,75 @@ def move_all_jobs_data(id, skip_current_cleanup=False):
         move_data(id, folders=["eval", "metrics", "train", "learner"])
 
 
+def archive_eval_active_dir(job_id):
+    """Move a finished EVAL job's summaries out of /tmp/active.
+
+    TensorBoard's ``current:`` experiment scans /tmp/active (see
+    sim-controller's --logdir_spec), so anything sitting there is drawn
+    alongside the training job's curves. move_all_jobs_data clears that
+    directory, but it is only called from the TRAIN branch of do_job -
+    so before this, every EVAL that ran between two TRAIN pickups left
+    a ``<id>_eval`` run in the live view until the next training job
+    swept it. Twenty-one had piled up when this was found, against one
+    real training run.
+
+    Called at the END of the EVAL branch rather than at pickup, so the
+    run stays visible in TensorBoard while the eval is actually
+    running. By the time we get here the numbers are already on the job
+    document, so the scalar history is the only thing being moved.
+
+    The destination matches move_all_jobs_data's grouping - one
+    /tmp/jobsdata/<id>/ bucket per job, with the directory keeping its
+    ``<id>_eval`` name inside it - so the dashboard's Compare flow
+    resolves it identically whichever path did the archiving.
+    """
+    entry = str(job_id) + "_eval"
+    src = os.path.join("/tmp/active", entry)
+    if not os.path.isdir(src):
+        return
+    archive_root = os.path.join("/tmp/jobsdata", str(job_id))
+    dst = os.path.join(archive_root, entry)
+    try:
+        os.makedirs(archive_root, exist_ok=True)
+        if os.path.isdir(dst):
+            shutil.rmtree(dst)
+        elif os.path.exists(dst):
+            os.remove(dst)
+        shutil.move(src, dst)
+        print(f"archived eval summaries {src} -> {dst}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        # Housekeeping must never fail the job. Worst case is one stale
+        # run in the live view until the next TRAIN pickup sweeps it -
+        # exactly the old behaviour, which is a safe thing to fall back to.
+        print(f"archive_eval_active_dir: failed to archive {src}: {e}",
+              flush=True)
+
+
+def _model_job_ids():
+    """Job ids that a saved model points at, as a set of strings.
+
+    prune_jobsdata must not delete these. The dashboard's "Compare in
+    Analysis" view works by symlinking /tmp/jobsdata/<job_id> into
+    TensorBoard's compare bucket, so dropping a bucket silently removes
+    that model from every future comparison - the selection resolves to
+    `missing` and TB draws nothing.
+
+    Ranking by mtime alone did exactly that. When this was written not
+    one of the 84 jobs behind the 409 saved models still had an
+    archive, because eval buckets kept churning the 100 most-recent
+    slots, so Compare had been rendering an empty pane for anything the
+    user picked.
+
+    Returns None if the lookup fails, which the caller treats as "prune
+    nothing this pass" - see there for why that direction.
+    """
+    try:
+        return {str(j) for j in db.models.distinct("job_id") if j}
+    except Exception as e:  # noqa: BLE001
+        print(f"_model_job_ids: lookup failed ({e})", flush=True)
+        return None
+
+
 def prune_jobsdata(keep=None, current_id=None):
     """Cap /tmp/jobsdata to the `keep` most-recently-modified job buckets.
 
@@ -5844,10 +5917,19 @@ def prune_jobsdata(keep=None, current_id=None):
     `keep` defaults to the JOBSDATA_MAX_ARCHIVES env var (fallback 100).
     A value <= 0 disables pruning entirely.
 
-    Pruned buckets can no longer be opened in TensorBoard's "Compare in
-    Analysis" view (that symlinks /tmp/jobsdata/<id> into the compare
-    bucket). Saved models live under a separate mount (/saved_models) and
-    are unaffected — only old jobs' TB scalar history is dropped.
+    Any bucket a SAVED MODEL points at is also protected, regardless of
+    rank. A pruned bucket can no longer be opened in TensorBoard's
+    "Compare in Analysis" view (that symlinks /tmp/jobsdata/<id> into
+    the compare bucket), and recency turned out to be the wrong proxy
+    for what an operator wants to compare: eval buckets churn daily
+    while the training runs worth comparing are old by definition. See
+    _model_job_ids for what that cost in practice. The retained set is
+    therefore "the `keep` newest, plus everything Compare can still
+    name" - so `keep` is a floor, not a cap.
+
+    Saved model weights live under a separate mount (/saved_models) and
+    were never at risk here; it is only the TB scalar history that a
+    prune destroys.
     """
     if keep is None:
         try:
@@ -5863,6 +5945,17 @@ def prune_jobsdata(keep=None, current_id=None):
         return
 
     current_str = str(current_id) if current_id is not None else None
+
+    # Fail closed. If Mongo is unreachable we cannot tell which buckets
+    # back a saved model, and the failure mode of guessing wrong is
+    # permanent (deleted scalar history) while the failure mode of
+    # skipping a pass is temporary (disk grows until the next pickup).
+    protected = _model_job_ids()
+    if protected is None:
+        print("prune_jobsdata: cannot resolve model-backed archives; "
+              "skipping this pass rather than risk deleting one.",
+              flush=True)
+        return
 
     # Gather (path, mtime) for every top-level bucket.
     buckets = []
@@ -5889,10 +5982,16 @@ def prune_jobsdata(keep=None, current_id=None):
     candidates = buckets[keep:]
 
     deleted = 0
+    kept_for_models = 0
     freed_bytes = 0
     for entry, path, _ in candidates:
         if current_str is not None and entry == current_str:
             continue  # never delete the in-flight job's archive
+        if entry in protected:
+            # A saved model names this job. Deleting it would drop that
+            # model out of "Compare in Analysis" permanently.
+            kept_for_models += 1
+            continue
         try:
             for dirpath, _dirs, files in os.walk(path):
                 for f in files:
@@ -5906,8 +6005,9 @@ def prune_jobsdata(keep=None, current_id=None):
             print(f"prune_jobsdata: failed to remove {path}: {e}", flush=True)
 
     print(
-        f"prune_jobsdata: kept {len(survivors)} newest, deleted {deleted} "
-        f"bucket(s), freed ~{freed_bytes / (1024 * 1024):.1f} MB.",
+        f"prune_jobsdata: kept {len(survivors)} newest + {kept_for_models} "
+        f"older bucket(s) still referenced by a saved model, deleted "
+        f"{deleted} bucket(s), freed ~{freed_bytes / (1024 * 1024):.1f} MB.",
         flush=True)
 
 

@@ -1,0 +1,6 @@
+# Shell scripts run inside Linux containers, and several are bind-mounted
+# straight from this Windows checkout (rl_agent/ -> /python_ws/src). A CRLF
+# line ending makes bash fail on the shebang with a bare "\r" error that
+# reads like the file is missing. Keep them LF on checkout whatever the
+# local core.autocrlf is set to.
+*.sh text eol=lf

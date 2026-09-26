@@ -177,34 +177,68 @@ Once all four Unity windows are up, kick off training:
 
 ```powershell
 docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller `
-  bash -c 'cd /python_ws/src && python -u robotaxi.py --num-envs 4 2>&1 | tee /tmp/trainer.log'
+  bash /python_ws/src/run_trainer.sh --num-envs 4
 ```
 
-Two important pieces in that command:
+`run_trainer.sh` is a thin wrapper — everything after it is forwarded to
+`robotaxi.py` untouched. What the wrapper adds:
 
-- `python -u` forces unbuffered stdout. When Python detects that stdout
-  is a pipe (which it is when piped to `tee`), it switches from
-  line-buffered to ~8 KB block-buffered, holding back lines until the
-  buffer fills. With `-u`, every `[actor-N]` line lands in
-  `/tmp/trainer.log` (and the dashboard's live log view) the moment it's
-  emitted.
-- `| tee /tmp/trainer.log` feeds the dashboard's live log panel —
-  `dashboard/src/server.ts` tails `/tmp/trainer.log` over a WebSocket.
-  The `compose/scale.yml` overlay disables sim-controller's default
-  auto-run of the single-env trainer (so it doesn't compete with your
-  multi-env exec for MongoDB jobs), which means without the `tee` the
-  dashboard panel has nothing to show.
+- **Your previous session's log survives.** It rotates `/tmp/trainer.log`
+  into `/tmp/trainer-logs/trainer-<timestamp>.log` and keeps the 10 most
+  recent (`TRAINER_LOG_KEEP` to change that). The old launch piped
+  straight into `tee`, which opens with `O_TRUNC` — so every relaunch
+  destroyed the log of the run you were probably relaunching *because of*.
+- **A session banner** with the UTC timestamp, git branch and SHA, and the
+  arguments used. A dashboard client that connects mid-run gets
+  `tail -n 100`, so this is usually still on screen.
+- `python -u` for unbuffered stdout. Python switches from line-buffered to
+  ~8 KB block-buffered the moment it sees a pipe, which would hold back
+  `[actor-N]` lines from both the log and the dashboard panel.
+- `| tee /tmp/trainer.log`, which is what feeds that panel —
+  `dashboard/src/server.ts` tails it over a WebSocket. The
+  `compose/scale.yml` overlay disables sim-controller's auto-run of the
+  single-env trainer (so it doesn't compete with your multi-env exec for
+  MongoDB jobs), so without the `tee` the panel has nothing to show.
 
-  Use `/tmp/trainer.log`, not the older `robotaxi.out`. The panel was
-  switched to it on 2026-07-19 (see the comment in `server.ts`) because
-  `robotaxi.out` is only written by the base compose command, so the
-  first manual restart left the panel frozen on a stale file with no
-  indication anything was wrong.
+The panel tails with `tail -F`, which follows by name, so it keeps
+streaming across the rotation and across a manual restart.
+
+Use `/tmp/trainer.log`, not the older `robotaxi.out`. The panel was
+switched to it on 2026-07-19 (see the comment in `server.ts`) because
+`robotaxi.out` is only written by the base compose command, so the first
+manual restart left the panel frozen on a stale file with no indication
+anything was wrong.
 
 TensorBoard at `http://localhost:6006/` will show one run with `metrics/`,
 `eval/`, `train/`, and `learner/train/` summaries. The dashboard at
 `http://localhost:80/` browses past runs (archived to `/tmp/jobsdata/` by
 the new TRAIN job's startup cleanup).
+
+#### What keeps the TensorBoard view honest
+
+TB scans two directories — `/tmp/active` as the `current` experiment and
+`/tmp/tb_compare` as `compare` — so *anything* left in either is drawn.
+Two pieces of housekeeping keep that to what you asked for:
+
+- **EVAL jobs archive their own summaries when they finish.** An eval writes
+  `/tmp/active/<job_id>_eval/` so you can watch it live, then moves it to
+  `/tmp/jobsdata/` on the way out. Until 2026-09-24 only the TRAIN startup
+  cleanup swept `/tmp/active`, so every eval between two training jobs left a
+  run behind permanently — 21 had piled up against a single real training run,
+  and the live view was unreadable.
+- **`prune_jobsdata` protects archives that a saved model points at.** It caps
+  `/tmp/jobsdata` at `JOBSDATA_MAX_ARCHIVES` (default 100) by directory mtime,
+  but a bucket referenced by any model in `db.models` is retained regardless of
+  age, so `keep` is a floor rather than a cap. Recency alone was the wrong
+  rule: eval buckets churn daily while the training runs worth comparing are
+  old by definition, so model archives were being evicted by eval noise. A
+  pruned bucket cannot be opened in the dashboard's **Compare in Analysis**
+  view — the selection resolves to `missing` and the pane renders nothing.
+  Model *weights* live on a separate mount (`/saved_models`) and were never at
+  risk; only the scalar history is lost.
+
+Both live in `rl_agent/robotaxi.py`, so changing either needs a trainer
+restart, not just a container restart.
 
 ### Bring everything down
 
@@ -249,7 +283,7 @@ When both Unity windows are up:
 
 ```powershell
 docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller `
-  bash -c 'export ROLLOUT_VIZ_ENABLED=1 && cd /python_ws/src && python -u robotaxi.py --num-envs 2 2>&1 | tee /tmp/trainer.log'
+  bash -c 'export ROLLOUT_VIZ_ENABLED=1 && bash /python_ws/src/run_trainer.sh --num-envs 2'
 ```
 
 Match `--num-envs` to `-N`. Start a TRAIN or EVAL job from the dashboard.
@@ -288,7 +322,7 @@ Same parameters as the `*-Stack` versions (`-N`, `-StaggerSeconds`,
 # even with -N 1 you start the trainer manually:
 .\scripts\Start-Stack.ps1 -N 1
 docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller `
-  bash -c 'cd /python_ws/src && python -u robotaxi.py 2>&1 | tee /tmp/trainer.log'
+  bash /python_ws/src/run_trainer.sh
 
 # Tile small popup windows for quick visual inspection of multi-actor runs
 .\scripts\Start-Stack.ps1 -Popup
@@ -1414,8 +1448,7 @@ only safe value, for the reason under *lane work*.
 
 ```powershell
 docker compose exec -T sim-controller sh -c "pkill -f 'robotaxi.py'; sleep 3"
-docker compose exec -d sim-controller `
-  sh -c "cd /python_ws/src && python -u robotaxi.py 2>&1 | tee /tmp/trainer.log"
+docker compose exec -d sim-controller bash /python_ws/src/run_trainer.sh
 ```
 
 **2. Queue the job** from the Jobs tab's **New job** form:
