@@ -61,6 +61,8 @@ class FlyBrainService(pb_grpc.FlyBrainServicer):
         self._eye = np.zeros(len(self.brain.visual), np.float32)
         self._labels_json = json.dumps(self.labels)
 
+        self._warmup()
+
         print("ready in %.1f s: n=%d device=%s trace_len=%d display=%d edges=%d"
               % (time.time() - t0, self.brain.n, self.brain.device,
                  self.trace_len, self.n_display, len(self.edge_src)),
@@ -193,6 +195,22 @@ class FlyBrainService(pb_grpc.FlyBrainServicer):
         return pb.SectorsReply(idx=[a.tobytes() for a in out])
 
     # ----------------------------------------------------------------- utils
+    def _warmup(self):
+        # CuPy compiles each kernel on its first call. On a fresh container
+        # that made the first client Step outlast the trainer's 10 s deadline,
+        # so both inject paths are driven here before the port opens.
+        t0 = time.time()
+        idx = np.arange(64, dtype=np.int32).tobytes()
+        request = pb.StepRequest(
+            inject=[pb.Injection(idx=idx, amount=0.5),
+                    pb.Injection(idx=idx,
+                                 amounts=np.full(64, 0.5, np.float32).tobytes())],
+            substeps=5, eye_drive=0.45, want_snapshot=True)
+        for _ in range(20):
+            self.Step(request, None)
+        self.Reset(pb.ResetRequest(seed=0), None)
+        print("warmup: 20 steps in %.1f s" % (time.time() - t0), flush=True)
+
     def _snapshot_bytes(self):
         # Fixed scale, not auto-ranged on the current maximum, so brightness
         # means the same thing from frame to frame.
