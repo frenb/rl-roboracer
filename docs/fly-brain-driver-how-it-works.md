@@ -8,7 +8,10 @@ This is the "how it works" companion to
 [`flybrain-driver-plan.md`](flybrain-driver-plan.md). That document is the
 decision record — twelve steps, what was measured at each, and which ideas were
 falsified along the way. This one describes the result. Where a number below
-has a story behind it, the plan has the story.
+has a story behind it, the plan has the story. For how to *operate* the
+pipeline end to end — every step from readout fit to SAC to a running policy,
+and what still needs a human — see
+[`fly-brain-job-lifecycle.md`](fly-brain-job-lifecycle.md).
 
 Every figure here was read off the running system on 2026-09-21, not copied
 from the plan.
@@ -34,9 +37,11 @@ Unity  ──►  31-D scene vector  ──►  encoder  ──►  fly connecto
                                                        └──►  spike snapshot  ──►  ROS  ──►  Unity overlay
 ```
 
+![One control step. The encoder turns Unity's 29 rays into four cues, which stimulate the frozen fly connectome. Its 1,314 descending neurons are read out as a trace, and a learned readout turns that trace into acceleration and steering.](images/fly-brain-flow.svg)
+
 Nothing inside the brain learns. Its weights are the MaleCNS v1.0 wiring
 diagram, fixed at load. The only trainable thing in the whole picture is the
-last arrow but one.
+`readout` box.
 
 ---
 
