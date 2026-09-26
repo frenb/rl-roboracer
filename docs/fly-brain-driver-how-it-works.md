@@ -690,7 +690,8 @@ colours up and the key bindings down.
 
 | Swatch | Role | What it is, and which cue drives it |
 |---|---|---|
-| Cyan | **sensory** | The feature detectors the encoder injects into: **LC4 + LPLC2** carry *looming*, **LC10a** carries *chase*, each side-specifically |
+| Cyan | **loom** | **LC4 + LPLC2**, the detectors the looming cues are injected into, side-specifically. **LPLC1** is drawn here too — see the wrinkle below |
+| Violet | **chase** | **LC10a**, the detectors the chase cues are injected into |
 | Grey | **relay** | Interneurons on the sensory → descending path, picked by two-hop weight |
 | Amber | **command** | The named command neurons — DNp01, DNa02, MDN, pIP10, … |
 | Red | **descending** | The `descending_neuron` superclass: the 1314 values the policy actually reads |
@@ -720,12 +721,41 @@ what makes `loom_L` and `loom_R` different numbers at all. Against a trainer
 that publishes no type table the row still names the cells and simply omits
 the counts, rather than showing a confident zero.
 
-The swatches are drawn from the same `sensoryColor` / `commandColor` / … fields
-`RoleColor` switches on, so retinting a role in the inspector retints its key
-entry too. The role names come from `display_subset.build` and the cue mapping
-from the encoder's `POPULATION_CELLS` — both Python-side, so if either changes,
-this panel's text is what goes stale. One wrinkle it glosses: `LPLC1` is in
-`SENSORY_TYPES` and so is drawn cyan, but the encoder does not drive it.
+Each cue row is swatched in the colour its own cells are drawn in, so a row and
+the dots it counts can be matched by eye.
+
+The swatches are drawn from the same `sensoryColor` / `chaseColor` /
+`commandColor` / … fields `RoleRamp` switches on, so retinting in the inspector
+retints the key entry too. The role names come from `display_subset.build` and
+the cue mapping from the encoder's `POPULATION_CELLS` — both Python-side, so if
+either changes, this panel's text is what goes stale. One wrinkle it glosses:
+`LPLC1` is in `SENSORY_TYPES` and so is drawn cyan with the loom cells, but the
+encoder does not drive it.
+
+#### Why loom and chase are two rows
+
+Both are role 1. The connectome makes no colour distinction between them and
+neither did this overlay at first — every detector was one cyan, which made the
+comparison you actually want to watch, *loom firing versus chase firing*, the
+one thing the overlay couldn't show. `chaseColor` splits role 1 by cue,
+resolved through the same `CueOf` lookup the counts use, so it matches on type
+**and** side exactly the way the injection does. Against a trainer that
+publishes no type table there is nothing to split on, and the overlay degrades
+to the old single cyan rather than guessing.
+
+The specific violet, `rgb(0.60, 0.15, 1.00)`, is chosen rather than picked.
+Scored in CIEDE2000 against every other colour in this palette under normal
+vision plus simulated protanopia, deuteranopia and tritanopia, it stays 27
+clear of its nearest neighbour in the worst case and 28 clear of the loom cyan
+— comfortably above the ~10 where two colours read as *clearly* different.
+
+The reason it is a blue-leaning violet and not the brighter magenta you might
+reach for is worth knowing before someone "fixes" it: the collision risk in
+this palette is not the cyan, it is `descendingColor` red. Pushing the purple
+toward pink collapses the two for a tritanope — `rgb(1.00, 0.30, 0.95)` scores
+**0.6** against that red, where anything under 2 is indistinguishable. The red
+channel is the margin. Raise it and this stops working for some viewers while
+still looking fine to you.
 
 ### Hovering a neuron
 
