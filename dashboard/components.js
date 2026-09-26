@@ -1622,6 +1622,8 @@
         label: 'donut_camera_no_rays (2-D + 84x84 CSI, raycast ablation)' },
       { value: 'fly_donut',
         label: 'fly_donut (1314-D fly connectome trace)' },
+      { value: 'fly_donut_flow',
+        label: 'fly_donut_flow (fly trace, encoder adds optic flow)' },
     ],
     // Trial-count chips on the eval form, and what each n buys you on
     // the Analysis tab.
