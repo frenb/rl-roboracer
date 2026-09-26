@@ -154,7 +154,18 @@ public class FlyBrainViz : MonoBehaviour
     [Header("Neurons")]
     [Tooltip("Half-size (m) of each neuron's camera-facing quad.")]
     public float pointSize = 0.10f;
-    public Color sensoryColor = new Color(0.25f, 0.85f, 1.00f);    // LC4/LPLC2/...
+    public Color sensoryColor = new Color(0.25f, 0.85f, 1.00f);    // LC4/LPLC2/LPLC1
+    [Tooltip("The chase half of role 1 - LC10a, the cells the chase cues are "
+             + "injected into. Split out of sensoryColor so the two cue "
+             + "families read apart while they fire. Violet rather than the "
+             + "pinker purple you might reach for first: scored in CIEDE2000 "
+             + "against the rest of this palette under simulated dichromat "
+             + "vision, a magenta lands on top of descendingColor for a "
+             + "tritanope - rgb(1.00,0.30,0.95) comes out 0.6 from it, where "
+             + "under 2 is indistinguishable - while this stays 27 clear of "
+             + "every colour here and 28 clear of the loom cyan in its worst "
+             + "view. Push it toward red and that margin is what goes.")]
+    public Color chaseColor = new Color(0.60f, 0.15f, 1.00f);      // LC10a
     public Color interneuronColor = new Color(0.65f, 0.65f, 0.72f);
     public Color commandColor = new Color(1.00f, 0.85f, 0.20f);    // DNp01, MDN, ...
     public Color descendingColor = new Color(1.00f, 0.35f, 0.25f);
@@ -881,8 +892,11 @@ public class FlyBrainViz : MonoBehaviour
                   + $"(of {_nEdges} sent)");
     }
 
-    /// <summary>Rest and full-activity colours for a role code.</summary>
-    void RoleRamp(byte role, out Color rest, out Color full)
+    /// <summary>
+    /// Rest and full-activity colours for a role code. `chase` splits role 1
+    /// into its two cue families and is ignored by every other role.
+    /// </summary>
+    void RoleRamp(byte role, bool chase, out Color rest, out Color full)
     {
         if (role == 4)
         {
@@ -892,7 +906,7 @@ public class FlyBrainViz : MonoBehaviour
         }
         switch (role)
         {
-            case 1: full = sensoryColor; break;
+            case 1: full = chase ? chaseColor : sensoryColor; break;
             case 2: full = commandColor; break;
             case 3: full = descendingColor; break;
             default: full = interneuronColor; break;
@@ -914,7 +928,8 @@ public class FlyBrainViz : MonoBehaviour
             if (intensityGamma != 1f) t = Mathf.Pow(t, intensityGamma);
 
             Color rest, full;
-            RoleRamp(_role[i], out rest, out full);
+            RoleRamp(_role[i], _isChase != null && i < _isChase.Length && _isChase[i],
+                     out rest, out full);
             Color lit = Color.Lerp(rest, full, t);
             lit.a = Mathf.Lerp(minAlpha, maxAlpha, t);
 
@@ -1523,7 +1538,7 @@ public class FlyBrainViz : MonoBehaviour
     /// <summary>
     /// What the colours mean, so someone watching can read the overlay without
     /// being told. Each row is the swatch actually used to draw that role -
-    /// taken from the same fields RoleColor switches on, not a copy - so
+    /// taken from the same fields RoleRamp switches on, not a copy - so
     /// retinting a role in the inspector retints its key entry too.
     ///
     /// Roles come from display_subset.build (viz.py ROLE_CODES); the cue text
@@ -1539,14 +1554,18 @@ public class FlyBrainViz : MonoBehaviour
         // so its row needs two swatches and is handled separately below. The
         // context entry is last in names/cues but has no entry in `swatch`.
         Color[] swatch = {
-            sensoryColor, interneuronColor, commandColor, descendingColor,
+            sensoryColor, chaseColor, interneuronColor, commandColor, descendingColor,
         };
-        string[] names = { "sensory", "relay", "command", "descending", "context" };
+        // "loom" and "chase" rather than one "sensory" row: both are role 1,
+        // but the two cue families are the comparison someone watching is
+        // actually making, so the key names them the way the cues do.
+        string[] names = { "loom", "chase", "relay", "command", "descending", "context" };
         // Cell types by name, since that is what the overlay is actually
         // drawing and what the hover label will echo back. Which of them
         // carries which cue is the block below, so it is not repeated here.
         string[] cues = {
-            "LC4, LPLC2, LPLC1, LC10a",
+            "LC4, LPLC2, LPLC1",
+            "LC10a",
             "sensory \u2192 descending path",
             "DNp01, DNa02, DNg100, MDN\u2026",
             "1314 descending, the policy's input",
@@ -1631,10 +1650,9 @@ public class FlyBrainViz : MonoBehaviour
         row += titleH;
         for (int c = 0; c < cueRows.Length; c++)
         {
-            // Same cyan as the sensory swatch: every cue lands on sensory
-            // cells, so a second colour here would imply a distinction the
-            // overlay does not draw.
-            DrawSwatch(x + pad, row + (rowH - sh) * 0.5f, swatchW, sh, sensoryColor);
+            // The colour that cue's cells are actually drawn in, so a row here
+            // and the dots it counts are matched by eye.
+            DrawSwatch(x + pad, row + (rowH - sh) * 0.5f, swatchW, sh, CueColor(c));
             GUI.Label(new Rect(x + textX, row, cueNameW, rowH), CueNames[c], _guiKeyStyle);
             GUI.Label(new Rect(x + textX + cueNameW, row,
                                panelW - pad - (textX + cueNameW), rowH),
@@ -1805,6 +1823,25 @@ public class FlyBrainViz : MonoBehaviour
     static readonly string[] CueSideWords = { "left", "right", "left", "right" };
     private int[] _cueShown, _cueFiring;
     private string[] _cueTypeText, _cueRows;
+    // Which neurons draw in chaseColor. Resolved once with the geometry
+    // because ApplyActivity recolours all ~10k neurons on every activity
+    // message and CueOf is a string search over the type table.
+    private bool[] _isChase;
+
+    /// <summary>
+    /// Is this cue one of the chase pair? Read off the cue name rather than
+    /// the index so reordering CueNames cannot silently recolour the overlay.
+    /// </summary>
+    static bool IsChaseCue(int cue)
+    {
+        return cue >= 0 && cue < CueNames.Length && CueNames[cue].StartsWith("chase");
+    }
+
+    /// <summary>The colour cue `c`'s population is drawn in.</summary>
+    Color CueColor(int cue)
+    {
+        return IsChaseCue(cue) ? chaseColor : sensoryColor;
+    }
 
     /// <summary>
     /// "LC4 + LPLC2, left" - the cue table's neuron-types column, spaced to
@@ -1820,6 +1857,9 @@ public class FlyBrainViz : MonoBehaviour
     {
         _cueShown = new int[CueNames.Length];
         _cueFiring = new int[CueNames.Length];
+        // All false without a type table, which is the pre-split look: every
+        // sensory cell cyan. Degrading to one colour beats guessing at two.
+        _isChase = new bool[_n];
         if (_cueTypeText == null)
         {
             _cueTypeText = new string[CueNames.Length];
@@ -1829,7 +1869,9 @@ public class FlyBrainViz : MonoBehaviour
         for (int i = 0; i < _n; i++)
         {
             int c = CueOf(i);
-            if (c >= 0) _cueShown[c]++;
+            if (c < 0) continue;
+            _cueShown[c]++;
+            _isChase[i] = IsChaseCue(c);
         }
     }
 
@@ -2036,7 +2078,7 @@ public class FlyBrainViz : MonoBehaviour
         // Headline in the colour the neuron is drawn in, so the label and the
         // thing it describes are visibly the same object.
         Color restC, fullC;
-        RoleRamp(role, out restC, out fullC);
+        RoleRamp(role, IsChaseCue(cueIdx), out restC, out fullC);
         _guiHeadStyle.normal.textColor = new Color(fullC.r, fullC.g, fullC.b, 1f);
         GUI.Label(new Rect(x + pad, y + pad, w - pad * 2f, headH), head, _guiHeadStyle);
 
