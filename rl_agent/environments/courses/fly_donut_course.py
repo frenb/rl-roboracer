@@ -42,12 +42,12 @@ class FlyDonutCourse(DonutCourseNoHint):
         # courses package does not pull in grpc or dial the fly-brain service
         # for the four courses that have nothing to do with it.
         from fly_brain.client import FlyBrainClient, SUBSTEPS
-        from fly_brain.encoder import RayEncoder, resolve_cells
+        from fly_brain.encoder import resolve_cells
         from fly_brain.viz import FlyBrainViz
 
         self._client = FlyBrainClient()
-        self._enc = RayEncoder()
-        self._cells = resolve_cells(self._client)
+        self._enc, populations = self._make_encoder()
+        self._cells = resolve_cells(self._client, populations)
         self._substeps = SUBSTEPS
         # The overlay rides along on the step we already make, so watching the
         # brain during training costs one extra field rather than a second
@@ -74,9 +74,17 @@ class FlyDonutCourse(DonutCourseNoHint):
         # Whatever the last job left in the service, this episode starts clean.
         self._client.reset(seed=self._episode)
         self._enc.reset()
-        print("fly_donut: trace_len=%d obs_max=%.2f substeps=%d device=%s"
-              % (self._trace_len, ceiling, self._substeps, info.device),
+        print("%s: encoder=%s trace_len=%d obs_max=%.2f substeps=%d device=%s"
+              % (self.COURSE_NAME, type(self._enc).__name__, self._trace_len,
+                 ceiling, self._substeps, info.device),
               flush=True)
+
+    COURSE_NAME = "fly_donut"
+
+    def _make_encoder(self):
+        """(encoder, population table). The four-cue encoder, as trained on."""
+        from fly_brain.encoder import POPULATION_CELLS, RayEncoder
+        return RayEncoder(), POPULATION_CELLS
 
     def get_empty_state(self):
         return np.zeros(self._trace_len, dtype=np.float32)
@@ -105,3 +113,24 @@ class FlyDonutCourse(DonutCourseNoHint):
     def close(self):
         self._viz.stop()
         self._client.close()
+
+
+class FlyDonutFlowCourse(FlyDonutCourse):
+    """fly_donut with optic flow per side added to the four cues.
+
+    A separate course rather than a switch on fly_donut, because the encoder
+    changes what the trace means: a fly_donut checkpoint evaluated on flow
+    traces would score garbage under its own name, and keeping the two course
+    types apart is what makes the leaderboard comparison between them honest.
+
+    The flow cues hand the brain the speed and lane position the four cues
+    never carried. Measured offline on the step-5 replay (100 expert episodes,
+    ridge readout): accel R2 0.176 -> 0.245, steer 0.620 -> 0.668. See
+    FlowEncoder in fly_brain/encoder.py.
+    """
+
+    COURSE_NAME = "fly_donut_flow"
+
+    def _make_encoder(self):
+        from fly_brain.encoder import FLOW_POPULATION_CELLS, FlowEncoder
+        return FlowEncoder(), FLOW_POPULATION_CELLS

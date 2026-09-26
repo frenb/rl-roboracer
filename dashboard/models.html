@@ -1865,7 +1865,9 @@
       // model falls through to the live-env comparison below, which reflects
       // whichever course ran last - so it would read "incompatible" against a
       // 31-D or 32-D env the moment any other course runs.
-      const COURSE_OBS_SIZES = { donut: 32, donut_no_hint: 31, fly_donut: 1314 };
+      const COURSE_OBS_SIZES = {
+        donut: 32, donut_no_hint: 31, fly_donut: 1314, fly_donut_flow: 1314,
+      };
       const COURSE_OBS_DICT = {
         donut_camera: {
           vector: { shape: [31], dtype: 'float32' },

@@ -883,7 +883,7 @@
         const course = document.getElementById('f-course').value;
         const noRays = course === 'donut_camera_no_rays';
         const camera = course === 'donut_camera' || noRays;
-        const fly = course === 'fly_donut';
+        const fly = course === 'fly_donut' || course === 'fly_donut_flow';
         const mt = document.getElementById('f-model-type').value;
         // FlyPyPolicy EVAL is the one combination the Models tab cannot
         // produce, because "Eval selected" always fills in a location and
@@ -901,23 +901,29 @@
             + 'vector itself, so the 1314-D trace raises a shape error. '
             + 'Requires the fly-brain service and the readout at '
             + '/saved_models/robotaxi/FlyPyPolicy/0/readout.npz.'
-            + (course === 'fly_donut'
-               ? ' \u26a0 Course is fly_donut \u2014 switch it to donut_no_hint.' : '')
+            + (fly
+               ? ' \u26a0 Course is ' + course + ' \u2014 switch it to donut_no_hint.' : '')
             + (course === 'donut' || course === 'trainer default'
                ? ' \u26a0 The encoder needs the 31-D no-hint vector; donut is 32-D.' : '');
         } else if (fly) {
           hint.textContent = jt === 'TRAIN'
-            ? 'TRAIN on fly_donut is SAC from scratch over the fly connectome\u2019s '
+            ? 'TRAIN on ' + course + ' is SAC from scratch over the fly connectome\u2019s '
               + '1314-D descending-neuron trace: the brain replaces the 31-D ray '
               + 'vector as the observation and SAC learns the readout from reward. '
+              + (course === 'fly_donut_flow'
+                 ? 'The encoder also feeds optic flow per side to the T4a/T5a motion '
+                   + 'detectors, telling the brain speed and lane position. '
+                 : '')
               + 'The fly-brain service must be up, and it holds ONE brain, so run '
               + 'this at --num-envs 1 \u2014 a second env would interleave on the same '
               + 'voltages with no error raised. No expert demos or BC pretrain '
               + 'exist for this course.'
             : (jt === 'EVAL'
-              ? 'EVAL a fly_donut checkpoint only. The observation is the brain\u2019s '
-                + 'trace, so a donut / donut_no_hint checkpoint fails Compat.'
-              : 'DEMO and BC_TRAINING_ONLY are impossible on fly_donut: the '
+              ? 'EVAL a ' + course + ' checkpoint only. The observation is the brain\u2019s '
+                + 'trace, so a donut / donut_no_hint checkpoint fails Compat. '
+                + 'fly_donut and fly_donut_flow traces come from different encoders, '
+                + 'so do not evaluate one course\u2019s checkpoint on the other.'
+              : 'DEMO and BC_TRAINING_ONLY are impossible on ' + course + ': the '
                 + 'observation is the brain\u2019s own history and cannot be recorded. '
                 + 'Use TRAIN from scratch.');
         } else if (jt === 'TRAIN' && camera) {

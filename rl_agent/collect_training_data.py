@@ -84,6 +84,7 @@ COURSE_OBS_KIND = {
     "donut_camera_no_rays": "dict",
     # Flat float vector, just a very wide one.
     "fly_donut": "vector",
+    "fly_donut_flow": "vector",
 }
 
 # Courses with no expert demo corpus, which therefore cannot run DEMO or
@@ -101,6 +102,7 @@ COURSES_WITHOUT_DEMOS = frozenset({
     "donut_camera",
     "donut_camera_no_rays",
     "fly_donut",
+    "fly_donut_flow",
 })
 
 

@@ -28,10 +28,11 @@ HELDOUT_EPISODES = max(1, N_EPISODES // 5)
 
 CORPUS = "/tfrecords/job_64168c1b58d4d8ccdb76e721"
 
-# "flat" is the four-scalar encoder, "retino" the per-sector one. flat is the
-# default because it measured better end to end (steering R2 0.620 against
-# 0.581) despite handing the brain a much poorer input -- see the step 5 notes
-# in docs/flybrain-driver-plan.md.
+# "flat" is the four-scalar encoder, "retino" the per-sector one, "flow" the
+# four scalars plus optic flow per side. flat is the default because it
+# measured better end to end than retino (steering R2 0.620 against 0.581)
+# despite handing the brain a much poorer input -- see the step 5 notes in
+# docs/flybrain-driver-plan.md.
 ENCODER = os.environ.get("FLY_ENCODER", "flat")
 _SUFFIX = "%dep%s" % (N_EPISODES, "" if ENCODER == "flat" else "_" + ENCODER)
 CACHE = "/tmp/fly_step5_trace_%s.npz" % _SUFFIX
@@ -61,6 +62,9 @@ def make_encoder(client):
     if ENCODER == "flat":
         from fly_brain.encoder import RayEncoder, resolve_cells
         return RayEncoder(), resolve_cells(client)
+    if ENCODER == "flow":
+        from fly_brain.encoder import FLOW_POPULATION_CELLS, FlowEncoder, resolve_cells
+        return FlowEncoder(), resolve_cells(client, FLOW_POPULATION_CELLS)
     from fly_brain.encoder import RetinotopicEncoder, resolve_sector_cells
     return RetinotopicEncoder(), resolve_sector_cells(client)
 
@@ -71,11 +75,11 @@ def encoder_features(obs):
     The control that matters: a frozen reservoir is only worth its cost where
     it returns more than it was handed.
     """
-    if ENCODER == "flat":
-        from fly_brain.encoder import POPULATIONS, RayEncoder
-        enc = RayEncoder()
-        out = np.empty((len(obs), len(POPULATIONS)), np.float32)
-        get = lambda o: [enc.cues(o)[k] for k in POPULATIONS]
+    if ENCODER in ("flat", "flow"):
+        from fly_brain.encoder import FLOW_POPULATIONS, POPULATIONS, FlowEncoder, RayEncoder
+        enc, pops = (RayEncoder(), POPULATIONS) if ENCODER == "flat" else (FlowEncoder(), FLOW_POPULATIONS)
+        out = np.empty((len(obs), len(pops)), np.float32)
+        get = lambda o: [enc.cues(o)[k] for k in pops]
     else:
         from fly_brain.encoder import RetinotopicEncoder
         enc = RetinotopicEncoder()

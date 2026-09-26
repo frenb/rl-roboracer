@@ -176,10 +176,76 @@ class RayEncoder(object):
         return cues, self.inject(cues, cell_idx)
 
 
-def resolve_cells(client):
-    """Look up the four populations' neuron indices over gRPC, once."""
+def resolve_cells(client, populations=POPULATION_CELLS):
+    """Look up each population's neuron indices over gRPC, once."""
     return {name: client.cells(types=types, side=side)
-            for name, (types, side) in POPULATION_CELLS.items()}
+            for name, (types, side) in populations.items()}
+
+
+# --------------------------------------------------------------------------
+# Flow encoder: the four cues plus translational optic flow per side
+# --------------------------------------------------------------------------
+# The four cues hand the brain no speed, and the cos weighting deletes the
+# +-90 rays that say where the car sits between the walls. A ridge straight
+# from cues to expert actions measures those as most of what is missing: accel
+# R2 0.002 -> 0.202 with speed added, steer 0.703 -> 0.799 with the side walls.
+#
+# Driving forward past a wall at range r sweeps the image along a ray at angle
+# a with angular speed v*sin(a)/r, so one number per side carries both: the two
+# sides together scale with speed, and their difference says which wall is
+# nearer -- the cue flies and bees centre themselves in corridors with.
+# Averaged per side and square-rooted, it lifts that ridge ceiling to accel
+# 0.225 / steer 0.786 with two numbers, matching speed plus both wall ranges
+# (0.205 / 0.792). Without the square root the few frames brushing a wall
+# dominate and it reaches only 0.140 / 0.748.
+#
+# It drives T4a + T5a, the elementary motion detectors tuned to front-to-back
+# motion, which is what forward translation produces on each eye.
+# docker/fly_brain/probe_candidates.py measured them as the best carrier: the
+# bilateral descending response is reliable across seeds (0.95), 95% outside
+# what loom and chase already evoke, and graded with strength, and the left
+# and right responses are nearly orthogonal (cosine 0.05), so the lane
+# contrast survives as well.
+#
+# Not cos-weighted: |sin(a)| weights the lateral rays up, which is the point.
+
+FLOW_POPULATIONS = POPULATIONS + ("flow_L", "flow_R")
+FLOW_POPULATION_CELLS = dict(
+    POPULATION_CELLS,
+    flow_L=(["T4a", "T5a"], "L"),
+    flow_R=(["T4a", "T5a"], "R"),
+)
+RAY_LATERAL = np.abs(np.sin(np.radians(RAY_ANGLES_DEG))).astype(np.float32)
+
+# Corpus p99 -> MAX_AMOUNT, like the other gains: measured p99 was 0.58 (0.57
+# left, 0.59 right). Unlike chase, flow is never zero while the car moves, so
+# the median frame injects ~0.51 and the signal is the variation around that.
+FLOW_GAIN = 1.37
+
+
+class FlowEncoder(RayEncoder):
+    """RayEncoder's four cues, unchanged, plus flow_L / flow_R."""
+
+    def __init__(self, flow_gain=FLOW_GAIN, **kwargs):
+        super(FlowEncoder, self).__init__(**kwargs)
+        self.flow_gain = float(flow_gain)
+
+    def cues(self, obs):
+        out = super(FlowEncoder, self).cues(obs)
+        obs = np.asarray(obs, dtype=np.float32)
+        speed = abs(float(obs[0]))
+        rays = obs[RAY_SLICE]
+        r = np.maximum(np.where(rays <= R_NO_RETURN, self.r_open, rays), R_FLOOR)
+        flow = speed * RAY_LATERAL / r
+        out["flow_L"] = float(np.sqrt(flow[LEFT].mean()))
+        out["flow_R"] = float(np.sqrt(flow[RIGHT].mean()))
+        return out
+
+    def amounts(self, cues):
+        out = super(FlowEncoder, self).amounts({k: cues[k] for k in POPULATIONS})
+        for k in ("flow_L", "flow_R"):
+            out[k] = float(np.clip(cues[k] * self.flow_gain, 0.0, self.max_amount))
+        return out
 
 
 # --------------------------------------------------------------------------

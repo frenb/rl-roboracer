@@ -56,6 +56,13 @@ class RobotaxiEnv(py_environment.PyEnvironment):
             # a connection attempt to the fly-brain service.
             from environments.courses.fly_donut_course import FlyDonutCourse
             self.course = FlyDonutCourse(api, self)
+        elif course_type == 'fly_donut_flow':
+            # fly_donut with optic flow per side added to the encoder, so the
+            # brain is told speed and lane position. Its own course type so
+            # fly_donut checkpoints keep evaluating on the encoder they were
+            # trained on.
+            from environments.courses.fly_donut_course import FlyDonutFlowCourse
+            self.course = FlyDonutFlowCourse(api, self)
         else:
             self.course = simple_course.SimpleCourse(api, self)
         # Derived from the course rather than a course_type list so a new dict
