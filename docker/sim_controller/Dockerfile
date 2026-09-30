@@ -24,13 +24,24 @@ RUN apt-get reinstall -y lsb-release
 RUN apt-get install apt-transport-https curl gnupg -y
 
 RUN ln -s /usr/bin/python3 /usr/bin/python
+# Upgrade pip BEFORE any `pip3 ...` call. Focal ships pip 20.0.2 as a
+# Debian-patched, "debundled" package: its vendor shim loads the system
+# python3-openssl, which the ros-noetic-* apt installs above have since
+# skewed against a newer python3-cryptography. The `pip3` console script
+# then dies on import with
+#   AttributeError: module 'lib' has no attribute 'X509_V_FLAG_NOTIFY_POLICY'
+# before it ever reaches the package index. A pip that vendors its own
+# TLS stack sidesteps the broken system one entirely. Invoked as
+# `python -m pip` because the `pip3` entry point is exactly what is
+# broken. This upgrade used to sit below the pip3 lines, so it could
+# never run - the first `pip3 install tensorboard` aborted the build.
+RUN python -m pip install --upgrade pip
 RUN python -m pip install grpcio google-api-python-client
 RUN pip3 install tensorboard
 RUN pip3 install -U tensorboard-plugin-profile
 RUN pip3 install pymongo
 RUN pip3 install numpy==1.23.1
 RUN pip3 install scipy
-RUN pip install --upgrade pip
 # uvloop: Cython wrapper around libuv that replaces asyncio's pure-
 # Python event loop with a much faster C implementation. The trainer's
 # RobotApi runs every Unity-side step through asyncio (publish
@@ -68,6 +79,21 @@ COPY ./docker/ros_server/tutorial /
 RUN /bin/bash -c "find $ROS_WORKSPACE -type f -print0 | xargs -0 dos2unix"
 RUN dos2unix /tutorial && dos2unix /setup.sh && chmod +x /setup.sh && /setup.sh && rm /setup.sh
 RUN /bin/bash -c "cd /python_ws && pip install -r requirements.txt"
+
+# Focal ships pyOpenSSL 19.0.0 as an apt package under
+# /usr/lib/python3/dist-packages. Every pip install above lands in
+# /usr/local/lib/python3.8/dist-packages and drags in a modern
+# `cryptography`, which that 2019 pyOpenSSL cannot bind against - it
+# raises on import with
+#   AttributeError: module 'lib' has no attribute 'X509_V_FLAG_NOTIFY_POLICY'
+# pymongo >= 4.9 hard-imports OpenSSL from pymongo.network_layer (its
+# "fall back to stdlib ssl" path does NOT cover that import), so the
+# trainer died on `from pymongo import MongoClient` before reaching the
+# job queue. Installing pyOpenSSL with pip puts a matching copy in
+# /usr/local, which precedes /usr/lib on sys.path and shadows the stale
+# apt one. Kept AFTER requirements.txt so it wins over anything that
+# pulls pyOpenSSL in transitively.
+RUN python -m pip install "pyOpenSSL>=23.2.0"
 
 RUN ln -s /usr/local/cuda-11.0/targets/x86_64-linux/lib/libcusolver.so.10 /usr/local/cuda-11.0/targets/x86_64-linux/lib/libcusolver.so.11
 # Pin cuDNN to the CUDA 11.2 build TF 2.7 was compiled against. Unpinned
