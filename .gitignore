@@ -94,3 +94,15 @@ _tmp_*
 
 # Written by scripts/Monitor-Job.ps1 each time it polls.
 scripts/_monitor_logstats_tmp.sh
+
+# Unused fly-model leftovers: an earlier export of the model, the materials
+# Unity extracted from it, and a scratch scene. The fly views load
+# Resources/FruitFly instead.
+unity/Assets/FruitFlyMale_clips.fbx*
+unity/Assets/Materials/FruitFly*.mat*
+unity/Assets/Materials/SkinShader_skinShader.mat*
+unity/Assets/Materials/anisotropic1.mat*
+unity/Assets/Materials/lambert3.mat*
+unity/Assets/Materials/phong1.mat*
+unity/Assets/Materials/phong3.mat*
+unity/Assets/drosophila.unity*
