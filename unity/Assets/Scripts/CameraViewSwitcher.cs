@@ -19,6 +19,9 @@ using UnityEngine.InputSystem;
 /// no goal gates, no perception rays. Those still render on the overhead
 /// Main Camera. While the car camera is up, T / G / R toggle those overlays
 /// on the CSI view only (overhead T / G / R state is left alone).
+///
+/// FlyBrainViz reads <see cref="CarCameraOn"/> and hides the connectome
+/// overlay while the car camera is up.
 /// </summary>
 public class CameraViewSwitcher : MonoBehaviour
 {
@@ -60,6 +63,8 @@ public class CameraViewSwitcher : MonoBehaviour
         if (_letterboxClear != null) _letterboxClear.enabled = false;
         CarCameraOn = false;
     }
+
+    void OnDestroy() { HiddenCamera.Destroy(_letterboxClear); }
 
     void Update()
     {
@@ -174,9 +179,7 @@ public class CameraViewSwitcher : MonoBehaviour
     Camera EnsureLetterboxClear()
     {
         if (_letterboxClear != null) return _letterboxClear;
-        var go = new GameObject("JetRacerCsiLetterboxClear");
-        go.hideFlags = HideFlags.HideAndDontSave;
-        _letterboxClear = go.AddComponent<Camera>();
+        _letterboxClear = HiddenCamera.Create("JetRacerCsiLetterboxClear");
         _letterboxClear.clearFlags = CameraClearFlags.SolidColor;
         _letterboxClear.backgroundColor = Color.black;
         _letterboxClear.cullingMask = 0;

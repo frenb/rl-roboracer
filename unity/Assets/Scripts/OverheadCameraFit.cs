@@ -50,12 +50,15 @@ public class OverheadCameraFit : MonoBehaviour
     bool _haveAuthored;
     Camera _gutterClear;
 
+    void OnDestroy() { HiddenCamera.Destroy(_gutterClear); }
+
     void OnDisable()
     {
         // Give the window back rather than leaving a black stripe behind.
         if (_cam != null) { _cam.rect = new Rect(0f, 0f, 1f, 1f); _cam.ResetAspect(); }
         if (_gutterClear != null) _gutterClear.enabled = false;
         TrackScreenHeight = 0f;
+        TrackScreenLeft = 0f;
     }
 
     void LateUpdate()
@@ -89,6 +92,7 @@ public class OverheadCameraFit : MonoBehaviour
             // leaving the last good band published, which the overlay would
             // keep matching against a track that is no longer there.
             TrackScreenHeight = 0f;
+            TrackScreenLeft = 0f;
             return;
         }
 
@@ -110,6 +114,9 @@ public class OverheadCameraFit : MonoBehaviour
     /// </summary>
     public static float TrackScreenHeight { get; private set; }
     public static float TrackScreenCentreY { get; private set; } = 0.5f;
+    /// <summary>Left edge of the road's box on screen, as a fraction of the
+    /// window's width; 0 when nothing is measured.</summary>
+    public static float TrackScreenLeft { get; private set; }
 
     /// <summary>
     /// Hand the left edge of the window to the fly-brain overlay and render
@@ -144,9 +151,7 @@ public class OverheadCameraFit : MonoBehaviour
     Camera EnsureGutterClear()
     {
         if (_gutterClear != null) return _gutterClear;
-        var go = new GameObject("OverheadGutterClear");
-        go.hideFlags = HideFlags.HideAndDontSave;
-        _gutterClear = go.AddComponent<Camera>();
+        _gutterClear = HiddenCamera.Create("OverheadGutterClear");
         _gutterClear.clearFlags = CameraClearFlags.SolidColor;
         _gutterClear.backgroundColor = Color.black;
         _gutterClear.cullingMask = 0;          // clears, renders nothing
@@ -208,6 +213,11 @@ public class OverheadCameraFit : MonoBehaviour
             ? Mathf.Clamp01(halfUpRaw / visibleHalfUp) * _cam.rect.height
             : 0f;
         TrackScreenCentreY = _cam.rect.y + _cam.rect.height * 0.5f;
+        float visibleHalfRight = visibleHalfUp * aspect;
+        TrackScreenLeft = visibleHalfRight > 1e-4f
+            ? _cam.rect.x + _cam.rect.width
+              * (0.5f - 0.5f * Mathf.Clamp01(halfRightRaw / visibleHalfRight))
+            : 0f;
 
         // Pulled back past the box's own depth as well, so the near side of a
         // course with height does not end up behind the camera.
