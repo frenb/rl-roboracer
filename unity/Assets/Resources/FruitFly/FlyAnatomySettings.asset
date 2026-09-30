@@ -1,0 +1,94 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9e5f85d599fb43f7aae370595166c0d5, type: 3}
+  m_Name: FlyAnatomySettings
+  m_EditorClassIdentifier: 
+  bodyOpacity: 0.037
+  bodyTint: {r: 0.75, g: 0.85, b: 1, a: 1}
+  bodyTextureStrength: 0
+  bodyRimOpacity: 0.45
+  rimColor: {r: 0.6, g: 0.85, b: 1, a: 1}
+  rimPower: 2.5
+  eyeOpacity: 0.109
+  eyeTint: {r: 0.7, g: 0.3, b: 0.26, a: 1}
+  eyeRimOpacity: 0.12
+  wingOpacity: 0.032
+  wingTint: {r: 0.8, g: 0.9, b: 1, a: 1}
+  wingRimOpacity: 0.284
+  showHair: 0
+  hairOpacity: 0
+  animationHz: 5
+  overlayRenderHz: 10
+  texturedLightIntensity: 1.1
+  texturedShowHair: 0
+  idleMinSeconds: 30
+  idleMaxSeconds: 60
+  groomSeconds: 5
+  groomBlendSeconds: 0.5
+  viewport:
+    serializedVersion: 2
+    x: 0
+    y: 0.029
+    width: 0.477
+    height: 0.922
+  flightLiftShown: 0.25
+  spinDegreesPerSecond: 0
+  showWithoutActivity: 1
+  editorTestActivity: 1
+  editorTestFiringFraction: 0.004
+  viewYaw: 90
+  viewElevation: 15
+  viewRoll: 0
+  viewBodyPitch: 37.6
+  headOpacity: 0.59
+  flyViewBrainBrightness: 1.61
+  closeUpHeadBox:
+    serializedVersion: 2
+    x: 0.04
+    y: 0.167
+    width: 0.366
+    height: 0.585
+  closeUpHeadFill: 0.85
+  closeUpHeadPitch: -0.8
+  closeUpViewYaw: 90
+  closeUpViewElevation: 15
+  closeUpViewRoll: 0
+  closeUpBodyPitch: 33.7
+  closeUpRearOpacity: 0.75
+  closeUpHeadOpacity: 1
+  glow: 1
+  glowGain: 0.93
+  glowRestGain: 2.42
+  glowRestAlpha: 0.279
+  glowPointScale: 1.82
+  closeUpPointScale: 2.5
+  closeUpBrainScale: 0.85
+  closeUpBackdrop: 1
+  closeUpBackdropOpacity: 0.91
+  closeUpBackdropPadding: 1.762
+  closeUpBackdropSoftness: 0.92
+  closeUpShellFill: 1
+  closeUpMouthOpacity: 0.99
+  mouthBone: Tongue01
+  closeUpShellTint: {r: 0.3, g: 0.36, b: 0.46, a: 1}
+  closeUpRimColor: {r: 0.35, g: 0.5, b: 0.65, a: 1}
+  neckBone: Neck
+  brainWidthFraction: 0.82
+  brainOffset: {x: 0, y: 0, z: 0}
+  vncOffset: {x: 0, y: 0, z: 0}
+  layout: 0
+  neckBendDegrees: 90
+  flipFrontBack: 0
+  flipLeftRight: 0
+  pointScale: 1.16
+  headBone: HeadLock
+  thoraxBone: Spine02

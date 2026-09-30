@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 // Active Input Handling is "Input System Package (New)" only, so the legacy
 // UnityEngine.Input API throws at runtime - use the new one.
@@ -197,6 +198,19 @@ public class FlyBrainViz : MonoBehaviour
              + "seconds (i.e. no fly policy is driving).")]
     public float staleTimeoutSeconds = 5f;
 
+    [Header("View mode")]
+    [Tooltip("Connectome draws the CNS on its own. FlyAnatomy places it, at "
+             + "true proportions, inside a see-through animated male fruit fly "
+             + "(FlyAnatomyView). BrainCloseUp zooms in until the head, bent "
+             + "down, fills the space left of the track. N cycles the three. "
+             + "The fly's transparency, animation "
+             + "schedule and CNS placement are tuned on the asset "
+             + "Resources/FruitFly/FlyAnatomySettings, not here - this "
+             + "component is added at runtime and forgets inspector edits.")]
+    public FlyViewMode viewMode = FlyViewMode.Connectome;
+
+    public enum FlyViewMode { Connectome, FlyAnatomy, BrainCloseUp }
+
     [Serializable]
     private class GeometryPayload
     {
@@ -231,6 +245,21 @@ public class FlyBrainViz : MonoBehaviour
         // failing - JsonUtility leaves the array null.
         public string[] typeNames;
         public string typeIdx;
+
+        /// <summary>Same neurons and placement, whatever the stamp. Each
+        /// trainer process stamps its own copy with its own clock, so with
+        /// several publishing, the stamp changes on nearly every resend.</summary>
+        public bool SameContent(GeometryPayload o)
+        {
+            return o != null && n == o.n && nEdges == o.nEdges && pos == o.pos
+                   && role == o.role && side == o.side && typeIdx == o.typeIdx
+                   && edgeSrc == o.edgeSrc && edgeDst == o.edgeDst
+                   && displaySize == o.displaySize && pointSize == o.pointSize
+                   && offsetX == o.offsetX && offsetY == o.offsetY && offsetZ == o.offsetZ
+                   && spin == o.spin && edgeAlpha == o.edgeAlpha && depthScale == o.depthScale
+                   && (typeNames == null) == (o.typeNames == null)
+                   && (typeNames == null || typeNames.Length == o.typeNames.Length);
+        }
     }
 
     [Serializable]
@@ -244,7 +273,13 @@ public class FlyBrainViz : MonoBehaviour
         public string act;         // uint8[n], 0..255
     }
 
+    [Tooltip("Most activity frames applied per second (each recolours every "
+             + "neuron); newer frames in between replace the waiting one.")]
+    public float maxActivityHz = 10f;
+
     private GeometryPayload _pendingGeometry;
+    private GeometryPayload _builtGeometry;
+    private float _nextActivityApply;
     private ActivityPayload _pendingActivity;
     private readonly object _lock = new object();
 
@@ -309,6 +344,35 @@ public class FlyBrainViz : MonoBehaviour
     private bool _dragging;
     private float _snapT = 1f;
 
+    // ---- fly anatomy mode (see BuildAnatomy) ----
+    private Vector3[] _unit;              // published positions, unit box, before displaySize
+    private string _pendingGeometryJson;  // raw payload, cached to disk for the fly view
+    private bool _triedGeometryCache;
+    private FlyAnatomySettings _anatSettings;
+    private FlyAnatomyView _fly;
+    private bool _flyFailed;
+    private Vector3[] _anatHead, _anatThorax;   // per neuron, in its bone's rest frame
+    private float[] _anatW;               // 0 rides the head, 1 the thorax
+    private Vector3 _anatBrainCentre;     // where the brain is centred, head-bone rest frame
+    private Vector3[] _anatPos;           // this frame, fly-Root local
+    private double _anatStamp = -2;
+    private int _anatHash;
+    private FlyAnatomyView _anatFly;
+    private float _anatPointSize;
+    private float _anatSpin;
+    private Vector3 _framedLift;
+    private float _viewYawDefault, _viewElevationDefault;
+    private float _closeUpYawDefault, _closeUpElevationDefault;
+
+    bool Anatomy { get { return viewMode != FlyViewMode.Connectome && _fly != null; } }
+    bool CloseUp { get { return viewMode == FlyViewMode.BrainCloseUp && _fly != null; } }
+
+    /// <summary>What is drawn this frame, in the container's space.</summary>
+    Vector3[] DrawPositions
+    {
+        get { return Anatomy && _anatPos != null && _anatPos.Length == _n ? _anatPos : _positions; }
+    }
+
     /// <summary>Total spikes in the last frame, or -1 when stale. For the HUD.</summary>
     public int CurrentSpikes =>
         (Time.time - _lastActivityTime) < staleTimeoutSeconds ? _lastSpikes : -1;
@@ -319,7 +383,10 @@ public class FlyBrainViz : MonoBehaviour
         _depthMultiplierDefault = depthMultiplier;
         _baseYawDefault = baseYawDegrees;
         _basePitchDefault = basePitchDegrees;
+        LoadAnatSettings();
+        Camera.onPostRender += BlitOverlayCache;
         TrySubscribe();
+        if (viewMode != FlyViewMode.Connectome) ApplyViewMode();
     }
 
     void TrySubscribe()
@@ -341,7 +408,7 @@ public class FlyBrainViz : MonoBehaviour
         {
             var p = JsonUtility.FromJson<GeometryPayload>(msg.data);
             if (p != null && p.n > 0 && !string.IsNullOrEmpty(p.pos))
-                lock (_lock) { _pendingGeometry = p; }
+                lock (_lock) { _pendingGeometry = p; _pendingGeometryJson = msg.data; }
         }
         catch (Exception e)
         {
@@ -390,8 +457,44 @@ public class FlyBrainViz : MonoBehaviour
         return outp;
     }
 
+    // ---- frame-time log ----------------------------------------------------
+    // The car's commands and observations only move between frames, at
+    // Time.timeScale 3, so frame length is driving latency. Logged per view
+    // so the views can be compared on the same run.
+    private readonly float[] _frameMs = new float[8192];
+    private int _frameCount;
+    private float _frameLogStart = -1f;
+    private string _frameLogView;
+    private int _redrawCount;
+
+    void LogFrameTimes()
+    {
+        string view = !_vizEnabled ? "off" : !IsVisible() ? "hidden" : viewMode.ToString();
+        float now = Time.unscaledTime;
+        if (_frameLogStart < 0f || view != _frameLogView || now - _frameLogStart >= 10f)
+        {
+            if (_frameCount > 30 && _frameLogView != null)
+            {
+                Array.Sort(_frameMs, 0, _frameCount);
+                float sum = 0f;
+                for (int i = 0; i < _frameCount; i++) sum += _frameMs[i];
+                float secs = now - _frameLogStart;
+                Debug.Log($"[FlyBrainViz] frames view={_frameLogView} {_frameCount / secs:0} fps, "
+                          + $"mean {sum / _frameCount:0.0} ms, p95 {_frameMs[(int)(_frameCount * 0.95f)]:0.0} ms, "
+                          + $"p99 {_frameMs[(int)(_frameCount * 0.99f)]:0.0} ms, max {_frameMs[_frameCount - 1]:0.0} ms, "
+                          + $"redraws {_redrawCount} over {secs:0} s");
+            }
+            _frameCount = 0;
+            _redrawCount = 0;
+            _frameLogStart = now;
+            _frameLogView = view;
+        }
+        if (_frameCount < _frameMs.Length) _frameMs[_frameCount++] = Time.unscaledDeltaTime * 1000f;
+    }
+
     void Update()
     {
+        LogFrameTimes();
         if (!_subscribed) TrySubscribe();
 
         var kb = Keyboard.current;
@@ -401,8 +504,20 @@ public class FlyBrainViz : MonoBehaviour
             SetVisible(false);
             Debug.Log($"[FlyBrainViz] overlay {(_vizEnabled ? "ON" : "OFF")}");
         }
-        if (!_vizEnabled)
+        if (kb != null && kb.nKey.wasPressedThisFrame)
         {
+            viewMode = viewMode == FlyViewMode.Connectome ? FlyViewMode.FlyAnatomy
+                     : viewMode == FlyViewMode.FlyAnatomy ? FlyViewMode.BrainCloseUp
+                     : FlyViewMode.Connectome;
+            ApplyViewMode();
+            Debug.Log($"[FlyBrainViz] view mode {viewMode}");
+        }
+        // The P car-camera view is the CSI frame the policy would see, so the
+        // brain stands aside for it without touching the B setting - P again
+        // brings the overlay back exactly as it was.
+        if (!_vizEnabled || CameraViewSwitcher.CarCameraOn)
+        {
+            SetVisible(false);
             lock (_lock) { _pendingActivity = null; }
             // Drop any grab in progress rather than resuming mid-drag when the
             // overlay comes back: this early-return skips UpdateDragRotation,
@@ -414,19 +529,37 @@ public class FlyBrainViz : MonoBehaviour
         HandleDepthKeys(kb);
         HandleOrientationKeys(kb);
         HandleSizeKeys(kb);
+        HandleFlyOpacityKeys(kb);
 
         GeometryPayload geom = null;
         ActivityPayload act = null;
+        string geomJson = null;
         lock (_lock)
         {
-            if (_pendingGeometry != null) { geom = _pendingGeometry; _pendingGeometry = null; }
-            if (_pendingActivity != null) { act = _pendingActivity; _pendingActivity = null; }
+            if (_pendingGeometry != null)
+            {
+                geom = _pendingGeometry; _pendingGeometry = null;
+                geomJson = _pendingGeometryJson; _pendingGeometryJson = null;
+            }
+            // Every trainer process publishes its own activity, so frames can
+            // arrive faster than they are worth recolouring 19k neurons for;
+            // the newest waits in the slot until the next apply.
+            if (_pendingActivity != null && Time.unscaledTime >= _nextActivityApply)
+            {
+                act = _pendingActivity; _pendingActivity = null;
+                _nextActivityApply = Time.unscaledTime + 1f / Mathf.Max(1f, maxActivityHz);
+            }
         }
 
         // Geometry is resent on a slow heartbeat so a late-connecting client
         // still gets it; rebuild only when it is actually new.
-        if (geom != null && geom.stamp != _geometryStamp)
+        if (geom != null && geom.stamp != _geometryStamp && !geom.SameContent(_builtGeometry))
+        {
             BuildMeshes(geom);
+            _builtGeometry = geom;
+            SaveGeometryCache(geomJson);
+        }
+        if (_positions == null && viewMode != FlyViewMode.Connectome) TryLoadGeometryCache();
 
         if (act != null && _positions != null && act.n == _n)
         {
@@ -436,8 +569,12 @@ public class FlyBrainViz : MonoBehaviour
         }
 
         // No fly policy driving -> hide rather than leave a frozen brain up.
-        SetVisible(_positions != null
-                   && (Time.time - _lastActivityTime) < staleTimeoutSeconds);
+        // The fly view may stay up regardless, as a presentation piece.
+        bool fresh = (Time.time - _lastActivityTime) < staleTimeoutSeconds;
+        bool preview = Anatomy && _anatSettings.showWithoutActivity;
+        SetVisible(_positions != null && (fresh || preview));
+        SyncCloseUpLook();
+        if (!fresh && preview) DriveTestActivity();
 
         // After SetVisible, so a grab can only start on an overlay that is
         // actually on screen this frame.
@@ -458,7 +595,8 @@ public class FlyBrainViz : MonoBehaviour
     /// </summary>
     void HandleDepthKeys(Keyboard kb)
     {
-        if (kb == null || _positions == null) return;
+        // The fly view always draws true proportions (see BuildAnatomy).
+        if (kb == null || _positions == null || Anatomy) return;
         bool down = kb.leftBracketKey.wasPressedThisFrame;
         bool up = kb.rightBracketKey.wasPressedThisFrame;
         bool reset = kb.backslashKey.wasPressedThisFrame;
@@ -523,6 +661,8 @@ public class FlyBrainViz : MonoBehaviour
         if (kb.semicolonKey.wasPressedThisFrame) { showControls = !showControls; return; }
         if (kb.quoteKey.wasPressedThisFrame) { showColorLegend = !showColorLegend; return; }
 
+        if (Anatomy) { HandleFlyViewKeys(kb); return; }
+
         if (kb.slashKey.wasPressedThisFrame)
         {
             // Back to the configured default, not to zero: the default is the
@@ -549,6 +689,71 @@ public class FlyBrainViz : MonoBehaviour
         if (kb.rightArrowKey.wasReleasedThisFrame || kb.leftArrowKey.wasReleasedThisFrame
             || kb.upArrowKey.wasReleasedThisFrame || kb.downArrowKey.wasReleasedThisFrame)
             LogOrientation();
+    }
+
+    /// <summary>
+    /// The arrows' fly-view meaning: turn the fly (yaw) and raise or lower the
+    /// camera over it (elevation). Written to FlyAnatomySettings, so in the
+    /// editor the pose you settle on is the one saved with the project.
+    /// </summary>
+    void HandleFlyViewKeys(Keyboard kb)
+    {
+        var s = _anatSettings;
+        if (kb.slashKey.wasPressedThisFrame)
+        {
+            if (CloseUp) { s.closeUpViewYaw = _closeUpYawDefault; s.closeUpViewElevation = _closeUpElevationDefault; }
+            else { s.viewYaw = _viewYawDefault; s.viewElevation = _viewElevationDefault; }
+            s.MarkChanged();
+            return;
+        }
+        float dYaw = (kb.rightArrowKey.isPressed ? 1f : 0f) - (kb.leftArrowKey.isPressed ? 1f : 0f);
+        float dElev = (kb.upArrowKey.isPressed ? 1f : 0f) - (kb.downArrowKey.isPressed ? 1f : 0f);
+        if (dYaw != 0f || dElev != 0f)
+        {
+            float step = orientationDegreesPerSecond * Time.unscaledDeltaTime;
+            FlyYaw = Wrap180(FlyYaw + dYaw * step);
+            FlyElevation = Mathf.Clamp(FlyElevation + dElev * step, -89f, 89f);
+        }
+        if (kb.rightArrowKey.wasReleasedThisFrame || kb.leftArrowKey.wasReleasedThisFrame
+            || kb.upArrowKey.wasReleasedThisFrame || kb.downArrowKey.wasReleasedThisFrame)
+        {
+            s.MarkChanged();
+            Debug.Log($"[FlyBrainViz] {(CloseUp ? "close-up" : "fly view")} yaw {FlyYaw:0.#} "
+                      + $"elevation {FlyElevation:0.#} (FlyAnatomySettings)");
+        }
+    }
+
+    // The orientation dials of whichever fly view is up; each view has its own.
+    float FlyYaw
+    {
+        get { return CloseUp ? _anatSettings.closeUpViewYaw : _anatSettings.viewYaw; }
+        set { if (CloseUp) _anatSettings.closeUpViewYaw = value; else _anatSettings.viewYaw = value; }
+    }
+    float FlyElevation
+    {
+        get { return CloseUp ? _anatSettings.closeUpViewElevation : _anatSettings.viewElevation; }
+        set { if (CloseUp) _anatSettings.closeUpViewElevation = value; else _anatSettings.viewElevation = value; }
+    }
+    float FlyRoll { get { return CloseUp ? _anatSettings.closeUpViewRoll : _anatSettings.viewRoll; } }
+    float FlyBodyPitch { get { return CloseUp ? _anatSettings.closeUpBodyPitch : _anatSettings.viewBodyPitch; } }
+
+    /// <summary>, and . make the fly's body more or less see-through; Y swaps
+    /// it for the fully textured model and back.</summary>
+    void HandleFlyOpacityKeys(Keyboard kb)
+    {
+        if (kb == null || !Anatomy) return;
+        if (kb.yKey.wasPressedThisFrame)
+        {
+            _flyTextured = !_flyTextured;
+            Debug.Log($"[FlyBrainViz] fly {(_flyTextured ? "textured" : "see-through")}");
+        }
+        bool down = kb.commaKey.wasPressedThisFrame;
+        bool up = kb.periodKey.wasPressedThisFrame;
+        if (!down && !up) return;
+        var s = _anatSettings;
+        s.bodyOpacity = Mathf.Clamp01(s.bodyOpacity + (up ? 0.02f : -0.02f));
+        s.MarkChanged();
+        Debug.Log($"[FlyBrainViz] fly body opacity {s.bodyOpacity:0.00} (FlyAnatomySettings)");
     }
 
     static float Wrap180(float deg)
@@ -606,6 +811,13 @@ public class FlyBrainViz : MonoBehaviour
     void UpdatePointBounds()
     {
         if (_pointMesh == null) return;
+        if (Anatomy)
+        {
+            // Fly-Root local, which is model units; the overlay camera sees
+            // nothing else, so an oversized bound costs nothing.
+            _pointMesh.bounds = new Bounds(Vector3.zero, Vector3.one * 1e4f);
+            return;
+        }
         float reach = displaySize * 2.5f * Mathf.Max(1f, depthMultiplier);
         _pointMesh.bounds = new Bounds(Vector3.zero, Vector3.one * reach);
     }
@@ -727,6 +939,12 @@ public class FlyBrainViz : MonoBehaviour
 
     void LateUpdate()
     {
+        PoseOverlay();
+        SyncOverlayCache();
+    }
+
+    void PoseOverlay()
+    {
         // Ahead of the visibility bail-out: the overlay camera has to be told
         // to switch off, and the track's reserved column has to be handed
         // back, precisely when the overlay stops being visible.
@@ -749,38 +967,85 @@ public class FlyBrainViz : MonoBehaviour
         var cam = _overlayCam != null ? _overlayCam : Camera.main;
 
         var container = _pointObject.transform.parent;
-        // In overlay-camera mode the rig is parked at a fixed world point and
-        // framed by its own camera, so the trainer's placement offset does not
-        // apply - writing it here every frame would drag the brain out of its
-        // own viewport.
-        if (_overlayCam == null) container.localPosition = worldOffset;
-        // Read right to left: the brain's own turntable, then the persistent
-        // correction that squares it up with the camera, then the temporary
-        // drag. Both rotations act in the parent's frame, where their axes
-        // were computed. The drag returning to identity therefore lands on the
-        // corrected pose, not on the uncorrected one.
-        container.localRotation =
-            _dragRotation * BaseOrientation(cam) * Quaternion.Euler(0f, _spin, 0f);
+        float size = pointSize;
+        // Fly views only: nothing to redo on a frame where neither the fly's
+        // pose nor the view moved. The fly is posed at FlyAnatomySettings
+        // .animationHz, not every frame, so most frames skip the per-neuron
+        // passes below.
+        bool unchanged = false;
+        if (Anatomy)
+        {
+            if (cam == null) { _hoverIndex = -1; return; }
+            if (!interacting && _anatSettings.spinDegreesPerSecond != 0f)
+                _anatSpin += _anatSettings.spinDegreesPerSecond * Time.unscaledDeltaTime;
+            // The drag is kept in this component's parent frame (see
+            // UpdateDragRotation); conjugate it into world space for Root.
+            Quaternion t = transform.rotation;
+            Quaternion rootRot = t * _dragRotation * Quaternion.Inverse(t) * SettledFlyRotation(cam);
+            _fly.Root.rotation = rootRot;
+            size = _anatPointSize * (CloseUp ? Mathf.Max(0.1f, _anatSettings.closeUpPointScale)
+                                    : GlowOn ? Mathf.Max(0.1f, _anatSettings.glowPointScale) : 1f);
+            int placement = _anatSettings.PlacementHash();
+            unchanged = _drawn.valid && !_fly.PosedThisFrame && rootRot == _drawn.rootRot
+                        && cam.transform.rotation == _drawn.camRot && size == _drawn.size
+                        && CloseUp == _drawn.closeUp && placement == _drawn.placement
+                        && _geometryStamp == _drawn.stamp;
+            if (!unchanged) UpdateAnatomyPositions();
+            _drawn = new DrawnPose {
+                valid = true, rootRot = rootRot, camRot = cam.transform.rotation, size = size,
+                closeUp = CloseUp, placement = placement, stamp = _geometryStamp,
+            };
+        }
+        else
+        {
+            _drawn.valid = false;
+            // In overlay-camera mode the rig is parked at a fixed world point
+            // and framed by its own camera, so the trainer's placement offset
+            // does not apply - writing it here every frame would drag the
+            // brain out of its own viewport.
+            if (_overlayCam == null) container.localPosition = worldOffset;
+            // Read right to left: the brain's own turntable, then the
+            // persistent correction that squares it up with the camera, then
+            // the temporary drag. Both rotations act in the parent's frame,
+            // where their axes were computed. The drag returning to identity
+            // therefore lands on the corrected pose, not on the uncorrected one.
+            container.localRotation =
+                _dragRotation * BaseOrientation(cam) * Quaternion.Euler(0f, _spin, 0f);
+        }
+
+        if (!Anatomy && GlowOn) size *= Mathf.Max(0.1f, _anatSettings.glowPointScale);
 
         // Billboard every neuron quad toward the camera. Done in the
         // container's local space so the rotations above don't fight it.
         if (cam == null) { _hoverIndex = -1; return; }
-        Vector3 right = container.InverseTransformDirection(cam.transform.right) * pointSize;
-        Vector3 up = container.InverseTransformDirection(cam.transform.up) * pointSize;
-        for (int i = 0; i < _n; i++)
+        Vector3[] pos = DrawPositions;
+        if (!unchanged)
         {
-            Vector3 p = _positions[i];
-            int b = i * 4;
-            _pointVertices[b + 0] = p - right - up;
-            _pointVertices[b + 1] = p + right - up;
-            _pointVertices[b + 2] = p - right + up;
-            _pointVertices[b + 3] = p + right + up;
+            Vector3 right = container.InverseTransformDirection(cam.transform.right) * size;
+            Vector3 up = container.InverseTransformDirection(cam.transform.up) * size;
+            for (int i = 0; i < _n; i++)
+            {
+                Vector3 p = pos[i];
+                int b = i * 4;
+                _pointVertices[b + 0] = p - right - up;
+                _pointVertices[b + 1] = p + right - up;
+                _pointVertices[b + 2] = p - right + up;
+                _pointVertices[b + 3] = p + right + up;
+            }
+            _pointMesh.vertices = _pointVertices;
+            UpdateBackdrop(container, cam, pos);
         }
-        _pointMesh.vertices = _pointVertices;
 
         // After the container transform is final for this frame, so the pick
-        // projects through the pose the user is actually looking at.
-        UpdateHover(cam);
+        // projects through the pose the user is actually looking at. A full
+        // pass over the neurons, so skipped while neither they nor the mouse
+        // have moved.
+        Vector2 mousePos = Mouse.current != null ? Mouse.current.position.ReadValue() : Vector2.zero;
+        if (!unchanged || mousePos != _hoverMouse || _dragging)
+        {
+            _hoverMouse = mousePos;
+            UpdateHover(cam);
+        }
 
         // Outside the hover path: the colour key's cue rows show firing counts
         // whether or not anything is under the cursor. A full pass over every
@@ -815,9 +1080,12 @@ public class FlyBrainViz : MonoBehaviour
         _publishedDepthScale = g.depthScale;
 
         _positions = new Vector3[_n];
+        _unit = new Vector3[_n];
         for (int i = 0; i < _n; i++)
-            _positions[i] = new Vector3(flat[i * 3], flat[i * 3 + 1], flat[i * 3 + 2])
-                            * displaySize;
+        {
+            _unit[i] = new Vector3(flat[i * 3], flat[i * 3 + 1], flat[i * 3 + 2]);
+            _positions[i] = _unit[i] * displaySize;
+        }
 
         // Local y is the axis viz.py flattens (it writes pos[:, 1]). Keep the
         // published values so the depth keys can rescale without a resend, and
@@ -874,16 +1142,22 @@ public class FlyBrainViz : MonoBehaviour
         _pointVertices = new Vector3[_n * 4];
         _pointColors = new Color[_n * 4];
         var tris = new int[_n * 6];
+        var uvs = new Vector2[_n * 4];
         for (int i = 0; i < _n; i++)
         {
             int b = i * 4, t = i * 6;
             // Sprites/Default is Cull Off, so winding does not matter here.
             tris[t] = b; tris[t + 1] = b + 1; tris[t + 2] = b + 2;
             tris[t + 3] = b + 2; tris[t + 4] = b + 1; tris[t + 5] = b + 3;
+            // Corner order matches LateUpdate's billboard; the glow shader
+            // draws a round spot from these.
+            uvs[b] = new Vector2(0f, 0f); uvs[b + 1] = new Vector2(1f, 0f);
+            uvs[b + 2] = new Vector2(0f, 1f); uvs[b + 3] = new Vector2(1f, 1f);
         }
         _pointMesh.Clear();
         _pointMesh.indexFormat = IndexFormat.UInt32;
         _pointMesh.vertices = _pointVertices;
+        _pointMesh.uv = uvs;
         _pointMesh.SetIndices(tris, MeshTopology.Triangles, 0);
         UpdatePointBounds();
 
@@ -917,6 +1191,11 @@ public class FlyBrainViz : MonoBehaviour
     void ApplyActivity(byte[] act)
     {
         if (_positions == null) return;
+        // Under the glow, silent neurons are lifted so the brain's shape reads
+        // on its own, and their weight goes to the shader as alpha.
+        bool glow = GlowOn;
+        float restGain = glow ? Mathf.Max(1f, _anatSettings.glowRestGain) : 1f;
+        float restAlpha = glow ? Mathf.Clamp01(_anatSettings.glowRestAlpha) : minAlpha;
         for (int i = 0; i < _n; i++)
         {
             // Kept so the hover label can count what is firing right now. The
@@ -930,8 +1209,11 @@ public class FlyBrainViz : MonoBehaviour
             Color rest, full;
             RoleRamp(_role[i], _isChase != null && i < _isChase.Length && _isChase[i],
                      out rest, out full);
+            if (restGain != 1f)
+                rest = new Color(Mathf.Min(1f, rest.r * restGain), Mathf.Min(1f, rest.g * restGain),
+                                 Mathf.Min(1f, rest.b * restGain), rest.a);
             Color lit = Color.Lerp(rest, full, t);
-            lit.a = Mathf.Lerp(minAlpha, maxAlpha, t);
+            lit.a = Mathf.Lerp(restAlpha, maxAlpha, t);
 
             _edgeColors[i] = new Color(lit.r, lit.g, lit.b, lit.a * edgeAlpha);
             int b = i * 4;
@@ -942,6 +1224,19 @@ public class FlyBrainViz : MonoBehaviour
         }
         _edgeMesh.colors = _edgeColors;
         _pointMesh.colors = _pointColors;
+    }
+
+    void OnDestroy()
+    {
+        Camera.onPostRender -= BlitOverlayCache;
+        if (_overlayRt != null) { _overlayRt.Release(); Destroy(_overlayRt); }
+        if (_overlayBlitMat != null) Destroy(_overlayBlitMat);
+        HiddenCamera.Destroy(_overlayCam);
+        // The rig is unparented to park it away from the course, so it does
+        // not go down with this component on its own.
+        var rig = _pointObject != null ? _pointObject.transform.parent : null;
+        if (rig != null && rig.parent == null) Destroy(rig.gameObject);
+        TrackGutterFraction = 0f;
     }
 
     void EnsureObjects()
@@ -958,6 +1253,7 @@ public class FlyBrainViz : MonoBehaviour
         _pointObject = NewMeshObject("FlyBrainNeurons", container, _pointMesh);
 
         if (useOverlayCamera) EnsureOverlayCamera(container);
+        if (Anatomy) ParentContainer();
     }
 
     /// <summary>
@@ -992,14 +1288,15 @@ public class FlyBrainViz : MonoBehaviour
         container.SetParent(null, false);
         container.position = OverlayWorldOrigin;
 
-        var go = new GameObject("FlyBrainOverlayCamera");
-        go.hideFlags = HideFlags.HideAndDontSave;
-        _overlayCam = go.AddComponent<Camera>();
+        _overlayCam = HiddenCamera.Create("FlyBrainOverlayCamera");
         _overlayCam.orthographic = true;
         _overlayCam.cullingMask = 1 << OverlayLayer;
-        // Depth, not SolidColor: the overlay composites over the main view
-        // rather than blanking a rectangle of it.
-        _overlayCam.clearFlags = CameraClearFlags.Depth;
+        // Cleared to black itself: its rect lies in the column the track
+        // gives up (OverheadCameraFit), never over the track, and relying on
+        // anything else to clear it leaves every past frame of the animated
+        // fly smeared on screen.
+        _overlayCam.clearFlags = CameraClearFlags.SolidColor;
+        _overlayCam.backgroundColor = Color.black;
         _overlayCam.depth = 100f;             // after every scene camera
         _overlayCam.nearClipPlane = 0.01f;
         _overlayCam.farClipPlane = OverlayCamDistance * 4f;
@@ -1038,6 +1335,23 @@ public class FlyBrainViz : MonoBehaviour
 
         Rect vp = OverlayViewportScaled();
         bool on = IsVisible();
+        if (_fly != null)
+        {
+            _fly.HeadPitchTarget = CloseUp ? _anatSettings.closeUpHeadPitch : 0f;
+            _fly.RearOpacityScale = CloseUp ? _anatSettings.closeUpRearOpacity : 1f;
+        }
+
+        // The close-up keeps the fly view's column for the track's sake, and
+        // draws from the left edge of the window up to it: the fly runs off
+        // the left of the screen and is cut off where the track starts.
+        Rect framed = vp;
+        if (CloseUp)
+        {
+            float right = framed.xMax;
+            float road = OverheadCameraFit.TrackScreenLeft;
+            if (road > 0.05f) right = Mathf.Min(right, road);
+            vp = new Rect(0f, 0f, Mathf.Clamp(right, 0.05f, 1f), 1f);
+        }
 
         _overlayCam.rect = vp;
         _overlayCam.enabled = on;
@@ -1045,7 +1359,12 @@ public class FlyBrainViz : MonoBehaviour
         // Claim the column so OverheadCameraFit can squeeze the track out of
         // it, and give it straight back when the overlay is toggled off - the
         // track should reclaim the full window rather than keep a gap.
-        TrackGutterFraction = on ? Mathf.Clamp01(vp.xMax) : 0f;
+        TrackGutterFraction = on ? Mathf.Clamp01(framed.xMax) : 0f;
+        if (CloseUp)
+        {
+            FrameCloseUp(vp);
+            return;
+        }
 
         // Framed on what the brain actually COVERS on screen, not on how far
         // its furthest neuron is from the centre.
@@ -1077,6 +1396,57 @@ public class FlyBrainViz : MonoBehaviour
     }
 
     /// <summary>
+    /// Frame the close-up on the head alone: the head's box, bent as the head
+    /// is and carried up with the fly in flight, is fitted to closeUpHeadBox
+    /// (screen fractions) and centred in it. The rest of the fly lands
+    /// wherever that puts it, including off screen.
+    /// </summary>
+    void FrameCloseUp(Rect vp)
+    {
+        var s = _anatSettings;
+        Rect box = s.closeUpHeadBox;
+        Transform root = _fly.Root;
+        Vector3 r = _overlayCam.transform.right, u = _overlayCam.transform.up;
+        Quaternion bend = Quaternion.AngleAxis(_fly.HeadPitch, _fly.Right);
+        float minX = float.MaxValue, maxX = float.MinValue;
+        float minY = float.MaxValue, maxY = float.MinValue;
+        for (int k = 0; k < 8; k++)
+        {
+            Vector3 p = _fly.HeadCentre
+                        + _fly.Right * (((k & 1) == 0 ? -0.5f : 0.5f) * _fly.HeadWidth)
+                        + _fly.Up * (((k & 2) == 0 ? -0.5f : 0.5f) * _fly.HeadHeight)
+                        + _fly.Forward * (((k & 4) == 0 ? -0.5f : 0.5f) * _fly.HeadDepth);
+            if (_fly.HasNeck) p = _fly.NeckRest + bend * (p - _fly.NeckRest);
+            Vector3 w = root.TransformPoint(p + _fly.ShownLift) - root.position;
+            float a = Vector3.Dot(w, r), b = Vector3.Dot(w, u);
+            if (a < minX) minX = a;
+            if (a > maxX) maxX = a;
+            if (b < minY) minY = b;
+            if (b > maxY) maxY = b;
+        }
+        float halfW = Mathf.Max(1e-4f, (maxX - minX) * 0.5f);
+        float halfH = Mathf.Max(1e-4f, (maxY - minY) * 0.5f);
+
+        // orthographicSize is half the viewport's height in world units; pick
+        // the one that makes the head exactly as tall, or as wide, as the box,
+        // whichever is tighter.
+        float sw = Mathf.Max(1f, Screen.width), sh = Mathf.Max(1f, Screen.height);
+        float fill = Mathf.Max(0.05f, s.closeUpHeadFill);
+        float size = Mathf.Max(halfH * vp.height / Mathf.Max(0.01f, box.height),
+                               halfW * vp.height * sh / (Mathf.Max(0.01f, box.width) * sw)) / fill;
+        _overlayCam.orthographicSize = size;
+
+        // Shift the camera so the head's centre lands on the box's centre
+        // rather than the viewport's.
+        float perPixel = 2f * size / (vp.height * sh);
+        float dx = (box.center.x - vp.center.x) * sw * perPixel;
+        float dy = (box.center.y - vp.center.y) * sh * perPixel;
+        Vector3 head = r * ((minX + maxX) * 0.5f) + u * ((minY + maxY) * 0.5f);
+        _overlayCam.transform.position = root.position + head - r * dx - u * dy
+                                         - _overlayCam.transform.forward * OverlayCamDistance;
+    }
+
+    /// <summary>
     /// Half-width and half-height of the brain as the overlay camera sees it,
     /// plus the offset from the container's origin to the centre of that box.
     ///
@@ -1093,6 +1463,7 @@ public class FlyBrainViz : MonoBehaviour
     void UpdateProjectedExtents()
     {
         if (_positions == null || _n <= 0 || _overlayCam == null) return;
+        if (Anatomy) { UpdateFlyExtents(); return; }
 
         Quaternion rot = BaseOrientation(_overlayCam) * Quaternion.Euler(0f, _spin, 0f);
         // A full pass over every neuron, so it runs only when the answer can
@@ -1247,6 +1618,18 @@ public class FlyBrainViz : MonoBehaviour
         float s = Mathf.Clamp(overlaySizeScale, overlaySizeMin, overlaySizeMax);
         Rect vp = overlayViewport;
 
+        // The fly view is a portrait rather than the track's counterpart: it
+        // fills its own configured area and the camera fits the fly to it.
+        if (Anatomy)
+        {
+            Rect a = _anatSettings.viewport;
+            float w = Mathf.Clamp(a.width * s, 0.05f, MaxGutter);
+            float h = Mathf.Clamp(a.height * s, 0.05f, 1f);
+            _lastAchievedScale = s;
+            return new Rect(Mathf.Clamp(a.center.x - w * 0.5f, 0f, MaxGutter - w),
+                            Mathf.Clamp(a.center.y - h * 0.5f, 0f, 1f - h), w, h);
+        }
+
         // Height and centre come from the track, so the brain reads as the
         // track's counterpart rather than a widget floating next to it. The
         // fallback is the configured viewport, for the frames before the fit
@@ -1319,6 +1702,406 @@ public class FlyBrainViz : MonoBehaviour
         _framingDirty = true;
     }
 
+    // ---- fly anatomy mode --------------------------------------------------
+
+    /// <summary>Bring the scene in line with viewMode, falling back to the
+    /// connectome view if the fly cannot be built.</summary>
+    void ApplyViewMode()
+    {
+        if (viewMode != FlyViewMode.Connectome)
+        {
+            if (!useOverlayCamera)
+            {
+                Debug.LogWarning("[FlyBrainViz] the fly view needs useOverlayCamera");
+                viewMode = FlyViewMode.Connectome;
+            }
+            else
+            {
+                EnsureFly();
+                if (_fly == null) viewMode = FlyViewMode.Connectome;
+            }
+        }
+        ParentContainer();
+        CancelDrag();
+        _framingDirty = true;
+        UpdatePointBounds();
+        if (_fly != null && !Anatomy) _fly.SetVisible(false);
+    }
+
+    /// <summary>Loaded up front, not with the fly: the neuron glow settings on
+    /// it apply to the brain-only view as well.</summary>
+    void LoadAnatSettings()
+    {
+        if (_anatSettings != null) return;
+        _anatSettings = FlyAnatomySettings.Load();
+        _viewYawDefault = _anatSettings.viewYaw;
+        _viewElevationDefault = _anatSettings.viewElevation;
+        _closeUpYawDefault = _anatSettings.closeUpViewYaw;
+        _closeUpElevationDefault = _anatSettings.closeUpViewElevation;
+    }
+
+    void EnsureFly()
+    {
+        if (_fly != null || _flyFailed) return;
+        LoadAnatSettings();
+        _fly = FlyAnatomyView.Create(OverlayWorldOrigin, OverlayLayer, _anatSettings);
+        if (_fly == null)
+        {
+            _flyFailed = true;
+            Debug.LogWarning("[FlyBrainViz] fly model unavailable; staying in the connectome view");
+            return;
+        }
+        _fly.SetVisible(false);
+    }
+
+    /// <summary>
+    /// The neuron container rides inside the fly's Root in the fly view, so
+    /// the per-neuron positions can be written in the fly's own frame; in the
+    /// connectome view it goes back to where EnsureObjects put it.
+    /// </summary>
+    void ParentContainer()
+    {
+        if (_pointObject == null) return;
+        var c = _pointObject.transform.parent;
+        if (Anatomy)
+        {
+            c.SetParent(_fly.Root, false);
+            c.localPosition = Vector3.zero;
+            c.localRotation = Quaternion.identity;
+        }
+        else if (_overlayCam != null)
+        {
+            c.SetParent(null, false);
+            c.position = OverlayWorldOrigin;
+        }
+        else
+        {
+            c.SetParent(transform, false);
+            c.localPosition = worldOffset;
+        }
+        c.localScale = Vector3.one;
+    }
+
+    /// <summary>
+    /// The fly's pose without the drag: head to the camera's right, turned by
+    /// the view's yaw about its own vertical, then tipped toward the camera by
+    /// its elevation so the view is from above, and rolled in the screen
+    /// plane. The fly view and the close-up each have their own dials.
+    /// </summary>
+    Quaternion SettledFlyRotation(Camera cam)
+    {
+        Quaternion align = Quaternion.LookRotation(Vector3.right, Vector3.up)
+                           * Quaternion.Inverse(Quaternion.LookRotation(_fly.Forward, _fly.Up));
+        Quaternion view = Quaternion.AngleAxis(FlyRoll, Vector3.forward)
+                          * Quaternion.AngleAxis(-FlyElevation, Vector3.right)
+                          * Quaternion.AngleAxis(FlyYaw + _anatSpin, Vector3.up);
+        // Applied in the fly's own frame, first: a nose-down pitch about its
+        // left-right axis. Positive tips the head down, as for the neck bend.
+        Quaternion tilt = Quaternion.AngleAxis(FlyBodyPitch, _fly.Right);
+        return cam.transform.rotation * view * align * tilt;
+    }
+
+    /// <summary>UpdateProjectedExtents for the fly view: frame the fly at
+    /// rest, plus the share of the takeoff climb FlyAnatomyView lets show, so
+    /// the fly fills its column and flight does not rescale the picture.</summary>
+    void UpdateFlyExtents()
+    {
+        Quaternion rot = SettledFlyRotation(_overlayCam);
+        Vector3 lift = _fly.Lift * Mathf.Clamp01(_anatSettings.flightLiftShown);
+        if (_haveFraming && !_framingDirty && Quaternion.Angle(rot, _framingRot) < 0.25f
+            && lift == _framedLift)
+            return;
+        float sc = _fly.Root.lossyScale.x;
+        Vector3 r = _overlayCam.transform.right, u = _overlayCam.transform.up;
+        float minX = float.MaxValue, maxX = float.MinValue;
+        float minY = float.MaxValue, maxY = float.MinValue;
+        foreach (var p0 in _fly.FramePoints)
+        {
+            for (int k = 0; k < 2; k++)
+            {
+                Vector3 w = rot * ((k == 0 ? p0 : p0 + lift) * sc);
+                float a = Vector3.Dot(w, r), b = Vector3.Dot(w, u);
+                if (a < minX) minX = a;
+                if (a > maxX) maxX = a;
+                if (b < minY) minY = b;
+                if (b > maxY) maxY = b;
+            }
+        }
+        _framedLift = lift;
+        _projHalfW = (maxX - minX) * 0.5f;
+        _projHalfH = (maxY - minY) * 0.5f;
+        _projCentre = r * ((maxX + minX) * 0.5f) + u * ((maxY + minY) * 0.5f);
+        _framingRot = rot;
+        _haveFraming = true;
+        _framingDirty = false;
+    }
+
+    void UpdateAnatomyPositions()
+    {
+        EnsureAnatomyLayout();
+        if (_anatHead == null) return;
+        Matrix4x4 toRoot = _fly.Root.worldToLocalMatrix;
+        Matrix4x4 mh = toRoot * _fly.HeadBone.localToWorldMatrix;
+        Matrix4x4 mt = toRoot * _fly.ThoraxBone.localToWorldMatrix;
+        // The close-up shrinks the brain about its own centre, riding the
+        // head; the cord keeps its size and the connective blends between.
+        float k = CloseUp ? Mathf.Max(0.05f, _anatSettings.closeUpBrainScale) : 1f;
+        Vector3 c = mh.MultiplyPoint3x4(_anatBrainCentre);
+        for (int i = 0; i < _n; i++)
+        {
+            float w = _anatW[i];
+            if (w >= 1f) { _anatPos[i] = mt.MultiplyPoint3x4(_anatThorax[i]); continue; }
+            Vector3 ph = mh.MultiplyPoint3x4(_anatHead[i]);
+            if (k != 1f) ph = c + (ph - c) * k;
+            _anatPos[i] = w <= 0f ? ph : Vector3.Lerp(ph, mt.MultiplyPoint3x4(_anatThorax[i]), w);
+        }
+    }
+
+    void EnsureAnatomyLayout()
+    {
+        if (_unit == null || _fly == null) return;
+        int hash = _anatSettings.PlacementHash();
+        if (_anatStamp == _geometryStamp && hash == _anatHash && _anatFly == _fly
+            && _anatPos != null && _anatPos.Length == _n)
+            return;
+        BuildAnatomy();
+        _anatStamp = _geometryStamp;
+        _anatHash = hash;
+        _anatFly = _fly;
+        _framingDirty = true;
+    }
+
+    /// <summary>
+    /// Place every neuron inside the fly, at true proportions.
+    ///
+    /// The published cloud is the whole CNS - brain, neck connective, nerve
+    /// cord - reoriented and flattened for the top-down connectome view
+    /// (viz.py _build_geometry, default axes "-z,y,x"): local x is the body
+    /// axis, y the axis it squashes by depthScale, z the bilateral one. The
+    /// squash is a pure final multiply after a +/-1 clip, so dividing it back
+    /// out restores the anatomy exactly for everything inside the clip.
+    ///
+    /// Orientation is read from the data rather than assumed:
+    ///  - The neck connective holds no somata, so it is the widest empty run
+    ///    of the histogram along the body axis. The side of it with the wider
+    ///    lateral spread is the brain.
+    ///  - Left is where the side==L neurons sit.
+    ///  - The fly brain is taller than it is deep, so if its extent along the
+    ///    body axis beats its extent along y, the CNS is in the dissected,
+    ///    straightened pose (brain dorsal away from the cord), and the cord is
+    ///    bent back neckBendDegrees at the neck to lie along the thorax.
+    ///    Otherwise it is already in body pose and is placed rigidly.
+    ///  - The cord attaches behind the brain (straightened) or below it (body
+    ///    pose), which signs y.
+    /// The brain is centred on the head and scaled so its width is
+    /// brainWidthFraction of the head's; that one scale applies to the whole
+    /// CNS, so the cord's size and position relative to the brain are real.
+    ///
+    /// Each neuron is stored in the rest frame of the bone it rides - the head
+    /// for the brain, the thorax for the cord, a blend across the connective -
+    /// so idle_look turns the brain with the head and flight carries the lot.
+    /// </summary>
+    void BuildAnatomy()
+    {
+        var s = _anatSettings;
+        var f = _fly;
+        int n = _n;
+        float ds = _publishedDepthScale > 0f ? _publishedDepthScale : 0.12f;
+        var u = new float[n];
+        var y = new float[n];
+        var l = new float[n];
+        float umin = float.MaxValue, umax = float.MinValue;
+        for (int i = 0; i < n; i++)
+        {
+            u[i] = _unit[i].x;
+            y[i] = _unit[i].y / ds;
+            l[i] = _unit[i].z;
+            umin = Mathf.Min(umin, u[i]);
+            umax = Mathf.Max(umax, u[i]);
+        }
+
+        const int Bins = 96;
+        float bw = Mathf.Max(1e-6f, (umax - umin) / Bins);
+        var hist = new int[Bins];
+        int peak = 0;
+        for (int i = 0; i < n; i++)
+            hist[Mathf.Clamp((int)((u[i] - umin) / bw), 0, Bins - 1)]++;
+        for (int b = 0; b < Bins; b++) peak = Mathf.Max(peak, hist[b]);
+        int thr = Mathf.Max(1, peak / 100);
+        int bestLo = -1, bestLen = 0, edge = Bins / 10;
+        for (int b = edge; b < Bins - edge;)
+        {
+            if (hist[b] > thr) { b++; continue; }
+            int e = b;
+            while (e < Bins - edge && hist[e] <= thr) e++;
+            if (e - b > bestLen) { bestLen = e - b; bestLo = b; }
+            b = e;
+        }
+        bool haveGap = bestLo >= 0;
+        float gapLo = umin + bestLo * bw, gapHi = umin + (bestLo + bestLen) * bw;
+
+        if (haveGap)
+        {
+            var above = new List<float>();
+            var below = new List<float>();
+            for (int i = 0; i < n; i++)
+            {
+                if (u[i] >= gapHi) above.Add(l[i]);
+                else if (u[i] <= gapLo) below.Add(l[i]);
+            }
+            if (Range(below, 0.02f, 0.98f) > Range(above, 0.02f, 0.98f))
+            {
+                for (int i = 0; i < n; i++) u[i] = -u[i];
+                float t = gapLo;
+                gapLo = -gapHi;
+                gapHi = -t;
+            }
+        }
+
+        // Brain is now at high u, the cord at low u.
+        var w = new float[n];
+        var bu = new List<float>();
+        var by = new List<float>();
+        var bl = new List<float>();
+        float vySum = 0f;
+        int nBrain = 0, nCord = 0;
+        for (int i = 0; i < n; i++)
+        {
+            w[i] = haveGap ? Mathf.InverseLerp(gapHi, gapLo, u[i]) : 0f;
+            if (w[i] <= 0f) { bu.Add(u[i]); by.Add(y[i]); bl.Add(l[i]); nBrain++; }
+            else if (w[i] >= 1f) { vySum += y[i]; nCord++; }
+        }
+        if (nBrain < 10)
+        {
+            bu.Clear(); by.Clear(); bl.Clear();
+            for (int i = 0; i < n; i++) { bu.Add(u[i]); by.Add(y[i]); bl.Add(l[i]); }
+        }
+        float medU = Percentile(bu, 0.5f), medY = Percentile(by, 0.5f), medL = Percentile(bl, 0.5f);
+        float spanU = Range(bu, 0.05f, 0.95f), spanY = Range(by, 0.05f, 0.95f);
+        float width = Mathf.Max(1e-6f, Range(bl, 0.02f, 0.98f));
+
+        float lSum = 0f, rSum = 0f;
+        int nL = 0, nR = 0;
+        if (_side != null)
+            for (int i = 0; i < n && i < _side.Length; i++)
+            {
+                if (_side[i] == 1) { lSum += l[i]; nL++; }
+                else if (_side[i] == 2) { rSum += l[i]; nR++; }
+            }
+        float sL = (nL > 0 && nR > 0 && lSum / nL < rSum / nR) ? -1f : 1f;
+        if (s.flipLeftRight) sL = -sL;
+        float sY = nCord > 0 && vySum / nCord < medY ? -1f : 1f;
+        if (s.flipFrontBack) sY = -sY;
+
+        bool straightened = s.layout == FlyAnatomySettings.CnsLayout.Straightened
+                            || (s.layout == FlyAnatomySettings.CnsLayout.Auto && spanU > spanY);
+
+        // Anatomical components per neuron, in published units: right, up, forward.
+        var ar = new float[n];
+        var au = new float[n];
+        var af = new float[n];
+        float pivotFwd = 0f;
+        for (int i = 0; i < n; i++)
+        {
+            float du = u[i] - medU, dy = y[i] - medY, dl = l[i] - medL;
+            ar[i] = -sL * dl;
+            if (straightened) { au[i] = du; af[i] = -sY * dy; }
+            else { af[i] = du; au[i] = -sY * dy; }
+            if (w[i] >= 1f) pivotFwd += af[i];
+        }
+        if (straightened && haveGap)
+        {
+            pivotFwd = nCord > 0 ? pivotFwd / nCord : 0f;
+            float pivotUp = (gapLo + gapHi) * 0.5f - medU;
+            for (int i = 0; i < n; i++)
+            {
+                if (w[i] <= 0f) continue;
+                float th = s.neckBendDegrees * w[i] * Mathf.Deg2Rad;
+                float c = Mathf.Cos(th), sn = Mathf.Sin(th);
+                float du2 = au[i] - pivotUp, df2 = af[i] - pivotFwd;
+                au[i] = pivotUp + du2 * c - df2 * sn;
+                af[i] = pivotFwd + du2 * sn + df2 * c;
+            }
+        }
+
+        float scale = s.brainWidthFraction * f.HeadWidth / width;
+        float hw = f.HeadWidth;
+        Vector3 shift = (s.brainOffset.x * f.Right + s.brainOffset.y * f.Up + s.brainOffset.z * f.Forward) * hw;
+        Vector3 cordShift = (s.vncOffset.x * f.Right + s.vncOffset.y * f.Up + s.vncOffset.z * f.Forward) * hw;
+        Matrix4x4 hInv = f.HeadRestInRoot.inverse, tInv = f.ThoraxRestInRoot.inverse;
+
+        _anatHead = new Vector3[n];
+        _anatThorax = new Vector3[n];
+        _anatPos = new Vector3[n];
+        _anatW = w;
+        _anatBrainCentre = hInv.MultiplyPoint3x4(f.HeadCentre + shift);
+        for (int i = 0; i < n; i++)
+        {
+            Vector3 p = f.HeadCentre + shift + cordShift * w[i]
+                        + (ar[i] * f.Right + au[i] * f.Up + af[i] * f.Forward) * scale;
+            _anatHead[i] = hInv.MultiplyPoint3x4(p);
+            _anatThorax[i] = tInv.MultiplyPoint3x4(p);
+            _anatPos[i] = p;
+        }
+        _anatPointSize = pointSize / Mathf.Max(1e-6f, displaySize) * scale * s.pointScale;
+
+        Debug.Log($"[FlyBrainViz] fly view: {(straightened ? "straightened" : "body-pose")} CNS "
+                  + $"(brain {spanU:0.###} along body axis vs {spanY:0.###} deep), "
+                  + (haveGap ? $"neck gap {bestLen} bins, " : "no neck gap found, ")
+                  + $"brain {nBrain} / cord {nCord} / connective {n - nBrain - nCord} neurons, "
+                  + $"depth restored x{1f / ds:0.##}, left sign {sL:+0;-0}, y sign {sY:+0;-0}");
+    }
+
+    static float Percentile(List<float> v, float q)
+    {
+        if (v.Count == 0) return 0f;
+        var a = v.ToArray();
+        Array.Sort(a);
+        return a[Mathf.Clamp(Mathf.RoundToInt(q * (a.Length - 1)), 0, a.Length - 1)];
+    }
+
+    static float Range(List<float> v, float lo, float hi)
+    {
+        if (v.Count == 0) return 0f;
+        var a = v.ToArray();
+        Array.Sort(a);
+        int n = a.Length - 1;
+        return a[Mathf.RoundToInt(hi * n)] - a[Mathf.RoundToInt(lo * n)];
+    }
+
+    // The fly view is a presentation piece and should come up without a
+    // trainer running, so the last geometry received is kept on disk.
+    static string GeometryCachePath
+    {
+        get { return System.IO.Path.Combine(Application.persistentDataPath, "fly_brain_geometry.json"); }
+    }
+
+    void SaveGeometryCache(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return;
+        try { System.IO.File.WriteAllText(GeometryCachePath, json); }
+        catch (Exception e) { Debug.LogWarning($"[FlyBrainViz] geometry cache not written: {e.Message}"); }
+    }
+
+    void TryLoadGeometryCache()
+    {
+        if (_triedGeometryCache) return;
+        _triedGeometryCache = true;
+        try
+        {
+            if (!System.IO.File.Exists(GeometryCachePath)) return;
+            var p = JsonUtility.FromJson<GeometryPayload>(System.IO.File.ReadAllText(GeometryCachePath));
+            if (p == null || p.n <= 0 || string.IsNullOrEmpty(p.pos)) return;
+            BuildMeshes(p);
+            _builtGeometry = p;
+            Debug.Log($"[FlyBrainViz] fly view using cached geometry from {GeometryCachePath}");
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[FlyBrainViz] geometry cache unreadable: {e.Message}");
+        }
+    }
+
     /// <summary>Remove the overlay layer from a camera that should not see it.</summary>
     public static void StripOverlayLayer(Camera cam)
     {
@@ -1344,6 +2127,290 @@ public class FlyBrainViz : MonoBehaviour
         return go;
     }
 
+    // ---- brain close-up look ------------------------------------------------
+
+    private Material _glowMaterial, _backdropMaterial;
+    private GameObject _backdrop;
+    private Mesh _backdropMesh;
+    private bool _lookGlow;
+    private bool _flyTextured;             // Y: textured fly instead of the see-through shell
+
+    // What the neuron billboards were last built for in the fly views.
+    struct DrawnPose
+    {
+        public bool valid, closeUp;
+        public Quaternion rootRot, camRot;
+        public float size;
+        public int placement;
+        public double stamp;
+    }
+    private DrawnPose _drawn;
+    private Vector2 _hoverMouse = new Vector2(-1f, -1f);
+    private readonly Vector3[] _backdropVerts = new Vector3[4];
+
+    private float[] _testLevel;
+    private byte[] _testAct;
+    private float _nextTestTick;
+    private System.Random _testRng;
+
+    /// <summary>
+    /// Stand-in firing for tuning the look in the editor with no fly job
+    /// running: random neurons fire and fade, bursts light a random run of
+    /// neighbours in the published order. Never runs in a build, and gives way
+    /// as soon as real activity arrives.
+    /// </summary>
+    void DriveTestActivity()
+    {
+        var s = _anatSettings;
+        if (!Application.isEditor || s == null || !s.editorTestActivity || _positions == null) return;
+        if (Time.unscaledTime < _nextTestTick) return;
+        float dt = 0.1f;
+        _nextTestTick = Time.unscaledTime + dt;
+        if (_testLevel == null || _testLevel.Length != _n)
+        {
+            _testLevel = new float[_n];
+            _testAct = new byte[_n];
+            _testRng = new System.Random(1);
+        }
+        float decay = Mathf.Exp(-dt / 0.35f);
+        for (int i = 0; i < _n; i++) _testLevel[i] *= decay;
+
+        int sparse = Mathf.RoundToInt(_n * Mathf.Clamp01(s.editorTestFiringFraction));
+        for (int k = 0; k < sparse; k++) _testLevel[_testRng.Next(_n)] = 1f;
+        if (_testRng.NextDouble() < 0.3)
+        {
+            int start = _testRng.Next(_n), len = Mathf.Min(_n, 150 + _testRng.Next(450));
+            for (int k = 0; k < len; k++)
+                if (_testRng.NextDouble() < 0.6) _testLevel[(start + k) % _n] = 1f;
+        }
+        for (int i = 0; i < _n; i++) _testAct[i] = (byte)(Mathf.Clamp01(_testLevel[i]) * 255f);
+        ApplyActivity(_testAct);
+    }
+
+    /// <summary>Neurons drawn as glowing spots, in whichever view.</summary>
+    bool GlowOn
+    {
+        get { return _anatSettings != null && _anatSettings.glow && GlowMaterial() != null; }
+    }
+
+    // ---- cached overlay (fly views) ----------------------------------------
+    // The fly views draw a skinned see-through fly and thousands of large
+    // glow spots. Drawn every frame that stretches the sim's frames, and at
+    // Time.timeScale 3 each frame is sim time the car drives on stale
+    // commands. So they are drawn into _overlayRt at overlayRenderHz, and on
+    // every frame the overlay camera draws nothing itself and just copies the
+    // last drawing into its column. The column is opaque (the camera clears
+    // it to black and it never lies over the track), so a plain copy is exact.
+    private RenderTexture _overlayRt;
+    private Material _overlayBlitMat;
+    private bool _overlayCached;
+    private float _nextOverlayRender;
+    private int _cachedHoverIndex = -1;
+
+    void SyncOverlayCache()
+    {
+        if (_overlayCam == null) return;
+        float hz = _anatSettings != null ? _anatSettings.overlayRenderHz : 0f;
+        if (!_overlayCam.enabled || !Anatomy || hz <= 0f || OverlayBlitMaterial() == null)
+        {
+            if (_overlayCached)
+            {
+                _overlayCam.cullingMask = OverlayLayerMask;
+                _overlayCam.clearFlags = CameraClearFlags.SolidColor;
+                _overlayCached = false;
+            }
+            return;
+        }
+
+        Rect px = _overlayCam.pixelRect;
+        int w = Mathf.Max(1, Mathf.RoundToInt(px.width));
+        int h = Mathf.Max(1, Mathf.RoundToInt(px.height));
+        bool resized = _overlayRt == null || _overlayRt.width != w || _overlayRt.height != h;
+        if (resized)
+        {
+            if (_overlayRt != null) { _overlayRt.Release(); Destroy(_overlayRt); }
+            _overlayRt = new RenderTexture(w, h, 24, RenderTextureFormat.ARGB32)
+                { name = "FlyBrainOverlayCache", antiAliasing = 1 };
+            _overlayRt.Create();
+        }
+
+        float now = Time.unscaledTime;
+        bool due = resized || !_overlayCached || _dragging || _snapT < 1f
+                   || _hoverIndex != _cachedHoverIndex || now >= _nextOverlayRender;
+        if (due)
+        {
+            _nextOverlayRender = now + 1f / hz;
+            _cachedHoverIndex = _hoverIndex;
+            Rect rect = _overlayCam.rect;
+            _overlayCam.cullingMask = OverlayLayerMask;
+            _overlayCam.clearFlags = CameraClearFlags.SolidColor;
+            _overlayCam.targetTexture = _overlayRt;
+            _overlayCam.rect = new Rect(0f, 0f, 1f, 1f);
+            _overlayCam.Render();
+            _redrawCount++;
+            _overlayCam.targetTexture = null;
+            _overlayCam.rect = rect;
+        }
+        _overlayCam.cullingMask = 0;
+        _overlayCam.clearFlags = CameraClearFlags.Nothing;
+        _overlayCached = true;
+    }
+
+    Material OverlayBlitMaterial()
+    {
+        if (_overlayBlitMat == null)
+        {
+            var sh = Shader.Find("Hidden/FlyOverlayBlit");
+            if (sh == null) return null;
+            _overlayBlitMat = new Material(sh) { hideFlags = HideFlags.HideAndDontSave };
+        }
+        return _overlayBlitMat;
+    }
+
+    /// <summary>Camera.onPostRender: on the overlay camera's own (empty) pass
+    /// to the screen, fill its column with the cached drawing.</summary>
+    void BlitOverlayCache(Camera c)
+    {
+        if (c != _overlayCam || !_overlayCached || c.targetTexture != null
+            || _overlayRt == null || _overlayBlitMat == null) return;
+        _overlayBlitMat.mainTexture = _overlayRt;
+        GL.PushMatrix();
+        GL.LoadOrtho();
+        _overlayBlitMat.SetPass(0);
+        GL.Begin(GL.QUADS);
+        GL.TexCoord2(0f, 0f); GL.Vertex3(0f, 0f, 0f);
+        GL.TexCoord2(0f, 1f); GL.Vertex3(0f, 1f, 0f);
+        GL.TexCoord2(1f, 1f); GL.Vertex3(1f, 1f, 0f);
+        GL.TexCoord2(1f, 0f); GL.Vertex3(1f, 0f, 0f);
+        GL.End();
+        GL.PopMatrix();
+    }
+
+    /// <summary>
+    /// Keep the neurons' material and the fly's shell in line with the view
+    /// and the glow setting. Recolours at once when the glow switches rather
+    /// than waiting for the next activity message, which never comes while
+    /// the sim is idle.
+    /// </summary>
+    void SyncCloseUpLook()
+    {
+        if (_fly != null)
+        {
+            _fly.OutlineOnly = CloseUp;
+            _fly.Textured = _flyTextured;
+        }
+        bool glow = GlowOn;
+        if (_pointObject != null)
+        {
+            Material m = glow ? GlowMaterial() : OverlayMaterial();
+            var mr = _pointObject.GetComponent<MeshRenderer>();
+            if (mr.sharedMaterial != m) mr.sharedMaterial = m;
+        }
+        if (_glowMaterial != null && _anatSettings != null)
+            _glowMaterial.SetFloat("_Gain", _anatSettings.glowGain
+                * (Anatomy && !CloseUp ? Mathf.Max(0f, _anatSettings.flyViewBrainBrightness) : 1f));
+        if (glow != _lookGlow)
+        {
+            _lookGlow = glow;
+            if (_act != null && _positions != null && _act.Length == _n)
+                ApplyActivity((byte[])_act.Clone());
+        }
+    }
+
+    Material GlowMaterial()
+    {
+        if (_glowMaterial != null) return _glowMaterial;
+        var shader = Shader.Find("Hidden/FlyNeuronGlow");
+        if (shader == null) return null;
+        _glowMaterial = new Material(shader);
+        return _glowMaterial;
+    }
+
+    /// <summary>
+    /// Fit the dark oval to the brain as the camera sees it, set just behind
+    /// the brain's middle. Brain here is every neuron that rides the head.
+    /// Positions and axes are in the neuron container's space, which in the
+    /// fly view is the fly's Root.
+    /// </summary>
+    void UpdateBackdrop(Transform container, Camera cam, Vector3[] pos)
+    {
+        var s = _anatSettings;
+        // Drawn over everything, so it would black out a solid head.
+        bool on = CloseUp && s.closeUpBackdrop && !_flyTextured && _anatW != null && _anatW.Length == _n
+                  && pos != null && pos.Length == _n;
+        if (!on)
+        {
+            if (_backdrop != null && _backdrop.activeSelf) _backdrop.SetActive(false);
+            return;
+        }
+        Vector3 r = container.InverseTransformDirection(cam.transform.right);
+        Vector3 u = container.InverseTransformDirection(cam.transform.up);
+        Vector3 f = container.InverseTransformDirection(cam.transform.forward);
+        float minA = float.MaxValue, maxA = float.MinValue;
+        float minB = float.MaxValue, maxB = float.MinValue;
+        float sumC = 0f;
+        int count = 0;
+        for (int i = 0; i < _n; i++)
+        {
+            if (_anatW[i] >= 0.5f) continue;
+            Vector3 p = pos[i];
+            float a = Vector3.Dot(p, r), b = Vector3.Dot(p, u);
+            if (a < minA) minA = a;
+            if (a > maxA) maxA = a;
+            if (b < minB) minB = b;
+            if (b > maxB) maxB = b;
+            sumC += Vector3.Dot(p, f);
+            count++;
+        }
+        if (count == 0)
+        {
+            if (_backdrop != null) _backdrop.SetActive(false);
+            return;
+        }
+        if (!EnsureBackdrop(container)) return;
+
+        float pad = Mathf.Max(0.1f, s.closeUpBackdropPadding);
+        float hw = (maxA - minA) * 0.5f * pad, hh = (maxB - minB) * 0.5f * pad;
+        Vector3 c = r * ((minA + maxA) * 0.5f) + u * ((minB + maxB) * 0.5f) + f * (sumC / count);
+        _backdropVerts[0] = c - r * hw - u * hh;
+        _backdropVerts[1] = c + r * hw - u * hh;
+        _backdropVerts[2] = c - r * hw + u * hh;
+        _backdropVerts[3] = c + r * hw + u * hh;
+        _backdropMesh.vertices = _backdropVerts;
+
+        _backdropMaterial.SetColor("_Color", new Color(0f, 0f, 0f, Mathf.Clamp01(s.closeUpBackdropOpacity)));
+        _backdropMaterial.SetFloat("_Inner", 1f - Mathf.Clamp(s.closeUpBackdropSoftness, 0.05f, 1f));
+        if (!_backdrop.activeSelf) _backdrop.SetActive(true);
+    }
+
+    bool EnsureBackdrop(Transform container)
+    {
+        if (_backdrop == null)
+        {
+            var shader = Shader.Find("Hidden/FlyBrainBackdrop");
+            if (shader == null) return false;
+            // After the shell (2990), before the neurons (3000).
+            _backdropMaterial = new Material(shader) { renderQueue = 2995 };
+            _backdropMesh = new Mesh { name = "FlyBrainBackdrop" };
+            _backdropMesh.vertices = _backdropVerts;
+            _backdropMesh.uv = new[] { new Vector2(0f, 0f), new Vector2(1f, 0f),
+                                       new Vector2(0f, 1f), new Vector2(1f, 1f) };
+            _backdropMesh.triangles = new[] { 0, 1, 2, 2, 1, 3 };
+            _backdropMesh.bounds = new Bounds(Vector3.zero, Vector3.one * 1e4f);
+            _backdrop = NewMeshObject("FlyBrainBackdrop", container, _backdropMesh);
+            _backdrop.GetComponent<MeshRenderer>().sharedMaterial = _backdropMaterial;
+            _backdrop.layer = OverlayLayer;
+        }
+        if (_backdrop.transform.parent != container)
+        {
+            _backdrop.transform.SetParent(container, false);
+            _backdrop.transform.localPosition = Vector3.zero;
+            _backdrop.transform.localRotation = Quaternion.identity;
+            _backdrop.transform.localScale = Vector3.one;
+        }
+        return true;
+    }
+
     Material OverlayMaterial()
     {
         if (_material != null) return _material;
@@ -1364,7 +2431,7 @@ public class FlyBrainViz : MonoBehaviour
 
     bool IsVisible()
     {
-        return _edgeObject != null && _edgeObject.activeSelf;
+        return _pointObject != null && _pointObject.activeSelf;
     }
 
     // ---- controls legend ---------------------------------------------------
@@ -1433,8 +2500,9 @@ public class FlyBrainViz : MonoBehaviour
         // oldest C# version this project might be compiled under.
         string[] keys = {
             "hover", "drag LMB", "-   =", "0", "[   ]", "\\", "arrows", "/",
-            "B", ";", "'",
+            "N", ",   .", "Y", "B", ";", "'",
         };
+        bool anat = Anatomy;
         // The absolute value is what gets pasted into FLY_VIZ_DEPTH_SCALE, so
         // show it next to the multiplier rather than making the user read the
         // log to find it. Absent on a trainer that predates the depthScale
@@ -1453,12 +2521,20 @@ public class FlyBrainViz : MonoBehaviour
             "turn it (springs back)",
             sizeText,
             "reset size",
-            "depth  \u00d7" + depthMultiplier.ToString("0.##")
-                + (depthAbs != null ? "   = " + depthAbs : ""),
+            anat ? "depth  (true in the fly view)"
+                 : "depth  \u00d7" + depthMultiplier.ToString("0.##")
+                   + (depthAbs != null ? "   = " + depthAbs : ""),
             "reset depth",
-            "square up  " + baseYawDegrees.ToString("0.#") + "\u00b0 yaw / "
-                + basePitchDegrees.ToString("0.#") + "\u00b0 pitch",
+            anat ? "turn fly  " + FlyYaw.ToString("0.#") + "\u00b0 yaw / "
+                   + FlyElevation.ToString("0.#") + "\u00b0 elev"
+                 : "square up  " + baseYawDegrees.ToString("0.#") + "\u00b0 yaw / "
+                   + basePitchDegrees.ToString("0.#") + "\u00b0 pitch",
             "reset orientation",
+            anat ? "brain-only view" : "fly anatomy view",
+            anat ? "fly opacity  " + _anatSettings.bodyOpacity.ToString("0.00")
+                 : "fly opacity (fly view)",
+            anat ? (_flyTextured ? "see-through fly" : "textured fly")
+                 : "textured fly (fly view)",
             "hide overlay",
             "hide this list",
             // Reads the state rather than asserting it: with the key hidden,
@@ -1519,8 +2595,9 @@ public class FlyBrainViz : MonoBehaviour
     /// </summary>
     void DrawControlsHint(out float panelW, out float panelH)
     {
-        string hint = showColorLegend ? "; fly-brain keys"
-                                      : "; fly-brain keys    ' colours";
+        string hint = (showColorLegend ? "; fly-brain keys"
+                                       : "; fly-brain keys    ' colours")
+                      + (CloseUp ? "    N brain only" : Anatomy ? "    N brain close-up" : "    N fly view");
         float fs = Mathf.Max(8, controlsFontSize);
         float pad = fs * 0.45f;
         panelW = Mathf.Ceil(_guiTextStyle.CalcSize(new GUIContent(hint)).x + pad * 2f);
@@ -1960,10 +3037,11 @@ public class FlyBrainViz : MonoBehaviour
         float r2 = hoverRadiusPixels * hoverRadiusPixels;
         float bestCircuit = r2, bestAny = r2;
         int hitCircuit = -1, hitAny = -1;
+        Vector3[] pos = DrawPositions;
 
         for (int i = 0; i < _n; i++)
         {
-            Vector3 v = toView.MultiplyPoint3x4(_positions[i]);
+            Vector3 v = toView.MultiplyPoint3x4(pos[i]);
             if (v.z >= 0f) continue;                       // view space looks down -Z
             Vector4 clip = proj * new Vector4(v.x, v.y, v.z, 1f);
             if (clip.w <= 0f) continue;
@@ -2163,10 +3241,14 @@ public class FlyBrainViz : MonoBehaviour
 
     void SetVisible(bool on)
     {
-        bool want = on && _vizEnabled;
-        if (_edgeObject != null && _edgeObject.activeSelf != want)
-            _edgeObject.SetActive(want);
+        bool want = on && _vizEnabled && !CameraViewSwitcher.CarCameraOn;
+        // Edges are laid out in the connectome view's space only, so the fly
+        // view draws neurons alone (edges ship off by default anyway).
+        bool edges = want && !Anatomy;
+        if (_edgeObject != null && _edgeObject.activeSelf != edges)
+            _edgeObject.SetActive(edges);
         if (_pointObject != null && _pointObject.activeSelf != want)
             _pointObject.SetActive(want);
+        if (_fly != null) _fly.SetVisible(want && Anatomy);
     }
 }

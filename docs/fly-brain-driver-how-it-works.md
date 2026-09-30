@@ -750,6 +750,7 @@ arrives in Unity.
 |---|---|
 | **Hover over a neuron** | Label it — cell type, side, role, what it does in the fly, and how many of that type are drawn and firing |
 | **B** | Toggle the overlay |
+| **P** | Switch to the car camera (another script's key). The overlay, its panels and the track's gutter are hidden while that view is up. Pressing **P** again brings them back as they were, and the **B** setting is left alone. |
 | **Left-drag on the brain** | Turn it. The face you can see follows the cursor: drag right and it swings right, drag up and it tips up. Release and it eases back to the neutral pose in 0.15 s. |
 | **`-`** / **`=`** | Shrink / grow the overlay, ×1.08 per press, as a multiple of *the track's height*. The track's gutter follows, so growing the brain narrows the track rather than covering it. |
 | **`0`** | Back to ×1 — exactly as tall as the track (`overlaySizeScale`) |
@@ -759,6 +760,12 @@ arrives in Unity.
 | **`/`** | Return the neutral pose to the configured default |
 | **`;`** | Show / hide the on-screen key legend. **Hidden by default**; a one-line hint stays, naming the key back |
 | **`'`** | Show / hide the colour key. **Hidden by default** |
+| **N** | Cycle the brain-only view, the [fly anatomy view](#the-fly-anatomy-view) and the brain close-up |
+| **`,`** / **`.`** | Fly view only: make the fly's body more / less see-through, 0.02 per press |
+
+In the fly view the arrow keys turn the fly (yaw) and raise or lower the camera
+over it (elevation) instead, `/` resets those, and `[` `]` `\` do nothing: that
+view always draws true proportions.
 
 Both reset keys go back to the component's **defaults**, not to identity. Those
 defaults are tuned values rather than neutral ones, so resetting to `×1` and
@@ -1261,8 +1268,123 @@ because otherwise the only route back from `;` or `'` is already knowing the
 answer. For the same reason the colour-key row reads "show colour key" when the
 key is hidden rather than asserting "hide".
 
-Keys are checked against the rest of the scene: `B` `[` `]` `\` `/` `;` `-` `=`
-`0` and the arrows are the overlay's, while `H` (hud), `T` (rollout fan), `C` (curriculum
+### The fly anatomy view
+
+**N** swaps the brain-only overlay for the same connectome placed inside a
+see-through, animated male fruit fly (`Resources/FruitFly/FruitFlyMale_animated_v2.fbx`).
+It uses the same orthographic overlay camera and the same `FlyBrainOverlay`
+layer, so it stays out of the CSI frame too. Hover labels, the colour key,
+drag-to-turn and `-` / `=` all work as before.
+
+The fly view does not match the track's height. It fills its own screen area,
+`viewport` on the settings asset (left 48% of the window, 92% of its height),
+and the camera frames the fly **at rest**, seen head-on from 15° above
+(`viewYaw` 90, `viewElevation` 15), so the fly fills that area.
+
+A third **N** press gives the **brain close-up**, built for watching the brain
+fire. The head is bent `closeUpHeadPitch` (15°) down at the `Neck` bone (the
+brain rides the head, so it tips with it), and the camera zooms until the head
+fills `closeUpHeadBox`, the space left of the track, centred in it and followed
+through takeoff. The track keeps the fly view's layout. The rest of the fly
+runs off the left of the screen and is cut off where the track starts. Framing the whole flight range instead left the resting
+fly about 60 px tall, because takeoff lifts the body about 2.5 body-heights.
+During takeoff, hover and land the model is shifted back by all but
+`flightLiftShown` (0.25) of that climb, so the flight still reads while the fly
+stays in frame.
+
+**Everything tunable lives on one asset:
+`unity/Assets/Resources/FruitFly/FlyAnatomySettings.asset`.** `FlyBrainViz` is
+added by `SimController` at runtime, so inspector edits to it vanish when Play
+stops. The asset keeps edits, and every value is read every frame, so dragging a
+slider during Play shows up immediately. The asset has these groups:
+
+| Group | Settings |
+|---|---|
+| Body transparency | `bodyOpacity` (0.10), `bodyTint`, `bodyTextureStrength`, `bodyRimOpacity`, `rimColor`, `rimPower` |
+| Fly view only | orientation dials `viewYaw` (90, head-on), `viewElevation` (15), `viewRoll` (0), `viewBodyPitch` (0); `headOpacity` (1; the head's shell from the neck forward, eyes excepted, relative to the body), `flyViewBrainBrightness` (1, multiplies `glowGain` in this view only) |
+| Eyes / wings / hair | Opacity, tint and rim for each; hair is off by default |
+| Eyes | `eyeOpacity` (0.05) and `eyeRimOpacity` (0.12), kept faint so the red does not drown the optic lobes |
+| Performance | `overlayRenderHz` (10): the fly views are drawn into a texture at this rate (`Hidden/FlyOverlayBlit` copies it into the column on every other frame; the column is opaque, so the copy is exact), and every frame while dragging. Capping the frame rate instead made driving worse: the car's commands and observations only move between frames, and at `Time.timeScale` 3 a 15 fps cap is 0.2 s of driving per frame. `animationHz` (30): the fly's pose, and the neurons riding it, update at this rate rather than every frame. The sim renders as fast as it can and the policy waits on its frames (at `Time.timeScale` 3), so per-frame overlay work costs the car reaction time; with the fly posed every frame the car crashed far more often |
+| Textured fly (Y key) | `texturedLightIntensity` (1.1), `texturedShowHair` (off; the strands are expensive). Y swaps the see-through shell for the authored materials in `Resources/FruitFly/Materials` (albedo, normal and metallic maps), lit by a light on the overlay layer only; the brain still draws on top, and the close-up's dark backdrop is off |
+| Animation schedule | `idleMinSeconds` / `idleMaxSeconds` (30 / 60, the still stretch), `groomSeconds` (5), `groomBlendSeconds` (0.5) |
+| View | `viewport`, `flightLiftShown` (0.25), `spinDegreesPerSecond`, `showWithoutActivity` |
+| Brain close-up | `closeUpHeadBox`, `closeUpHeadPitch` (15), orientation dials independent of the fly view's: `closeUpViewYaw` (90), `closeUpViewElevation` (15), `closeUpViewRoll` (0), `closeUpBodyPitch` (10), `closeUpRearOpacity` (0.75 for the body behind the head; head, eyes, front legs and wings unchanged), `closeUpHeadOpacity` (1, the close-up's `headOpacity`), `neckBone` |
+| Neuron glow (all three views) | `glow` (additive soft spots, `Hidden/FlyNeuronGlow`), `glowGain` (0.9), `glowRestGain` (2.5× resting brightness), `glowRestAlpha` (0.25), `glowPointScale` (1.6, brain-only and fly views) |
+| Close-up brain | `closeUpPointScale` (2.5), `closeUpBrainScale` (0.85, brain only, about its centre, so the eyes cover less of the optic lobes), `closeUpBodyPitch` (10° nose down; the head stays framed, the abdomen rises), `closeUpHeadFill` (0.67) |
+| Close-up backdrop and shell | `closeUpBackdrop` (dark oval behind the brain, `Hidden/FlyBrainBackdrop`, drawn between shell and neurons), `closeUpBackdropOpacity` (0.85), `closeUpBackdropPadding` (1.25), `closeUpBackdropSoftness` (0.4), `closeUpShellFill` (0.1 of the fly view's fill, leaving mostly the rim), `closeUpShellTint`, `closeUpRimColor`, `closeUpMouthOpacity` (0.1 for the mouthparts, skinned to the `Tongue01` branch named by `mouthBone`) |
+| Connectome placement | `brainWidthFraction` (0.82), `brainOffset`, `vncOffset`, layout override, flips, `pointScale` |
+
+Transparency comes from `Hidden/FlyXRay`, an unlit shader. Opacity is a floor
+across the surface plus a fresnel rim at glancing angles, so the silhouette
+still reads at a floor low enough to see the neurons through. The shell draws
+at queue 2990, just before the neurons' `Sprites/Default` at 3000, so firing
+neurons land on top of the tinted body at full strength. The FBX's own
+materials are swapped at runtime by name: `phong1` is the eyes, `phong3` the
+wings, `anisotropic1` the hair, and anything else is body.
+
+**The animation schedule.** A fixed loop, repeated forever:
+
+1. standing still on the idle clip's first frame for a random time between
+   `idleMinSeconds` and `idleMaxSeconds` (30–60 s, picked fresh each loop),
+2. idle_look (cleaning hands) for `groomSeconds` (5 s).
+
+Breathing, takeoff, hover and land no longer play; the takeoff clip is still
+sampled once at load to measure the climb that `flightLiftShown` frames for.
+While the fly stands still nothing is evaluated, so the neurons riding it are
+not rebuilt either. idle_look is 1.0 s natively and plays whole cycles, so
+`groomSeconds` rounds to the nearest cycle. The front legs stay raised through
+every frame of it, so it blends in from standing and back out over
+`groomBlendSeconds` each way. The durations are re-read at the start of each
+loop, so edits in Play mode apply on the next loop. The schedule runs on
+unscaled time, because the sim runs at `Time.timeScale` 3–5 and
+the fly should not. It uses a manually evaluated `PlayableGraph` rather than an
+Animator Controller, which can only be authored in the editor. Each step is
+logged as `[FlyAnatomy] <step> <seconds> s`.
+
+**Placing the connectome.** The published cloud is the whole CNS, but
+`viz.py` flattens its front-to-back axis to `depthScale` (0.12). The flatten is
+a pure final multiply after a ±1 clip that no neuron reaches, so the fly view
+divides it back out and gets true proportions. The orientation is then read from
+the data rather than assumed:
+
+- **Where the neck is.** The neck connective holds no somata, so it is the
+  widest empty run along the body axis. The side of it with the wider lateral
+  spread is the brain.
+- **Which way is left.** Left is where the `side == L` neurons sit.
+- **Which pose the CNS is in.** If the brain is taller than it is long along the
+  body axis, the CNS is already in body pose. Otherwise it is the dissected,
+  straightened pose, and the cord is bent back `neckBendDegrees` at the neck.
+- **Which way is ventral.** The cord sits ventral to the brain, which signs the
+  flattened axis.
+
+On the current geometry that gives 17,389 brain, 1,819 nerve-cord and 17
+connective neurons in body pose: the brain is 0.35 tall against 0.25 long, and
+the cord runs 0.62 along the body. The brain is centred on the head and scaled to
+0.82 of the head's width.
+
+The head is located from the skeleton, not the mesh. Its centre sits on the
+`HeadLock` bone and its width is 0.77 of the pelvis-to-head-bone distance, both
+measured on the model's rest pose in Blender. The fly's forward and up
+directions come from the pelvis-to-head line and the feet. Two mesh-based
+measurements failed in the player. `Renderer.bounds` is stale on the frame the
+model is created, and skinning the imported vertices by hand came out about 35×
+too wide.
+That single scale applies to the whole CNS, so the cord's size and position
+relative to the brain are real. The cord lands along the ventral thorax, from
+just behind the neck to about the middle of the thorax. Each neuron is stored
+in the rest frame of the bone it rides: `HeadLock` for the brain, `Spine02` for
+the cord, and a blend across the connective. So idle_look turns the brain with
+the head, and flight carries the whole CNS. A summary line
+(`[FlyBrainViz] fly view: body-pose CNS ...`) is logged whenever the layout is
+rebuilt.
+
+With `showWithoutActivity` on (the default), the fly view stays up with no fly
+policy running. It shows the last geometry received, which `FlyBrainViz` keeps
+at `Application.persistentDataPath/fly_brain_geometry.json`, drawn at rest. So
+the view works as a presentation piece once any fly job has run on that machine.
+
+Keys are checked against the rest of the scene: `B` `N` `,` `.` `[` `]` `\` `/`
+`;` `-` `=` `0` and the arrows are the overlay's, while `H` (hud), `T` (rollout fan), `C` (curriculum
 stages), `P` (car camera) and `F` (CSI dump) belong to other scripts. The
 legend's last line lists those too, so one panel answers "what are the keys" —
 which also means it is what goes stale if one of them is renamed.
@@ -1354,7 +1476,9 @@ round trip, not the brain, sets the pace at one env.
 | `rl_agent/fly_brain/policy.py` | `FlyPyPolicy` — the BC route, as a tf-agents `PyPolicy`. |
 | `rl_agent/environments/courses/fly_donut_course.py` | The RL route. The trace becomes the observation here. |
 | `rl_agent/fly_brain/viz.py` | Publishes geometry and activity to ROS for the overlay. |
-| `unity/Assets/Scripts/FlyBrainViz.cs` | Renders it. |
+| `unity/Assets/Scripts/FlyBrainViz.cs` | Renders it, in either view. Also places the CNS inside the fly. |
+| `unity/Assets/Scripts/FlyAnatomyView.cs` | The see-through fly: model, X-ray materials, animation schedule, head and thorax landmarks. |
+| `unity/Assets/Resources/FruitFly/FlyAnatomySettings.asset` | Fly view tuning: transparency, schedule, view, placement. |
 | `rl_agent/environments/robotaxi_env.py` | `_pack_observation` / `_as_obs_time_step` — where `policy_vector` is applied. |
 | `rl_agent/collect_training_data.py` | `COURSES_WITHOUT_DEMOS`, `COURSE_OBS_KIND`. |
 
