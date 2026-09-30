@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+<defs>
+  <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="7"/></filter>
+  <marker id="mU" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#40D9FF"/></marker><marker id="mS" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5BE37D"/></marker><marker id="mM" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#B26BFF"/></marker><marker id="mR" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FF991F"/></marker><marker id="mD" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a93a6"/></marker>
+  <marker id="mY" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FFD933"/></marker><marker id="mB" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6E8BFF"/></marker><marker id="mE" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FF5940"/></marker><marker id="mG" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#A6A6B8"/></marker>
+  <clipPath id="rclip"><rect x="640" y="0" width="1280" height="1080"/></clipPath>
+  <linearGradient id="fadeL" x1="0" x2="1"><stop offset="0" stop-color="#07090d"/><stop offset="1" stop-color="#07090d" stop-opacity="0"/></linearGradient>
+  <linearGradient id="fadeR" x1="0" x2="1"><stop offset="0" stop-color="#07090d" stop-opacity="0"/><stop offset="1" stop-color="#07090d"/></linearGradient>
+</defs>
+<rect x="0" y="0" width="1920" height="1080" fill="#07090d"/>
+<rect x="680" y="44" width="232" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="680,912" x="796" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="500" text-anchor="middle">Overview</text>
+<rect x="922" y="44" width="232" height="36" rx="18" fill="#161b27" stroke="#e6e9ef" stroke-width="2"/>
+<text data-box="922,1154" x="1038" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#e6e9ef" font-weight="700" text-anchor="middle">Control loop</text>
+<rect x="1164" y="44" width="232" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1164,1396" x="1280" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="500" text-anchor="middle">MongoDB</text>
+<rect x="1406" y="44" width="232" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1406,1638" x="1522" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="500" text-anchor="middle">Storage</text>
+<rect x="1648" y="44" width="232" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1648,1880" x="1764" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="500" text-anchor="middle">Operations</text>
+<rect x="662" y="110" width="216" height="70" rx="10" fill="#10141d" stroke="#40D9FF" stroke-width="1.6"/>
+<text data-box="662,878" x="770" y="140" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="19" fill="#e6e9ef" font-weight="700" text-anchor="middle">Unity gym</text>
+<text data-box="662,878" x="770" y="164" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="middle">Windows host</text>
+<line x1="770" y1="184" x2="770" y2="900" stroke="#40D9FF" stroke-width="1.2" opacity="0.5" stroke-dasharray="4 6" stroke-linecap="round"/>
+<rect x="912" y="110" width="216" height="70" rx="10" fill="#10141d" stroke="#A6A6B8" stroke-width="1.6"/>
+<text data-box="912,1128" x="1020" y="140" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="19" fill="#e6e9ef" font-weight="700" text-anchor="middle">ros-server-i</text>
+<text data-box="912,1128" x="1020" y="164" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="middle">one per gym</text>
+<line x1="1020" y1="184" x2="1020" y2="900" stroke="#A6A6B8" stroke-width="1.2" opacity="0.5" stroke-dasharray="4 6" stroke-linecap="round"/>
+<rect x="1162" y="110" width="216" height="70" rx="10" fill="#10141d" stroke="#5BE37D" stroke-width="1.6"/>
+<text data-box="1162,1378" x="1270" y="140" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="19" fill="#e6e9ef" font-weight="700" text-anchor="middle">Trainer actor</text>
+<text data-box="1162,1378" x="1270" y="164" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="middle">sim-controller</text>
+<line x1="1270" y1="184" x2="1270" y2="900" stroke="#5BE37D" stroke-width="1.2" opacity="0.5" stroke-dasharray="4 6" stroke-linecap="round"/>
+<rect x="1412" y="110" width="216" height="70" rx="10" fill="#10141d" stroke="#FF5940" stroke-width="1.6"/>
+<text data-box="1412,1628" x="1520" y="140" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="19" fill="#e6e9ef" font-weight="700" text-anchor="middle">fly-brain</text>
+<text data-box="1412,1628" x="1520" y="164" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="middle">fly courses only</text>
+<line x1="1520" y1="184" x2="1520" y2="900" stroke="#FF5940" stroke-width="1.2" opacity="0.5" stroke-dasharray="4 6" stroke-linecap="round"/>
+<rect x="1662" y="110" width="216" height="70" rx="10" fill="#10141d" stroke="#5BE37D" stroke-width="1.6"/>
+<text data-box="1662,1878" x="1770" y="140" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="19" fill="#e6e9ef" font-weight="700" text-anchor="middle">Learner</text>
+<text data-box="1662,1878" x="1770" y="164" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="middle">Reverb + SAC, GPU</text>
+<line x1="1770" y1="184" x2="1770" y2="900" stroke="#5BE37D" stroke-width="1.2" opacity="0.5" stroke-dasharray="4 6" stroke-linecap="round"/>
+<line x1="778" y1="236" x2="1012" y2="236" stroke="#40D9FF" stroke-width="2.2" marker-end="url(#mU)" stroke-linecap="round"/>
+<circle cx="770" cy="236" r="5" fill="#40D9FF"/>
+<text data-box="750,1040" x="895" y="224" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="400" text-anchor="middle">scene: 31 numbers</text>
+<text data-box="770,1020" x="895" y="260" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="middle" xml:space="preserve">ROS-TCP</text>
+<text data-box="640,1920" x="684" y="241" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="700" text-anchor="middle">1</text>
+<line x1="1028" y1="324" x2="1262" y2="324" stroke="#A6A6B8" stroke-width="2.2" marker-end="url(#mG)" stroke-linecap="round"/>
+<circle cx="1020" cy="324" r="5" fill="#A6A6B8"/>
+<text data-box="1000,1290" x="1145" y="312" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="400" text-anchor="middle">gRPC Subscribe stream</text>
+<text data-box="640,1920" x="684" y="329" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="700" text-anchor="middle">2</text>
+<line x1="1278" y1="412" x2="1512" y2="412" stroke="#FF5940" stroke-width="2.2" stroke-dasharray="7 5" marker-end="url(#mE)" stroke-linecap="round"/>
+<circle cx="1270" cy="412" r="5" fill="#FF5940"/>
+<text data-box="1250,1540" x="1395" y="400" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="400" text-anchor="middle">gRPC Step</text>
+<text data-box="640,1920" x="684" y="417" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="700" text-anchor="middle">3</text>
+<line x1="1512" y1="500" x2="1278" y2="500" stroke="#FF5940" stroke-width="2.2" stroke-dasharray="7 5" marker-end="url(#mE)" stroke-linecap="round"/>
+<circle cx="1520" cy="500" r="5" fill="#FF5940"/>
+<text data-box="1250,1540" x="1395" y="488" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="400" text-anchor="middle">1,314-number trace</text>
+<text data-box="640,1920" x="684" y="505" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="700" text-anchor="middle">4</text>
+<line x1="1262" y1="588" x2="1028" y2="588" stroke="#5BE37D" stroke-width="2.2" marker-end="url(#mS)" stroke-linecap="round"/>
+<circle cx="1270" cy="588" r="5" fill="#5BE37D"/>
+<text data-box="1000,1290" x="1145" y="576" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="400" text-anchor="middle">gRPC CallService: action</text>
+<text data-box="640,1920" x="684" y="593" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="700" text-anchor="middle">5</text>
+<line x1="1012" y1="676" x2="778" y2="676" stroke="#A6A6B8" stroke-width="2.2" marker-end="url(#mG)" stroke-linecap="round"/>
+<circle cx="1020" cy="676" r="5" fill="#A6A6B8"/>
+<text data-box="750,1040" x="895" y="664" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="400" text-anchor="middle">accel, steer</text>
+<text data-box="770,1020" x="895" y="700" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="middle" xml:space="preserve">ROS-TCP</text>
+<text data-box="640,1920" x="684" y="681" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="700" text-anchor="middle">6</text>
+<line x1="1278" y1="764" x2="1762" y2="764" stroke="#5BE37D" stroke-width="2.2" marker-end="url(#mS)" stroke-linecap="round"/>
+<circle cx="1270" cy="764" r="5" fill="#5BE37D"/>
+<text data-box="1250,1790" x="1520" y="752" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="400" text-anchor="middle">transition into Reverb</text>
+<text data-box="640,1920" x="684" y="769" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="700" text-anchor="middle">7</text>
+<rect x="1670" y="806" width="200" height="60" rx="10" fill="#161b27" stroke="#5BE37D" stroke-width="1"/>
+<text data-box="1670,1870" x="1770" y="830" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#e6e9ef" font-weight="400" text-anchor="middle">sample batches,</text>
+<text data-box="1670,1870" x="1770" y="852" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#e6e9ef" font-weight="400" text-anchor="middle">SAC update on GPU</text>
+<rect x="690" y="930" width="1180" height="50" rx="10" fill="#10141d" stroke="#262d3d" stroke-width="1"/>
+<text data-box="640,1920" x="1280" y="962" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#8a93a6" font-weight="400" text-anchor="middle">10 steps a second per gym · up to 4 gyms in parallel · fly courses run 1</text>
+<text data-box="640,1900" x="1880" y="1056" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#6b7488" font-weight="400" text-anchor="end">rl-roboracer · platform overview · 2026-09-26</text>
+<text data-box="40,600" x="70" y="150" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6E8BFF" font-weight="700" text-anchor="start" letter-spacing="1.6">ARCHITECTURE · 2 OF 5</text>
+<text data-box="40,600" x="70" y="214" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="46" fill="#e6e9ef" font-weight="700" text-anchor="start">One step, ten times a</text>
+<text data-box="40,600" x="70" y="270" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="46" fill="#e6e9ef" font-weight="700" text-anchor="start">second</text>
+<circle cx="76" cy="340" r="4" fill="#8a93a6"/>
+<text data-box="40,600" x="98" y="348" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">Unity publishes the scene over ROS-TCP to</text>
+<text data-box="40,600" x="98" y="381" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">its own ROS server.</text>
+<circle cx="76" cy="424" r="4" fill="#8a93a6"/>
+<text data-box="40,600" x="98" y="432" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">The trainer reads it over gRPC, picks an</text>
+<text data-box="40,600" x="98" y="465" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">action and sends it back.</text>
+<circle cx="76" cy="508" r="4" fill="#8a93a6"/>
+<text data-box="40,600" x="98" y="516" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">Each transition lands in the Reverb replay</text>
+<text data-box="40,600" x="98" y="549" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">buffer for SAC to learn from.</text>
+</svg>

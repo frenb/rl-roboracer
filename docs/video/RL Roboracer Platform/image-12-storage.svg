@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1080" viewBox="640 0 1280 1080">
+<defs>
+  <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="7"/></filter>
+  <marker id="mU" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#40D9FF"/></marker><marker id="mS" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5BE37D"/></marker><marker id="mM" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#B26BFF"/></marker><marker id="mR" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FF991F"/></marker><marker id="mD" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a93a6"/></marker>
+  <marker id="mY" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FFD933"/></marker><marker id="mB" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6E8BFF"/></marker><marker id="mE" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FF5940"/></marker><marker id="mG" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#A6A6B8"/></marker>
+  <clipPath id="rclip"><rect x="640" y="0" width="1280" height="1080"/></clipPath>
+  <linearGradient id="fadeL" x1="0" x2="1"><stop offset="0" stop-color="#07090d"/><stop offset="1" stop-color="#07090d" stop-opacity="0"/></linearGradient>
+  <linearGradient id="fadeR" x1="0" x2="1"><stop offset="0" stop-color="#07090d" stop-opacity="0"/><stop offset="1" stop-color="#07090d"/></linearGradient>
+</defs>
+<rect x="0" y="0" width="1920" height="1080" fill="#07090d"/>
+<rect x="680" y="44" width="232" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="680,912" x="796" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="500" text-anchor="middle">Overview</text>
+<rect x="922" y="44" width="232" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="922,1154" x="1038" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="500" text-anchor="middle">Control loop</text>
+<rect x="1164" y="44" width="232" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1164,1396" x="1280" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="500" text-anchor="middle">MongoDB</text>
+<rect x="1406" y="44" width="232" height="36" rx="18" fill="#161b27" stroke="#e6e9ef" stroke-width="2"/>
+<text data-box="1406,1638" x="1522" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#e6e9ef" font-weight="700" text-anchor="middle">Storage</text>
+<rect x="1648" y="44" width="232" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1648,1880" x="1764" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="500" text-anchor="middle">Operations</text>
+<text data-box="640,1920" x="690" y="132" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="700" text-anchor="start" letter-spacing="1.3">HOST FOLDERS</text>
+<text data-box="640,1920" x="690" y="156" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#6b7488" font-weight="400" text-anchor="start">Beside the repo; survive rebuilds</text>
+<text data-box="640,1920" x="1090" y="132" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="700" text-anchor="start" letter-spacing="1.3">SHARED DOCKER VOLUMES</text>
+<text data-box="640,1920" x="1090" y="156" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#6b7488" font-weight="400" text-anchor="start">Fast, container-native</text>
+<text data-box="640,1920" x="1530" y="132" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="700" text-anchor="start" letter-spacing="1.3">WHO READS THEM</text>
+<rect x="690" y="186" width="360" height="110" rx="10" fill="#10141d" stroke="#FFD933" stroke-width="1.4"/>
+<text data-box="690,1050" x="706" y="216" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="18" fill="#FFD933" font-weight="400" text-anchor="start" xml:space="preserve">../saved_models</text>
+<text data-box="690,1050" x="706" y="242" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">Model checkpoints</text>
+<text data-box="690,1050" x="706" y="263" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">Written on each new best eval</text>
+<rect x="690" y="316" width="360" height="110" rx="10" fill="#10141d" stroke="#FFD933" stroke-width="1.4"/>
+<text data-box="690,1050" x="706" y="346" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="18" fill="#FFD933" font-weight="400" text-anchor="start" xml:space="preserve">../tfrecords</text>
+<text data-box="690,1050" x="706" y="372" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">Expert demo corpora</text>
+<text data-box="690,1050" x="706" y="393" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">From DEMO jobs</text>
+<rect x="690" y="446" width="360" height="110" rx="10" fill="#10141d" stroke="#FFD933" stroke-width="1.4"/>
+<text data-box="690,1050" x="706" y="476" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="18" fill="#FFD933" font-weight="400" text-anchor="start" xml:space="preserve">../mongodb</text>
+<text data-box="690,1050" x="706" y="502" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">Database files</text>
+<text data-box="690,1050" x="706" y="523" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">Jobs, models, designs</text>
+<rect x="1090" y="186" width="400" height="90" rx="10" fill="#10141d" stroke="#5BE37D" stroke-width="1.4"/>
+<text data-box="1090,1490" x="1106" y="216" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="18" fill="#5BE37D" font-weight="400" text-anchor="start" xml:space="preserve">tmpdata:/tmp/active</text>
+<text data-box="1090,1490" x="1106" y="242" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">The live run, drawn as current</text>
+<rect x="1090" y="292" width="400" height="112" rx="10" fill="#10141d" stroke="#5BE37D" stroke-width="1.4"/>
+<text data-box="1090,1490" x="1106" y="322" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="18" fill="#5BE37D" font-weight="400" text-anchor="start" xml:space="preserve">tmpdata:/tmp/jobsdata</text>
+<text data-box="1090,1490" x="1106" y="348" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">Archived runs: the newest 100,</text>
+<text data-box="1090,1490" x="1106" y="369" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">plus any a saved model points at</text>
+<rect x="1090" y="420" width="400" height="90" rx="10" fill="#10141d" stroke="#5BE37D" stroke-width="1.4"/>
+<text data-box="1090,1490" x="1106" y="450" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="18" fill="#5BE37D" font-weight="400" text-anchor="start" xml:space="preserve">tmpdata:/tmp/tb_compare</text>
+<text data-box="1090,1490" x="1106" y="476" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">Runs picked for Compare</text>
+<rect x="1090" y="526" width="400" height="112" rx="10" fill="#10141d" stroke="#5BE37D" stroke-width="1.4"/>
+<text data-box="1090,1490" x="1106" y="556" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="18" fill="#5BE37D" font-weight="400" text-anchor="start" xml:space="preserve">tmpdata:/tmp/trainer.log</text>
+<text data-box="1090,1490" x="1106" y="582" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">Rotated by run_trainer.sh,</text>
+<text data-box="1090,1490" x="1106" y="603" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">last 10 sessions kept</text>
+<rect x="1090" y="654" width="400" height="90" rx="10" fill="#10141d" stroke="#FF5940" stroke-width="1.4"/>
+<text data-box="1090,1490" x="1106" y="684" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="18" fill="#FF5940" font-weight="400" text-anchor="start" xml:space="preserve">flydata</text>
+<text data-box="1090,1490" x="1106" y="710" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">The 260 MB connectome</text>
+<rect x="1530" y="232" width="340" height="130" rx="10" fill="#10141d" stroke="#FFD933" stroke-width="1.4"/>
+<text data-box="1530,1870" x="1546" y="262" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="18" fill="#FFD933" font-weight="400" text-anchor="start" xml:space="preserve">TensorBoard :6006</text>
+<text data-box="1530,1870" x="1546" y="288" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">current: the live run</text>
+<text data-box="1530,1870" x="1546" y="309" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">compare: runs you picked</text>
+<rect x="1530" y="520" width="340" height="130" rx="10" fill="#10141d" stroke="#6E8BFF" stroke-width="1.4"/>
+<text data-box="1530,1870" x="1546" y="550" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="18" fill="#6E8BFF" font-weight="400" text-anchor="start" xml:space="preserve">Logs tab</text>
+<text data-box="1530,1870" x="1546" y="576" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">WebSocket :8080 tails</text>
+<text data-box="1530,1870" x="1546" y="597" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">the trainer log live</text>
+<rect x="1530" y="654" width="340" height="90" rx="10" fill="#10141d" stroke="#FF5940" stroke-width="1.4"/>
+<text data-box="1530,1870" x="1546" y="684" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="18" fill="#FF5940" font-weight="400" text-anchor="start" xml:space="preserve">fly-brain</text>
+<text data-box="1530,1870" x="1546" y="710" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">Loads it at startup</text>
+<path d="M 1492 231 C 1509 231, 1509 280, 1526 280" fill="none" stroke="#FFD933" stroke-width="1.8" marker-end="url(#mY)" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1492 465 C 1509 465, 1509 316, 1526 316" fill="none" stroke="#FFD933" stroke-width="1.8" marker-end="url(#mY)" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1492 582 C 1509 582, 1509 585, 1526 585" fill="none" stroke="#6E8BFF" stroke-width="1.8" marker-end="url(#mB)" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1492 699 C 1509 699, 1509 699, 1526 699" fill="none" stroke="#FF5940" stroke-width="1.8" marker-end="url(#mE)" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="690" y="800" width="1180" height="110" rx="12" fill="#10141d" stroke="#262d3d" stroke-width="1"/>
+<text data-box="640,1920" x="712" y="836" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16.5" fill="#8a93a6" font-weight="400" text-anchor="start">EVAL jobs move their summaries out of /tmp/active when they finish, so TensorBoard</text>
+<text data-box="640,1920" x="712" y="860" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16.5" fill="#8a93a6" font-weight="400" text-anchor="start">shows only the training run. Pruning never deletes an archive a saved model needs,</text>
+<text data-box="640,1920" x="712" y="884" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16.5" fill="#8a93a6" font-weight="400" text-anchor="start">so Compare in Analysis keeps working for every model.</text>
+<text data-box="640,1900" x="1880" y="1056" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#6b7488" font-weight="400" text-anchor="end">rl-roboracer · platform overview · 2026-09-26</text>
+</svg>

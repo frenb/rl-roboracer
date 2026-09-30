@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+<defs>
+  <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="7"/></filter>
+  <marker id="mU" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#40D9FF"/></marker><marker id="mS" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5BE37D"/></marker><marker id="mM" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#B26BFF"/></marker><marker id="mR" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FF991F"/></marker><marker id="mD" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a93a6"/></marker>
+  <marker id="mY" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FFD933"/></marker><marker id="mB" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6E8BFF"/></marker><marker id="mE" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FF5940"/></marker><marker id="mG" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#A6A6B8"/></marker>
+  <clipPath id="rclip"><rect x="640" y="0" width="1280" height="1080"/></clipPath>
+  <linearGradient id="fadeL" x1="0" x2="1"><stop offset="0" stop-color="#07090d"/><stop offset="1" stop-color="#07090d" stop-opacity="0"/></linearGradient>
+  <linearGradient id="fadeR" x1="0" x2="1"><stop offset="0" stop-color="#07090d" stop-opacity="0"/><stop offset="1" stop-color="#07090d"/></linearGradient>
+</defs>
+<rect x="0" y="0" width="1920" height="1080" fill="#07090d"/>
+<rect x="680" y="44" width="232" height="36" rx="18" fill="#161b27" stroke="#e6e9ef" stroke-width="2"/>
+<text data-box="680,912" x="796" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#e6e9ef" font-weight="700" text-anchor="middle">Overview</text>
+<rect x="922" y="44" width="232" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="922,1154" x="1038" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="500" text-anchor="middle">Control loop</text>
+<rect x="1164" y="44" width="232" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1164,1396" x="1280" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="500" text-anchor="middle">MongoDB</text>
+<rect x="1406" y="44" width="232" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1406,1638" x="1522" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="500" text-anchor="middle">Storage</text>
+<rect x="1648" y="44" width="232" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1648,1880" x="1764" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="500" text-anchor="middle">Operations</text>
+<rect x="680" y="112" width="1200" height="158" rx="14" fill="none" stroke="#40D9FF" stroke-width="1.4" stroke-dasharray="6 6"/>
+<text data-box="640,1920" x="700" y="138" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#40D9FF" font-weight="700" text-anchor="start" letter-spacing="1.4">WINDOWS HOST</text>
+<rect x="700" y="150" width="350" height="104" rx="12" fill="#10141d" stroke="#40D9FF" stroke-width="1.6"/>
+<text data-box="706,1044" x="718" y="182" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="21" fill="#e6e9ef" font-weight="700" text-anchor="start">Unity gyms × 1–4</text>
+<text data-box="706,1044" x="718" y="208" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">Supervised, restarted on hang</text>
+<rect x="1105" y="150" width="350" height="104" rx="12" fill="#10141d" stroke="#40D9FF" stroke-width="1.6"/>
+<text data-box="1111,1449" x="1123" y="182" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="21" fill="#e6e9ef" font-weight="700" text-anchor="start">Watchdog.ps1</text>
+<text data-box="1111,1449" x="1123" y="208" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">Recovers wedged runs</text>
+<rect x="1510" y="150" width="350" height="104" rx="12" fill="#10141d" stroke="#40D9FF" stroke-width="1.6"/>
+<text data-box="1516,1854" x="1528" y="182" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="21" fill="#e6e9ef" font-weight="700" text-anchor="start">Browser</text>
+<text data-box="1516,1854" x="1528" y="208" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">Dashboard :80, TensorBoard :6006</text>
+<rect x="680" y="310" width="1200" height="620" rx="14" fill="none" stroke="#6b7488" stroke-width="1.4" stroke-dasharray="6 6"/>
+<text data-box="640,1920" x="700" y="338" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="700" text-anchor="start" letter-spacing="1.4">DOCKER COMPOSE STACK</text>
+<rect x="700" y="356" width="350" height="150" rx="12" fill="#10141d" stroke="#A6A6B8" stroke-width="1.6"/>
+<text data-box="706,1044" x="718" y="388" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="21" fill="#e6e9ef" font-weight="700" text-anchor="start">ros-server × 1–4</text>
+<text data-box="706,1044" x="718" y="414" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">ROS Noetic, one per gym</text>
+<text data-box="706,1044" x="718" y="436" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">ROS-TCP :10000+i</text>
+<text data-box="706,1044" x="718" y="458" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">gRPC :50051+i</text>
+<rect x="1105" y="356" width="350" height="150" rx="12" fill="#10141d" stroke="#5BE37D" stroke-width="1.6"/>
+<text data-box="1111,1449" x="1123" y="388" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="21" fill="#e6e9ef" font-weight="700" text-anchor="start">sim-controller</text>
+<text data-box="1111,1449" x="1123" y="414" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">Trainer: SAC on tf-agents</text>
+<text data-box="1111,1449" x="1123" y="436" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">Reverb replay buffer</text>
+<text data-box="1111,1449" x="1123" y="458" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">TensorBoard :6006</text>
+<rect x="1510" y="356" width="350" height="150" rx="12" fill="#10141d" stroke="#FF5940" stroke-width="1.6"/>
+<text data-box="1516,1854" x="1528" y="388" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="21" fill="#e6e9ef" font-weight="700" text-anchor="start">fly-brain</text>
+<text data-box="1516,1854" x="1528" y="414" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">Frozen fly connectome</text>
+<text data-box="1516,1854" x="1528" y="436" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">CuPy on the GPU</text>
+<text data-box="1516,1854" x="1528" y="458" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">gRPC :50061</text>
+<rect x="700" y="560" width="350" height="150" rx="12" fill="#10141d" stroke="#B26BFF" stroke-width="1.6"/>
+<text data-box="706,1044" x="718" y="592" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="21" fill="#e6e9ef" font-weight="700" text-anchor="start">madscientist</text>
+<text data-box="706,1044" x="718" y="618" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">Research agents, LLM judge</text>
+<text data-box="706,1044" x="718" y="640" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">Off by default</text>
+<text data-box="706,1044" x="718" y="662" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">Read-only repo mount</text>
+<rect x="1105" y="560" width="350" height="150" rx="12" fill="#10141d" stroke="#FFD933" stroke-width="1.6"/>
+<text data-box="1111,1449" x="1123" y="592" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="21" fill="#e6e9ef" font-weight="700" text-anchor="start">mongo</text>
+<text data-box="1111,1449" x="1123" y="618" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">MongoDB 6.0 replica set</text>
+<text data-box="1111,1449" x="1123" y="640" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">:27017</text>
+<text data-box="1111,1449" x="1123" y="662" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">mongo-express :8081</text>
+<rect x="1510" y="560" width="350" height="150" rx="12" fill="#10141d" stroke="#6E8BFF" stroke-width="1.6"/>
+<text data-box="1516,1854" x="1528" y="592" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="21" fill="#e6e9ef" font-weight="700" text-anchor="start">dashboard</text>
+<text data-box="1516,1854" x="1528" y="618" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">Node 20 + Express, :80</text>
+<text data-box="1516,1854" x="1528" y="640" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">WebSockets :8080, :8082</text>
+<text data-box="1516,1854" x="1528" y="662" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">Every tab of the UI</text>
+<text data-box="640,1920" x="700" y="760" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="700" text-anchor="start" letter-spacing="1.4">STORAGE AND GPU</text>
+<rect x="700" y="776" width="222" height="64" rx="10" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="700,922" x="714" y="802" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="16" fill="#FFD933" font-weight="400" text-anchor="start" xml:space="preserve">saved_models</text>
+<text data-box="700,922" x="714" y="826" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="start">checkpoints</text>
+<rect x="932" y="776" width="222" height="64" rx="10" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="932,1154" x="946" y="802" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="16" fill="#FFD933" font-weight="400" text-anchor="start" xml:space="preserve">tfrecords</text>
+<text data-box="932,1154" x="946" y="826" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="start">expert demos</text>
+<rect x="1164" y="776" width="222" height="64" rx="10" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="1164,1386" x="1178" y="802" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="16" fill="#FFD933" font-weight="400" text-anchor="start" xml:space="preserve">mongodb</text>
+<text data-box="1164,1386" x="1178" y="826" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="start">database files</text>
+<rect x="1396" y="776" width="222" height="64" rx="10" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="1396,1618" x="1410" y="802" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="16" fill="#FFD933" font-weight="400" text-anchor="start" xml:space="preserve">tmpdata</text>
+<text data-box="1396,1618" x="1410" y="826" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="start">live runs, logs</text>
+<rect x="1628" y="776" width="222" height="64" rx="10" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="1628,1850" x="1642" y="802" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="16" fill="#FFD933" font-weight="400" text-anchor="start" xml:space="preserve">flydata</text>
+<text data-box="1628,1850" x="1642" y="826" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="start">connectome</text>
+<rect x="700" y="852" width="1160" height="58" rx="10" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="640,1920" x="718" y="888" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16.5" fill="#e6e9ef" font-weight="400" text-anchor="start">One NVIDIA GPU, shared by sim-controller and fly-brain</text>
+<line x1="875" y1="256" x2="875" y2="352" stroke="#40D9FF" stroke-width="2" marker-end="url(#mU)" marker-start="url(#mU)" stroke-linecap="round"/>
+<rect x="887" y="291" width="71.2" height="22" rx="11" fill="#07090d" stroke="#40D9FF" stroke-width="1"/>
+<text data-box="885,960.2" x="922.6" y="306.5" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#40D9FF" font-weight="400" text-anchor="middle" xml:space="preserve">ROS-TCP</text>
+<line x1="1053" y1="431" x2="1102" y2="431" stroke="#A6A6B8" stroke-width="2" marker-end="url(#mG)" marker-start="url(#mG)" stroke-linecap="round"/>
+<rect x="1053.3" y="406" width="48.4" height="22" rx="11" fill="#07090d" stroke="#A6A6B8" stroke-width="1"/>
+<text data-box="1051.3,1103.7" x="1077.5" y="421.5" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#A6A6B8" font-weight="400" text-anchor="middle" xml:space="preserve">gRPC</text>
+<line x1="1458" y1="431" x2="1507" y2="431" stroke="#FF5940" stroke-width="2" marker-end="url(#mE)" marker-start="url(#mE)" stroke-linecap="round"/>
+<rect x="1458.3" y="406" width="48.4" height="22" rx="11" fill="#07090d" stroke="#FF5940" stroke-width="1"/>
+<text data-box="1456.3,1508.7" x="1482.5" y="421.5" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#FF5940" font-weight="400" text-anchor="middle" xml:space="preserve">gRPC</text>
+<line x1="1280" y1="509" x2="1280" y2="557" stroke="#FFD933" stroke-width="2" marker-end="url(#mY)" marker-start="url(#mY)" stroke-linecap="round"/>
+<rect x="1292" y="521" width="109.2" height="22" rx="11" fill="#07090d" stroke="#FFD933" stroke-width="1"/>
+<text data-box="1290,1403.2" x="1346.6" y="536.5" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#FFD933" font-weight="400" text-anchor="middle" xml:space="preserve">jobs, models</text>
+<line x1="1053" y1="635" x2="1102" y2="635" stroke="#B26BFF" stroke-width="2" marker-end="url(#mM)" marker-start="url(#mM)" stroke-linecap="round"/>
+<line x1="1507" y1="635" x2="1458" y2="635" stroke="#6E8BFF" stroke-width="2" marker-end="url(#mY)" marker-start="url(#mB)" stroke-linecap="round"/>
+<line x1="1280" y1="256" x2="1280" y2="352" stroke="#40D9FF" stroke-width="1.6" stroke-dasharray="5 5" marker-end="url(#mU)" stroke-linecap="round"/>
+<rect x="1292" y="291" width="101.6" height="22" rx="11" fill="#07090d" stroke="#40D9FF" stroke-width="1"/>
+<text data-box="1290,1395.6" x="1342.8" y="306.5" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#40D9FF" font-weight="400" text-anchor="middle" xml:space="preserve">trainer.log</text>
+<path d="M 1830 256 V 290 H 1868 V 600 H 1864" fill="none" stroke="#40D9FF" stroke-width="1.6" marker-end="url(#mU)" stroke-linecap="round" stroke-linejoin="round"/>
+<text data-box="640,1900" x="1880" y="1056" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#6b7488" font-weight="400" text-anchor="end">rl-roboracer · platform overview · 2026-09-26</text>
+<text data-box="40,600" x="70" y="150" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6E8BFF" font-weight="700" text-anchor="start" letter-spacing="1.6">ARCHITECTURE · 1 OF 5</text>
+<text data-box="40,600" x="70" y="214" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="46" fill="#e6e9ef" font-weight="700" text-anchor="start">How the pieces fit</text>
+<circle cx="76" cy="284" r="4" fill="#8a93a6"/>
+<text data-box="40,600" x="98" y="292" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">Unity gyms run on the Windows host;</text>
+<text data-box="40,600" x="98" y="325" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">everything else runs in Docker Compose.</text>
+<circle cx="76" cy="368" r="4" fill="#8a93a6"/>
+<text data-box="40,600" x="98" y="376" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">The trainer and the fly brain share one</text>
+<text data-box="40,600" x="98" y="409" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">NVIDIA GPU.</text>
+<circle cx="76" cy="452" r="4" fill="#8a93a6"/>
+<text data-box="40,600" x="98" y="460" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">MongoDB holds the shared state: jobs,</text>
+<text data-box="40,600" x="98" y="493" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">models, designs and proposals.</text>
+</svg>

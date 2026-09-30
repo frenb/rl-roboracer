@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+<defs>
+  <marker id="mU" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#40D9FF"/></marker>
+  <marker id="mS" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5BE37D"/></marker>
+  <marker id="mM" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#B26BFF"/></marker>
+  <marker id="mE" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FF5940"/></marker>
+  <marker id="mG" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#A6A6B8"/></marker>
+  <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+    <feGaussianBlur stdDeviation="2.2" result="b"/>
+    <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+</defs>
+<rect x="0" y="0" width="1920" height="1080" fill="#07090d"/>
+<rect x="680" y="44" width="190" height="36" rx="18" fill="none" stroke="#3a4356" stroke-width="1.2"/>
+<text x="775" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#8a93a6" font-weight="500" text-anchor="middle">1  Unity</text>
+<rect x="882" y="44" width="190" height="36" rx="18" fill="none" stroke="#3a4356" stroke-width="1.2"/>
+<text x="977" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#8a93a6" font-weight="500" text-anchor="middle">2  Encoder</text>
+<rect x="1084" y="44" width="190" height="36" rx="18" fill="none" stroke="#3a4356" stroke-width="1.2"/>
+<text x="1179" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#8a93a6" font-weight="500" text-anchor="middle">3  Connectome</text>
+<rect x="1286" y="44" width="190" height="36" rx="18" fill="none" stroke="#3a4356" stroke-width="1.2"/>
+<text x="1381" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#8a93a6" font-weight="500" text-anchor="middle">4  Trace</text>
+<rect x="1488" y="44" width="190" height="36" rx="18" fill="none" stroke="#3a4356" stroke-width="1.2"/>
+<text x="1583" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#8a93a6" font-weight="500" text-anchor="middle">5  Readout</text>
+<rect x="1690" y="44" width="190" height="36" rx="18" fill="none" stroke="#3a4356" stroke-width="1.2"/>
+<text x="1785" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#8a93a6" font-weight="500" text-anchor="middle">6  Action</text>
+<rect x="662" y="110" width="216" height="70" rx="10" fill="#10141d" stroke="#40D9FF" stroke-width="1.6"/>
+<text x="770" y="140" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="19" fill="#e6e9ef" font-weight="700" text-anchor="middle">Unity gym</text>
+<text x="770" y="164" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="middle">car + neuron overlay</text>
+<line x1="770" y1="184" x2="770" y2="900" stroke="#40D9FF" stroke-width="1.2" opacity="0.5" stroke-dasharray="4 6" stroke-linecap="round"/>
+<rect x="912" y="110" width="216" height="70" rx="10" fill="#10141d" stroke="#A6A6B8" stroke-width="1.6"/>
+<text x="1020" y="140" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="19" fill="#e6e9ef" font-weight="700" text-anchor="middle">ros-server</text>
+<text x="1020" y="164" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="middle">ROS &#8596; gRPC bridge</text>
+<line x1="1020" y1="184" x2="1020" y2="900" stroke="#A6A6B8" stroke-width="1.2" opacity="0.5" stroke-dasharray="4 6" stroke-linecap="round"/>
+<rect x="1162" y="110" width="216" height="70" rx="10" fill="#10141d" stroke="#5BE37D" stroke-width="1.6"/>
+<text x="1270" y="140" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="19" fill="#e6e9ef" font-weight="700" text-anchor="middle">Trainer actor</text>
+<text x="1270" y="164" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="middle">encoder + readout</text>
+<line x1="1270" y1="184" x2="1270" y2="900" stroke="#5BE37D" stroke-width="1.2" opacity="0.5" stroke-dasharray="4 6" stroke-linecap="round"/>
+<rect x="1412" y="110" width="216" height="70" rx="10" fill="#10141d" stroke="#FF5940" stroke-width="1.6"/>
+<text x="1520" y="140" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="19" fill="#e6e9ef" font-weight="700" text-anchor="middle">fly-brain</text>
+<text x="1520" y="164" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="middle">frozen connectome, GPU</text>
+<line x1="1520" y1="184" x2="1520" y2="900" stroke="#FF5940" stroke-width="1.2" opacity="0.5" stroke-dasharray="4 6" stroke-linecap="round"/>
+<rect x="1662" y="110" width="216" height="70" rx="10" fill="#10141d" stroke="#5BE37D" stroke-width="1.6"/>
+<text x="1770" y="140" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="19" fill="#e6e9ef" font-weight="700" text-anchor="middle">Learner</text>
+<text x="1770" y="164" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="middle">Reverb + AWAC, GPU</text>
+<line x1="1770" y1="184" x2="1770" y2="900" stroke="#5BE37D" stroke-width="1.2" opacity="0.5" stroke-dasharray="4 6" stroke-linecap="round"/>
+<circle cx="684" cy="228" r="12" fill="#10141d" stroke="#3a4356" stroke-width="1.2"/>
+<text x="684" y="233" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="700" text-anchor="middle">1</text>
+<line x1="778" y1="228" x2="1012" y2="228" stroke="#40D9FF" stroke-width="2.2" marker-end="url(#mU)" stroke-linecap="round"/>
+<circle cx="770" cy="228" r="5" fill="#40D9FF"/>
+<text x="895" y="216" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="400" text-anchor="middle">scene: 31 numbers</text>
+<text x="895" y="250" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="middle">ROS-TCP</text>
+<circle cx="684" cy="286" r="12" fill="#10141d" stroke="#3a4356" stroke-width="1.2"/>
+<text x="684" y="291" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="700" text-anchor="middle">1</text>
+<line x1="1028" y1="286" x2="1262" y2="286" stroke="#A6A6B8" stroke-width="2.2" marker-end="url(#mG)" stroke-linecap="round"/>
+<circle cx="1020" cy="286" r="5" fill="#A6A6B8"/>
+<text x="1145" y="274" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="400" text-anchor="middle">gRPC Subscribe stream</text>
+<circle cx="684" cy="344" r="12" fill="#10141d" stroke="#3a4356" stroke-width="1.2"/>
+<text x="684" y="349" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="700" text-anchor="middle">2</text>
+<rect x="1165" y="324" width="210" height="40" rx="8" fill="#161b27" stroke="#5BE37D" stroke-width="1"/>
+<text x="1270" y="349" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#e6e9ef" font-weight="400" text-anchor="middle">encode rays &#8594; 6 cues</text>
+<text x="1390" y="349" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">loom &#183; chase &#183; flow, L + R</text>
+<circle cx="684" cy="402" r="12" fill="#10141d" stroke="#3a4356" stroke-width="1.2"/>
+<text x="684" y="407" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="700" text-anchor="middle">3</text>
+<line x1="1278" y1="402" x2="1512" y2="402" stroke="#FF5940" stroke-width="2.2" stroke-dasharray="7 5" marker-end="url(#mE)" stroke-linecap="round"/>
+<circle cx="1270" cy="402" r="5" fill="#FF5940"/>
+<text x="1395" y="390" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="400" text-anchor="middle">gRPC Step: 6 injections</text>
+<text x="1395" y="424" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="middle">substeps=5 &#183; eye_drive=0.45</text>
+<circle cx="684" cy="466" r="12" fill="#10141d" stroke="#3a4356" stroke-width="1.2"/>
+<text x="684" y="471" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="700" text-anchor="middle">3</text>
+<rect x="1405" y="442" width="230" height="48" rx="8" fill="#1a1215" stroke="#FF5940" stroke-width="1" filter="url(#glow)"/>
+<text x="1520" y="462" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#e6e9ef" font-weight="600" text-anchor="middle">166,700 neurons spike</text>
+<text x="1520" y="482" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="middle">5 &#215; 20 ms substeps = 100 ms</text>
+<circle cx="684" cy="530" r="12" fill="#10141d" stroke="#3a4356" stroke-width="1.2"/>
+<text x="684" y="535" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="700" text-anchor="middle">4</text>
+<line x1="1512" y1="530" x2="1278" y2="530" stroke="#FF5940" stroke-width="2.2" stroke-dasharray="7 5" marker-end="url(#mE)" stroke-linecap="round"/>
+<circle cx="1520" cy="530" r="5" fill="#FF5940"/>
+<text x="1395" y="518" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="400" text-anchor="middle">1,314-number trace*</text>
+<text x="1395" y="552" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="middle">+ overlay snapshot</text>
+<circle cx="684" cy="592" r="12" fill="#10141d" stroke="#3a4356" stroke-width="1.2"/>
+<text x="684" y="597" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="700" text-anchor="middle">5</text>
+<rect x="1165" y="572" width="210" height="40" rx="8" fill="#161b27" stroke="#5BE37D" stroke-width="1"/>
+<text x="1270" y="597" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#e6e9ef" font-weight="400" text-anchor="middle">readout: trace &#8594; action&#8224;</text>
+<text x="1390" y="597" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">the only part that learns</text>
+<circle cx="684" cy="650" r="12" fill="#10141d" stroke="#3a4356" stroke-width="1.2"/>
+<text x="684" y="655" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="700" text-anchor="middle">6</text>
+<line x1="1262" y1="650" x2="1028" y2="650" stroke="#5BE37D" stroke-width="2.2" marker-end="url(#mS)" stroke-linecap="round"/>
+<circle cx="1270" cy="650" r="5" fill="#5BE37D"/>
+<text x="1145" y="638" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="400" text-anchor="middle">gRPC CallService: action</text>
+<circle cx="684" cy="708" r="12" fill="#10141d" stroke="#3a4356" stroke-width="1.2"/>
+<text x="684" y="713" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="700" text-anchor="middle">6</text>
+<line x1="1012" y1="708" x2="778" y2="708" stroke="#A6A6B8" stroke-width="2.2" marker-end="url(#mG)" stroke-linecap="round"/>
+<circle cx="1020" cy="708" r="5" fill="#A6A6B8"/>
+<text x="895" y="696" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="400" text-anchor="middle">accel, steer</text>
+<text x="895" y="730" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="middle">ROS-TCP</text>
+<circle cx="684" cy="766" r="12" fill="#10141d" stroke="#5BE37D" stroke-width="1.2"/>
+<text x="684" y="771" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#5BE37D" font-weight="700" text-anchor="middle">&#8635;</text>
+<line x1="1278" y1="766" x2="1762" y2="766" stroke="#5BE37D" stroke-width="2.2" marker-end="url(#mS)" stroke-linecap="round"/>
+<circle cx="1270" cy="766" r="5" fill="#5BE37D"/>
+<text x="1520" y="754" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="400" text-anchor="middle">transition into Reverb</text>
+<text x="1520" y="788" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="middle">trace, action, reward, next trace</text>
+<rect x="1670" y="802" width="200" height="60" rx="10" fill="#161b27" stroke="#5BE37D" stroke-width="1"/>
+<text x="1770" y="826" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#e6e9ef" font-weight="400" text-anchor="middle">online + demo tables,</text>
+<text x="1770" y="848" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#e6e9ef" font-weight="400" text-anchor="middle">AWAC + BC update</text>
+<circle cx="684" cy="830" r="12" fill="#10141d" stroke="#B26BFF" stroke-width="1.2"/>
+<text x="684" y="835" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#B26BFF" font-weight="700" text-anchor="middle">&#9673;</text>
+<line x1="1262" y1="830" x2="778" y2="830" stroke="#B26BFF" stroke-width="2" stroke-dasharray="3 5" marker-end="url(#mM)" stroke-linecap="round"/>
+<circle cx="1270" cy="830" r="5" fill="#B26BFF"/>
+<text x="1020" y="818" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="400" text-anchor="middle">neuron activity overlay, 10 Hz</text>
+<text x="1020" y="852" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="middle">background thread &#183; via ros-server</text>
+<rect x="690" y="906" width="1180" height="42" rx="10" fill="#10141d" stroke="#262d3d" stroke-width="1"/>
+<text x="1280" y="933" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#8a93a6" font-weight="400" text-anchor="middle">10 steps a second &#183; one gym on fly courses &#183; gRPC Reset clears the brain at every episode start</text>
+<text x="690" y="972" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="start">* Trace: one number per descending neuron, the 1,314 cells that carry the brain's commands to the body. Each spike adds 1</text>
+<text x="690" y="991" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="start">and the value fades with a 0.1 s time constant, so it reads as recent firing rate: 0 when silent, about 5.5 when firing every 20 ms.</text>
+<text x="690" y="1015" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="start">&#8224; Readout: the policy network, 1,314 trace values in, two 512-unit layers, two numbers out: [accel, steer]. &#8220;Picks an action&#8221; means one</text>
+<text x="690" y="1034" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="start">forward pass per step: in training it samples near its best guess to explore, in evaluation it takes the best guess. AWAC + BC is what trains it.</text>
+<text x="1880" y="1064" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#6b7488" font-weight="400" text-anchor="end">rl-roboracer &#183; fly-brain driver &#183; 2026-09-28</text>
+<text x="70" y="150" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6E8BFF" font-weight="700" text-anchor="start" letter-spacing="1.6">UNDER THE HOOD &#183; CONTROL LOOP</text>
+<text x="70" y="214" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="46" fill="#e6e9ef" font-weight="700" text-anchor="start">One step through</text>
+<text x="70" y="270" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="46" fill="#e6e9ef" font-weight="700" text-anchor="start">the fly brain</text>
+<circle cx="76" cy="340" r="4" fill="#8a93a6"/>
+<text x="98" y="348" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">The trainer turns the scene into six cues</text>
+<text x="98" y="381" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">and sends them to the fly-brain service.</text>
+<circle cx="76" cy="424" r="4" fill="#FF5940"/>
+<text x="98" y="432" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">The brain runs 100 ms of spiking on the</text>
+<text x="98" y="465" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">GPU and returns its 1,314-number trace.*</text>
+<circle cx="76" cy="508" r="4" fill="#5BE37D"/>
+<text x="98" y="516" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">The readout picks an action,&#8224; and every</text>
+<text x="98" y="549" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">step becomes training data for AWAC + BC.</text>
+<text x="70" y="976" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#6b7488" font-weight="400" text-anchor="start" font-style="italic">Numbered steps match the six-step walkthrough.</text>
+</svg>

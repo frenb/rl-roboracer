@@ -1,0 +1,423 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1080" viewBox="640 0 1280 1080">
+<defs>
+  <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="7"/></filter>
+  <marker id="mU" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#40D9FF"/></marker><marker id="mS" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5BE37D"/></marker><marker id="mM" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#B26BFF"/></marker><marker id="mR" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FF991F"/></marker><marker id="mD" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a93a6"/></marker>
+  <marker id="mY" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FFD933"/></marker><marker id="mB" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6E8BFF"/></marker><marker id="mE" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FF5940"/></marker><marker id="mG" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#A6A6B8"/></marker>
+  <clipPath id="rclip"><rect x="640" y="0" width="1280" height="1080"/></clipPath>
+  <linearGradient id="fadeL" x1="0" x2="1"><stop offset="0" stop-color="#07090d"/><stop offset="1" stop-color="#07090d" stop-opacity="0"/></linearGradient>
+  <linearGradient id="fadeR" x1="0" x2="1"><stop offset="0" stop-color="#07090d" stop-opacity="0"/><stop offset="1" stop-color="#07090d"/></linearGradient>
+</defs>
+<rect x="0" y="0" width="1920" height="1080" fill="#07090d"/>
+<rect x="680" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="680,821.25" x="750.63" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Build</text>
+<rect x="831.25" y="44" width="141.25" height="36" rx="18" fill="#161b27" stroke="#e6e9ef" stroke-width="2"/>
+<text data-box="831.25,972.5" x="901.88" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#e6e9ef" font-weight="700" text-anchor="middle">Design</text>
+<rect x="982.5" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="982.5,1123.75" x="1053.13" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Train</text>
+<rect x="1133.75" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1133.75,1275" x="1204.38" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Evaluate</text>
+<rect x="1285" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1285,1426.25" x="1355.63" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Sim to real</text>
+<rect x="1436.25" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1436.25,1577.5" x="1506.88" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Deploy</text>
+<rect x="1587.5" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1587.5,1728.75" x="1658.13" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Mad Scientist</text>
+<rect x="1738.75" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1738.75,1880" x="1809.38" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Dashboard</text>
+<g clip-path="url(#rclip)"><g transform="translate(194.6 116) scale(1.62)">
+<g transform="translate(0 0)" opacity="0.28">
+<rect x="0" y="0" width="400" height="500" rx="16" fill="#10141d" stroke="#262d3d" stroke-width="1.4"/>
+<circle cx="32" cy="36" r="15" fill="none" stroke="#40D9FF" stroke-width="1.6"/>
+<text data-box="8,392" x="32" y="41.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#40D9FF" font-weight="600" text-anchor="middle">1</text>
+<text data-box="8,392" x="58" y="44" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="24" fill="#e6e9ef" font-weight="600" text-anchor="start">Build the world</text>
+<text data-box="8,392" x="22" y="74" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">A gym to drive in, and demos</text>
+<ellipse cx="140" cy="166" rx="104" ry="60" fill="none" stroke="#4a5163" stroke-width="36"/>
+<ellipse cx="140" cy="166" rx="104" ry="60" fill="none" stroke="#1f242f" stroke-width="32"/>
+<ellipse cx="140" cy="166" rx="104" ry="60" fill="none" stroke="#4a5163" stroke-width="1.2" stroke-dasharray="8 8"/>
+<line x1="66.92" y1="208.69" x2="36.37" y2="174.3" stroke="#40D9FF" stroke-width="1" opacity="0.55" stroke-linecap="round"/>
+<line x1="66.92" y1="208.69" x2="42.8" y2="169.52" stroke="#40D9FF" stroke-width="1" opacity="0.55" stroke-linecap="round"/>
+<line x1="66.92" y1="208.69" x2="49.97" y2="165.92" stroke="#40D9FF" stroke-width="1" opacity="0.55" stroke-linecap="round"/>
+<line x1="66.92" y1="208.69" x2="57.65" y2="163.63" stroke="#40D9FF" stroke-width="1" opacity="0.55" stroke-linecap="round"/>
+<line x1="66.92" y1="208.69" x2="65.62" y2="162.71" stroke="#40D9FF" stroke-width="1" opacity="0.55" stroke-linecap="round"/>
+<line x1="66.92" y1="208.69" x2="73.62" y2="163.18" stroke="#40D9FF" stroke-width="1" opacity="0.55" stroke-linecap="round"/>
+<line x1="66.92" y1="208.69" x2="81.42" y2="165.04" stroke="#40D9FF" stroke-width="1" opacity="0.55" stroke-linecap="round"/>
+<line x1="66.92" y1="208.69" x2="88.78" y2="168.22" stroke="#40D9FF" stroke-width="1" opacity="0.55" stroke-linecap="round"/>
+<line x1="66.92" y1="208.69" x2="95.48" y2="172.63" stroke="#40D9FF" stroke-width="1" opacity="0.55" stroke-linecap="round"/>
+<line x1="66.92" y1="208.69" x2="101.31" y2="178.14" stroke="#40D9FF" stroke-width="1" opacity="0.55" stroke-linecap="round"/>
+<line x1="66.92" y1="208.69" x2="106.09" y2="184.57" stroke="#40D9FF" stroke-width="1" opacity="0.55" stroke-linecap="round"/>
+<line x1="66.92" y1="208.69" x2="109.68" y2="191.74" stroke="#40D9FF" stroke-width="1" opacity="0.55" stroke-linecap="round"/>
+<line x1="66.92" y1="208.69" x2="111.98" y2="199.42" stroke="#40D9FF" stroke-width="1" opacity="0.55" stroke-linecap="round"/>
+<g transform="translate(66.92 208.69) rotate(-72)"><rect x="-7" y="-11" width="14" height="22" rx="4" fill="#e6e9ef"/></g>
+<rect x="298" y="130" width="84" height="64" rx="6" fill="#161b27" stroke="#5BE37D" stroke-width="1.2" opacity="0.5"/>
+<rect x="290" y="120" width="84" height="64" rx="6" fill="#161b27" stroke="#5BE37D" stroke-width="1.2" opacity="0.75"/>
+<rect x="282" y="110" width="84" height="64" rx="6" fill="#161b27" stroke="#5BE37D" stroke-width="1.2" opacity="1"/>
+<text data-box="8,392" x="324" y="150" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="12.5" fill="#5BE37D" font-weight="400" text-anchor="middle" xml:space="preserve">TFRecord</text>
+<text data-box="8,392" x="332" y="222" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#8a93a6" font-weight="400" text-anchor="middle">expert demos</text>
+<rect x="14" y="250" width="372" height="116" rx="10" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<rect x="14" y="260" width="4" height="96" rx="2" fill="#40D9FF"/>
+<text data-box="8,392" x="30" y="270" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11" fill="#40D9FF" font-weight="700" text-anchor="start" letter-spacing="0.6">GYMS TAB</text>
+<text data-box="8,392" x="30" y="291" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16.5" fill="#e6e9ef" font-weight="600" text-anchor="start">Create a Unity gym</text>
+<text data-box="8,392" x="30" y="310" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Register a Unity build and its track, then pick a</text>
+<text data-box="8,392" x="30" y="326.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">course: what the policy sees and how it can act.</text>
+<rect x="14" y="376" width="372" height="110" rx="10" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<rect x="14" y="386" width="4" height="90" rx="2" fill="#5BE37D"/>
+<text data-box="8,392" x="30" y="396" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11" fill="#5BE37D" font-weight="700" text-anchor="start" letter-spacing="0.6">JOBS TAB · DEMO JOB</text>
+<text data-box="8,392" x="30" y="417" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16.5" fill="#e6e9ef" font-weight="600" text-anchor="start">Record expert demos</text>
+<text data-box="8,392" x="30" y="436" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">A scripted expert drives the gym. Its driving is</text>
+<text data-box="8,392" x="30" y="452.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">saved as TFRecords for pre-training.</text>
+</g>
+<line x1="409" y1="250" x2="461" y2="250" stroke="#8a93a6" stroke-width="2" opacity="1" marker-end="url(#mD)" stroke-linecap="round"/>
+<g transform="translate(470 0)" opacity="1">
+<rect x="0" y="0" width="400" height="500" rx="16" fill="#10141d" stroke="#262d3d" stroke-width="1.4"/>
+<circle cx="32" cy="36" r="15" fill="none" stroke="#40D9FF" stroke-width="1.6"/>
+<text data-box="8,392" x="32" y="41.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#40D9FF" font-weight="600" text-anchor="middle">2</text>
+<text data-box="8,392" x="58" y="44" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="24" fill="#e6e9ef" font-weight="600" text-anchor="start">Design</text>
+<text data-box="8,392" x="22" y="74" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">What to reward, and how to train</text>
+<rect x="18" y="92" width="236" height="148" rx="8" fill="#0b0f16" stroke="#262d3d" stroke-width="1"/>
+<text data-box="18,254" x="30" y="114" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="12.5"><tspan fill="#B26BFF">def </tspan><tspan fill="#e6e9ef">step_reward(s):</tspan></text>
+<text data-box="18,254" x="30" y="132" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="12.5" fill="#8a93a6" font-weight="400" text-anchor="start" xml:space="preserve">  r = -time_cost</text>
+<text data-box="18,254" x="30" y="149" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="12.5" fill="#8a93a6" font-weight="400" text-anchor="start" xml:space="preserve">  if s.reached_goal:</text>
+<text data-box="18,254" x="30" y="166" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="12.5" fill="#8a93a6" font-weight="400" text-anchor="start" xml:space="preserve">    r += goal_bonus</text>
+<text data-box="18,254" x="30" y="183" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="12.5" fill="#8a93a6" font-weight="400" text-anchor="start" xml:space="preserve">  if s.crashed:</text>
+<text data-box="18,254" x="30" y="200" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="12.5" fill="#8a93a6" font-weight="400" text-anchor="start" xml:space="preserve">    r -= crash_penalty</text>
+<text data-box="18,254" x="30" y="217" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="12.5" fill="#8a93a6" font-weight="400" text-anchor="start" xml:space="preserve">  return r</text>
+<text data-box="8,392" x="318" y="104" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#8a93a6" font-weight="400" text-anchor="middle">curriculum</text>
+<rect x="272" y="194" width="18" height="30" rx="3" fill="#40D9FF" opacity="0.35"/>
+<rect x="296" y="174" width="18" height="50" rx="3" fill="#40D9FF" opacity="0.53"/>
+<rect x="320" y="152" width="18" height="72" rx="3" fill="#40D9FF" opacity="0.71"/>
+<rect x="344" y="124" width="18" height="100" rx="3" fill="#40D9FF" opacity="0.89"/>
+<text data-box="8,392" x="318" y="240" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#6b7488" font-weight="400" text-anchor="middle">easy to hard</text>
+<rect x="14" y="252" width="372" height="116" rx="10" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<rect x="14" y="262" width="4" height="96" rx="2" fill="#40D9FF"/>
+<text data-box="8,392" x="30" y="272" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11" fill="#40D9FF" font-weight="700" text-anchor="start" letter-spacing="0.6">REWARD DESIGN TAB</text>
+<text data-box="8,392" x="30" y="293" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16.5" fill="#e6e9ef" font-weight="600" text-anchor="start">Design the reward</text>
+<text data-box="8,392" x="30" y="312" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Rewards for steps, goals and crashes, written as</text>
+<text data-box="8,392" x="30" y="328.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">code. Every edit is versioned, so each model</text>
+<text data-box="8,392" x="30" y="345" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">records its reward.</text>
+<rect x="14" y="378" width="372" height="110" rx="10" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<rect x="14" y="388" width="4" height="90" rx="2" fill="#40D9FF"/>
+<text data-box="8,392" x="30" y="398" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11" fill="#40D9FF" font-weight="700" text-anchor="start" letter-spacing="0.6">EXPERIMENT DESIGN TAB</text>
+<text data-box="8,392" x="30" y="419" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16.5" fill="#e6e9ef" font-weight="600" text-anchor="start">Design the experiment</text>
+<text data-box="8,392" x="30" y="438" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Hyperparameters, how demos are used, and curriculum</text>
+<text data-box="8,392" x="30" y="454.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">stages from easy to hard.</text>
+</g>
+<line x1="879" y1="250" x2="931" y2="250" stroke="#8a93a6" stroke-width="2" opacity="1" marker-end="url(#mD)" stroke-linecap="round"/>
+<g transform="translate(940 0)" opacity="0.28">
+<rect x="0" y="0" width="400" height="500" rx="16" fill="#10141d" stroke="#262d3d" stroke-width="1.4"/>
+<circle cx="32" cy="36" r="15" fill="none" stroke="#5BE37D" stroke-width="1.6"/>
+<text data-box="8,392" x="32" y="41.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#5BE37D" font-weight="600" text-anchor="middle">3</text>
+<text data-box="8,392" x="58" y="44" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="24" fill="#e6e9ef" font-weight="600" text-anchor="start">Train</text>
+<text data-box="8,392" x="22" y="74" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">SAC learns while you watch</text>
+<line x1="40" y1="226" x2="372" y2="226" stroke="#6b7488" stroke-width="1" stroke-linecap="round"/>
+<line x1="40" y1="226" x2="40" y2="98" stroke="#6b7488" stroke-width="1" stroke-linecap="round"/>
+<text data-box="8,392" x="46" y="106" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#6b7488" font-weight="400" text-anchor="start">eval return</text>
+<text data-box="8,392" x="372" y="244" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#6b7488" font-weight="400" text-anchor="end">training steps</text>
+<path d="M 40 220.26 L 45.53 214.84 L 51.07 211.77 L 56.6 206.24 L 62.13 207.59 L 67.67 202.62 L 73.2 201.52 L 78.73 202.84 L 84.27 204.04 L 89.8 198.06 L 95.33 192.17 L 100.87 189.74 L 106.4 187.93 L 111.93 185.38 L 117.47 182.37 L 123 178.01 L 128.53 173.63 L 134.07 172.09 L 139.6 170.11 L 145.13 165.16 L 150.67 164.06 L 156.2 162.02 L 161.73 163.03 L 167.27 158.9 L 172.8 154.09 L 178.33 153.02 L 183.87 153.35 L 189.4 147.39 L 194.93 148.17 L 200.47 146.34 L 206 144.5 L 211.53 145.39 L 217.07 146.23 L 222.6 143.1 L 228.13 138.77 L 233.67 139.85 L 239.2 136.83 L 244.73 131.31 L 250.27 130.96 L 255.8 128.07 L 261.33 127.04 L 266.87 126.32 L 272.4 124.04 L 277.93 120.2 L 283.47 119.6 L 289 120.1 L 294.53 119.6 L 300.07 119.6 L 305.6 119.6 L 311.13 119.6 L 316.67 119.6 L 322.2 119.94 L 327.73 119.69 L 333.27 119.6 L 338.8 119.6 L 344.33 119.6 L 349.87 119.96 L 355.4 119.6 L 360.93 119.94 L 366.47 121.66 L 372 119.6" fill="none" stroke="#5BE37D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 40 214.26 L 42 218.26 L 46 218.26 L 43 221.26 L 44 226.26 L 40 223.26 L 36 226.26 L 37 221.26 L 34 218.26 L 38 218.26 z" fill="#FFD933"/>
+<path d="M 73.2 195.52 L 75.2 199.52 L 79.2 199.52 L 76.2 202.52 L 77.2 207.52 L 73.2 204.52 L 69.2 207.52 L 70.2 202.52 L 67.2 199.52 L 71.2 199.52 z" fill="#FFD933"/>
+<path d="M 106.4 181.93 L 108.4 185.93 L 112.4 185.93 L 109.4 188.93 L 110.4 193.93 L 106.4 190.93 L 102.4 193.93 L 103.4 188.93 L 100.4 185.93 L 104.4 185.93 z" fill="#FFD933"/>
+<path d="M 139.6 164.11 L 141.6 168.11 L 145.6 168.11 L 142.6 171.11 L 143.6 176.11 L 139.6 173.11 L 135.6 176.11 L 136.6 171.11 L 133.6 168.11 L 137.6 168.11 z" fill="#FFD933"/>
+<path d="M 172.8 148.09 L 174.8 152.09 L 178.8 152.09 L 175.8 155.09 L 176.8 160.09 L 172.8 157.09 L 168.8 160.09 L 169.8 155.09 L 166.8 152.09 L 170.8 152.09 z" fill="#FFD933"/>
+<path d="M 206 138.5 L 208 142.5 L 212 142.5 L 209 145.5 L 210 150.5 L 206 147.5 L 202 150.5 L 203 145.5 L 200 142.5 L 204 142.5 z" fill="#FFD933"/>
+<path d="M 239.2 130.83 L 241.2 134.83 L 245.2 134.83 L 242.2 137.83 L 243.2 142.83 L 239.2 139.83 L 235.2 142.83 L 236.2 137.83 L 233.2 134.83 L 237.2 134.83 z" fill="#FFD933"/>
+<path d="M 272.4 118.04 L 274.4 122.04 L 278.4 122.04 L 275.4 125.04 L 276.4 130.04 L 272.4 127.04 L 268.4 130.04 L 269.4 125.04 L 266.4 122.04 L 270.4 122.04 z" fill="#FFD933"/>
+<text data-box="8,392" x="372" y="106" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#FFD933" font-weight="400" text-anchor="end">★ new best, checkpoint saved</text>
+<rect x="14" y="250" width="372" height="116" rx="10" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<rect x="14" y="260" width="4" height="96" rx="2" fill="#5BE37D"/>
+<text data-box="8,392" x="30" y="270" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11" fill="#5BE37D" font-weight="700" text-anchor="start" letter-spacing="0.6">JOBS TAB · TRAIN JOB</text>
+<text data-box="8,392" x="30" y="291" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16.5" fill="#e6e9ef" font-weight="600" text-anchor="start">Run training jobs</text>
+<text data-box="8,392" x="30" y="310" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">SAC learns from reward across up to four Unity gyms</text>
+<text data-box="8,392" x="30" y="326.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">at once. Each new best eval saves a checkpoint.</text>
+<rect x="14" y="376" width="372" height="110" rx="10" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<rect x="14" y="386" width="4" height="90" rx="2" fill="#40D9FF"/>
+<text data-box="8,392" x="30" y="396" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11" fill="#40D9FF" font-weight="700" text-anchor="start" letter-spacing="0.6">TENSORBOARD · UNITY CLIENT</text>
+<text data-box="8,392" x="30" y="417" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16.5" fill="#e6e9ef" font-weight="600" text-anchor="start">Track training progress</text>
+<text data-box="8,392" x="30" y="436" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Live curves in TensorBoard; the car, its HUD and</text>
+<text data-box="8,392" x="30" y="452.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">the curriculum stage in Unity.</text>
+</g>
+<line x1="1349" y1="250" x2="1401" y2="250" stroke="#8a93a6" stroke-width="2" opacity="0.3" marker-end="url(#mD)" stroke-linecap="round"/>
+<g transform="translate(1410 0)" opacity="0.28">
+<rect x="0" y="0" width="400" height="500" rx="16" fill="#10141d" stroke="#262d3d" stroke-width="1.4"/>
+<circle cx="32" cy="36" r="15" fill="none" stroke="#40D9FF" stroke-width="1.6"/>
+<text data-box="8,392" x="32" y="41.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#40D9FF" font-weight="600" text-anchor="middle">4</text>
+<text data-box="8,392" x="58" y="44" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="24" fill="#e6e9ef" font-weight="600" text-anchor="start">Evaluate</text>
+<text data-box="8,392" x="22" y="74" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">Measure, compare and rank</text>
+<text data-box="8,392" x="30" y="118" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">model A</text>
+<rect x="100" y="104" width="60.5" height="20" rx="4" fill="#40D9FF" opacity="0.675"/>
+<text data-box="8,392" x="30" y="154" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">model B</text>
+<rect x="100" y="140" width="90.2" height="20" rx="4" fill="#40D9FF" opacity="0.81"/>
+<text data-box="8,392" x="30" y="190" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">model C</text>
+<rect x="100" y="176" width="37.4" height="20" rx="4" fill="#40D9FF" opacity="0.5700000000000001"/>
+<rect x="236" y="98" width="142" height="28" rx="6" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<circle cx="252" cy="112" r="5" fill="#FFD933"/>
+<text data-box="8,392" x="264" y="117" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#e6e9ef" font-weight="400" text-anchor="start">#1  model B</text>
+<rect x="236" y="134" width="142" height="28" rx="6" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<circle cx="252" cy="148" r="5" fill="#C8CCD6"/>
+<text data-box="8,392" x="264" y="153" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#e6e9ef" font-weight="400" text-anchor="start">#2  model A</text>
+<rect x="236" y="170" width="142" height="28" rx="6" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<circle cx="252" cy="184" r="5" fill="#C98A4B"/>
+<text data-box="8,392" x="264" y="189" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#e6e9ef" font-weight="400" text-anchor="start">#3  model C</text>
+<rect x="14" y="222" width="372" height="86" rx="10" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<rect x="14" y="232" width="4" height="66" rx="2" fill="#40D9FF"/>
+<text data-box="8,392" x="30" y="242" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11" fill="#40D9FF" font-weight="700" text-anchor="start" letter-spacing="0.6">MODELS TAB · EVAL JOB</text>
+<text data-box="8,392" x="30" y="263" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16.5" fill="#e6e9ef" font-weight="600" text-anchor="start">Run eval jobs</text>
+<text data-box="8,392" x="30" y="282" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Run checkpoints for N trials, optionally on every</text>
+<text data-box="8,392" x="30" y="298.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">curriculum stage.</text>
+<rect x="14" y="316" width="372" height="86" rx="10" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<rect x="14" y="326" width="4" height="66" rx="2" fill="#40D9FF"/>
+<text data-box="8,392" x="30" y="336" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11" fill="#40D9FF" font-weight="700" text-anchor="start" letter-spacing="0.6">ANALYSIS · WEAKNESS MAP</text>
+<text data-box="8,392" x="30" y="357" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16.5" fill="#e6e9ef" font-weight="600" text-anchor="start">Compare and diagnose</text>
+<text data-box="8,392" x="30" y="376" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Compare models trial by trial, and see where on the</text>
+<text data-box="8,392" x="30" y="392.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">track they fail.</text>
+<rect x="14" y="410" width="372" height="76" rx="10" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<rect x="14" y="420" width="4" height="56" rx="2" fill="#40D9FF"/>
+<text data-box="8,392" x="30" y="430" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11" fill="#40D9FF" font-weight="700" text-anchor="start" letter-spacing="0.6">LEADERBOARD TAB</text>
+<text data-box="8,392" x="30" y="451" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16.5" fill="#e6e9ef" font-weight="600" text-anchor="start">Track the best models</text>
+<text data-box="8,392" x="30" y="470" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Ranks by goals, speed, crashes and return.</text>
+</g>
+<line x1="1819" y1="250" x2="1871" y2="250" stroke="#8a93a6" stroke-width="2" opacity="0.3" marker-end="url(#mD)" stroke-linecap="round"/>
+<g transform="translate(1880 0)" opacity="0.28">
+<rect x="0" y="0" width="400" height="500" rx="16" fill="#10141d" stroke="#262d3d" stroke-width="1.4"/>
+<circle cx="32" cy="36" r="15" fill="none" stroke="#FF991F" stroke-width="1.6"/>
+<text data-box="8,392" x="32" y="41.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#FF991F" font-weight="600" text-anchor="middle">5</text>
+<text data-box="8,392" x="58" y="44" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="24" fill="#e6e9ef" font-weight="600" text-anchor="start">Sim to real</text>
+<text data-box="8,392" x="22" y="74" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">Make the real car look like sim</text>
+<rect x="299.2" y="20" width="80.8" height="26" rx="13" fill="#1c2230" stroke="#FF991F" stroke-width="1"/>
+<text data-box="8,392" x="339.6" y="38" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#FF991F" font-weight="700" text-anchor="middle" letter-spacing="1.2">PLANNED</text>
+<line x1="92" y1="166" x2="125.76" y2="166" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="125.76" cy="166" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="141.22" y2="168.58" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="141.22" cy="168.58" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="131.44" y2="170.15" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="131.44" cy="170.15" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="138.02" y2="173.29" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="138.02" cy="173.29" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="134.15" y2="174.96" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="134.15" cy="174.96" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="140.71" y2="179.05" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="140.71" cy="179.05" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="128.55" y2="177.88" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="128.55" cy="177.88" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="125.04" y2="178.68" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="125.04" cy="178.68" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="123.57" y2="182.08" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="123.57" cy="182.08" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="133.73" y2="193.1" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="133.73" cy="193.1" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="123.75" y2="191.71" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="123.75" cy="191.71" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="118.09" y2="198.21" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="118.09" cy="198.21" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="115.79" y2="212.69" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="115.79" cy="212.69" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="106.65" y2="198.91" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="106.65" cy="198.91" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="108.2" y2="208.21" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="108.2" cy="208.21" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="103.55" y2="209.11" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="103.55" cy="209.11" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="98.54" y2="196.79" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="98.54" cy="196.79" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="98.47" y2="206.82" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="98.47" cy="206.82" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="97.61" y2="219.4" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="97.61" cy="219.4" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="92" y2="217.11" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="92" cy="217.11" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="89.13" y2="220.68" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="89.13" cy="220.68" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="79.88" y2="211.25" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="79.88" cy="211.25" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="79.74" y2="203.73" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="79.74" cy="203.73" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="77.35" y2="194.76" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="77.35" cy="194.76" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="72.98" y2="195.28" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="72.98" cy="195.28" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="66.62" y2="200.93" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="66.62" cy="200.93" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="64.31" y2="200.19" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="64.31" cy="200.19" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="59.97" y2="191.94" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="59.97" cy="191.94" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="58.2" y2="181.05" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="58.2" cy="181.05" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="48.91" y2="177.55" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="48.91" cy="177.55" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="43.24" y2="176.36" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="43.24" cy="176.36" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="54.97" y2="171.87" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="54.97" cy="171.87" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="61.31" y2="167.61" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="61.31" cy="167.61" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="51.12" y2="161.7" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="51.12" cy="161.7" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="62.17" y2="161.28" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="62.17" cy="161.28" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="56.42" y2="158.44" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="56.42" cy="158.44" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="39.51" y2="151.93" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="39.51" cy="151.93" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="60.66" y2="153.97" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="60.66" cy="153.97" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="61.1" y2="150.25" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="61.1" cy="150.25" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="45.19" y2="138.98" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="45.19" cy="138.98" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="65.55" y2="148.83" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="65.55" cy="148.83" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="58.19" y2="141.44" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="58.19" cy="141.44" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="64.12" y2="140.89" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="64.12" cy="140.89" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="54.97" y2="124.87" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="54.97" cy="124.87" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="71.35" y2="140.5" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="71.35" cy="140.5" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="67.41" y2="128.14" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="67.41" cy="128.14" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="68" y2="124.43" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="68" cy="124.43" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="76.5" y2="135.57" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="76.5" cy="135.57" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="77.41" y2="133.24" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="77.41" cy="133.24" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="79.77" y2="128.37" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="79.77" cy="128.37" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="78.67" y2="116.25" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="78.67" cy="116.25" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="85.74" y2="136.55" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="85.74" cy="136.55" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="83.92" y2="115.01" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="83.92" cy="115.01" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="86.73" y2="115.86" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="86.73" cy="115.86" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="96.26" y2="125.45" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="96.26" cy="125.45" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="99.65" y2="117.7" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="99.65" cy="117.7" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="100.85" y2="124.38" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="100.85" cy="124.38" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="110.58" y2="117.59" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="110.58" cy="117.59" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="105.47" y2="135.74" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="105.47" cy="135.74" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="110.54" y2="129.62" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="110.54" cy="129.62" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="117.47" y2="121.89" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="117.47" cy="121.89" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="116.73" y2="131.96" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="116.73" cy="131.96" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="116.4" y2="135.87" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="116.4" cy="135.87" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="117.42" y2="140.58" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="117.42" cy="140.58" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="115.62" y2="144.73" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="115.62" cy="144.73" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="135.01" y2="131.17" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="135.01" cy="131.17" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="116.96" y2="147.87" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="116.96" cy="147.87" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="136.06" y2="137.39" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="136.06" cy="137.39" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="130.54" y2="153.48" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="130.54" cy="153.48" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="142.01" y2="152.6" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="142.01" cy="152.6" r="1.3" fill="#FF991F"/>
+<line x1="92" y1="166" x2="137.31" y2="161.24" stroke="#FF991F" stroke-width="0.7" opacity="0.35" stroke-linecap="round"/>
+<circle cx="137.31" cy="161.24" r="1.3" fill="#FF991F"/>
+<circle cx="92" cy="166" r="6" fill="#e6e9ef"/>
+<text data-box="8,392" x="92" y="238" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#8a93a6" font-weight="400" text-anchor="middle">real lidar: 720 beams</text>
+<line x1="170" y1="166" x2="222" y2="166" stroke="#FF991F" stroke-width="1.8" marker-end="url(#mR)" stroke-linecap="round"/>
+<text data-box="8,392" x="196" y="154" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#FF991F" font-weight="400" text-anchor="middle" font-style="italic">rescale</text>
+<line x1="306" y1="206" x2="262" y2="206" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="261.9" y2="201.03" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="261.65" y2="195.88" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="261.38" y2="190.39" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="261.27" y2="184.46" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="261.55" y2="178.07" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="262.48" y2="171.3" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="264.28" y2="164.28" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="267.13" y2="157.26" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="271.15" y2="150.53" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="276.34" y2="144.42" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="282.64" y2="139.24" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="289.86" y2="135.3" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="297.76" y2="132.84" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="306" y2="132" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="314.24" y2="132.84" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="322.14" y2="135.3" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="329.36" y2="139.24" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="335.66" y2="144.42" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="340.85" y2="150.53" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="344.87" y2="157.26" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="347.72" y2="164.28" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="349.52" y2="171.3" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="350.45" y2="178.07" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="350.73" y2="184.46" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="350.62" y2="190.39" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="350.35" y2="195.88" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="350.1" y2="201.03" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<line x1="306" y1="206" x2="350" y2="206" stroke="#40D9FF" stroke-width="1" opacity="0.6" stroke-linecap="round"/>
+<circle cx="306" cy="206" r="5" fill="#e6e9ef"/>
+<text data-box="8,392" x="306" y="238" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#8a93a6" font-weight="400" text-anchor="middle">29 sim rays</text>
+<circle cx="34" cy="271" r="12" fill="none" stroke="#FF991F" stroke-width="1.5"/>
+<text data-box="8,392" x="34" y="275.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#FF991F" font-weight="600" text-anchor="middle">1</text>
+<text data-box="8,392" x="56" y="276" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="600" text-anchor="start">Export</text>
+<text data-box="8,392" x="56" y="295" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="start">Plain numpy, matched to TensorFlow.</text>
+<circle cx="34" cy="327" r="12" fill="none" stroke="#FF991F" stroke-width="1.5"/>
+<text data-box="8,392" x="34" y="331.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#FF991F" font-weight="600" text-anchor="middle">2</text>
+<text data-box="8,392" x="56" y="332" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="600" text-anchor="start">Record</text>
+<text data-box="8,392" x="56" y="351" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="start">30 seconds of real lidar, odometry and IMU.</text>
+<circle cx="34" cy="383" r="12" fill="none" stroke="#FF991F" stroke-width="1.5"/>
+<text data-box="8,392" x="34" y="387.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#FF991F" font-weight="600" text-anchor="middle">3</text>
+<text data-box="8,392" x="56" y="388" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="600" text-anchor="start">Translate</text>
+<text data-box="8,392" x="56" y="407" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="start">The 720 lidar beams onto the 29 sim rays.</text>
+<circle cx="34" cy="439" r="12" fill="none" stroke="#FF991F" stroke-width="1.5"/>
+<text data-box="8,392" x="34" y="443.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#FF991F" font-weight="600" text-anchor="middle">4</text>
+<text data-box="8,392" x="56" y="444" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="600" text-anchor="start">Replay</text>
+<text data-box="8,392" x="56" y="463" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="start">The recording through the policy, motors off.</text>
+</g>
+<line x1="2289" y1="250" x2="2341" y2="250" stroke="#8a93a6" stroke-width="2" opacity="0.3" marker-end="url(#mD)" stroke-linecap="round"/>
+<g transform="translate(2350 0)" opacity="0.28">
+<rect x="0" y="0" width="400" height="500" rx="16" fill="#10141d" stroke="#262d3d" stroke-width="1.4"/>
+<circle cx="32" cy="36" r="15" fill="none" stroke="#FF991F" stroke-width="1.6"/>
+<text data-box="8,392" x="32" y="41.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#FF991F" font-weight="600" text-anchor="middle">6</text>
+<text data-box="8,392" x="58" y="44" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="24" fill="#e6e9ef" font-weight="600" text-anchor="start">Deploy</text>
+<text data-box="8,392" x="22" y="74" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">Put the best model on the car</text>
+<rect x="299.2" y="20" width="80.8" height="26" rx="13" fill="#1c2230" stroke="#FF991F" stroke-width="1"/>
+<text data-box="8,392" x="339.6" y="38" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#FF991F" font-weight="700" text-anchor="middle" letter-spacing="1.2">PLANNED</text>
+<circle cx="120" cy="166" r="64" fill="none" opacity="0.6" stroke="#FF991F" stroke-width="1" stroke-dasharray="4 5"/>
+<rect x="88" y="116" width="12" height="24" rx="3" fill="#2b3140"/>
+<rect x="140" y="116" width="12" height="24" rx="3" fill="#2b3140"/>
+<rect x="88" y="192" width="12" height="24" rx="3" fill="#2b3140"/>
+<rect x="140" y="192" width="12" height="24" rx="3" fill="#2b3140"/>
+<rect x="98" y="116" width="44" height="100" rx="10" fill="#161b27" stroke="#e6e9ef" stroke-width="1.4"/>
+<circle cx="120" cy="144" r="9" fill="#FF991F"/>
+<text data-box="8,392" x="120" y="252" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#8a93a6" font-weight="400" text-anchor="middle">JetRacer · Jetson Nano</text>
+<path d="M 331.41 149.01 L 313.01 167.41 L 286.99 167.41 L 268.59 149.01 L 268.59 122.99 L 286.99 104.59 L 313.01 104.59 L 331.41 122.99 Z" fill="#FF5940" stroke="#FF5940" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<text data-box="8,392" x="300" y="141" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#fff" font-weight="700" text-anchor="middle">STOP</text>
+<text data-box="8,392" x="300" y="190" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#8a93a6" font-weight="400" text-anchor="middle">lidar e-stop wins</text>
+<rect x="270" y="208" width="60" height="24" rx="12" fill="#1c2230" stroke="#6b7488" stroke-width="1"/>
+<circle cx="283" cy="220" r="8" fill="#6b7488"/>
+<text data-box="8,392" x="340" y="225" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#8a93a6" font-weight="400" text-anchor="start">off</text>
+<circle cx="34" cy="275" r="12" fill="none" stroke="#FF991F" stroke-width="1.5"/>
+<text data-box="8,392" x="34" y="279.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#FF991F" font-weight="600" text-anchor="middle">1</text>
+<text data-box="8,392" x="56" y="280" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="600" text-anchor="start">Gate</text>
+<text data-box="8,392" x="56" y="299" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="start">Commands pass a default-off switch.</text>
+<circle cx="34" cy="339" r="12" fill="none" stroke="#FF991F" stroke-width="1.5"/>
+<text data-box="8,392" x="34" y="343.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#FF991F" font-weight="600" text-anchor="middle">2</text>
+<text data-box="8,392" x="56" y="344" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="600" text-anchor="start">Bench</text>
+<text data-box="8,392" x="56" y="363" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="start">Wheels in the air: the e-stop must win.</text>
+<circle cx="34" cy="403" r="12" fill="none" stroke="#FF991F" stroke-width="1.5"/>
+<text data-box="8,392" x="34" y="407.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#FF991F" font-weight="600" text-anchor="middle">3</text>
+<text data-box="8,392" x="56" y="408" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#e6e9ef" font-weight="600" text-anchor="start">Drive</text>
+<text data-box="8,392" x="56" y="427" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="start">Ten seconds on an open floor.</text>
+<text data-box="8,392" x="22" y="482" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#FF991F" font-weight="400" text-anchor="start" font-style="italic">What the car does feeds back into the gym.</text>
+</g>
+</g>
+<rect x="640" y="0" width="190" height="1080" rx="0" fill="url(#fadeL)"/>
+<rect x="1730" y="0" width="190" height="1080" rx="0" fill="url(#fadeR)"/>
+</g>
+<text data-box="640,1900" x="1880" y="1056" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#6b7488" font-weight="400" text-anchor="end">rl-roboracer · platform overview · 2026-09-26</text>
+</svg>

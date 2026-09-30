@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+<defs><filter id="glow" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="2.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+<rect x="0" y="0" width="1920" height="1080" fill="#07090d"/>
+<text x="690" y="104" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#8a93a6" font-weight="700" text-anchor="start" letter-spacing="1.2">GOALS PER EPISODE ON THE DONUT TRACK &#183; 10-TRIAL EVAL &#183; HIGHER IS BETTER</text>
+<text x="690" y="206" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="26" fill="#e6e9ef" font-weight="600" text-anchor="start">Fly brain + copied expert</text>
+<text x="690" y="236" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="18" fill="#8a93a6" font-weight="400" text-anchor="start">Ridge readout &#183; FlyPyPolicy</text>
+<rect x="1170" y="188" width="63.74" height="36" rx="6" fill="#8fa0b8" opacity="0.9"/>
+<text x="1247.74" y="216" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="24" fill="#e6e9ef" font-weight="600" text-anchor="start">10.4</text>
+<text x="690" y="356" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="26" fill="#e6e9ef" font-weight="600" text-anchor="start">Fly brain + SAC</text>
+<text x="690" y="386" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="18" fill="#8a93a6" font-weight="400" text-anchor="start">Four cues &#183; fly_donut</text>
+<rect x="1170" y="338" width="122.00" height="36" rx="6" fill="#6E8BFF" opacity="0.9"/>
+<text x="1306.00" y="366" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="24" fill="#e6e9ef" font-weight="600" text-anchor="start">20.0</text>
+<text x="690" y="506" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="26" fill="#e6e9ef" font-weight="600" text-anchor="start">Fly brain + SAC + optic flow</text>
+<text x="690" y="536" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="18" fill="#8a93a6" font-weight="400" text-anchor="start">Six cues &#183; fly_donut_flow</text>
+<rect x="1170" y="488" width="323.91" height="36" rx="6" fill="#40D9FF" opacity="0.9"/>
+<text x="1507.91" y="516" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="24" fill="#e6e9ef" font-weight="600" text-anchor="start">53.1</text>
+<rect x="670" y="608" width="1220" height="112" rx="14" fill="#10141d" stroke="#5BE37D" stroke-width="1.6"/>
+<text x="690" y="656" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="26" fill="#5BE37D" font-weight="600" text-anchor="start">Fly brain + AWAC + BC</text>
+<text x="690" y="686" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="18" fill="#8a93a6" font-weight="400" text-anchor="start">Expert demos + reward &#183; fly_donut_flow</text>
+<rect x="1170" y="638" width="395.28" height="36" rx="6" fill="#5BE37D" opacity="0.9" filter="url(#glow)"/>
+<text x="1579.28" y="666" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="24" fill="#5BE37D" font-weight="600" text-anchor="start">64.8</text>
+<text x="1170" y="704" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#5BE37D" font-weight="400" text-anchor="start" font-style="italic">+22% over SAC alone &#183; 74% of the no-brain agent</text>
+<text x="690" y="806" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="26" fill="#e6e9ef" font-weight="600" text-anchor="start">SAC with no brain</text>
+<text x="690" y="836" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="18" fill="#8a93a6" font-weight="400" text-anchor="start">Raw 31 numbers &#183; donut_no_hint</text>
+<rect x="1170" y="788" width="537.41" height="36" rx="6" fill="#A6A6B8" opacity="0.9"/>
+<text x="1721.41" y="816" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="24" fill="#e6e9ef" font-weight="600" text-anchor="start">88.1</text>
+<line x1="1780.00" y1="150" x2="1780.00" y2="826" stroke="#A6A6B8" stroke-width="1.2" opacity="0.6" stroke-dasharray="5 6" stroke-linecap="round"/>
+<text x="1780.00" y="142" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="400" text-anchor="middle">100 = every goal</text>
+<text x="690" y="906" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="400" text-anchor="start">Goals per episode: checkpoints reached before the episode ends, out of 100. Mean of a fresh greedy</text>
+<text x="690" y="930" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="400" text-anchor="start">eval, 10 trials of 5 episodes. Copied expert and fly_donut are the mean of two such evals.</text>
+<text x="690" y="954" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="400" text-anchor="start">AWAC + BC trials ranged 27.8&#8211;86.2 goals. Random actions are not shown: their evals did not record goals.</text>
+<text x="1880" y="1056" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#6b7488" font-weight="400" text-anchor="end">rl-roboracer &#183; fly-brain driver &#183; 2026-09-28</text>
+<text x="70" y="150" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#5BE37D" font-weight="700" text-anchor="start" letter-spacing="1.6">RESULTS &#183; GOALS</text>
+<text x="70" y="214" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="46" fill="#e6e9ef" font-weight="700" text-anchor="start">How far does it</text>
+<text x="70" y="270" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="46" fill="#e6e9ef" font-weight="700" text-anchor="start">get?</text>
+<circle cx="76" cy="340" r="4" fill="#8a93a6"/>
+<text x="98" y="348" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">Goals per episode: how many checkpoints</text>
+<text x="98" y="381" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">the car reaches, out of 100.</text>
+<circle cx="76" cy="424" r="4" fill="#8a93a6"/>
+<text x="98" y="432" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">Copying an expert reaches about 10.</text>
+<text x="98" y="465" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">SAC with optic flow reaches 53.</text>
+<circle cx="76" cy="508" r="4" fill="#8a93a6"/>
+<text x="98" y="516" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">AWAC + BC reaches 65, three quarters</text>
+<text x="98" y="549" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#e6e9ef" font-weight="400" text-anchor="start">of the no-brain agent's 88.</text>
+<text x="70" y="976" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#6b7488" font-weight="400" text-anchor="start" font-style="italic">Next: the same pipeline on a real JetRacer robot car.</text>
+</svg>

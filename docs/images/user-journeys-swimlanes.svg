@@ -1,0 +1,192 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1461" viewBox="0 0 1800 1461">
+<defs>
+  <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="7"/></filter>
+  <marker id="arr" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a93a6"/></marker>
+  <marker id="arrU" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#40D9FF"/></marker>
+  <marker id="arrS" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5BE37D"/></marker>
+  <marker id="arrM" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#B26BFF"/></marker>
+  <marker id="arrR" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FF991F"/></marker>
+  <marker id="arrY" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FFD933"/></marker>
+</defs>
+<rect x="0" y="0" width="1800" height="1461" fill="#07090d"/>
+<text data-box="30,1770" x="40" y="56" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="32" fill="#e6e9ef" font-weight="700" text-anchor="start">Building an autonomous driving system, from gym to robot car</text>
+<text data-box="30,1770" x="40" y="86" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start">The same lifecycle by who does the work: you in the dashboard, the trainer and Unity, the Mad Scientist agent, and the robot car.</text>
+<text data-box="224,516" x="370" y="138" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#e6e9ef" font-weight="700" text-anchor="middle">1  Build the world</text>
+<text data-box="534,826" x="680" y="138" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#e6e9ef" font-weight="700" text-anchor="middle">2  Design</text>
+<text data-box="844,1136" x="990" y="138" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#e6e9ef" font-weight="700" text-anchor="middle">3  Train</text>
+<text data-box="1154,1446" x="1300" y="138" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#e6e9ef" font-weight="700" text-anchor="middle">4  Evaluate</text>
+<text data-box="1464,1756" x="1610" y="138" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#e6e9ef" font-weight="700" text-anchor="middle">5  Deploy</text>
+<rect x="40" y="158" width="1720" height="430" rx="12" fill="#0b0e14" stroke="#262d3d" stroke-width="1"/>
+<rect x="40" y="158" width="170" height="430" rx="12" fill="#10141d"/>
+<rect x="40" y="172" width="4" height="402" rx="2" fill="#40D9FF"/>
+<text data-box="48,204" x="60" y="371" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="18" fill="#40D9FF" font-weight="700" text-anchor="start">You</text>
+<text data-box="48,204" x="60" y="391" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#8a93a6" font-weight="400" text-anchor="start">in the dashboard</text>
+<rect x="40" y="600" width="1720" height="210" rx="12" fill="#0b0e14" stroke="#262d3d" stroke-width="1"/>
+<rect x="40" y="600" width="170" height="210" rx="12" fill="#10141d"/>
+<rect x="40" y="614" width="4" height="182" rx="2" fill="#5BE37D"/>
+<text data-box="48,204" x="60" y="703" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="18" fill="#5BE37D" font-weight="700" text-anchor="start">Trainer</text>
+<text data-box="48,204" x="60" y="723" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#8a93a6" font-weight="400" text-anchor="start">and Unity gym</text>
+<rect x="40" y="822" width="1720" height="225" rx="12" fill="#0b0e14" stroke="#262d3d" stroke-width="1"/>
+<rect x="40" y="822" width="170" height="225" rx="12" fill="#10141d"/>
+<rect x="40" y="836" width="4" height="197" rx="2" fill="#B26BFF"/>
+<text data-box="48,204" x="60" y="932.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="18" fill="#B26BFF" font-weight="700" text-anchor="start">Mad Scientist</text>
+<text data-box="48,204" x="60" y="952.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#8a93a6" font-weight="400" text-anchor="start">research agent</text>
+<rect x="40" y="1059" width="1720" height="340" rx="12" fill="#0b0e14" stroke="#262d3d" stroke-width="1"/>
+<rect x="40" y="1059" width="170" height="340" rx="12" fill="#10141d"/>
+<rect x="40" y="1073" width="4" height="312" rx="2" fill="#FF991F"/>
+<text data-box="48,204" x="60" y="1227" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="18" fill="#FF991F" font-weight="700" text-anchor="start">Robot car</text>
+<text data-box="48,204" x="60" y="1247" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#8a93a6" font-weight="400" text-anchor="start">JetRacer, Jetson Nano</text>
+<rect x="224" y="172" width="292" height="162" rx="10" fill="#10141d" stroke="#262d3d" stroke-width="1.2"/>
+<rect x="224" y="182" width="3" height="142" rx="1.5" fill="#40D9FF"/>
+<text data-box="232,508" x="240" y="203" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#e6e9ef" font-weight="600" text-anchor="start">Create a Unity gym</text>
+<text data-box="232,508" x="240" y="222" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#40D9FF" font-weight="600" text-anchor="start">Gyms tab</text>
+<text data-box="232,508" x="240" y="245" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Register a Unity build and its track.</text>
+<text data-box="232,508" x="240" y="263" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Pick a course: what the policy sees</text>
+<text data-box="232,508" x="240" y="281" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">and how it can act.</text>
+<text data-box="232,508" x="240" y="299" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">A gym is the Unity world; a course is</text>
+<text data-box="232,508" x="240" y="317" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">the policy's inputs and actions.</text>
+<rect x="534" y="172" width="292" height="108" rx="10" fill="#10141d" stroke="#262d3d" stroke-width="1.2"/>
+<rect x="534" y="182" width="3" height="88" rx="1.5" fill="#40D9FF"/>
+<text data-box="542,818" x="550" y="203" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#e6e9ef" font-weight="600" text-anchor="start">Design the reward</text>
+<text data-box="542,818" x="550" y="222" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#40D9FF" font-weight="600" text-anchor="start">Reward Design tab</text>
+<text data-box="542,818" x="550" y="245" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Versioned reward code for steps,</text>
+<text data-box="542,818" x="550" y="263" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">goals and crashes.</text>
+<rect x="534" y="292" width="292" height="108" rx="10" fill="#10141d" stroke="#262d3d" stroke-width="1.2"/>
+<rect x="534" y="302" width="3" height="88" rx="1.5" fill="#40D9FF"/>
+<text data-box="542,818" x="550" y="323" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#e6e9ef" font-weight="600" text-anchor="start">Design the experiment</text>
+<text data-box="542,818" x="550" y="342" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#40D9FF" font-weight="600" text-anchor="start">Experiment Design tab</text>
+<text data-box="542,818" x="550" y="365" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Hyperparameters, demo use and</text>
+<text data-box="542,818" x="550" y="383" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">curriculum stages.</text>
+<rect x="844" y="172" width="292" height="144" rx="10" fill="#10141d" stroke="#262d3d" stroke-width="1.2"/>
+<rect x="844" y="182" width="3" height="124" rx="1.5" fill="#40D9FF"/>
+<text data-box="852,1128" x="860" y="203" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#e6e9ef" font-weight="600" text-anchor="start">Track training progress</text>
+<text data-box="852,1128" x="860" y="222" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#40D9FF" font-weight="600" text-anchor="start">TensorBoard · Unity client</text>
+<text data-box="852,1128" x="860" y="245" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">TensorBoard plots loss, return and</text>
+<text data-box="852,1128" x="860" y="263" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">eval curves live.</text>
+<text data-box="852,1128" x="860" y="281" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">The Unity client shows the car, its</text>
+<text data-box="852,1128" x="860" y="299" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">HUD and the current curriculum stage.</text>
+<rect x="1154" y="172" width="292" height="108" rx="10" fill="#10141d" stroke="#262d3d" stroke-width="1.2"/>
+<rect x="1154" y="182" width="3" height="88" rx="1.5" fill="#40D9FF"/>
+<text data-box="1162,1438" x="1170" y="203" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#e6e9ef" font-weight="600" text-anchor="start">Run eval jobs</text>
+<text data-box="1162,1438" x="1170" y="222" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#40D9FF" font-weight="600" text-anchor="start">Models tab · EVAL job</text>
+<text data-box="1162,1438" x="1170" y="245" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Run checkpoints for N trials;</text>
+<text data-box="1162,1438" x="1170" y="263" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">optional stage sweep.</text>
+<rect x="1154" y="292" width="292" height="108" rx="10" fill="#10141d" stroke="#262d3d" stroke-width="1.2"/>
+<rect x="1154" y="302" width="3" height="88" rx="1.5" fill="#40D9FF"/>
+<text data-box="1162,1438" x="1170" y="323" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#e6e9ef" font-weight="600" text-anchor="start">Compare and diagnose</text>
+<text data-box="1162,1438" x="1170" y="342" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#40D9FF" font-weight="600" text-anchor="start">Analysis · Weakness Map</text>
+<text data-box="1162,1438" x="1170" y="365" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Compare models; see where on the</text>
+<text data-box="1162,1438" x="1170" y="383" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">track they fail.</text>
+<rect x="1154" y="412" width="292" height="108" rx="10" fill="#10141d" stroke="#262d3d" stroke-width="1.2"/>
+<rect x="1154" y="422" width="3" height="88" rx="1.5" fill="#40D9FF"/>
+<text data-box="1162,1438" x="1170" y="443" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#e6e9ef" font-weight="600" text-anchor="start">Track the best models</text>
+<text data-box="1162,1438" x="1170" y="462" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#40D9FF" font-weight="600" text-anchor="start">Leaderboard tab</text>
+<text data-box="1162,1438" x="1170" y="485" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Rank by goals, speed and crashes;</text>
+<text data-box="1162,1438" x="1170" y="503" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">pick the best.</text>
+<rect x="224" y="614" width="292" height="108" rx="10" fill="#10141d" stroke="#262d3d" stroke-width="1.2"/>
+<rect x="224" y="624" width="3" height="88" rx="1.5" fill="#5BE37D"/>
+<text data-box="232,508" x="240" y="645" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#e6e9ef" font-weight="600" text-anchor="start">Record expert demos</text>
+<text data-box="232,508" x="240" y="664" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#5BE37D" font-weight="600" text-anchor="start">Jobs tab · DEMO job</text>
+<text data-box="232,508" x="240" y="687" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">A scripted expert drives; demos saved</text>
+<text data-box="232,508" x="240" y="705" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">as TFRecords.</text>
+<rect x="844" y="614" width="292" height="108" rx="10" fill="#10141d" stroke="#262d3d" stroke-width="1.2"/>
+<rect x="844" y="624" width="3" height="88" rx="1.5" fill="#5BE37D"/>
+<text data-box="852,1128" x="860" y="645" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#e6e9ef" font-weight="600" text-anchor="start">Run training jobs</text>
+<text data-box="852,1128" x="860" y="664" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#5BE37D" font-weight="600" text-anchor="start">Jobs tab · TRAIN job</text>
+<text data-box="852,1128" x="860" y="687" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">SAC learns from reward; best evals</text>
+<text data-box="852,1128" x="860" y="705" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">save checkpoints.</text>
+<rect x="1154" y="614" width="292" height="108" rx="10" fill="#10141d" stroke="#262d3d" stroke-width="1.2"/>
+<rect x="1154" y="624" width="3" height="88" rx="1.5" fill="#5BE37D"/>
+<text data-box="1162,1438" x="1170" y="645" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#e6e9ef" font-weight="600" text-anchor="start">EVAL jobs run trials</text>
+<text data-box="1162,1438" x="1170" y="664" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#5BE37D" font-weight="600" text-anchor="start">Trainer · Unity</text>
+<text data-box="1162,1438" x="1170" y="687" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Logs goals, speed, crashes and</text>
+<text data-box="1162,1438" x="1170" y="705" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">trajectories.</text>
+<rect x="224" y="836" width="292" height="126" rx="10" fill="#10141d" stroke="#262d3d" stroke-width="1.2"/>
+<rect x="224" y="846" width="3" height="106" rx="1.5" fill="#B26BFF"/>
+<text data-box="232,508" x="240" y="867" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#e6e9ef" font-weight="600" text-anchor="start">Research new techniques</text>
+<text data-box="232,508" x="240" y="886" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#B26BFF" font-weight="600" text-anchor="start">Mad Scientist</text>
+<text data-box="232,508" x="240" y="909" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Reads arXiv and the codebase; writes</text>
+<text data-box="232,508" x="240" y="927" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">proposals.</text>
+<text data-box="232,508" x="240" y="945" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">An LLM judge scores each one.</text>
+<rect x="534" y="836" width="292" height="108" rx="10" fill="#10141d" stroke="#262d3d" stroke-width="1.2"/>
+<rect x="534" y="846" width="3" height="88" rx="1.5" fill="#B26BFF"/>
+<text data-box="542,818" x="550" y="867" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#e6e9ef" font-weight="600" text-anchor="start">Turn ideas into designs</text>
+<text data-box="542,818" x="550" y="886" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#B26BFF" font-weight="600" text-anchor="start">Mad Scientist</text>
+<text data-box="542,818" x="550" y="909" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">You approve in the Mad Scientist Lab.</text>
+<text data-box="542,818" x="550" y="927" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">It seeds experiment designs.</text>
+<rect x="844" y="836" width="292" height="108" rx="10" fill="#10141d" stroke="#262d3d" stroke-width="1.2"/>
+<rect x="844" y="846" width="3" height="88" rx="1.5" fill="#B26BFF"/>
+<text data-box="852,1128" x="860" y="867" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#e6e9ef" font-weight="600" text-anchor="start">Queue training</text>
+<text data-box="852,1128" x="860" y="886" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#B26BFF" font-weight="600" text-anchor="start">Mad Scientist</text>
+<text data-box="852,1128" x="860" y="909" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Queues TRAIN jobs for approved</text>
+<text data-box="852,1128" x="860" y="927" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">designs.</text>
+<rect x="1154" y="836" width="292" height="108" rx="10" fill="#10141d" stroke="#262d3d" stroke-width="1.2"/>
+<rect x="1154" y="846" width="3" height="88" rx="1.5" fill="#B26BFF"/>
+<text data-box="1162,1438" x="1170" y="867" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#e6e9ef" font-weight="600" text-anchor="start">Learn from outcomes</text>
+<text data-box="1162,1438" x="1170" y="886" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#B26BFF" font-weight="600" text-anchor="start">Mad Scientist</text>
+<text data-box="1162,1438" x="1170" y="909" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Tallies finished jobs onto the</text>
+<text data-box="1162,1438" x="1170" y="927" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">proposal.</text>
+<rect x="1462" y="1071" width="296" height="320" rx="12" fill="none" stroke="#FF991F" stroke-width="6" opacity="0.3" filter="url(#soft)"/>
+<rect x="1464" y="1073" width="292" height="316" rx="10" fill="#10141d" stroke="#262d3d" stroke-width="1.2"/>
+<rect x="1464" y="1083" width="3" height="296" rx="1.5" fill="#FF991F"/>
+<text data-box="1472,1748" x="1480" y="1104" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#e6e9ef" font-weight="600" text-anchor="start">Deploy to the JetRacer</text>
+<text data-box="1472,1748" x="1480" y="1123" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#FF991F" font-weight="600" text-anchor="start">Jetson Nano robot car</text>
+<circle cx="1491" cy="1145" r="10" fill="none" stroke="#FF991F" stroke-width="1.3"/>
+<text data-box="1480,1740" x="1491" y="1149.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#FF991F" font-weight="600" text-anchor="middle">1</text>
+<text data-box="1480,1740" x="1510" y="1150" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#e6e9ef" font-weight="600" text-anchor="start">Export</text>
+<text data-box="1480,1740" x="1510" y="1171" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Turn the checkpoint into plain</text>
+<text data-box="1480,1740" x="1510" y="1189" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">numpy arithmetic.</text>
+<circle cx="1491" cy="1215" r="10" fill="none" stroke="#FF991F" stroke-width="1.3"/>
+<text data-box="1480,1740" x="1491" y="1219.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#FF991F" font-weight="600" text-anchor="middle">2</text>
+<text data-box="1480,1740" x="1510" y="1220" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#e6e9ef" font-weight="600" text-anchor="start">Translate</text>
+<text data-box="1480,1740" x="1510" y="1241" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Map real lidar onto the 29</text>
+<text data-box="1480,1740" x="1510" y="1259" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">simulated rays.</text>
+<circle cx="1491" cy="1285" r="10" fill="none" stroke="#FF991F" stroke-width="1.3"/>
+<text data-box="1480,1740" x="1491" y="1289.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#FF991F" font-weight="600" text-anchor="middle">3</text>
+<text data-box="1480,1740" x="1510" y="1290" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#e6e9ef" font-weight="600" text-anchor="start">Drive</text>
+<text data-box="1480,1740" x="1510" y="1311" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Publish commands behind a lidar</text>
+<text data-box="1480,1740" x="1510" y="1329" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">emergency stop.</text>
+<rect x="1480" y="1347" width="260" height="26" rx="6" fill="#1d1710" stroke="#FF991F" stroke-width="0.8" opacity="0.9"/>
+<text data-box="1472,1748" x="1610" y="1364.5" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#FF991F" font-weight="400" text-anchor="middle" font-style="italic">Planned: docs/jetracer-deployment-plan.md</text>
+<path d="M 519 206 L 529 206" fill="none" stroke="#40D9FF" stroke-width="1.6" marker-end="url(#arrU)" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 370 336 L 370 608" fill="none" stroke="#5BE37D" stroke-width="1.6" marker-end="url(#arrS)" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 519 668 L 525 668 L 525 346 L 529 346" fill="none" stroke="#5BE37D" stroke-width="1.6" marker-end="url(#arrS)" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 829 346 L 835 346 L 835 644 L 839 644" fill="none" stroke="#40D9FF" stroke-width="1.6" marker-end="url(#arrU)" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="799.57" y="583.5" width="70.86" height="21.5" rx="5" fill="#07090d"/>
+<text data-box="799.57,870.43" x="835" y="598" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#8a93a6" font-weight="400" text-anchor="middle" font-style="italic">TRAIN job</text>
+<path d="M 990 612 L 990 322" fill="none" stroke="#5BE37D" stroke-width="1.6" marker-end="url(#arrS)" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="918" y="335.5" width="144" height="21.5" rx="5" fill="#07090d"/>
+<text data-box="918,1062" x="990" y="350" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#8a93a6" font-weight="400" text-anchor="middle" font-style="italic">live curves and video</text>
+<path d="M 1139 668 L 1149 668" fill="none" stroke="#5BE37D" stroke-width="1.6" marker-end="url(#arrS)" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1300 612 L 1300 526" fill="none" stroke="#5BE37D" stroke-width="1.6" marker-end="url(#arrS)" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1270.67" y="539.5" width="58.67" height="21.5" rx="5" fill="#07090d"/>
+<text data-box="1270.67,1329.33" x="1300" y="554" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#8a93a6" font-weight="400" text-anchor="middle" font-style="italic">results</text>
+<path d="M 1449 466 L 1610 466 L 1610 1067" fill="none" stroke="#FF991F" stroke-width="1.6" marker-end="url(#arrR)" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1571.53" y="481.5" width="76.95" height="21.5" rx="5" fill="#07090d"/>
+<text data-box="1571.53,1648.48" x="1610" y="496" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#FF991F" font-weight="400" text-anchor="middle" font-style="italic">best model</text>
+<path d="M 519 870 L 529 870" fill="none" stroke="#B26BFF" stroke-width="1.6" marker-end="url(#arrM)" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 829 870 L 839 870" fill="none" stroke="#B26BFF" stroke-width="1.6" marker-end="url(#arrM)" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 680 834 L 680 406" fill="none" stroke="#B26BFF" stroke-width="1.6" marker-end="url(#arrM)" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="638.48" y="791.5" width="83.05" height="21.5" rx="5" fill="#07090d"/>
+<text data-box="638.48,721.52" x="680" y="806" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#B26BFF" font-weight="400" text-anchor="middle" font-style="italic">new designs</text>
+<path d="M 990 834 L 990 728" fill="none" stroke="#B26BFF" stroke-width="1.6" marker-end="url(#arrM)" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1300 724 L 1300 830" fill="none" stroke="#B26BFF" stroke-width="1.6" marker-end="url(#arrM)" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1267.62" y="791.5" width="64.76" height="21.5" rx="5" fill="#07090d"/>
+<text data-box="1267.62,1332.38" x="1300" y="806" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#B26BFF" font-weight="400" text-anchor="middle" font-style="italic">outcomes</text>
+<path d="M 1184 946 L 1184 966 L 370 966 L 370 968" fill="none" stroke="#FFD933" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#arrY)" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="689.86" y="956.5" width="290.28" height="21.5" rx="5" fill="#07090d"/>
+<text data-box="689.86,980.14" x="835" y="971" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#FFD933" font-weight="400" text-anchor="middle" font-style="italic">what worked shapes the next round of research</text>
+<path d="M 1150 346 L 1145 346 L 1145 164 L 680 164 L 680 166" fill="none" stroke="#FFD933" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#arrY)" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 370 164 L 370 166" fill="none" stroke="#FFD933" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#arrY)" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="40" y="1429" width="14" height="14" rx="3" fill="#40D9FF"/>
+<text data-box="56,217.5" x="60" y="1441" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">You, in the dashboard</text>
+<rect x="225.2" y="1429" width="14" height="14" rx="3" fill="#5BE37D"/>
+<text data-box="241.2,402.7" x="245.2" y="1441" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Trainer and Unity gym</text>
+<rect x="410.4" y="1429" width="14" height="14" rx="3" fill="#B26BFF"/>
+<text data-box="426.4,572.9" x="430.4" y="1441" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Mad Scientist agent</text>
+<rect x="581.2" y="1429" width="14" height="14" rx="3" fill="#FF991F"/>
+<text data-box="597.2,668.7" x="601.2" y="1441" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Robot car</text>
+<path d="M 680 1436 L 714 1436" fill="none" stroke="#FFD933" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#arrY)" stroke-linecap="round" stroke-linejoin="round"/>
+<text data-box="722,940" x="722" y="1441" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#8a93a6" font-weight="400" text-anchor="start">Improvement loop</text>
+<text data-box="30,1770" x="1760" y="1443" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#6b7488" font-weight="400" text-anchor="end">Source: rl-roboracer dashboard, trainer and docs, 2026-09-26.</text>
+</svg>

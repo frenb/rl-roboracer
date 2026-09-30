@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1080" viewBox="640 0 1280 1080">
+<defs>
+  <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="7"/></filter>
+  <marker id="mU" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#40D9FF"/></marker><marker id="mS" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5BE37D"/></marker><marker id="mM" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#B26BFF"/></marker><marker id="mR" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FF991F"/></marker><marker id="mD" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a93a6"/></marker>
+  <marker id="mY" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FFD933"/></marker><marker id="mB" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6E8BFF"/></marker><marker id="mE" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FF5940"/></marker><marker id="mG" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#A6A6B8"/></marker>
+  <clipPath id="rclip"><rect x="640" y="0" width="1280" height="1080"/></clipPath>
+  <linearGradient id="fadeL" x1="0" x2="1"><stop offset="0" stop-color="#07090d"/><stop offset="1" stop-color="#07090d" stop-opacity="0"/></linearGradient>
+  <linearGradient id="fadeR" x1="0" x2="1"><stop offset="0" stop-color="#07090d" stop-opacity="0"/><stop offset="1" stop-color="#07090d"/></linearGradient>
+</defs>
+<rect x="0" y="0" width="1920" height="1080" fill="#07090d"/>
+<rect x="680" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="680,821.25" x="750.63" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Build</text>
+<rect x="831.25" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="831.25,972.5" x="901.88" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Design</text>
+<rect x="982.5" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="982.5,1123.75" x="1053.13" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Train</text>
+<rect x="1133.75" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1133.75,1275" x="1204.38" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Evaluate</text>
+<rect x="1285" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1285,1426.25" x="1355.63" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Sim to real</text>
+<rect x="1436.25" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1436.25,1577.5" x="1506.88" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Deploy</text>
+<rect x="1587.5" y="44" width="141.25" height="36" rx="18" fill="#161b27" stroke="#e6e9ef" stroke-width="2"/>
+<text data-box="1587.5,1728.75" x="1658.13" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#e6e9ef" font-weight="700" text-anchor="middle">Mad Scientist</text>
+<rect x="1738.75" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1738.75,1880" x="1809.38" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Dashboard</text>
+<line x1="1419.04" y1="288" x2="1550.96" y2="362" stroke="#B26BFF" stroke-width="2" opacity="0.85" marker-end="url(#mM)" stroke-linecap="round"/>
+<line x1="1654.34" y1="518" x2="1565.66" y2="712" stroke="#B26BFF" stroke-width="2" opacity="0.85" marker-end="url(#mM)" stroke-linecap="round"/>
+<line x1="1356" y1="790" x2="1204" y2="790" stroke="#B26BFF" stroke-width="2" opacity="0.85" marker-end="url(#mM)" stroke-linecap="round"/>
+<line x1="994.34" y1="712" x2="905.66" y2="518" stroke="#B26BFF" stroke-width="2" opacity="0.85" marker-end="url(#mM)" stroke-linecap="round"/>
+<line x1="1009.04" y1="362" x2="1140.96" y2="288" stroke="#B26BFF" stroke-width="2" opacity="0.85" marker-end="url(#mM)" stroke-linecap="round"/>
+<rect x="1120" y="146" width="320" height="128" rx="12" fill="#10141d" stroke="#B26BFF" stroke-width="1.6"/>
+<circle cx="1150" cy="178" r="13" fill="none" stroke="#B26BFF" stroke-width="1.6"/>
+<text data-box="1126,1434" x="1150" y="183" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#B26BFF" font-weight="600" text-anchor="middle">1</text>
+<text data-box="1126,1434" x="1174" y="185" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="21" fill="#e6e9ef" font-weight="700" text-anchor="start">Research</text>
+<text data-box="1126,1434" x="1140" y="216" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">Reads arXiv papers and the codebase,</text>
+<text data-box="1126,1434" x="1140" y="237" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">and drafts proposals.</text>
+<rect x="1530" y="376" width="320" height="128" rx="12" fill="#10141d" stroke="#B26BFF" stroke-width="1.6"/>
+<circle cx="1560" cy="408" r="13" fill="none" stroke="#B26BFF" stroke-width="1.6"/>
+<text data-box="1536,1844" x="1560" y="413" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#B26BFF" font-weight="600" text-anchor="middle">2</text>
+<text data-box="1536,1844" x="1584" y="415" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="21" fill="#e6e9ef" font-weight="700" text-anchor="start">Judge</text>
+<text data-box="1536,1844" x="1550" y="446" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">An LLM scores each proposal against</text>
+<text data-box="1536,1844" x="1550" y="467" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">a rubric.</text>
+<rect x="870" y="726" width="320" height="128" rx="12" fill="#10141d" stroke="#B26BFF" stroke-width="1.6"/>
+<circle cx="900" cy="758" r="13" fill="none" stroke="#B26BFF" stroke-width="1.6"/>
+<text data-box="876,1184" x="900" y="763" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#B26BFF" font-weight="600" text-anchor="middle">4</text>
+<text data-box="876,1184" x="924" y="765" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="21" fill="#e6e9ef" font-weight="700" text-anchor="start">Orchestrate</text>
+<text data-box="876,1184" x="890" y="796" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">Seeds experiment designs and queues</text>
+<text data-box="876,1184" x="890" y="817" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">TRAIN jobs.</text>
+<rect x="710" y="376" width="320" height="128" rx="12" fill="#10141d" stroke="#B26BFF" stroke-width="1.6"/>
+<circle cx="740" cy="408" r="13" fill="none" stroke="#B26BFF" stroke-width="1.6"/>
+<text data-box="716,1024" x="740" y="413" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#B26BFF" font-weight="600" text-anchor="middle">5</text>
+<text data-box="716,1024" x="764" y="415" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="21" fill="#e6e9ef" font-weight="700" text-anchor="start">Learn</text>
+<text data-box="716,1024" x="730" y="446" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">Tallies finished jobs back onto the</text>
+<text data-box="716,1024" x="730" y="467" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">proposal.</text>
+<rect x="1370" y="726" width="320" height="128" rx="12" fill="#10141d" stroke="#40D9FF" stroke-width="1.6"/>
+<circle cx="1400" cy="758" r="13" fill="none" stroke="#40D9FF" stroke-width="1.6"/>
+<text data-box="1376,1684" x="1400" y="763" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#40D9FF" font-weight="600" text-anchor="middle">3</text>
+<text data-box="1376,1684" x="1424" y="765" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="21" fill="#e6e9ef" font-weight="700" text-anchor="start">You decide</text>
+<text data-box="1376,1684" x="1390" y="796" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">Approve or reject in the Lab, or</text>
+<text data-box="1376,1684" x="1390" y="817" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15.5" fill="#8a93a6" font-weight="400" text-anchor="start">with one click from an email.</text>
+<text data-box="1080,1480" x="1280" y="512" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="26" fill="#B26BFF" font-weight="700" text-anchor="middle">Mad Scientist Lab</text>
+<text data-box="1080,1480" x="1280" y="544" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#8a93a6" font-weight="400" text-anchor="middle">30 proposals · 189 research notes</text>
+<rect x="730" y="940" width="164.8" height="38" rx="19" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="640,1920" x="812.4" y="965" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#e6e9ef" font-weight="400" text-anchor="middle">Off by default</text>
+<rect x="912.8" y="940" width="183.2" height="38" rx="19" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="640,1920" x="1004.4" y="965" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#e6e9ef" font-weight="400" text-anchor="middle">1 proposal a day</text>
+<rect x="1114" y="940" width="210.8" height="38" rx="19" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="640,1920" x="1219.4" y="965" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#e6e9ef" font-weight="400" text-anchor="middle">$250 a month budget</text>
+<rect x="1342.8" y="940" width="164.8" height="38" rx="19" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="640,1920" x="1425.2" y="965" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#e6e9ef" font-weight="400" text-anchor="middle">Read-only repo</text>
+<text data-box="640,1900" x="1880" y="1056" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#6b7488" font-weight="400" text-anchor="end">rl-roboracer · platform overview · 2026-09-26</text>
+</svg>

@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1080" viewBox="640 0 1280 1080">
+<defs>
+  <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="7"/></filter>
+  <marker id="mU" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#40D9FF"/></marker><marker id="mS" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5BE37D"/></marker><marker id="mM" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#B26BFF"/></marker><marker id="mR" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FF991F"/></marker><marker id="mD" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a93a6"/></marker>
+  <marker id="mY" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FFD933"/></marker><marker id="mB" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6E8BFF"/></marker><marker id="mE" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FF5940"/></marker><marker id="mG" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#A6A6B8"/></marker>
+  <clipPath id="rclip"><rect x="640" y="0" width="1280" height="1080"/></clipPath>
+  <linearGradient id="fadeL" x1="0" x2="1"><stop offset="0" stop-color="#07090d"/><stop offset="1" stop-color="#07090d" stop-opacity="0"/></linearGradient>
+  <linearGradient id="fadeR" x1="0" x2="1"><stop offset="0" stop-color="#07090d" stop-opacity="0"/><stop offset="1" stop-color="#07090d"/></linearGradient>
+</defs>
+<rect x="0" y="0" width="1920" height="1080" fill="#07090d"/>
+<rect x="680" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="680,821.25" x="750.63" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Build</text>
+<rect x="831.25" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="831.25,972.5" x="901.88" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Design</text>
+<rect x="982.5" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="982.5,1123.75" x="1053.13" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Train</text>
+<rect x="1133.75" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1133.75,1275" x="1204.38" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Evaluate</text>
+<rect x="1285" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1285,1426.25" x="1355.63" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Sim to real</text>
+<rect x="1436.25" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1436.25,1577.5" x="1506.88" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Deploy</text>
+<rect x="1587.5" y="44" width="141.25" height="36" rx="18" fill="none" stroke="#262d3d" stroke-width="1.2"/>
+<text data-box="1587.5,1728.75" x="1658.13" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#6b7488" font-weight="500" text-anchor="middle">Mad Scientist</text>
+<rect x="1738.75" y="44" width="141.25" height="36" rx="18" fill="#161b27" stroke="#e6e9ef" stroke-width="2"/>
+<text data-box="1738.75,1880" x="1809.38" y="68" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="15" fill="#e6e9ef" font-weight="700" text-anchor="middle">Dashboard</text>
+<rect x="690" y="120" width="1180" height="780" rx="14" fill="#10141d" stroke="#262d3d" stroke-width="1.6"/>
+<circle cx="714" cy="142" r="6" fill="#FF5940" opacity="0.8"/>
+<circle cx="734" cy="142" r="6" fill="#FFD933" opacity="0.8"/>
+<circle cx="754" cy="142" r="6" fill="#5BE37D" opacity="0.8"/>
+<rect x="780" y="130" width="300" height="24" rx="12" fill="#0b0f16"/>
+<text data-box="690,1870" x="796" y="147" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="start" xml:space="preserve">localhost / jobs</text>
+<text data-box="690,1870" x="730.4" y="186" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="middle">Home</text>
+<text data-box="690,1870" x="783.2" y="186" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="middle">Gyms</text>
+<text data-box="690,1870" x="872" y="186" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="middle">Reward Designs</text>
+<text data-box="690,1870" x="1011.2" y="186" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="middle">Experiment Designs</text>
+<rect x="1090" y="166" width="48.8" height="30" rx="7" fill="#161b27" stroke="#40D9FF" stroke-width="1"/>
+<text data-box="690,1870" x="1114.4" y="186" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#40D9FF" font-weight="700" text-anchor="middle">Jobs</text>
+<text data-box="690,1870" x="1174.4" y="186" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="middle">Models</text>
+<text data-box="690,1870" x="1248.8" y="186" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="middle">Analysis</text>
+<text data-box="690,1870" x="1330.4" y="186" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="middle">Weakness</text>
+<text data-box="690,1870" x="1422.8" y="186" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="middle">Leaderboard</text>
+<text data-box="690,1870" x="1500.8" y="186" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="middle">Logs</text>
+<text data-box="690,1870" x="1586" y="186" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="middle">Mad Scientist</text>
+<line x1="690" y1="204" x2="1870" y2="204" stroke="#262d3d" stroke-width="1" stroke-linecap="round"/>
+<rect x="710" y="224" width="99.8" height="32" rx="7" fill="#12324a" stroke="#40D9FF" stroke-width="1"/>
+<text data-box="690,1870" x="759.9" y="245" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#40D9FF" font-weight="400" text-anchor="middle">+ New job</text>
+<rect x="819.8" y="224" width="67" height="32" rx="7" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="690,1870" x="853.3" y="245" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#e6e9ef" font-weight="400" text-anchor="middle">Pause</text>
+<rect x="896.8" y="224" width="75.2" height="32" rx="7" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="690,1870" x="934.4" y="245" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#e6e9ef" font-weight="400" text-anchor="middle">Resume</text>
+<rect x="982" y="224" width="116.2" height="32" rx="7" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="690,1870" x="1040.1" y="245" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#e6e9ef" font-weight="400" text-anchor="middle">Set to done</text>
+<rect x="1108.2" y="224" width="75.2" height="32" rx="7" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="690,1870" x="1145.8" y="245" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#e6e9ef" font-weight="400" text-anchor="middle">Cancel</text>
+<rect x="1193.4" y="224" width="116.2" height="32" rx="7" fill="#161b27" stroke="#FFD933" stroke-width="1"/>
+<text data-box="690,1870" x="1251.5" y="245" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#FFD933" font-weight="400" text-anchor="middle">Pause queue</text>
+<text data-box="690,1870" x="722" y="296" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#6b7488" font-weight="700" text-anchor="start">Type</text>
+<text data-box="690,1870" x="832" y="296" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#6b7488" font-weight="700" text-anchor="start">Course</text>
+<text data-box="690,1870" x="1052" y="296" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#6b7488" font-weight="700" text-anchor="start">Status</text>
+<text data-box="690,1870" x="1242" y="296" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#6b7488" font-weight="700" text-anchor="start">Progress</text>
+<rect x="710" y="314" width="760" height="50" rx="8" fill="#12241a" stroke="#5BE37D" stroke-width="1"/>
+<text data-box="690,1870" x="722" y="345" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="15" fill="#e6e9ef" font-weight="400" text-anchor="start" xml:space="preserve">TRAIN</text>
+<text data-box="690,1870" x="832" y="345" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start" xml:space="preserve">fly_donut_flow</text>
+<rect x="1052" y="327" width="108" height="24" rx="12" fill="none" stroke="#5BE37D" stroke-width="1"/>
+<text data-box="690,1870" x="1106" y="344" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#5BE37D" font-weight="700" text-anchor="middle">IN_PROGRESS</text>
+<rect x="1242" y="334" width="180" height="10" rx="5" fill="#1c2230"/>
+<rect x="1242" y="334" width="163.8" height="10" rx="5" fill="#5BE37D"/>
+<text data-box="690,1870" x="1456" y="345" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="end" xml:space="preserve">91%</text>
+<rect x="710" y="372" width="760" height="50" rx="8" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="690,1870" x="722" y="403" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="15" fill="#e6e9ef" font-weight="400" text-anchor="start" xml:space="preserve">EVAL</text>
+<text data-box="690,1870" x="832" y="403" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start" xml:space="preserve">fly_donut</text>
+<rect x="1052" y="385" width="52" height="24" rx="12" fill="none" stroke="#8a93a6" stroke-width="1"/>
+<text data-box="690,1870" x="1078" y="402" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#8a93a6" font-weight="700" text-anchor="middle">DONE</text>
+<rect x="1242" y="392" width="180" height="10" rx="5" fill="#1c2230"/>
+<rect x="1242" y="392" width="180" height="10" rx="5" fill="#6b7488"/>
+<text data-box="690,1870" x="1456" y="403" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="end" xml:space="preserve">100%</text>
+<rect x="710" y="430" width="760" height="50" rx="8" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="690,1870" x="722" y="461" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="15" fill="#e6e9ef" font-weight="400" text-anchor="start" xml:space="preserve">TRAIN</text>
+<text data-box="690,1870" x="832" y="461" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start" xml:space="preserve">donut_no_hint</text>
+<rect x="1052" y="443" width="68" height="24" rx="12" fill="none" stroke="#FFD933" stroke-width="1"/>
+<text data-box="690,1870" x="1086" y="460" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#FFD933" font-weight="700" text-anchor="middle">PAUSED</text>
+<rect x="1242" y="450" width="180" height="10" rx="5" fill="#1c2230"/>
+<rect x="1242" y="450" width="115.2" height="10" rx="5" fill="#FFD933"/>
+<text data-box="690,1870" x="1456" y="461" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="end" xml:space="preserve">64%</text>
+<rect x="710" y="488" width="760" height="50" rx="8" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="690,1870" x="722" y="519" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="15" fill="#e6e9ef" font-weight="400" text-anchor="start" xml:space="preserve">DEMO</text>
+<text data-box="690,1870" x="832" y="519" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start" xml:space="preserve">donut</text>
+<rect x="1052" y="501" width="52" height="24" rx="12" fill="none" stroke="#8a93a6" stroke-width="1"/>
+<text data-box="690,1870" x="1078" y="518" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#8a93a6" font-weight="700" text-anchor="middle">DONE</text>
+<rect x="1242" y="508" width="180" height="10" rx="5" fill="#1c2230"/>
+<rect x="1242" y="508" width="180" height="10" rx="5" fill="#6b7488"/>
+<text data-box="690,1870" x="1456" y="519" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="end" xml:space="preserve">100%</text>
+<rect x="710" y="546" width="760" height="50" rx="8" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="690,1870" x="722" y="577" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="15" fill="#e6e9ef" font-weight="400" text-anchor="start" xml:space="preserve">EVAL</text>
+<text data-box="690,1870" x="832" y="577" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start" xml:space="preserve">donut_no_hint</text>
+<rect x="1052" y="559" width="108" height="24" rx="12" fill="none" stroke="#40D9FF" stroke-width="1"/>
+<text data-box="690,1870" x="1106" y="576" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#40D9FF" font-weight="700" text-anchor="middle">NOT_STARTED</text>
+<rect x="1242" y="566" width="180" height="10" rx="5" fill="#1c2230"/>
+<text data-box="690,1870" x="1456" y="577" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="end" xml:space="preserve">0%</text>
+<rect x="710" y="604" width="760" height="50" rx="8" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="690,1870" x="722" y="635" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="15" fill="#e6e9ef" font-weight="400" text-anchor="start" xml:space="preserve">TRAIN</text>
+<text data-box="690,1870" x="832" y="635" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="15" fill="#8a93a6" font-weight="400" text-anchor="start" xml:space="preserve">donut_camera</text>
+<rect x="1052" y="617" width="92" height="24" rx="12" fill="none" stroke="#6b7488" stroke-width="1"/>
+<text data-box="690,1870" x="1098" y="634" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#6b7488" font-weight="700" text-anchor="middle">CANCELLED</text>
+<rect x="1242" y="624" width="180" height="10" rx="5" fill="#1c2230"/>
+<rect x="1242" y="624" width="21.6" height="10" rx="5" fill="#6b7488"/>
+<text data-box="690,1870" x="1456" y="635" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13.5" fill="#8a93a6" font-weight="400" text-anchor="end" xml:space="preserve">12%</text>
+<rect x="1490" y="224" width="360" height="300" rx="10" fill="#0b0f16" stroke="#262d3d" stroke-width="1"/>
+<text data-box="690,1870" x="1506" y="250" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="700" text-anchor="start">Logs · live trainer log</text>
+<text data-box="1490,1850" x="1506" y="280" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#5BE37D" font-weight="400" text-anchor="start" xml:space="preserve">TRAIN end: iter=92688</text>
+<text data-box="1490,1850" x="1506" y="300" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#5BE37D" font-weight="400" text-anchor="start" xml:space="preserve">  loss=-4.13 buffer=100148</text>
+<text data-box="1490,1850" x="1506" y="320" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#5BE37D" font-weight="400" text-anchor="start" xml:space="preserve">EVAL CYCLE begin: 91.0%</text>
+<text data-box="1490,1850" x="1506" y="340" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#5BE37D" font-weight="400" text-anchor="start" xml:space="preserve">  avg_return=60.71</text>
+<text data-box="1490,1850" x="1506" y="360" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#5BE37D" font-weight="400" text-anchor="start" xml:space="preserve">  is_new_max=True</text>
+<text data-box="1490,1850" x="1506" y="380" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#5BE37D" font-weight="400" text-anchor="start" xml:space="preserve">  saved_checkpoint=True</text>
+<text data-box="1490,1850" x="1506" y="400" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="13" fill="#5BE37D" font-weight="400" text-anchor="start" xml:space="preserve">TRAIN begin: iter=92689</text>
+<rect x="1490" y="540" width="360" height="300" rx="10" fill="#0b0f16" stroke="#262d3d" stroke-width="1"/>
+<text data-box="690,1870" x="1506" y="566" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#8a93a6" font-weight="700" text-anchor="start">TensorBoard</text>
+<line x1="1510" y1="820" x2="1830" y2="820" stroke="#6b7488" stroke-width="1" stroke-linecap="round"/>
+<path d="M 1510 794.39 L 1518 784.62 L 1526 775.36 L 1534 773.72 L 1542 770.17 L 1550 769.96 L 1558 768.86 L 1566 762.05 L 1574 753.03 L 1582 743.95 L 1590 736.05 L 1598 725.5 L 1606 725.86 L 1614 719 L 1622 711.76 L 1630 709.13 L 1638 708.65 L 1646 701.21 L 1654 691.06 L 1662 690.96 L 1670 686.75 L 1678 685.76 L 1686 682.6 L 1694 684.21 L 1702 682.14 L 1710 680.98 L 1718 670.49 L 1726 672.39 L 1734 670.71 L 1742 662.68 L 1750 658.61 L 1758 655.69 L 1766 649.99 L 1774 641.84 L 1782 641.56 L 1790 635.49 L 1798 628.1 L 1806 623.42 L 1814 625.2 L 1822 625.72 L 1830 617.6" fill="none" stroke="#FFD933" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="690" y="940" width="128" height="38" rx="19" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="640,1920" x="754" y="965" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#e6e9ef" font-weight="400" text-anchor="middle">1,198 jobs</text>
+<rect x="836" y="940" width="201.6" height="38" rx="19" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="640,1920" x="936.8" y="965" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#e6e9ef" font-weight="400" text-anchor="middle">7,722 saved models</text>
+<rect x="1055.6" y="940" width="238.4" height="38" rx="19" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="640,1920" x="1174.8" y="965" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#e6e9ef" font-weight="400" text-anchor="middle">938 leaderboard scores</text>
+<rect x="1312" y="940" width="238.4" height="38" rx="19" fill="#161b27" stroke="#262d3d" stroke-width="1"/>
+<text data-box="640,1920" x="1431.2" y="965" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#e6e9ef" font-weight="400" text-anchor="middle">Watchdog auto-recovery</text>
+<text data-box="640,1900" x="1880" y="1056" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#6b7488" font-weight="400" text-anchor="end">rl-roboracer · platform overview · 2026-09-28</text>
+</svg>

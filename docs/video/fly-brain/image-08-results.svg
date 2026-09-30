@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1080" viewBox="640 0 1280 1080">
+<defs>
+  <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+    <feGaussianBlur stdDeviation="2.2" result="b"/>
+    <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="7"/></filter>
+  <marker id="arr" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#8a93a6"/></marker>
+  <marker id="arrL" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#5BE37D"/></marker>
+  <clipPath id="rclip"><rect x="640" y="0" width="1280" height="1080"/></clipPath>
+  <linearGradient id="fadeL" x1="0" x2="1"><stop offset="0" stop-color="#07090d"/><stop offset="1" stop-color="#07090d" stop-opacity="0"/></linearGradient>
+  <linearGradient id="fadeR" x1="0" x2="1"><stop offset="0" stop-color="#07090d" stop-opacity="0"/><stop offset="1" stop-color="#07090d"/></linearGradient>
+</defs>
+<rect x="0" y="0" width="1920" height="1080" fill="#07090d"/>
+<text data-box="640,1900" x="690" y="104" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#8a93a6" font-weight="700" text-anchor="start" letter-spacing="1.2">AVERAGE RETURN ON THE DONUT TRACK · 10-TRIAL EVAL · HIGHER IS BETTER</text>
+<text data-box="640,1900" x="690" y="190" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="26" fill="#e6e9ef" font-weight="600" text-anchor="start">Random actions</text>
+<text data-box="640,1900" x="690" y="220" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="18" fill="#8a93a6" font-weight="400" text-anchor="start">For reference</text>
+<rect x="1170" y="172" width="7.75" height="36" rx="6" fill="#6b7488" opacity="0.9"/>
+<text data-box="640,1900" x="1191.75" y="200" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="24" fill="#e6e9ef" font-weight="600" text-anchor="start">~1</text>
+<text data-box="640,1900" x="690" y="305" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="26" fill="#e6e9ef" font-weight="600" text-anchor="start">Fly brain + copied expert</text>
+<text data-box="640,1900" x="690" y="335" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="18" fill="#8a93a6" font-weight="400" text-anchor="start">Ridge readout · FlyPyPolicy</text>
+<rect x="1170" y="287" width="53.24" height="36" rx="6" fill="#8fa0b8" opacity="0.9"/>
+<text data-box="640,1900" x="1237.24" y="315" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="24" fill="#e6e9ef" font-weight="600" text-anchor="start">6.9</text>
+<text data-box="640,1900" x="690" y="420" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="26" fill="#e6e9ef" font-weight="600" text-anchor="start">Fly brain + SAC</text>
+<text data-box="640,1900" x="690" y="450" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="18" fill="#8a93a6" font-weight="400" text-anchor="start">Four cues · fly_donut</text>
+<rect x="1170" y="402" width="130.2" height="36" rx="6" fill="#6E8BFF" opacity="0.9"/>
+<text data-box="640,1900" x="1314.2" y="430" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="24" fill="#e6e9ef" font-weight="600" text-anchor="start">16.8</text>
+<text data-box="640,1900" x="690" y="535" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="26" fill="#e6e9ef" font-weight="600" text-anchor="start">Fly brain + SAC + optic flow</text>
+<text data-box="640,1900" x="690" y="565" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="18" fill="#8a93a6" font-weight="400" text-anchor="start">Six cues · fly_donut_flow</text>
+<rect x="1170" y="517" width="316.2" height="36" rx="6" fill="#40D9FF" opacity="0.9"/>
+<text data-box="640,1900" x="1500.2" y="545" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="24" fill="#e6e9ef" font-weight="600" text-anchor="start">40.8</text>
+<rect x="670" y="612" width="1220" height="112" rx="14" fill="#10141d" stroke="#5BE37D" stroke-width="1.6"/>
+<text data-box="640,1900" x="690" y="660" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="26" fill="#5BE37D" font-weight="600" text-anchor="start">Fly brain + AWAC + BC</text>
+<text data-box="640,1900" x="690" y="690" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="18" fill="#8a93a6" font-weight="400" text-anchor="start">Expert demos + reward · fly_donut_flow</text>
+<rect x="1170" y="642" width="451.05" height="36" rx="6" fill="#5BE37D" opacity="0.9" filter="url(#glow)"/>
+<text data-box="640,1900" x="1635.05" y="670" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="24" fill="#5BE37D" font-weight="600" text-anchor="start">58.2</text>
+<text data-box="640,1900" x="1170" y="708" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="17" fill="#5BE37D" font-weight="400" text-anchor="start" font-style="italic">+43% over SAC alone · 77% of the no-brain agent</text>
+<text data-box="640,1900" x="690" y="790" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="26" fill="#e6e9ef" font-weight="600" text-anchor="start">SAC with no brain</text>
+<text data-box="640,1900" x="690" y="820" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="18" fill="#8a93a6" font-weight="400" text-anchor="start">Raw 31 numbers · donut_no_hint</text>
+<rect x="1170" y="772" width="586.67" height="36" rx="6" fill="#A6A6B8" opacity="0.9"/>
+<text data-box="640,1900" x="1770.68" y="800" font-family="Consolas, 'SF Mono', Menlo, monospace" font-size="24" fill="#e6e9ef" font-weight="600" text-anchor="start">75.7</text>
+<line x1="1756.68" y1="150" x2="1756.68" y2="812" stroke="#A6A6B8" stroke-width="1.2" opacity="0.6" stroke-linecap="round" stroke-dasharray="5 6"/>
+<text data-box="640,1900" x="690" y="906" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="400" text-anchor="start">Mean of a fresh greedy eval, 10 trials of 5 episodes (random: 3 trials). fly_donut is the mean of two such evals.</text>
+<text data-box="640,1900" x="690" y="930" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="400" text-anchor="start">AWAC + BC trials ranged 24.9–77.3; its best in-training eval was 84.7, which overstates a fresh eval.</text>
+<text data-box="640,1900" x="690" y="954" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="16" fill="#6b7488" font-weight="400" text-anchor="start">Every fly-brain score passes through the same frozen connectome; only the readout differs.</text>
+<text data-box="640,1900" x="1880" y="1056" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#6b7488" font-weight="400" text-anchor="end">rl-roboracer · fly-brain driver · 2026-09-28</text>
+</svg>
