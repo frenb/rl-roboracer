@@ -57,6 +57,10 @@ observation_size = int(
 # convert_tfrecord_to_trajectory - so a SINGLE 32-wide demo corpus can feed
 # both donut and donut_no_hint jobs with no re-collection.
 _OBS_DROP_LEADING = FULL_OBSERVATION_SIZE - observation_size
+# Width the demo corpus is PARSED at. FULL_OBSERVATION_SIZE for every scene
+# corpus; the trace width while a TRACE_DEMO_COURSES job reads its brain
+# replay (set_trace_observation_size), until set_observation_size restores it.
+_recorded_observation_size = FULL_OBSERVATION_SIZE
 action_size = 2
 
 # Single source of truth mapping a course_type -> its observation width. Used
@@ -68,10 +72,10 @@ COURSE_OBSERVATION_SIZES = {
     "donut": 32,
     "donut_no_hint": 31,
 }
-# Courses in COURSES_WITHOUT_DEMOS are deliberately absent above: their demo
-# pipeline never runs, so a width here would be dead weight that looks
-# authoritative. fly_donut's real width comes from the brain service's own
-# trace_len at course construction, never from a literal.
+# Courses in COURSES_WITHOUT_DEMOS are deliberately absent above: a width
+# here would be dead weight that looks authoritative. fly_donut's real width
+# comes from the brain service's own trace_len, never from a literal, and its
+# demo corpus is read at that width via set_trace_observation_size.
 # Vector courses use COURSE_OBSERVATION_SIZES (an int). donut_camera is a
 # dict {vector: 31, image: 84x84x3} — do not call set_observation_size for
 # it (that helper only knows a flat width). Networks / BC are Phase 6–7.
@@ -87,20 +91,30 @@ COURSE_OBS_KIND = {
     "fly_donut_flow": "vector",
 }
 
-# Courses with no expert demo corpus, which therefore cannot run DEMO or
-# BC_TRAINING_ONLY. do_job refuses those job types here (see the guard in
-# robotaxi.do_job); TRAIN from scratch and EVAL are fine.
+# Courses that cannot RECORD demos, so do_job refuses DEMO and
+# BC_TRAINING_ONLY on them (see the guard in robotaxi.do_job). TRAIN and EVAL
+# are fine; TRAIN runs from scratch unless the course is also in
+# TRACE_DEMO_COURSES and the job names a demo source.
 #
 # The camera courses are listed because their demos need a dict TFRecord
-# layout that does not exist yet (Phase 7) - a solvable problem. fly_donut is
-# listed for a stronger reason: its observation is the brain's own decaying
-# state, so it depends on the entire episode so far and cannot be
-# reconstructed from a recorded scene. There is no TFRecord layout that fixes
-# that, which is why this set is keyed on the course rather than on
-# COURSE_OBS_KIND.
+# layout that does not exist yet (Phase 7). fly_donut is listed because its
+# observation is the brain's own decaying state: recording it directly would
+# freeze one brain run into the corpus. Keyed on the course rather than on
+# COURSE_OBS_KIND for that reason.
 COURSES_WITHOUT_DEMOS = frozenset({
     "donut_camera",
     "donut_camera_no_rays",
+    "fly_donut",
+    "fly_donut_flow",
+})
+
+# Courses whose demo corpus is a scene corpus replayed through the brain (see
+# fly_brain/demo_corpus.py). The trace at step t depends on the whole episode
+# so far, but the brain never sees the action, so replaying a recorded episode
+# from its first frame reproduces exactly the traces the policy would have
+# observed. Those corpora are recorded at the live trace width with nothing to
+# drop - see set_trace_observation_size.
+TRACE_DEMO_COURSES = frozenset({
     "fly_donut",
     "fly_donut_flow",
 })
@@ -347,12 +361,14 @@ env = robotaxi()
 # width - the active-width slice (dropping _OBS_DROP_LEADING leading columns)
 # happens in convert_tfrecord_to_trajectory. This is what lets a 32-wide demo
 # corpus be read by a 31-wide (donut_no_hint) job.
-feature_description = {
-    'action': tf.io.FixedLenFeature((action_size,), tf.float32),
-    'observation': tf.io.FixedLenFeature((FULL_OBSERVATION_SIZE,), tf.float32),
-    # 'reward': tf.io.FixedLenFeature((1,), tf.float32),
-    # 'discount': tf.io.FixedLenFeature((1,), tf.float32),
-}
+def _make_feature_description(width):
+    return {
+        'action': tf.io.FixedLenFeature((action_size,), tf.float32),
+        'observation': tf.io.FixedLenFeature((width,), tf.float32),
+    }
+
+
+feature_description = _make_feature_description(FULL_OBSERVATION_SIZE)
 
 def _parse_function(example_proto):
   # Parse the input `tf.train.Example` proto using the dictionary above.
@@ -380,6 +396,7 @@ def set_observation_size(n):
     """
     global observation_size, _OBS_DROP_LEADING, env
     n = int(n)
+    _restore_scene_recorded_width()
     if n == observation_size:
         return
     observation_size = n
@@ -393,6 +410,34 @@ def set_observation_size(n):
     env = robotaxi()
     print(f"collect_training_data: observation_size set to {observation_size} "
           f"(recorded={FULL_OBSERVATION_SIZE}, drop_leading={_OBS_DROP_LEADING})",
+          flush=True)
+
+
+def _restore_scene_recorded_width():
+    """Undo set_trace_observation_size, so a scene job after a fly job parses at 32."""
+    global _recorded_observation_size, feature_description
+    if _recorded_observation_size != FULL_OBSERVATION_SIZE:
+        _recorded_observation_size = FULL_OBSERVATION_SIZE
+        feature_description = _make_feature_description(FULL_OBSERVATION_SIZE)
+
+
+def set_trace_observation_size(n):
+    """Point the demo read path at a brain-replay corpus of width ``n``.
+
+    Unlike set_observation_size, the recorded width changes too: every column
+    of a trace corpus is observation, so it is parsed at ``n`` and nothing is
+    dropped. The dummy ``env`` is left alone - only train_agent reads it, and
+    that runs for DEMO / BC_TRAINING_ONLY, which do_job refuses on these
+    courses.
+    """
+    global observation_size, _OBS_DROP_LEADING, _recorded_observation_size
+    global feature_description
+    n = int(n)
+    observation_size = n
+    _recorded_observation_size = n
+    _OBS_DROP_LEADING = 0
+    feature_description = _make_feature_description(n)
+    print(f"collect_training_data: reading a brain-replay corpus at width {n}",
           flush=True)
 
 def get_files_from_directory(directory):
@@ -457,7 +502,7 @@ def convert_tfrecord_to_trajectory(rows,batch_size=1000):
     # a TF strided_slice op for every one of ~500k rows, which turned this
     # loop from ~seconds into many minutes (looked like a hung "job init").
     observation_full = np.empty(
-        (batch_size, FULL_OBSERVATION_SIZE), dtype=np.float32)
+        (batch_size, _recorded_observation_size), dtype=np.float32)
     action = np.empty((batch_size, action_size), dtype=np.float32)
     i=0
 

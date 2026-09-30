@@ -476,13 +476,51 @@ whose state integrates history, and throttle depends on where the car is in a
 manoeuvre rather than on the current frame.
 
 Driving with it works, in the sense that it is unmistakably better than chance
-and unmistakably worse than SAC:
+and unmistakably worse than SAC. The middle rows are Route B, described
+below: an RL readout on the same descending trace. Those rows are much better,
+and AWAC + BC on the flow course is the best fly result so far.
 
-| Policy | AverageReturn | Goals/episode | Speed |
-|---|---|---|---|
-| RandomPyPolicy | ~1.0 | — | — |
-| **FlyPyPolicy** (ridge) | **6.87** | 8.0 / 12.7 | 1.9–2.4 m/s |
-| SAC on `donut_no_hint` | 75.7 | 78–100 | 5.2–5.5 m/s |
+| Policy | Readout | AverageReturn | Goals/episode | Speed |
+|---|---|---|---|---|
+| RandomPyPolicy | — | ~1.0 | — | — |
+| **FlyPyPolicy** | ridge (BC) | **6.87** | 8.0 / 12.7 | 1.9–2.4 m/s |
+| SAC on `fly_donut` (4 cues) | SAC (RL) | 15.6–18.0 | 17.6–22.4 | 2.2–3.0 m/s |
+| SAC on `fly_donut_flow` (4 cues + optic flow) | SAC (RL) | 40.8 | 53.1 | 1.5–1.7 m/s |
+| **AWAC + BC on `fly_donut_flow`** | AWAC + BC (RL + demos) | **58.2** † | **64.8** | 3.5–3.9 m/s |
+| SAC on `donut_no_hint` (no brain) | SAC (RL) | 75.7 | 78–100 | 5.2–5.5 m/s |
+
+Every row is a greedy eval over 10 trials of 5 episodes, apart from
+RandomPyPolicy's 3 trials. The `fly_donut` row is the range over the two 10-trial
+evals of its best checkpoint (`SacAgent/7639_step_49163`). The flow SAC row is
+`SacAgent/7653_step_90967` from TRAIN job `6ab728dfa2e93e59cc065c13`, EVAL job
+`6ab83af3a249d535d4d976b3`.
+
+† `SacAgent/7657_step_26502`, from TRAIN job `6ab861dfe8ad86fce0df9564`
+(100,000 steps, demos from DEMO job `6ab85cc87287de6ced0c9041` replayed through
+the brain). EVAL job `6ab96623a249d535d4d976b4`; a later 3-trial eval
+(`6aba2b7ea249d535d4d976b5`) also averaged 58.2. Goals and speed are the
+per-trial means in `leaderboard_scores`, read 2026-09-28.
+
+Four things about the RL rows:
+
+- **The training-time numbers are higher than these.** The Models tab shows
+  36.9 for the best `fly_donut` checkpoint, 60.7 for the best flow SAC one and
+  84.7 for the best AWAC + BC one. Those come from single eval cycles during
+  training, and the checkpoint is kept precisely because that cycle was its
+  best, so they overstate a fresh 10-trial eval. Use the table for comparisons.
+- **Optic flow more than doubled the SAC result.** `fly_donut_flow` adds two
+  cues, `flow_L` and `flow_R`, which drive the T4a/T5a motion detectors with how
+  fast the scene streams past each side (`FlowEncoder` in `encoder.py`).
+  Everything else is the same encoder, brain and trace. Against `fly_donut`,
+  return rose from 15.6–18.0 to 40.8 and goals per episode from about 20 to 53.
+- **Flow SAC is bimodal and slow.** Its trials range from 6.8 to 76.6 in return
+  and 7.5 to 100 in goals: some runs are near SAC-level, others end early. In
+  every trial it drives at about 1.5–1.7 m/s, under a third of SAC's speed and
+  slower even than the ridge, so it scores by staying on the track for a long
+  time rather than by driving fast.
+- **Demos fixed the throttle.** AWAC + BC on the same course drives at
+  3.5–3.9 m/s, more than twice flow SAC's pace, and scores 58.2, 77% of the
+  no-brain agent. It is still uneven: trial returns range from 24.9 to 77.3.
 
 The failure mode is specific and it points directly at what to do next. The
 ridge's acceleration prediction falls **below the course's own 0.05 action
@@ -1324,9 +1362,12 @@ round trip, not the brain, sets the pace at one env.
 
 ## Where this has got to
 
-Measured so far: the ridge readout drives at roughly 7× a random policy and
-about a tenth of SAC. SAC on the trace is training now — job
-`6ab0bc6ac2736b990584404a`, 100,000 iterations on `fly_donut`.
+Measured so far (the table under
+[Route A](#route-a--ridge-regression-on-expert-actions-behaviour-cloning) has
+the details): the ridge readout drives at roughly 7× a random policy and about a
+tenth of SAC. SAC reading the trace reaches 15.6–18.0 on `fly_donut`. Adding
+the optic-flow cues on `fly_donut_flow` more than doubles that to about 38, and
+its best trials match SAC's goal counts at a third of its speed.
 
 Two things are still open, and the second is the one that determines whether
 any of this means anything.

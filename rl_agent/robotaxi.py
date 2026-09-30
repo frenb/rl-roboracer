@@ -1108,6 +1108,11 @@ COURSE_DEFAULT_DEMO_JOB_IDS = {
     # default below, which would hand a dict-obs job the 32-wide vector corpus.
     "donut_camera": None,
     "donut_camera_no_rays": None,
+    # A fly corpus is built per job from the scene DEMO job it names in
+    # demo_job_ids (fly_brain/demo_corpus.py); with none, TRAIN is from
+    # scratch. The donut fallback would hand these a 32-wide scene corpus.
+    "fly_donut": None,
+    "fly_donut_flow": None,
 }
 
 
@@ -1461,11 +1466,34 @@ def main(
         collect_training_data.COURSE_OBS_KIND.get(_course_type) == "dict")
     # Separate from _dict_obs_course, which selects the CNN towers below. What
     # matters here is whether an expert corpus exists at this observation
-    # width: the camera courses are dict and have none yet (Phase 7), and
-    # fly_donut is a flat vector course that can never have one, since its
-    # observation is the brain's own history. Keying the skip on the obs kind
-    # would let fly_donut load 31-D TFRecords against a 1314-D spec.
-    if _course_type in collect_training_data.COURSES_WITHOUT_DEMOS:
+    # width: the camera courses are dict and have none yet (Phase 7), and the
+    # fly courses have one only when do_job built a brain replay for them
+    # (fly_brain/demo_corpus.py). Keying the skip on the obs kind would let
+    # fly_donut load 31-D scene TFRecords against a 1314-D spec.
+    _trace_demo = False
+    if (_course_type in collect_training_data.TRACE_DEMO_COURSES
+            and demo_record_dirs_val):
+        from fly_brain import demo_corpus as _fly_demo_corpus
+        _trace_widths = {
+            _fly_demo_corpus.trace_len(_d) if _fly_demo_corpus.is_trace_corpus(_d)
+            else None
+            for _d in demo_record_dirs_val}
+        if None in _trace_widths or len(_trace_widths) != 1:
+            raise RuntimeError(
+                f"main: {_course_type} demo sources must all be brain-replay "
+                f"corpora of one width (fly_brain/demo_corpus.ensure); got "
+                f"{demo_record_dirs_val}")
+        _trace_demo = True
+        collect_training_data.set_trace_observation_size(_trace_widths.pop())
+        print(
+            f"main: {_course_type} TRAIN with brain-replay demos "
+            f"{demo_record_dirs_val} (BC pretrain {bc_pretrain_steps_val} steps, "
+            f"awac_lambda={awac_lambda_val})",
+            flush=True)
+    _no_demo_course = (
+        _course_type in collect_training_data.COURSES_WITHOUT_DEMOS
+        and not _trace_demo)
+    if _no_demo_course:
         print(
             f"main: {_course_type} TRAIN from scratch "
             "(skip expert TFRecords, BC pretrain, AWAC)",
@@ -1479,10 +1507,12 @@ def main(
     # 32-wide corpus is dropped down to the active width (31 for donut_no_hint)
     # before it hits the actor/critic. do_job already does this before calling
     # main(), but doing it here too makes direct/manual main() callers correct.
-    try:
-        collect_training_data.apply_course_observation_size(_course_type)
-    except Exception as _e:  # noqa: BLE001 - obs-size set must not kill training
-        print(f"main: set_observation_size failed (non-fatal): {_e}", flush=True)
+    # A brain-replay corpus was already pointed at its own width above.
+    if not _trace_demo:
+        try:
+            collect_training_data.apply_course_observation_size(_course_type)
+        except Exception as _e:  # noqa: BLE001 - obs-size set must not kill training
+            print(f"main: set_observation_size failed (non-fatal): {_e}", flush=True)
     # Environment. Single-env runs use one env for both collect and eval.
     env = build_train_env(num_envs, course_type=_course_type)
     # Dedicated single-gym EVAL env (option-a, 2026-07-25). In multi-env runs
@@ -1772,7 +1802,7 @@ def main(
                     tanh_normal_projection_network.TanhNormalProjectionNetwork))
 
     trajectory_dataset = None
-    if _dict_obs_course:
+    if _dict_obs_course or _no_demo_course:
         demo_record_dirs_val = []
     _phase("expert_tfrecord_load (500k records)")
     # demo_record_dirs_val lets a job combine MULTIPLE DEMO collections into
@@ -1791,8 +1821,10 @@ def main(
         record_dirs = (
             [f'/tfrecords/job_{_fallback_demo_id}'] if _fallback_demo_id
             else [])
+    if _no_demo_course:
+        record_dirs = []
     if not record_dirs:
-        if _dict_obs_course:
+        if _dict_obs_course or _no_demo_course:
             print(
                 f"main: no expert-demo source (expected for {_course_type}); "
                 "SAC from scratch.",
@@ -2112,6 +2144,11 @@ def main(
     # _prune_reverb_checkpoints).
     REVERB_PERIODIC_CHECKPOINT_INTERVAL = 1000
     REVERB_PERIODIC_CHECKPOINT_KEEP = 2
+    # The Jobs tab's progress bar. Without this it only moved at eval
+    # cycles, and the time-budgeted gate spaces those at 9x the last
+    # eval's duration - a 20-minute eval froze the bar for 3 hours of
+    # healthy training. ~2 minutes at fly_donut's 0.65 s/step.
+    PROGRESS_UPDATE_INTERVAL = 200
     (reverb_server, reverb_replay, dataset,
      rb_observer, expert_observer,
      demo_replay, demo_observer) = make_local_replay(
@@ -2992,6 +3029,14 @@ def main(
               f"loss={loss_value:.4f} "
               f"buffer_size={buffer_size}/{replay_buffer_capacity}",
               flush=True)
+
+        if step > 0 and step % PROGRESS_UPDATE_INTERVAL == 0:
+            try:
+                update_job(job_id, step / num_iterations * 100,
+                           "percent_complete")
+            except Exception as _pc_e:  # noqa: BLE001
+                print(f"main: percent_complete update failed "
+                      f"(non-fatal): {_pc_e}", flush=True)
 
         # Periodic Reverb online-table checkpoint - see
         # REVERB_PERIODIC_CHECKPOINT_INTERVAL's docstring above for why
@@ -4893,7 +4938,14 @@ def do_job(job, num_envs=1):
                 f"corner_radius={_demo_cr}, curvature_difficulty={_demo_cd}, "
                 f"chicanes(N/E/S/W)={_demo_ch_n}/{_demo_ch_e}/{_demo_ch_s}/{_demo_ch_w} "
                 f"({num_iterations} episodes/gym x {demo_num_gyms} gym(s))", flush=True)
-            _collect_on_all_gyms(num_iterations, batch_number=0)
+            # Optional goals-reached budget, as the curriculum path uses per
+            # stage; num_iterations stays the episode cap alongside it.
+            _demo_goal_budget = _demo_int_field("demo_goal_budget", 0) or None
+            if _demo_goal_budget:
+                print(f"do_job: DEMO goal_budget={_demo_goal_budget}/gym",
+                      flush=True)
+            _collect_on_all_gyms(num_iterations, batch_number=0,
+                                 goal_budget=_demo_goal_budget)
 
         root_dir = "/tfrecords/job_" + str(job["_id"])
         collect_training_data.train_agent(root_dir, demo_training_steps)
@@ -5158,7 +5210,8 @@ def do_job(job, num_envs=1):
             j for j in _extra_demo_job_ids
             if j and j != _DEFAULT_DEMO_JOB_ID]
         if not _demo_job_ids:
-            if collect_training_data.COURSE_OBS_KIND.get(_job_course_type) == "dict":
+            if (collect_training_data.COURSE_OBS_KIND.get(_job_course_type) == "dict"
+                    or _job_course_type in collect_training_data.COURSES_WITHOUT_DEMOS):
                 print(
                     f"do_job: TRAIN course={_job_course_type} from scratch "
                     "(no expert-demo source).",
@@ -5180,6 +5233,15 @@ def do_job(job, num_envs=1):
                     f"ROBOTAXI_DEFAULT_DEMO_JOB_ID env var).")
         demo_record_dirs_val = [
             f"/tfrecords/job_{_jid}" for _jid in _demo_job_ids]
+        if (_demo_job_ids and _job_course_type
+                in collect_training_data.TRACE_DEMO_COURSES):
+            # The named DEMO jobs hold scene records; the policy observes the
+            # brain's trace. Replay them through the brain now, while nothing
+            # else is stepping it (cached after the first build).
+            from fly_brain import demo_corpus
+            demo_record_dirs_val = [
+                demo_corpus.ensure(_jid, _job_course_type)
+                for _jid in _demo_job_ids]
         if len(_demo_job_ids) > 1:
             print(f"do_job: TRAIN combining {len(_demo_job_ids)} expert-demo "
                   f"sources for course={_job_course_type}: {_demo_job_ids}",
@@ -6636,6 +6698,9 @@ def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
                 next_time_step.reward,
                 next_time_step.discount)
 
+            if environment._episode_ended:
+                traj = traj._replace(next_step_type=np.full_like(
+                    np.asarray(traj.next_step_type), ts.StepType.LAST))
             trajectories.append(traj)
             num_trajectories+=1
             
@@ -6731,7 +6796,11 @@ def write_trajectories_to_file(trajectories, output_file):
             'action': tf.train.Feature(float_list=tf.train.FloatList(value=action.numpy().ravel())),
             'observation': tf.train.Feature(float_list=tf.train.FloatList(value=observation.numpy().ravel())),
             'reward': tf.train.Feature(float_list=tf.train.FloatList(value=reward.numpy().ravel())),
-            'discount': tf.train.Feature(float_list=tf.train.FloatList(value=discount.numpy().ravel()))
+            'discount': tf.train.Feature(float_list=tf.train.FloatList(value=discount.numpy().ravel())),
+            # LAST on an episode's final record. fly_brain/demo_corpus.py
+            # needs it to reset the brain between replayed episodes.
+            'next_step_type': tf.train.Feature(int64_list=tf.train.Int64List(
+                value=np.asarray(traj.next_step_type).ravel().astype(np.int64))),
         }
         example = tf.train.Example(features=tf.train.Features(feature=feature_dict))
         writer.write(example.SerializeToString())

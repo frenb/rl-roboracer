@@ -16,10 +16,11 @@ rewards, stuck detection, the curriculum and the per-step stats keep reading
 exactly what they read on donut_no_hint. Only ``policy_vector`` changes, which
 is the seam donut_camera_no_rays already established.
 
-There is no demo corpus at this width and there cannot be one: the trace
-depends on the brain's own history, so a recorded observation is not
-reconstructible from a stored scene. TRAIN from scratch only; do_job refuses
-DEMO and BC_TRAINING_ONLY here.
+The trace depends on the brain's own history, so it is never recorded
+directly and do_job refuses DEMO and BC_TRAINING_ONLY here. Demos come from
+replaying a scene corpus through the brain one whole episode at a time, which
+reproduces the trace exactly because the brain never sees the action - see
+fly_brain/demo_corpus.py. Without one, TRAIN runs from scratch.
 """
 import numpy as np
 from tf_agents.specs import array_spec
@@ -81,8 +82,13 @@ class FlyDonutCourse(DonutCourseNoHint):
 
     COURSE_NAME = "fly_donut"
 
-    def _make_encoder(self):
-        """(encoder, population table). The four-cue encoder, as trained on."""
+    @staticmethod
+    def _make_encoder():
+        """(encoder, population table). The four-cue encoder, as trained on.
+
+        Static so fly_brain/demo_corpus.py builds exactly this encoder without
+        constructing a course.
+        """
         from fly_brain.encoder import POPULATION_CELLS, RayEncoder
         return RayEncoder(), POPULATION_CELLS
 
@@ -131,6 +137,7 @@ class FlyDonutFlowCourse(FlyDonutCourse):
 
     COURSE_NAME = "fly_donut_flow"
 
-    def _make_encoder(self):
+    @staticmethod
+    def _make_encoder():
         from fly_brain.encoder import FLOW_POPULATION_CELLS, FlowEncoder
         return FlowEncoder(), FLOW_POPULATION_CELLS
