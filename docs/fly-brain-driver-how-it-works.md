@@ -167,6 +167,10 @@ hand decoder reading a rate off DNa02 is reading a near-binary signal. Reading
 all 1,314 through a decay filter is what makes the signal continuous enough to
 regress on.
 
+What these neurons are, why they are the ones read, and what the cues actually
+do to them is covered in [Descending neurons](#descending-neurons-the-brains-output-cable)
+below.
+
 The course derives its observation bounds from that decay rather than guessing:
 
 ```python
@@ -214,6 +218,230 @@ non-dict observations, which meant a flat-vector course had no way to change
 what the policy saw. With the `BaseCourse.policy_vector` default being the
 identity, routing everything through it is a no-op for `donut` and
 `donut_no_hint`.
+
+---
+
+## Descending neurons: the brain's output cable
+
+Every driving decision the fly brain makes reaches the car through one
+population: the **1,314 descending neurons**. This section covers what they are,
+where the name comes from, why the pipeline reads them and nothing else, and
+what happens between their spikes and `[acceleration, steering]`.
+
+Unless a source is cited, the numbers here come from
+[`docker/fly_brain/probe_descending.py`](../docker/fly_brain/probe_descending.py),
+which reads the wiring out of `weights.npz` and `brain.npz` and runs its own
+`FlyBrain`, so it never touches the brain a training job is stepping. It was run
+on 2026-09-26, and a rerun gives identical numbers because the brain is
+deterministic for a given seed.
+
+### Where the name comes from
+
+"Descending" is anatomy, and it describes direction. A fly's central nervous
+system is in two parts. The **brain** sits in the head. The **ventral nerve
+cord** (VNC), the insect counterpart of a spinal cord, runs through the thorax
+and holds the circuits that move the legs and wings. The two are joined by a
+thin bundle of axons through the neck, the **neck connective**.
+
+A descending neuron has its cell body and dendrites in the brain, and its axon
+runs *down* the neck connective into the nerve cord. Information goes head to
+body, down the body axis. The reverse population, with cell bodies in the nerve
+cord and axons running up into the brain, is called **ascending**. The same
+convention names vertebrate pathways: descending tracts carry commands from
+brain to spinal cord, and ascending tracts carry sensation back up.
+
+The connectome labels this population with the `superclass` value
+`descending_neuron`, and that label is exactly what the service selects:
+`Trace(self.brain, types=["descending_neuron"], ...)` in `fly_brain_server.py`.
+The data also has 1,846 `ascending_neuron` cells, which the pipeline does not
+read.
+
+**How the cells are named.** Descending neuron names follow Namiki et al.
+(2018, *eLife*, "The functional organization of descending sensory-motor
+pathways in *Drosophila*"): `DN`, then a letter for where the cell body sits,
+then a number. The letters that matter most here are `p` (posterior brain), `g`
+(gnathal ganglia, the region under the brain that also runs the mouthparts) and
+`a` (anterior). Types like `DNpe056` and `DNge109`, with an extra letter and a
+three-digit number, are later additions from the electron-microscopy connectome
+work, and they keep the same location prefix. A few cells keep older names
+instead: `MDN` ("moonwalker", which drives backward walking), `pIP10` (the male
+courtship-song command neuron) and a handful of `aSP`, `pMP` and `CB` types.
+
+In this build the 1,314 cells fall into 463 types:
+
+| Prefix | Cells |
+|---|---|
+| `DNg` | 856 |
+| `DNp` | 320 |
+| `DNa` | 52 |
+| `DNb` | 40 |
+| `DNd` | 22 |
+| everything else (`DNc`, `DNx`, `MDN`, `pIP10`, …) | 24 |
+
+Most types are a single left/right pair: 367 of the 463 types have exactly two
+cells.
+
+### What they do in a fly
+
+Descending neurons are the bottleneck between deciding and doing. The brain
+integrates vision, smell, touch and internal state, but it cannot move a leg
+directly. Everything it wants the body to do has to be carried down a few
+hundred pairs of axons to the nerve cord, and the nerve cord's own circuits turn
+that into coordinated leg and wing movement.
+
+So descending neurons carry **commands**, not muscle-level detail. A few are
+strong enough on their own to trigger a whole behaviour, and those are the
+famous ones:
+
+| Neuron | Behaviour it drives | In this pipeline |
+|---|---|---|
+| `DNp01` | The giant fibre: short-mode escape take-off | Looming cue's measured target |
+| `DNa02` | Turning toward the same side while walking | Chase cue's measured target |
+| `MDN` | Backward walking | Not driven by any cue |
+| `pIP10` | Courtship song | Not driven by any cue |
+| `DNg100` | Described as forward walking in fly64 | Flat under every cue (step 2) |
+
+Most of the other 1,300 or so have less well-understood roles. The working view
+in the field is that they act as a population code: many cells each nudge the
+nerve cord's circuits, rather than each one owning a behaviour.
+
+The `flybrain` library bakes in this view. `brain.npz` ships six "motor groups"
+(`forward`, `steer`, `escape`, `backward`, `punch`, `kick`), and every one of
+them is a descending neuron: `DNg100`, `DNa02`, `DNp01`, `MDN`, `DNg11` and
+`pIP10`. The library's own source says the first four follow the literature and
+that `punch` and `kick` are arbitrary picks made for its SSH Fighter game
+example. This pipeline uses none of these groups.
+
+### Where they sit in the wiring
+
+The wiring confirms the textbook picture, and it also shows the population is
+not a clean one-way output layer. By share of absolute synaptic weight:
+
+| Descending neurons **receive** from | Share | Descending neurons **send** to | Share |
+|---|---|---|---|
+| central-brain interneurons (`cb_intrinsic`) | 53.2% | nerve-cord interneurons (`vnc_intrinsic`) | 49.3% |
+| other descending neurons | 16.2% | central-brain interneurons | 17.3% |
+| ascending neurons (feedback from the cord) | 15.0% | ascending neurons | 9.1% |
+| visual projection neurons | 4.3% | other descending neurons | 6.9% |
+| central-brain sensory neurons | 3.9% | nerve-cord sensory neurons | 6.6% |
+| nerve-cord interneurons | 3.8% | central-brain sensory neurons | 4.5% |
+| | | nerve-cord motor neurons | 2.2% |
+
+Four things follow from this:
+
+- **They listen to the brain.** More than half their input comes from
+  central-brain interneurons. Only 4.3% comes directly from visual projection
+  neurons like LC4 and LC10a, so the cues mostly reach them through the brain's
+  own circuits. The exception is the giant fibre: LC4 feeds `DNp01` directly,
+  and all 71 left LC4 cells synapse onto the left `DNp01`.
+- **They talk mostly to the nerve cord.** 59.2% of their output weight lands on
+  `vnc_*` cells.
+- **They also talk sideways and back up.** About 17% of their output goes to
+  central-brain interneurons and 7% to other descending neurons, so they take
+  part in the brain's recurrent dynamics rather than simply reporting them.
+- **They set context for the motor neurons; they don't drive them directly.**
+  1,090 of the 1,314 synapse onto at least one motor neuron. Even so, only 9.4%
+  of the motor neurons' input comes straight from descending neurons, and 81.2%
+  comes from the nerve cord's own interneurons.
+
+### What the cues actually do to them
+
+At rest, the tonic drive keeps the population ticking over at a mean of 2.45
+spikes/s, with 211 of the 1,314 silent. Injecting each cue at the encoder's full
+strength (0.8) and counting the neurons whose rate changes by at least 1
+spike/s, reliably across four seeds:
+
+| Cue | Descending neurons moved | Types | Largest changes, spikes/s |
+|---|---|---|---|
+| `loom_L` | 114 (62 L, 49 R, 3 midline) | 91 | `DNp04_L` +49.8, `DNp01_L` +25.2, `DNg40_L` +25.0, `DNp02_L` +24.2 |
+| `loom_R` | 106 (59 R, 47 L) | 79 | `DNp04_R` +49.3, `DNp01_R` +24.7, `DNg40_R` +24.0, `DNp02_R` +23.3 |
+| `chase_L` | 39 (26 L, 12 R, 1 midline) | 32 | `DNg111_L` +6.2, `DNa02_L` +4.2, `DNae002_L` +4.0 |
+| `chase_R` | 58 (30 R, 27 L, 1 midline) | 45 | `DNg111_R` +5.7, `DNae002_R` +5.7, `DNge109_L` +3.5 |
+
+This is the strongest argument for reading all 1,314 instead of a few named
+cells:
+
+- **The famous cells are not the biggest responders.** Looming moves `DNp04`
+  about twice as much as `DNp01`, and chase moves `DNg111` more than `DNa02`. A
+  decoder built only on the named cells would miss the strongest signal.
+- **Each cue has its own signature.** Looming spreads over about a hundred cells
+  with large changes, while chase moves a few dozen with small ones. A linear
+  readout can tell those patterns apart even where a single cell cannot.
+- **Side is encoded as a bias, not a switch.** A left cue mostly moves left-side
+  cells, but a large minority on the right move too. That is why the readout
+  needs both sides at once.
+- **Steering is easier than throttle.** The loom and chase cues are strongly
+  lateralised, which lines up with steering being the channel the brain carries
+  well (ridge R² 0.620). Nothing here obviously encodes "go faster".
+
+### Why the pipeline reads descending neurons, not motor neurons
+
+The model contains the whole nerve cord, including 708 motor neurons, so reading
+the motor neurons directly would be possible. It is the wrong choice for three
+reasons.
+
+1. **The fly's motor neurons control a fly's body.** Motor neurons drive
+   specific leg and wing muscles through the nerve cord's walking and flight
+   circuits. The car has one throttle and one steering angle, so there is no
+   honest mapping from "left middle leg femur flexor" to either. Descending
+   neurons carry behaviour-level commands such as turn, escape and go, which
+   is the level a car's controls work at.
+2. **The nerve cord barely responds here.** Looming changes the rate of 22–25
+   of the 708 motor neurons, and chase changes 0–4. In a real fly the cord's
+   rhythm-generating circuits also depend on feedback from the moving body,
+   which this point-neuron model does not have. Reading past the descending
+   layer would add noise and lose signal.
+3. **It is the natural bottleneck.** The descending neurons are the last place
+   where the brain's whole decision is present in one population, before the
+   nerve cord expands it into muscle detail. That is why `flybrain`'s build
+   script calls its motor groups "descending neurons … used as motor
+   read-outs", and why the plan read them from the start. Step 3's service keeps
+   the trace over exactly this population.
+
+### From descending spikes to the car's action
+
+Each control step turns 1,314 spiking neurons into two numbers in four stages:
+
+```
+descending spikes  ──►  decaying trace  ──►  observation  ──►  readout  ──►  [accel, steer]
+ 5 substeps × 20 ms      +1 per spike,         1,314 floats      ridge (BC)      accel [0.05, 1]
+ per 0.1 s step          × 0.8187 per substep  in [0, 5.52]      or SAC (RL)     steer [−1, 1]
+```
+
+1. **Spikes.** The brain runs five 20 ms substeps per control step. On each one,
+   the service notes which of the 1,314 fired.
+2. **Trace.** Each neuron's value decays by `exp(−0.02/0.1) = 0.8187` per
+   substep and adds 1.0 for each spike. This turns the near-binary spiking of a
+   single cell (0–3 spikes per control step for `DNa02`) into a smooth number
+   that remembers roughly the last 0.1 s. A neuron firing on every substep
+   levels off at `1/(1−0.8187) = 5.52`, which is where `fly_donut`'s
+   observation bound comes from.
+3. **Observation.** The 1,314 values come back over gRPC in a fixed order, so
+   position *k* is always the same neuron, and `policy_vector` hands them to the
+   env as the observation. The order is the only thing that ties a number to a
+   neuron. Nothing downstream is told which position is `DNp01`; the readout
+   works that out from data.
+4. **Readout.** This is the only learned step:
+   - **Ridge (behaviour cloning).** Two weighted sums of the 1,314 values plus a
+     bias, one for acceleration and one for steering, fit offline to expert
+     actions. Each weight says how much one descending neuron's trace should
+     push that control.
+   - **SAC (reinforcement learning).** The trace goes into the actor network,
+     two hidden layers of 512 units (1,314 × 512 is the ~673k first-layer
+     weights mentioned above). A tanh-squashed Gaussian head outputs the mean
+     and spread of each action. Training samples from that Gaussian, and eval
+     takes its mode, `tanh(mean)`. The critic sees the same trace plus the
+     action.
+
+   Both land in the same action spec, acceleration first: `[0.05, 1.0]` for
+   acceleration and `[−1.0, 1.0]` for steering. The ridge output is clipped
+   into it, which is what pins the BC car near minimum throttle. SAC's tanh
+   head is scaled into the bounds, so it never needs clipping.
+
+In a fly, the nerve cord turns descending commands into movement. Here the
+readout takes the nerve cord's place: it is the only part of the pipeline that
+learns, and it learns which descending neurons mean "turn left" and "go faster"
+for a car.
 
 ---
 
@@ -1083,6 +1311,7 @@ round trip, not the brain, sets the pace at one env.
 | `protos/fly_brain/proto/fly_brain.proto` | The wire contract. |
 | `rl_agent/fly_brain/client.py` | Trainer-side client. `SUBSTEPS = 5`, `EYE_DRIVE = 0.45`. Also the smoke test. |
 | `rl_agent/fly_brain/encoder.py` | `RayEncoder` (the 4-cue encoder in use) and `RetinotopicEncoder` (the measured negative result). |
+| `docker/fly_brain/probe_descending.py` | Measures where the descending neurons sit in the wiring and how many each cue moves. Backs the descending-neurons section. |
 | `rl_agent/fly_brain/step5_readout.py` | Fits the ridge readout and reports held-out R² against its controls. |
 | `rl_agent/fly_brain/policy.py` | `FlyPyPolicy` — the BC route, as a tf-agents `PyPolicy`. |
 | `rl_agent/environments/courses/fly_donut_course.py` | The RL route. The trace becomes the observation here. |

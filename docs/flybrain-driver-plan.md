@@ -19,7 +19,9 @@ the *readout* that fly.ai normally fits with ridge regression.
 Nothing inside the brain ever trains. Its weights are the MaleCNS v1.0 wiring
 diagram, fixed at load time. The only learned thing is what we read off the
 1,314 descending neurons, which is exactly how `flybrain/reservoir.py` is meant
-to be used.
+to be used. What descending neurons are, and why they rather than motor neurons
+are the read-out, is covered in
+[the how-it-works doc](fly-brain-driver-how-it-works.md#descending-neurons-the-brains-output-cable).
 
 **If you want to know how the built system works rather than why it was built
 this way, read [`fly-brain-driver-how-it-works.md`](fly-brain-driver-how-it-works.md)
