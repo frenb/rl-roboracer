@@ -1307,7 +1307,8 @@ slider during Play shows up immediately. The asset has these groups:
 | Performance | `overlayRenderHz` (10): the fly views are drawn into a texture at this rate (`Hidden/FlyOverlayBlit` copies it into the column on every other frame; the column is opaque, so the copy is exact), and every frame while dragging. Capping the frame rate instead made driving worse: the car's commands and observations only move between frames, and at `Time.timeScale` 3 a 15 fps cap is 0.2 s of driving per frame. `animationHz` (30): the fly's pose, and the neurons riding it, update at this rate rather than every frame. The sim renders as fast as it can and the policy waits on its frames (at `Time.timeScale` 3), so per-frame overlay work costs the car reaction time; with the fly posed every frame the car crashed far more often |
 | Textured fly (Y key) | `texturedLightIntensity` (1.1), `texturedShowHair` (off; the strands are expensive). Y swaps the see-through shell for the authored materials in `Resources/FruitFly/Materials` (albedo, normal and metallic maps), lit by a light on the overlay layer only; the brain still draws on top, and the close-up's dark backdrop is off |
 | Animation schedule | `idleMinSeconds` / `idleMaxSeconds` (30 / 60, the still stretch), `groomSeconds` (5), `groomBlendSeconds` (0.5) |
-| View | `viewport`, `flightLiftShown` (0.25), `spinDegreesPerSecond`, `showWithoutActivity` |
+| Flight (1 key) | `flightHoverSeconds` (1.2), `flightPathSeconds` (9, the loop), `flightRampSeconds` (1), `flightReturnHoverSeconds` (1.8), `flightFov` (30°, perspective camera in flight), `flightFarShrink` (2.6), `flightLoopWidth` (1.5), `flightLoopLeft` (on), `flightBodyBounce` (0.06), `flightFarSpeedup` (1), `flightFarRise` (0.05), `flightFaceHeading` (on), `flightTurnRate` (360°/s), `flightFullBankTurnRate` (60°/s), `flightBankDegrees` (25), clip speeds `flightWingSpeed` (0.5), `flightTakeoffSpeed` (0.5), `flightLandSpeed` (0.2), `flightCrossfadeSeconds` (0.15), `flightAnimationHz` / `flightRenderHz` (30 / 30, only while flying), `flightCameraSeconds` (1), `flightFramePadding` (1.25), `editorCaptureFlight` / `editorCaptureHz` (on / 5, editor only: PNGs of each flight in `unity/Temp/FlyFlightFrames`) |
+| View | `viewport`, `flyBehindTrack` (on: no black panel. The fly is drawn over the whole window, still framed in `viewport`, before the overhead track camera. That camera clears depth only while this is on, with HDR and MSAA off, so the road draws over the fly and the fly shows on the black around it and can fly out of its area), `flightLiftShown` (0.25), `spinDegreesPerSecond`, `showWithoutActivity` |
 | Brain close-up | `closeUpHeadBox`, `closeUpHeadPitch` (15), orientation dials independent of the fly view's: `closeUpViewYaw` (90), `closeUpViewElevation` (15), `closeUpViewRoll` (0), `closeUpBodyPitch` (10), `closeUpRearOpacity` (0.75 for the body behind the head; head, eyes, front legs and wings unchanged), `closeUpHeadOpacity` (1, the close-up's `headOpacity`), `neckBone` |
 | Neuron glow (all three views) | `glow` (additive soft spots, `Hidden/FlyNeuronGlow`), `glowGain` (0.9), `glowRestGain` (2.5× resting brightness), `glowRestAlpha` (0.25), `glowPointScale` (1.6, brain-only and fly views) |
 | Close-up brain | `closeUpPointScale` (2.5), `closeUpBrainScale` (0.85, brain only, about its centre, so the eyes cover less of the optic lobes), `closeUpBodyPitch` (10° nose down; the head stays framed, the abdomen rises), `closeUpHeadFill` (0.67) |
@@ -1326,10 +1327,110 @@ wings, `anisotropic1` the hair, and anything else is body.
 
 1. standing still on the idle clip's first frame for a random time between
    `idleMinSeconds` and `idleMaxSeconds` (30–60 s, picked fresh each loop),
-2. idle_look (cleaning hands) for `groomSeconds` (5 s).
+2. idle_look (cleaning hands) for `groomSeconds` (5 s),
+3. standing still again, for another random 30–60 s,
+4. look_around (3.8 s): the head turns 30° to the fly's left, holds, sweeps
+   30° to its right, holds, and comes back to centre.
 
-Breathing, takeoff, hover and land no longer play; the takeoff clip is still
-sampled once at load to measure the climb that `flightLiftShown` frames for.
+look_around lives in its own file, `Resources/FruitFly/FruitFlyMale_look.fbx`,
+so the model file is untouched. It was keyed in Blender (`fly_retarget.blend`,
+action `FruitFly_look_around`) on the `FruitFlyMale` armature, the same
+skeleton the model was exported from: every bone holds the idle clip's first
+frame, and only `Neck` turns, about the vertical. It has to be the neck: the
+head's mesh (eyes, head hair, head shell) is skinned to `Neck`, while
+`HeadLock`, which the brain rides, deforms almost nothing, so turning
+`HeadLock` turned the brain inside a still head. It has to key the whole
+standing pose rather than just the head, because a mixer with one clip at full
+weight puts every bone that clip does not key back to the bind pose. It was
+exported armature-only with the model's settings (no leaf bones, no NLA, only
+this action), and its `.meta` copies the model's import settings (Generic
+rig). Its one take is named `Scene` by Blender's exporter, so it is loaded by
+file rather than by name. At load `FlyAnatomyView` poses it once and checks
+the head actually turns; if the bone paths ever stop matching, it warns and
+the loop grooms only.
+
+**Flight (1 key).** In either fly view, 1 interrupts the loop from wherever it
+is: takeoff, `flightHoverSeconds` of hover, a figure-eight for
+`flightPathSeconds`, `flightReturnHoverSeconds` of hover back over the start,
+then land and start the loop afresh. The figure-eight lies flat around the
+top of the takeoff, as a fly circles: across = sin(a) left and right on
+screen (`flightPathWidth`, 4 body lengths), depth = sin(2a) toward and away
+from the camera (`flightPathDepth`, 3), and a climb of sin(2a) as each loop
+draws away (`flightPathHeight`, 1), so the eight still shows under the
+orthographic camera. The axes are levelled from the camera's, so it runs
+across and into the view whatever the orientation dials say. The fly faces
+along the path, whose direction turns smoothly all the way round (at most
+~385°/s at the loops' tips over `flightPathSeconds` 8), banks into the turn by
+up to `flightBankDegrees`, and blends from the model's `fly_forward` clip to
+`fly_turn_left` / `fly_turn_right` with how hard it is turning; the two loops
+turn opposite ways, so it comes back facing as it left. It starts and ends at
+the crossing, where the path runs straight, on whichever of the four ways
+round is nearest the way the fly faces, and a time warp takes it from rest and
+back to rest. In the last hover it turns back to face the way it started.
+
+**The choreography now replaces the figure-eight** (described below as it
+was). It follows a reference clip of a biplane circling in front of a camera
+at its own height: one steady level circle in a single direction, facing
+along it and banking. Across the shot large, round and away at one side,
+back across about 2.6× smaller on the far side, round toward the camera at
+the other side. The screen height barely changes, and the far side looks
+slower only because it is further away. Flutter up (takeoff at half speed),
+hover while turning to set off, then the loop in `flightPathSeconds` (9),
+its nearest point the hover point. It sets off to the left as the plane does
+(`flightLoopLeft`). It is an oval `flightLoopWidth` (1.5) times wider across
+the shot than it is deep, so it swings well out of the sides. Then a pause over the start while the
+fly turns back, and a slow landing (0.2 speed, about 2.4 s).
+
+The fly camera turns perspective for the flight, so the fly shrinks with
+distance on its own instead of being drawn smaller. Outside a flight it is
+orthographic as before. As the camera pulls back over
+`flightCameraSeconds`, its field of view opens from 1° (indistinguishable
+from orthographic) to `flightFov` (30°), and it dollies back so the plane
+through the fly stays framed as the orthographic shot would frame it. There
+is no jump either way, and it returns to orthographic once it is back in.
+FlyBrainViz passes the camera's position, direction and field of view to
+the fly each frame. The loop is planned from them when it starts:
+`flightFarShrink` (2.6) sets the far side at that many camera distances,
+so the radius is (shrink − 1) / 2 of the camera's distance. How far the
+sides go out of the shot then follows from `flightFov` and the shot's
+shape. The height is solved for the screen position: from the hover point's
+height to `flightFarRise` (0.05 of the half-height) above it at the far side.
+The loop then looks as if seen from its own level, instead of being lifted
+toward the horizon by the camera's downward look. Speed is steady apart from
+`flightRampSeconds` (1) of easing at each end. `flightFarSpeedup` (1) speeds
+up the far side if wanted. The pulled-back shot frames only the fly at rest
+and hovering, not the loop.
+
+In the air the body is held steady at the height takeoff leaves it. The
+wingbeat clips each carry the pelvis at their own height (`fly_forward` and
+the turns well below `hover`), and they bob and pitch the body hard with every
+beat. Pinning only the pelvis still let the body swing around it. Each
+wingbeat clip's average body pose over its loop is measured at load: the
+centre between pelvis and head, and the pelvis-to-head direction. In flight
+the body is pulled to that average, keeping `flightBodyBounce` (0.06) of the
+bob for a subtle bounce, and each clip's average is raised to the takeoff
+height. The landing is held the same way at first, from the hover's
+average, and let go as it touches down. Before, it was offset from the
+landing clip's first frame even while it was still blending in from the
+hover, which threw the fly up for a frame.
+
+An upright eight in the camera's plane was tried first and read as tumbling:
+the fly had to turn 180° at each end, started late and flew backwards through
+it, and the 15° camera elevation turned up-and-down motion into spurious turns
+toward and away from the camera. During a
+flight the whole climb shows (`flightLiftShown` does not apply), and the
+camera eases out over `flightCameraSeconds` to a shot that holds the fly at
+rest and anywhere on the path. That applies in the close-up too, which comes
+back in to the head once the fly has landed; during a flight the close-up is
+framed on the head at rest, so the camera only zooms and never tracks the fly.
+`flightFaceHeading` off keeps the fly facing the way it started (it side-slips
+round the path), since a fly turning in place can read as the camera orbiting.
+In flight the column is redrawn on exactly the frames the fly is posed. The fly is posed and the column
+redrawn at `flightAnimationHz` / `flightRenderHz` for the ~12 s this takes
+(and while the camera moves), then drops back to the usual rates.
+
+Breathing no longer plays. Outside a flight, the takeoff clip is sampled once
+at load to measure the climb that `flightLiftShown` frames for.
 While the fly stands still nothing is evaluated, so the neurons riding it are
 not rebuilt either. idle_look is 1.0 s natively and plays whole cycles, so
 `groomSeconds` rounds to the nearest cycle. The front legs stay raised through

@@ -742,6 +742,9 @@ public class FlyBrainViz : MonoBehaviour
     void HandleFlyOpacityKeys(Keyboard kb)
     {
         if (kb == null || !Anatomy) return;
+        if ((kb.digit1Key.wasPressedThisFrame || kb.numpad1Key.wasPressedThisFrame)
+            && _fly != null && IsVisible() && _fly.TriggerFlight())
+            Debug.Log("[FlyBrainViz] fly: takeoff (1)");
         if (kb.yKey.wasPressedThisFrame)
         {
             _flyTextured = !_flyTextured;
@@ -1231,6 +1234,8 @@ public class FlyBrainViz : MonoBehaviour
         Camera.onPostRender -= BlitOverlayCache;
         if (_overlayRt != null) { _overlayRt.Release(); Destroy(_overlayRt); }
         if (_overlayBlitMat != null) Destroy(_overlayBlitMat);
+        DrawsBehindTrack = false;
+        HiddenCamera.Destroy(_behindCam);
         HiddenCamera.Destroy(_overlayCam);
         // The rig is unparented to park it away from the course, so it does
         // not go down with this component on its own.
@@ -1327,6 +1332,11 @@ public class FlyBrainViz : MonoBehaviour
     /// </summary>
     void UpdateOverlayCamera()
     {
+        // Orthographic unless a flight's pull-back turns it perspective
+        // below; reset every frame so no view is ever left in perspective.
+        _overlayCam.orthographic = true;
+        _overlayCam.nearClipPlane = 0.01f;
+        _overlayCam.farClipPlane = OverlayCamDistance * 4f;
         // Aim first: the projected extents are measured along this camera's
         // right and up, so its rotation has to be settled before they mean
         // anything.
@@ -1335,10 +1345,18 @@ public class FlyBrainViz : MonoBehaviour
 
         Rect vp = OverlayViewportScaled();
         bool on = IsVisible();
+        float flightFrame = 0f;
         if (_fly != null)
         {
             _fly.HeadPitchTarget = CloseUp ? _anatSettings.closeUpHeadPitch : 0f;
             _fly.RearOpacityScale = CloseUp ? _anatSettings.closeUpRearOpacity : 1f;
+            _fly.FlightRight = _fly.Root.InverseTransformDirection(_overlayCam.transform.right);
+            _fly.FlightUp = _fly.Root.InverseTransformDirection(_overlayCam.transform.up);
+            // Out to the whole flight at takeoff, back in once it has landed.
+            float target = Anatomy && _fly.Flying ? 1f : 0f;
+            _flightZoom = Mathf.MoveTowards(_flightZoom, target,
+                Time.unscaledDeltaTime / Mathf.Max(0.01f, _anatSettings.flightCameraSeconds));
+            flightFrame = Mathf.SmoothStep(0f, 1f, _flightZoom);
         }
 
         // The close-up keeps the fly view's column for the track's sake, and
@@ -1363,6 +1381,7 @@ public class FlyBrainViz : MonoBehaviour
         if (CloseUp)
         {
             FrameCloseUp(vp);
+            BlendToFlightFrame(flightFrame);
             return;
         }
 
@@ -1393,6 +1412,75 @@ public class FlyBrainViz : MonoBehaviour
         Rect px = _overlayCam.pixelRect;
         float aspect = px.height > 1f ? px.width / px.height : 1f;
         _overlayCam.orthographicSize = Mathf.Max(halfH, halfW / Mathf.Max(0.01f, aspect));
+        if (Anatomy) BlendToFlightFrame(flightFrame);
+    }
+
+    private float _flightZoom;             // 0 framed as usual, 1 pulled back to the whole flight
+
+    /// <summary>
+    /// Move the overlay camera part way (w) from the framing just set toward
+    /// one that holds the fly at rest and hovering at the top of the takeoff.
+    /// Not the orbit: it is sized from this shot to carry the fly out of it
+    /// and back, so the shot's size is passed on every frame, before the
+    /// camera starts to move. The hovering fly turns, so it is allowed its
+    /// largest rest extent in every direction.
+    /// </summary>
+    void BlendToFlightFrame(float w)
+    {
+        if (_fly == null || _fly.FramePoints == null) return;
+        var cam = _overlayCam;
+        Transform root = _fly.Root;
+        Vector3 r = cam.transform.right, u = cam.transform.up;
+        float sc = root.lossyScale.x;
+        Quaternion rot = root.rotation;
+        float minX = float.MaxValue, maxX = float.MinValue;
+        float minY = float.MaxValue, maxY = float.MinValue;
+        foreach (var p in _fly.FramePoints)
+        {
+            Vector3 q = rot * (p * sc);
+            float a = Vector3.Dot(q, r), b = Vector3.Dot(q, u);
+            if (a < minX) minX = a;
+            if (a > maxX) maxX = a;
+            if (b < minY) minY = b;
+            if (b > maxY) maxY = b;
+        }
+        float cx = (minX + maxX) * 0.5f, cy = (minY + maxY) * 0.5f;
+        float reach = Mathf.Max(maxX - minX, maxY - minY) * 0.5f;
+        Vector3 lift = rot * (_fly.Lift * sc);
+        float hx = cx + Vector3.Dot(lift, r), hy = cy + Vector3.Dot(lift, u);
+        float ax = reach, ay = reach;
+        minX = Mathf.Min(minX, hx - ax); maxX = Mathf.Max(maxX, hx + ax);
+        minY = Mathf.Min(minY, hy - ay); maxY = Mathf.Max(maxY, hy + ay);
+
+        float pad = Mathf.Max(1f, _anatSettings.flightFramePadding);
+        Rect px = cam.pixelRect;
+        float aspect = px.height > 1f ? px.width / px.height : 1f;
+        float size = Mathf.Max((maxY - minY) * 0.5f, (maxX - minX) * 0.5f / Mathf.Max(0.01f, aspect)) * pad;
+        Vector3 pos = root.position + r * ((minX + maxX) * 0.5f) + u * ((minY + maxY) * 0.5f)
+                      - cam.transform.forward * OverlayCamDistance;
+        _fly.ShotHalfSize = new Vector2(size * aspect, size) / Mathf.Max(1e-6f, sc);
+        _fly.CamTanHalfFov = 0f;
+        if (w <= 0f) return;
+        cam.orthographicSize = Mathf.Lerp(cam.orthographicSize, size, w);
+        cam.transform.position = Vector3.Lerp(cam.transform.position, pos, w);
+
+        // Perspective, so a fly flying away shrinks. Framed like the
+        // orthographic shot on the plane through the fly, and the field of
+        // view opens from nearly nothing as the camera pulls back: at w = 0
+        // the two are indistinguishable, so there is no jump either way.
+        float fov = Mathf.Lerp(1f, Mathf.Clamp(_anatSettings.flightFov, 5f, 90f), w);
+        float tan = Mathf.Tan(0.5f * fov * Mathf.Deg2Rad);
+        Vector3 fwd = cam.transform.forward;
+        Vector3 centre = cam.transform.position + fwd * OverlayCamDistance;
+        float dist = cam.orthographicSize / tan;
+        cam.orthographic = false;
+        cam.fieldOfView = fov;
+        cam.transform.position = centre - fwd * dist;
+        cam.nearClipPlane = Mathf.Max(0.01f, dist * 0.05f);
+        cam.farClipPlane = dist + Mathf.Max(dist, _fly.OrbitReach * sc) * 3f;
+        _fly.CamPos = root.InverseTransformPoint(cam.transform.position);
+        _fly.CamForward = root.InverseTransformDirection(fwd);
+        _fly.CamTanHalfFov = tan;
     }
 
     /// <summary>
@@ -1408,6 +1496,9 @@ public class FlyBrainViz : MonoBehaviour
         Transform root = _fly.Root;
         Vector3 r = _overlayCam.transform.right, u = _overlayCam.transform.up;
         Quaternion bend = Quaternion.AngleAxis(_fly.HeadPitch, _fly.Right);
+        // Framed on the head at rest during a 1-key flight: the pull-back and
+        // the return then only zoom, and the fly moves against a still camera.
+        Vector3 lift = _fly.Flying ? Vector3.zero : _fly.ShownLift;
         float minX = float.MaxValue, maxX = float.MinValue;
         float minY = float.MaxValue, maxY = float.MinValue;
         for (int k = 0; k < 8; k++)
@@ -1417,7 +1508,7 @@ public class FlyBrainViz : MonoBehaviour
                         + _fly.Up * (((k & 2) == 0 ? -0.5f : 0.5f) * _fly.HeadHeight)
                         + _fly.Forward * (((k & 4) == 0 ? -0.5f : 0.5f) * _fly.HeadDepth);
             if (_fly.HasNeck) p = _fly.NeckRest + bend * (p - _fly.NeckRest);
-            Vector3 w = root.TransformPoint(p + _fly.ShownLift) - root.position;
+            Vector3 w = root.TransformPoint(p + lift) - root.position;
             float a = Vector3.Dot(w, r), b = Vector3.Dot(w, u);
             if (a < minX) minX = a;
             if (a > maxX) maxX = a;
@@ -2211,6 +2302,9 @@ public class FlyBrainViz : MonoBehaviour
     {
         if (_overlayCam == null) return;
         float hz = _anatSettings != null ? _anatSettings.overlayRenderHz : 0f;
+        // Smooth while the fly flies and while the camera moves.
+        if (hz > 0f && _fly != null && Anatomy && (_fly.Flying || _flightZoom > 0f))
+            hz = _anatSettings.flightRenderHz > 0f ? Mathf.Max(hz, _anatSettings.flightRenderHz) : 0f;
         if (!_overlayCam.enabled || !Anatomy || hz <= 0f || OverlayBlitMaterial() == null)
         {
             if (_overlayCached)
@@ -2219,10 +2313,16 @@ public class FlyBrainViz : MonoBehaviour
                 _overlayCam.clearFlags = CameraClearFlags.SolidColor;
                 _overlayCached = false;
             }
+            SetBehindTrack(false);
             return;
         }
 
-        Rect px = _overlayCam.pixelRect;
+        // Behind the track: drawn over the whole window, before the track
+        // camera, which then draws the road over it and leaves the fly
+        // showing on the black around it. The camera is still framed on its
+        // column, so the fly rests where it always has.
+        bool behind = _anatSettings.flyBehindTrack && OverheadCameraFit.TrackCamera != null;
+        Rect px = behind ? new Rect(0f, 0f, Screen.width, Screen.height) : _overlayCam.pixelRect;
         int w = Mathf.Max(1, Mathf.RoundToInt(px.width));
         int h = Mathf.Max(1, Mathf.RoundToInt(px.height));
         bool resized = _overlayRt == null || _overlayRt.width != w || _overlayRt.height != h;
@@ -2235,25 +2335,126 @@ public class FlyBrainViz : MonoBehaviour
         }
 
         float now = Time.unscaledTime;
+        // In flight, draw exactly the frames the fly was posed on: two
+        // independent 30 Hz clocks beat against each other and the motion
+        // stutters, showing some poses twice and skipping others.
+        bool flying = _fly != null && _fly.Flying;
+        bool timed = flying ? _fly.PosedThisFrame : now >= _nextOverlayRender;
         bool due = resized || !_overlayCached || _dragging || _snapT < 1f
-                   || _hoverIndex != _cachedHoverIndex || now >= _nextOverlayRender;
+                   || _hoverIndex != _cachedHoverIndex || timed || behind != DrawsBehindTrack;
         if (due)
         {
             _nextOverlayRender = now + 1f / hz;
             _cachedHoverIndex = _hoverIndex;
             Rect rect = _overlayCam.rect;
+            Matrix4x4 columnProj = _overlayCam.projectionMatrix;
             _overlayCam.cullingMask = OverlayLayerMask;
             _overlayCam.clearFlags = CameraClearFlags.SolidColor;
             _overlayCam.targetTexture = _overlayRt;
             _overlayCam.rect = new Rect(0f, 0f, 1f, 1f);
+            if (behind) _overlayCam.projectionMatrix = ColumnToWindow(rect) * columnProj;
             _overlayCam.Render();
+            if (behind) _overlayCam.ResetProjectionMatrix();
             _redrawCount++;
             _overlayCam.targetTexture = null;
             _overlayCam.rect = rect;
+            CaptureFlightFrame(now);
         }
         _overlayCam.cullingMask = 0;
         _overlayCam.clearFlags = CameraClearFlags.Nothing;
         _overlayCached = true;
+        SetBehindTrack(behind);
+    }
+
+    /// <summary>Clip-space map from a camera's own viewport to the whole
+    /// window, so it draws exactly what it would in its rect, plus whatever
+    /// its view extends to beyond it.</summary>
+    static Matrix4x4 ColumnToWindow(Rect r)
+    {
+        var m = Matrix4x4.identity;
+        m.m00 = r.width;
+        m.m03 = 2f * r.x + r.width - 1f;
+        m.m11 = r.height;
+        m.m13 = 2f * r.y + r.height - 1f;
+        return m;
+    }
+
+    /// <summary>True while the fly view is drawn over the whole window
+    /// behind the track; OverheadCameraFit then stops clearing over it.</summary>
+    public static bool DrawsBehindTrack { get; private set; }
+    private Camera _behindCam;
+
+    void SetBehindTrack(bool on)
+    {
+        DrawsBehindTrack = on;
+        if (!on)
+        {
+            if (_behindCam != null) _behindCam.enabled = false;
+            return;
+        }
+        if (_behindCam == null)
+        {
+            _behindCam = HiddenCamera.Create("FlyBehindTrackCamera");
+            _behindCam.clearFlags = CameraClearFlags.SolidColor;
+            _behindCam.backgroundColor = Color.black;
+            _behindCam.cullingMask = 0;          // clears, then takes the cached fly
+            _behindCam.orthographic = true;
+            _behindCam.allowHDR = false;
+            _behindCam.allowMSAA = false;
+            _behindCam.useOcclusionCulling = false;
+        }
+        _behindCam.rect = new Rect(0f, 0f, 1f, 1f);
+        _behindCam.depth = OverheadCameraFit.TrackCamera != null
+            ? OverheadCameraFit.TrackCamera.depth - 0.5f : -1.5f;
+        _behindCam.enabled = true;
+    }
+
+    // ---- flight capture (editor review) ------------------------------------
+    private bool _captureWasFlying;
+    private int _captureCount;
+    private float _nextCapture;
+    private Texture2D _captureTex;
+
+    /// <summary>Editor only: save the just-drawn column to
+    /// Temp/FlyFlightFrames while a flight, or the camera's return after it,
+    /// is under way.</summary>
+    void CaptureFlightFrame(float now)
+    {
+        if (!Application.isEditor || _anatSettings == null || !_anatSettings.editorCaptureFlight
+            || _fly == null || _overlayRt == null) return;
+        bool active = _fly.Flying || _flightZoom > 0f;
+        string dir = System.IO.Path.GetFullPath(
+            System.IO.Path.Combine(Application.dataPath, "..", "Temp", "FlyFlightFrames"));
+        if (!active)
+        {
+            if (_captureWasFlying)
+                Debug.Log($"[FlyBrainViz] flight capture: {_captureCount} frames in {dir}");
+            _captureWasFlying = false;
+            return;
+        }
+        if (!_captureWasFlying)
+        {
+            if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir, true);
+            System.IO.Directory.CreateDirectory(dir);
+            _captureCount = 0;
+            _nextCapture = now;
+            _captureWasFlying = true;
+        }
+        if (now < _nextCapture) return;
+        _nextCapture = now + 1f / Mathf.Max(1f, _anatSettings.editorCaptureHz);
+        int w = _overlayRt.width, h = _overlayRt.height;
+        if (_captureTex == null || _captureTex.width != w || _captureTex.height != h)
+        {
+            if (_captureTex != null) Destroy(_captureTex);
+            _captureTex = new Texture2D(w, h, TextureFormat.RGB24, false);
+        }
+        var prev = RenderTexture.active;
+        RenderTexture.active = _overlayRt;
+        _captureTex.ReadPixels(new Rect(0, 0, w, h), 0, 0);
+        RenderTexture.active = prev;
+        System.IO.File.WriteAllBytes(System.IO.Path.Combine(dir, $"flight_{_captureCount:000}.png"),
+                                     _captureTex.EncodeToPNG());
+        _captureCount++;
     }
 
     Material OverlayBlitMaterial()
@@ -2271,7 +2472,8 @@ public class FlyBrainViz : MonoBehaviour
     /// to the screen, fill its column with the cached drawing.</summary>
     void BlitOverlayCache(Camera c)
     {
-        if (c != _overlayCam || !_overlayCached || c.targetTexture != null
+        Camera into = DrawsBehindTrack ? _behindCam : _overlayCam;
+        if (c != into || !_overlayCached || c.targetTexture != null
             || _overlayRt == null || _overlayBlitMat == null) return;
         _overlayBlitMat.mainTexture = _overlayRt;
         GL.PushMatrix();
@@ -2500,7 +2702,7 @@ public class FlyBrainViz : MonoBehaviour
         // oldest C# version this project might be compiled under.
         string[] keys = {
             "hover", "drag LMB", "-   =", "0", "[   ]", "\\", "arrows", "/",
-            "N", ",   .", "Y", "B", ";", "'",
+            "N", ",   .", "Y", "1", "B", ";", "'",
         };
         bool anat = Anatomy;
         // The absolute value is what gets pasted into FLY_VIZ_DEPTH_SCALE, so
@@ -2535,6 +2737,8 @@ public class FlyBrainViz : MonoBehaviour
                  : "fly opacity (fly view)",
             anat ? (_flyTextured ? "see-through fly" : "textured fly")
                  : "textured fly (fly view)",
+            anat ? (_fly != null && _fly.Flying ? "flying\u2026" : "fly a loop and land")
+                 : "fly a loop (fly view)",
             "hide overlay",
             "hide this list",
             // Reads the state rather than asserting it: with the key hidden,

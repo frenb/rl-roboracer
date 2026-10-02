@@ -50,6 +50,15 @@ public class OverheadCameraFit : MonoBehaviour
     bool _haveAuthored;
     Camera _gutterClear;
 
+    /// <summary>The overhead camera while it is drawing the track, null
+    /// otherwise, so the fly view can draw itself behind it.</summary>
+    public static Camera TrackCamera { get; private set; }
+
+    // What the camera had before the fly was drawn behind the track.
+    bool _behind;
+    CameraClearFlags _savedClear;
+    bool _savedHdr, _savedMsaa;
+
     void OnDestroy() { HiddenCamera.Destroy(_gutterClear); }
 
     void OnDisable()
@@ -57,13 +66,48 @@ public class OverheadCameraFit : MonoBehaviour
         // Give the window back rather than leaving a black stripe behind.
         if (_cam != null) { _cam.rect = new Rect(0f, 0f, 1f, 1f); _cam.ResetAspect(); }
         if (_gutterClear != null) _gutterClear.enabled = false;
+        SetBehind(false);
+        if (TrackCamera == _cam) TrackCamera = null;
         TrackScreenHeight = 0f;
         TrackScreenLeft = 0f;
     }
 
+    /// <summary>
+    /// With the fly drawn behind the track, the fly view has already filled
+    /// the window before this camera runs, so it must not clear its colour:
+    /// it clears depth only and the fly shows wherever the track leaves
+    /// background. HDR and MSAA are off meanwhile, since either renders into
+    /// an intermediate target that starts empty rather than holding the fly.
+    /// </summary>
+    void SetBehind(bool on)
+    {
+        if (_cam == null || on == _behind) return;
+        _behind = on;
+        if (on)
+        {
+            _savedClear = _cam.clearFlags;
+            _savedHdr = _cam.allowHDR;
+            _savedMsaa = _cam.allowMSAA;
+            _cam.clearFlags = CameraClearFlags.Depth;
+            _cam.allowHDR = false;
+            _cam.allowMSAA = false;
+        }
+        else
+        {
+            _cam.clearFlags = _savedClear;
+            _cam.allowHDR = _savedHdr;
+            _cam.allowMSAA = _savedMsaa;
+        }
+    }
+
     void LateUpdate()
     {
-        if (!enableFit) return;
+        if (!enableFit)
+        {
+            SetBehind(false);
+            if (TrackCamera == _cam) TrackCamera = null;
+            return;
+        }
         if (_cam == null)
         {
             _cam = GetComponent<Camera>();
@@ -146,6 +190,9 @@ public class OverheadCameraFit : MonoBehaviour
         // clears depth only - so without this the gutter keeps whatever was
         // last in the backbuffer and smears.
         EnsureGutterClear().enabled = g > 0.0001f;
+
+        TrackCamera = _cam.isActiveAndEnabled ? _cam : null;
+        SetBehind(TrackCamera != null && FlyBrainViz.DrawsBehindTrack);
     }
 
     Camera EnsureGutterClear()

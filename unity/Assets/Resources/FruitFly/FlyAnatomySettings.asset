@@ -34,12 +34,38 @@ MonoBehaviour:
   idleMaxSeconds: 60
   groomSeconds: 5
   groomBlendSeconds: 0.5
+  flightHoverSeconds: 1.2
+  flightPathSeconds: 9
+  flightRampSeconds: 1
+  flightReturnHoverSeconds: 1.8
+  flightFov: 30
+  flightFarShrink: 2.6
+  flightLoopWidth: 1.5
+  flightLoopLeft: 1
+  flightBodyBounce: 0.06
+  flightFarSpeedup: 1
+  flightFarRise: 0.05
+  flightFaceHeading: 1
+  flightTurnRate: 360
+  flightFullBankTurnRate: 60
+  flightBankDegrees: 25
+  flightWingSpeed: 0.5
+  flightTakeoffSpeed: 0.5
+  flightLandSpeed: 0.2
+  flightCrossfadeSeconds: 0.15
+  flightAnimationHz: 30
+  flightRenderHz: 30
+  flightCameraSeconds: 1
+  flightFramePadding: 1.25
+  editorCaptureFlight: 1
+  editorCaptureHz: 5
   viewport:
     serializedVersion: 2
     x: 0
     y: 0.029
     width: 0.477
     height: 0.922
+  flyBehindTrack: 1
   flightLiftShown: 0.25
   spinDegreesPerSecond: 0
   showWithoutActivity: 1

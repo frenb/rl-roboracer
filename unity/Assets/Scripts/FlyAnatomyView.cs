@@ -9,9 +9,11 @@ using UnityEngine.Playables;
 /// animation schedule; FlyBrainViz owns the pose of Root and the neurons.
 ///
 /// The schedule is a fixed loop: stand still on the idle clip's first frame
-/// for a random stretch, then idle_look (cleaning hands), and around again.
-/// Everything runs on unscaled time, because the sim runs at Time.timeScale
-/// 3-5 and the fly should not.
+/// for a random stretch, idle_look (cleaning hands), stand still again,
+/// look_around (head left, then right), and around again. TriggerFlight (the
+/// 1 key) interrupts it for takeoff, a figure-eight and a landing, then
+/// starts it afresh. Everything runs on unscaled time, because the sim runs
+/// at Time.timeScale 3-5 and the fly should not.
 ///
 /// Driven through a manually evaluated PlayableGraph rather than an Animator
 /// Controller: controllers can only be authored in the editor, and manual
@@ -28,18 +30,32 @@ public class FlyAnatomyView : MonoBehaviour
     // blended first and the neurons land on top of it at full strength.
     const int ShellQueue = 2990;
 
-    enum Clip { Idle, IdleLook, Takeoff, Hover, Land }
-    static readonly string[] ClipKeys = { "idle", "idle_look", "takeoff", "hover", "land" };
+    enum Clip { Idle, IdleLook, Takeoff, Hover, Land, FlyForward, FlyTurnLeft, FlyTurnRight, Look }
+    static readonly string[] ClipKeys = {
+        "idle", "idle_look", "takeoff", "hover", "land",
+        "fly_forward", "fly_turn_left", "fly_turn_right", "look_around",
+    };
+    /// <summary>The look-around is keyed on the same skeleton in Blender and
+    /// exported on its own, so the model file stays as it was.</summary>
+    public const string LookClipPath = "FruitFly/FruitFlyMale_look";
+
+    enum Kind { Play, Still, Path }
 
     struct Step
     {
+        public Kind kind;
         public Clip clip;
         public int repeats;
         public float fade;      // blend into this step, seconds
-        public float hold;      // > 0: stand still on the clip's first frame this long instead
+        public float seconds;   // Still and Path: how long
+        public bool faceOut;    // flight: turn to face the path's first heading
         public string label;
-        public Step(Clip c, int r, float f, string l, float h = 0f)
-        { clip = c; repeats = r; fade = f; label = l; hold = h; }
+        public static Step Play(Clip c, int r, float f, string l)
+        { return new Step { kind = Kind.Play, clip = c, repeats = r, fade = f, label = l }; }
+        public static Step Still(float s, float f, string l)
+        { return new Step { kind = Kind.Still, clip = Clip.Idle, repeats = 1, fade = f, seconds = s, label = l }; }
+        public static Step Path(float s, float f, string l)
+        { return new Step { kind = Kind.Path, clip = Clip.FlyForward, repeats = 1, fade = f, seconds = s, label = l }; }
     }
 
     public FlyAnatomySettings Settings { get; private set; }
@@ -97,8 +113,72 @@ public class FlyAnatomyView : MonoBehaviour
     private Vector3 _pelvisRest, _modelRestLocalPos;
     private PlayableGraph _graph;
     private AnimationMixerPlayable _mixer;
-    private readonly AnimationClipPlayable[] _clipPlayables = new AnimationClipPlayable[5];
-    private readonly float[] _clipLength = new float[5];
+    private readonly AnimationClipPlayable[] _clipPlayables = new AnimationClipPlayable[ClipKeys.Length];
+    private readonly float[] _clipLength = new float[ClipKeys.Length];
+    private bool _hasLook;
+    private Quaternion _modelRestLocalRot = Quaternion.identity;
+    // The clip carrying most weight in the last pose, and its time, so a
+    // flight can blend out of whatever the fly was doing.
+    private Clip _curClip;
+    private float _curTime;
+
+    // ---- flight (1 key) ----
+    private bool _flight;
+    private float _pathSign = 1f;
+    /// <summary>Half-width and half-height of the pulled-back flight shot on
+    /// the plane through the fly, Root-local, set by FlyBrainViz; the loop is
+    /// sized to leave it.</summary>
+    public Vector2 ShotHalfSize { get; set; }
+    /// <summary>The overlay camera in Root-local terms while it is in
+    /// perspective for a flight (CamTanHalfFov 0 when orthographic), so the
+    /// loop can be planned against what the camera actually sees.</summary>
+    public Vector3 CamPos { get; set; }
+    public Vector3 CamForward { get; set; } = Vector3.forward;
+    public float CamTanHalfFov { get; set; }
+    /// <summary>Farthest the loop goes from the hover point, Root-local, so
+    /// the camera's far clip plane can take it in.</summary>
+    public float OrbitReach { get; private set; }
+
+    const int OrbitSamples = 720;
+    private readonly Vector3[] _orbit = new Vector3[OrbitSamples + 1];   // level offset from the hover point
+    private readonly float[] _orbitTime = new float[OrbitSamples + 1];   // share of the loop's time
+    private bool _orbitBuilt;
+    private float _orbitFar, _orbitHoverY;
+    private float _landProgress;
+    // The last pose's blend, and each wingbeat clip's body averaged over its
+    // loop (Root-local): the centre between pelvis and head, the pelvis, and
+    // the pelvis-to-head direction. Flight holds the body near these.
+    private Clip _poseFrom, _poseTo;
+    private float _poseW = 1f;
+    private readonly Vector3[] _airCentre = new Vector3[ClipKeys.Length];
+    private readonly Vector3[] _airPelvis = new Vector3[ClipKeys.Length];
+    private readonly Vector3[] _airDir = new Vector3[ClipKeys.Length];
+    private Vector3 _modelRestLocalScale = Vector3.one;
+    private float _flightYaw, _yawRate, _flightRoll;
+    private Vector3 _flightOffset;
+    /// <summary>True from takeoff until the landing has finished.</summary>
+    public bool Flying { get { return _flight; } }
+    /// <summary>Root-local directions of the camera's right and up, set by
+    /// FlyBrainViz: the figure-eight is laid out in that plane so it stays
+    /// in view whatever the orientation dials say.</summary>
+    public Vector3 FlightRight { get; set; } = Vector3.right;
+    public Vector3 FlightUp { get; set; } = Vector3.up;
+    /// <summary>Pelvis to head bone at rest, Root-local.</summary>
+    public float BodyLength { get; private set; } = 1f;
+    /// <summary>
+    /// The figure-eight's axes, Root-local: across the screen and toward the
+    /// camera, both level, and the fly's up. Level from the camera's right
+    /// and forward, so the loops run across and into the view whatever the
+    /// orientation dials say.
+    /// </summary>
+    void PathAxes(out Vector3 across, out Vector3 depth)
+    {
+        across = Vector3.ProjectOnPlane(FlightRight, Up);
+        if (across.sqrMagnitude < 1e-6f) across = Right;
+        across.Normalize();
+        depth = Vector3.Cross(Up, across).normalized;
+    }
+
     private readonly Material[] _materials = new Material[4];   // body, eyes, wings, hair
     private readonly List<Renderer> _hairRenderers = new List<Renderer>();
     private readonly List<Mesh> _meshes = new List<Mesh>();
@@ -194,9 +274,26 @@ public class FlyAnatomyView : MonoBehaviour
         for (int k = 0; k < ClipKeys.Length; k++)
         {
             AnimationClip clip = null;
-            foreach (var c in clips)
-                if (!c.name.StartsWith("__preview__") && c.name.EndsWith("FruitFly_" + ClipKeys[k]))
-                    clip = c;
+            if (k == (int)Clip.Look)
+            {
+                // Its own file, whose one take Blender names after the scene.
+                foreach (var c in Resources.LoadAll<AnimationClip>(LookClipPath))
+                    if (!c.name.StartsWith("__preview__")) clip = c;
+                _clipLength[k] = 1f;
+                if (clip == null)
+                {
+                    Debug.LogWarning($"[FlyAnatomy] no look-around clip at Resources/{LookClipPath}; "
+                                     + "the idle cycle grooms only");
+                    continue;
+                }
+                _hasLook = true;
+            }
+            else
+            {
+                foreach (var c in clips)
+                    if (!c.name.StartsWith("__preview__") && c.name.EndsWith("FruitFly_" + ClipKeys[k]))
+                        clip = c;
+            }
             if (clip == null)
             {
                 Debug.LogError($"[FlyAnatomy] clip '{ClipKeys[k]}' not found in {ModelPath}");
@@ -209,7 +306,33 @@ public class FlyAnatomyView : MonoBehaviour
             _clipLength[k] = Mathf.Max(1e-3f, clip.length);
         }
         Pose(Clip.Idle, 0f);
+        CheckLookBinds();
         return true;
+    }
+
+    /// <summary>
+    /// A clip from a separate file only moves bones whose paths match the
+    /// model's. If the export's hierarchy differs it plays as a frozen
+    /// standing pose, silently; catch that here instead.
+    /// </summary>
+    void CheckLookBinds()
+    {
+        if (!_hasLook) return;
+        // The turn is keyed on the neck, which the head's mesh is skinned to;
+        // the head bone (and the brain riding it) just follows.
+        var head = FindBone("HeadLock");
+        if (head == null) return;
+        Quaternion rest = head.rotation;
+        Pose(Clip.Look, Mathf.Min(1.3f, _clipLength[(int)Clip.Look] * 0.35f));
+        float turned = Quaternion.Angle(rest, head.rotation);
+        Pose(Clip.Idle, 0f);
+        if (turned < 5f)
+        {
+            _hasLook = false;
+            Debug.LogWarning($"[FlyAnatomy] look-around clip does not move the head "
+                             + $"({turned:0.0} deg); its bone paths do not match the model. "
+                             + "The idle cycle grooms only");
+        }
     }
 
     IEnumerable<string> ClipSummary()
@@ -234,11 +357,13 @@ public class FlyAnatomyView : MonoBehaviour
         // waits for its next camera frame.
         float now = Time.unscaledTime;
         float hz = Settings.animationHz;
+        if (_flight && hz > 0f)
+            hz = Settings.flightAnimationHz > 0f ? Mathf.Max(hz, Settings.flightAnimationHz) : 0f;
         if (hz > 0f && _lastPose >= 0f && now - _lastPose < 1f / hz) return;
         float dt = _lastPose >= 0f ? now - _lastPose : 0f;
         _lastPose = now;
-        bool moved = AdvanceSchedule(now);
-        if (moved) ApplyLiftCompensation(_queue[_stepIndex].clip);
+        bool moved = AdvanceSchedule(now, dt);
+        if (moved) ApplyModelTransform(_queue[_stepIndex].clip);
         float pitch = HeadPitch;
         ApplyHeadPitch(dt);
         PosedThisFrame = moved || HeadPitch != pitch;
@@ -273,7 +398,7 @@ public class FlyAnatomyView : MonoBehaviour
 
     /// <summary>Advance the cycle and pose the fly; false when the pose is
     /// the one already on the bones, so nothing was evaluated.</summary>
-    bool AdvanceSchedule(float now)
+    bool AdvanceSchedule(float now, float dt)
     {
         bool started = false;
         if (_stepIndex < 0)
@@ -284,21 +409,23 @@ public class FlyAnatomyView : MonoBehaviour
         }
 
         Step step = _queue[_stepIndex];
-        float len = _clipLength[(int)step.clip];
         float t = now - _stepStart;
         if (t >= StepSeconds(step))
         {
             // A looping clip ends on its last frame, which is also its first.
-            float endTime = step.hold > 0f ? 0f : len;
+            Clip endClip = step.clip;
+            float endTime = step.kind == Kind.Still ? 0f
+                          : step.kind == Kind.Path ? WingTime(Clip.FlyForward, StepSeconds(step))
+                          : _clipLength[(int)step.clip];
             int next = _stepIndex + 1;
             if (next >= _queue.Count)
             {
+                if (_flight) EndFlight();
                 BuildCycle();     // picks up any settings changed mid-cycle
                 next = 0;
             }
-            StartStep(next, now, step.clip, endTime);
+            StartStep(next, now, endClip, endTime);
             step = _queue[_stepIndex];
-            len = _clipLength[(int)step.clip];
             t = 0f;
             started = true;
         }
@@ -306,42 +433,272 @@ public class FlyAnatomyView : MonoBehaviour
         float w = (!_fading || step.fade <= 0f) ? 1f : Mathf.Clamp01(t / step.fade);
         bool wasFading = _fading;
         if (w >= 1f) _fading = false;
-        if (step.hold > 0f)
+        UpdateFlightMotion(step, t, dt);
+        Clip from = _fading ? _fadeFrom : step.clip;
+        switch (step.kind)
         {
-            if (!started && !wasFading) return false;
-            Pose(step.clip, 0f, _fading ? _fadeFrom : step.clip, _fadeFromTime, w);
-            return true;
+            case Kind.Still:
+                if (!started && !wasFading && !_flight) return false;
+                Pose(step.clip, 0f, from, _fadeFromTime, w);
+                return true;
+            case Kind.Path:
+            {
+                float fwd = WingTime(Clip.FlyForward, t);
+                if (_fading)
+                {
+                    Pose(Clip.FlyForward, fwd, from, _fadeFromTime, w);
+                    return true;
+                }
+                // Positive yaw turns the fly to its right.
+                Clip turn = _yawRate > 0f ? Clip.FlyTurnRight : Clip.FlyTurnLeft;
+                float tw = Mathf.Clamp01(Mathf.Abs(_yawRate) / Mathf.Max(1f, Settings.flightFullBankTurnRate));
+                Pose(turn, WingTime(turn, t), Clip.FlyForward, fwd, tw);
+                return true;
+            }
+            default:
+            {
+                float len = _clipLength[(int)step.clip];
+                float played = t * Speed(step.clip);
+                float clipTime = step.repeats > 1 ? Mathf.Repeat(played, len) : Mathf.Min(played, len);
+                _landProgress = step.clip == Clip.Land ? clipTime / len : 0f;
+                Pose(step.clip, clipTime, from, _fadeFromTime, w);
+                return true;
+            }
         }
-        float clipTime = step.repeats > 1 ? Mathf.Repeat(t, len) : Mathf.Min(t, len);
-        Pose(step.clip, clipTime, _fading ? _fadeFrom : step.clip, _fadeFromTime, w);
-        return true;
+    }
+
+    float WingTime(Clip c, float t)
+    {
+        return Mathf.Repeat(t * Speed(c), _clipLength[(int)c]);
     }
 
     float StepSeconds(Step s)
     {
-        return s.hold > 0f ? s.hold : _clipLength[(int)s.clip] * s.repeats;
+        return s.kind != Kind.Play ? s.seconds : _clipLength[(int)s.clip] * s.repeats / Speed(s.clip);
+    }
+
+    /// <summary>Playback rate of a clip; 1 is its native speed.</summary>
+    float Speed(Clip c)
+    {
+        var s = Settings;
+        switch (c)
+        {
+            case Clip.Takeoff: return Mathf.Max(0.05f, s.flightTakeoffSpeed);
+            case Clip.Land: return Mathf.Max(0.05f, s.flightLandSpeed);
+            case Clip.Hover:
+            case Clip.FlyForward:
+            case Clip.FlyTurnLeft:
+            case Clip.FlyTurnRight: return Mathf.Max(0.05f, s.flightWingSpeed);
+            default: return 1f;
+        }
     }
 
     /// <summary>Whole loops of a looping clip closest to a wanted duration, so
     /// it always stops on its first frame.</summary>
     int Loops(Clip c, float seconds)
     {
-        return Mathf.Max(1, Mathf.RoundToInt(seconds / _clipLength[(int)c]));
+        return Mathf.Max(1, Mathf.RoundToInt(seconds * Speed(c) / _clipLength[(int)c]));
     }
 
     /// <summary>
-    /// The fixed cycle: stand still, groom, and around again. Grooming holds
-    /// the front legs up on every frame, first and last included, so it
-    /// blends in and out of the standing pose at a pace the legs can
-    /// plausibly move.
+    /// The fixed cycle: stand still, groom, stand still, look left and right,
+    /// and around again. Grooming holds the front legs up on every frame,
+    /// first and last included, so it blends in and out of the standing pose
+    /// at a pace the legs can plausibly move. The look-around starts and ends
+    /// on the standing pose itself.
     /// </summary>
     void BuildCycle()
     {
         var s = Settings;
         float legs = Mathf.Max(0f, s.groomBlendSeconds);
         _queue.Clear();
-        _queue.Add(new Step(Clip.Idle, 1, legs, "standing still", Mathf.Max(0.1f, StillSeconds())));
-        _queue.Add(new Step(Clip.IdleLook, Loops(Clip.IdleLook, s.groomSeconds), legs, "idle_look (cleaning hands)"));
+        _queue.Add(Step.Still(Mathf.Max(0.1f, StillSeconds()), legs, "standing still"));
+        _queue.Add(Step.Play(Clip.IdleLook, Loops(Clip.IdleLook, s.groomSeconds), legs, "idle_look (cleaning hands)"));
+        if (!_hasLook) return;
+        _queue.Add(Step.Still(Mathf.Max(0.1f, StillSeconds()), legs, "standing still"));
+        _queue.Add(Step.Play(Clip.Look, 1, 0.2f, "look_around (left, then right)"));
+    }
+
+    // ---- flight (1 key) ----------------------------------------------------
+    /// <summary>
+    /// Take off from wherever the idle cycle is, fly a figure-eight in the
+    /// camera's plane, and land back on the spot. False when already flying
+    /// or not on screen.
+    /// </summary>
+    public bool TriggerFlight()
+    {
+        if (!Ready || _flight || !_model.activeInHierarchy) return false;
+        _pathSign = Settings.flightLoopLeft ? -1f : 1f;
+        _flight = true;
+        _orbitBuilt = false;
+        _flightYaw = _yawRate = _flightRoll = 0f;
+        _flightOffset = Vector3.zero;
+        Clip from = _curClip;
+        float fromTime = _curTime;
+        BuildFlight();
+        StartStep(0, Time.unscaledTime, from, fromTime);
+        return true;
+    }
+
+    void BuildFlight()
+    {
+        var s = Settings;
+        float cf = Mathf.Max(0f, s.flightCrossfadeSeconds);
+        _queue.Clear();
+        _queue.Add(Step.Play(Clip.Takeoff, 1, cf, "takeoff"));
+        var hover = Step.Play(Clip.Hover, Loops(Clip.Hover, s.flightHoverSeconds), cf, "hover");
+        hover.faceOut = true;
+        _queue.Add(hover);
+        _queue.Add(Step.Path(s.flightPathSeconds, 0.3f, "orbiting"));
+        _queue.Add(Step.Play(Clip.Hover, Loops(Clip.Hover, s.flightReturnHoverSeconds), 0.3f,
+                             "hover (back over the start)"));
+        _queue.Add(Step.Play(Clip.Land, 1, cf, "land"));
+    }
+
+    void EndFlight()
+    {
+        _flight = false;
+        _flightYaw = _yawRate = _flightRoll = 0f;
+        _flightOffset = Vector3.zero;
+    }
+
+    /// <summary>
+    /// Plan the loop against the camera as it is when the loop starts: a
+    /// level circle (stretched across the shot by flightLoopWidth), its
+    /// nearest point the hover point, leftward first unless flightLoopLeft
+    /// is off, as a plane circling
+    /// in front of a camera at its own height - across the shot large, round
+    /// and away at one side, back across small on the far side, and round
+    /// toward the camera at the other. Sized so the far side is
+    /// flightFarShrink times smaller than the start, which is all perspective
+    /// needs to set the radius: the far side is flightFarShrink times the
+    /// camera's distance away. Timed by arc length, the speed rising
+    /// flightFarSpeedup-fold toward the far side (1 is a steady speed).
+    /// </summary>
+    void BuildOrbit()
+    {
+        var s = Settings;
+        PathAxes(out Vector3 across, out Vector3 depth);
+        Vector3 away = -depth;
+        Vector3 hover = _pelvisRest + Lift;
+        float tan = CamTanHalfFov > 1e-4f ? CamTanHalfFov : Mathf.Tan(0.5f * s.flightFov * Mathf.Deg2Rad);
+        float halfH = ShotHalfSize.y > 0f ? ShotHalfSize.y : 3f * BodyLength;
+        float d = CamTanHalfFov > 1e-4f ? Vector3.Dot(hover - CamPos, CamForward) : halfH / tan;
+        d = Mathf.Max(BodyLength, d);
+        float r = 0.5f * (Mathf.Max(1.1f, s.flightFarShrink) - 1f) * d;
+        float far = 2f * r;
+        float width = Mathf.Max(0.5f, s.flightLoopWidth);
+        float speedUp = Mathf.Max(1f, s.flightFarSpeedup);
+        float cost = 0f;
+        Vector2 prev = Vector2.zero;
+        for (int i = 0; i <= OrbitSamples; i++)
+        {
+            float a = 2f * Mathf.PI * i / OrbitSamples;
+            var p = new Vector2(_pathSign * width * r * Mathf.Sin(a), r * (1f - Mathf.Cos(a)));
+            if (i > 0)
+                cost += (p - prev).magnitude / (1f + (speedUp - 1f) * Mathf.Clamp01(0.5f * (p.y + prev.y) / far));
+            _orbitTime[i] = cost;
+            _orbit[i] = across * p.x + away * p.y;
+            prev = p;
+        }
+        for (int i = 0; i <= OrbitSamples; i++) _orbitTime[i] /= Mathf.Max(1e-6f, cost);
+        _orbitFar = far;
+        OrbitReach = Mathf.Max(far, width * r);
+        Vector3 q = hover - CamPos;
+        _orbitHoverY = CamTanHalfFov > 1e-4f
+            ? Vector3.Dot(q, FlightUp.normalized) / (Vector3.Dot(q, CamForward) * tan) : 0f;
+        _orbitBuilt = true;
+    }
+
+    /// <summary>Level offset and direction on the loop at time share x.</summary>
+    void SampleOrbit(float x, out Vector3 level, out Vector3 dir)
+    {
+        int lo = 0, hi = OrbitSamples;
+        while (hi - lo > 1)
+        {
+            int mid = (lo + hi) >> 1;
+            if (_orbitTime[mid] <= x) lo = mid; else hi = mid;
+        }
+        float span = _orbitTime[hi] - _orbitTime[lo];
+        float f = span > 1e-7f ? Mathf.Clamp01((x - _orbitTime[lo]) / span) : 0f;
+        level = Vector3.Lerp(_orbit[lo], _orbit[hi], f);
+        dir = _orbit[hi] - _orbit[lo];
+        if (dir.sqrMagnitude < 1e-12f) dir = _orbit[Mathf.Min(OrbitSamples, hi + 1)] - _orbit[lo];
+    }
+
+    /// <summary>Share of the orbit done at time share x: steady, with a
+    /// constant-acceleration ramp of share r at each end.</summary>
+    static float Ramp(float x, float r)
+    {
+        float p;
+        if (x < r) p = x * x / (2f * r);
+        else if (x > 1f - r) p = 1f - r - (1f - x) * (1f - x) / (2f * r);
+        else p = x - r * 0.5f;
+        return p / (1f - r);
+    }
+
+    /// <summary>
+    /// Where the fly is on its loop (BuildOrbit), and which way it faces.
+    /// The camera is in perspective for the flight, so the fly shrinks with
+    /// distance on its own. Its height is solved for where it should sit on
+    /// screen: from the hover point's height to flightFarRise (of the
+    /// half-height) above it on the far side, as if the camera were level
+    /// with the loop, rather than wherever the camera's downward look would
+    /// put a level path, which lifts the far side toward the horizon.
+    ///
+    /// The fly faces along the loop and banks with the rate of turn. It
+    /// turns to the first heading while it hovers after takeoff, and back to
+    /// the way it started in the hover before landing.
+    /// </summary>
+    void UpdateFlightMotion(Step step, float t, float dt)
+    {
+        if (!_flight) return;
+        var s = Settings;
+        float targetYaw = 0f;
+        Vector3 offset = Vector3.zero;
+        PathAxes(out Vector3 across, out Vector3 depth);
+        if (step.kind == Kind.Path)
+        {
+            if (!_orbitBuilt) BuildOrbit();
+            float T = Mathf.Max(0.1f, step.seconds);
+            float x = Ramp(Mathf.Clamp01(t / T), Mathf.Clamp(s.flightRampSeconds / T, 0.01f, 0.5f));
+            SampleOrbit(x, out Vector3 level, out Vector3 dir);
+            float h = 0f;
+            if (CamTanHalfFov > 1e-4f)
+            {
+                Vector3 u = FlightUp.normalized, f = CamForward;
+                float awayNow = -Vector3.Dot(level, depth);
+                float y = _orbitHoverY + s.flightFarRise
+                          * Mathf.Clamp01(awayNow / Mathf.Max(1e-4f, _orbitFar));
+                Vector3 q = _pelvisRest + Lift + level - CamPos;
+                float yt = y * CamTanHalfFov;
+                float den = Vector3.Dot(Up, u) - yt * Vector3.Dot(Up, f);
+                if (Mathf.Abs(den) > 1e-3f) h = (yt * Vector3.Dot(q, f) - Vector3.Dot(q, u)) / den;
+            }
+            offset = level + Up * h;
+            if (s.flightFaceHeading && dir.sqrMagnitude > 1e-12f)
+                targetYaw = Vector3.SignedAngle(Forward, dir, Up);
+        }
+        else if (step.faceOut && s.flightFaceHeading)
+        {
+            // The loop leaves the hover point straight across the shot.
+            targetYaw = Vector3.SignedAngle(Forward, across * _pathSign, Up);
+        }
+        float prev = _flightYaw;
+        _flightYaw = Mathf.MoveTowardsAngle(_flightYaw, targetYaw, Settings.flightTurnRate * dt);
+        _yawRate = dt > 1e-4f ? Mathf.DeltaAngle(prev, _flightYaw) / dt : 0f;
+        // A positive roll about the fly's forward dips its left side, so a
+        // turn to the right (positive yaw) rolls negative.
+        float bank = -Settings.flightBankDegrees
+                     * Mathf.Clamp(_yawRate / Mathf.Max(1f, Settings.flightFullBankTurnRate), -1f, 1f);
+        _flightRoll = Mathf.MoveTowards(_flightRoll, bank, 90f * dt);
+        _flightOffset = offset;
+    }
+
+    Quaternion FlightRotation()
+    {
+        Quaternion yaw = Quaternion.AngleAxis(_flightYaw, Up);
+        return Quaternion.AngleAxis(_flightRoll, yaw * Forward) * yaw;
     }
 
     float StillSeconds()
@@ -376,6 +733,12 @@ public class FlyAnatomyView : MonoBehaviour
         _mixer.SetInputWeight((int)to, from != to ? w : 1f);
         _clipPlayables[(int)to].SetTime(toTime);
         _graph.Evaluate(0f);
+        _poseFrom = from;
+        _poseTo = to;
+        _poseW = from != to ? w : 1f;
+        bool toWins = from == to || w >= 0.5f;
+        _curClip = toWins ? to : from;
+        _curTime = toWins ? toTime : fromTime;
     }
 
     // ---- materials ---------------------------------------------------------
@@ -626,7 +989,10 @@ public class FlyAnatomyView : MonoBehaviour
         Vector3 headBonePos = transform.InverseTransformPoint(HeadBone.position);
         float bodyScale = Mathf.Max(1e-6f, Vector3.Distance(back, headBonePos));
         _pelvisRest = back;
+        BodyLength = bodyScale;
         _modelRestLocalPos = _model.transform.localPosition;
+        _modelRestLocalRot = _model.transform.localRotation;
+        _modelRestLocalScale = _model.transform.localScale;
 
         // Axes from the anatomy rather than from the import's conventions:
         // forward runs pelvis -> head bone, up is away from the feet.
@@ -695,6 +1061,22 @@ public class FlyAnatomyView : MonoBehaviour
         // the part of it that flightLiftShown lets through.
         Pose(Clip.Takeoff, _clipLength[(int)Clip.Takeoff]);
         Lift = _pelvis != null ? transform.InverseTransformPoint(_pelvis.position) - back : Vector3.zero;
+        foreach (Clip c in new[] { Clip.Hover, Clip.FlyForward, Clip.FlyTurnLeft, Clip.FlyTurnRight })
+        {
+            const int n = 24;
+            Vector3 centre = Vector3.zero, pelvis = Vector3.zero, dir = Vector3.zero;
+            for (int k = 0; k < n; k++)
+            {
+                Pose(c, _clipLength[(int)c] * k / n);
+                BodyNow(out Vector3 p, out Vector3 h);
+                centre += 0.5f * (p + h);
+                pelvis += p;
+                dir += (h - p).normalized;
+            }
+            _airCentre[(int)c] = centre / n;
+            _airPelvis[(int)c] = pelvis / n;
+            _airDir[(int)c] = dir.sqrMagnitude > 1e-9f ? dir.normalized : Forward;
+        }
 
         Pose(Clip.Idle, 0f);
         Debug.Log($"[FlyAnatomy] head width {HeadWidth:0.####} ({HeadWidthRatio} x pelvis-to-head "
@@ -703,22 +1085,98 @@ public class FlyAnatomyView : MonoBehaviour
                   + $"{Lift.magnitude / bodyScale:0.0} x pelvis-to-head");
     }
 
+    static bool Airborne(Clip c)
+    {
+        return c == Clip.Takeoff || c == Clip.Hover || c == Clip.Land || c == Clip.FlyForward
+               || c == Clip.FlyTurnLeft || c == Clip.FlyTurnRight;
+    }
+
     /// <summary>
-    /// Keep the body in frame while it flies. The flight clips carry the
-    /// pelvis ~2.5 body-heights up; shifting the model back by all but
-    /// flightLiftShown of that lets the camera frame the fly at rest and
-    /// still show a hint of the climb. Idle clips are left alone.
+    /// Place the model under Root for the pose just evaluated. The flight
+    /// clips carry the pelvis ~2.5 body-heights up. A flight on the 1 key
+    /// shows all of that climb, moves the fly along its path and turns and
+    /// banks it about its pelvis; the camera pulls back to make room. Any
+    /// other flight clip is shifted back by all but flightLiftShown of the
+    /// climb, so a camera framed on the fly at rest keeps it in view.
     /// </summary>
-    void ApplyLiftCompensation(Clip clip)
+    void ApplyModelTransform(Clip clip)
     {
         if (_pelvis == null) return;
-        _model.transform.localPosition = _modelRestLocalPos;
+        var mt = _model.transform;
+        mt.localPosition = _modelRestLocalPos;
+        mt.localRotation = _modelRestLocalRot;
+        mt.localScale = _modelRestLocalScale;
         ShownLift = Vector3.zero;
-        if (clip == Clip.Idle || clip == Clip.IdleLook) return;
+        bool airborne = Airborne(clip);
+        if (!airborne && !_flight) return;
+        if (_flight)
+        {
+            ApplyFlightTransform();
+            return;
+        }
         Vector3 d = transform.InverseTransformPoint(_pelvis.position) - _pelvisRest;
-        float keep = 1f - Mathf.Clamp01(Settings.flightLiftShown);
-        _model.transform.localPosition = _modelRestLocalPos - d * keep;
-        ShownLift = d * (1f - keep);
+        Vector3 comp = -d * (1f - Mathf.Clamp01(Settings.flightLiftShown));
+        mt.localPosition = _modelRestLocalPos + comp;
+        ShownLift = d + comp;
+    }
+
+    void BodyNow(out Vector3 pelvis, out Vector3 head)
+    {
+        pelvis = transform.InverseTransformPoint(_pelvis.position);
+        head = HeadBone != null ? transform.InverseTransformPoint(HeadBone.position) : pelvis + Forward * BodyLength;
+    }
+
+    /// <summary>How much of a clip's pose flight steadies: all of the
+    /// wingbeat clips, the landing less and less as it touches down, not the
+    /// takeoff.</summary>
+    float SteadyWeight(Clip c)
+    {
+        if (c == Clip.Hover || c == Clip.FlyForward || c == Clip.FlyTurnLeft || c == Clip.FlyTurnRight) return 1f;
+        if (c == Clip.Land) return 1f - Mathf.SmoothStep(0f, 1f, _landProgress);
+        return 0f;
+    }
+
+    /// <summary>
+    /// The model in flight. The wingbeat clips bob and pitch the body with
+    /// every beat, and each carries it at its own height (fly_forward and the
+    /// turns well below hover), so blending between them dropped the fly on
+    /// the path and popped it back up. Here the body - the centre between
+    /// pelvis and head, and the pelvis-to-head direction - is pulled toward
+    /// the clip's average over its loop, keeping flightBodyBounce of the
+    /// bob, and each clip's average is raised to where takeoff leaves the
+    /// pelvis. The landing is held the same way at first, from the hover's
+    /// average, and let go as it touches down, so it hands over to the
+    /// clip's own descent without a jump. Then the fly is turned and banked
+    /// about that centre and moved along its path.
+    /// </summary>
+    void ApplyFlightTransform()
+    {
+        var mt = _model.transform;
+        BodyNow(out Vector3 pNow, out Vector3 hNow);
+        Vector3 cNow = 0.5f * (pNow + hNow);
+        Vector3 dirNow = (hNow - pNow).normalized;
+
+        float a = SteadyWeight(_poseFrom) * (1f - _poseW), b = SteadyWeight(_poseTo) * _poseW;
+        float strength = Mathf.Clamp01(a + b);
+        Quaternion steady = Quaternion.identity;
+        Vector3 target = cNow;
+        if (strength > 1e-4f)
+        {
+            int ia = (int)(_poseFrom == Clip.Land ? Clip.Hover : _poseFrom);
+            int ib = (int)(_poseTo == Clip.Land ? Clip.Hover : _poseTo);
+            float sum = a + b;
+            Vector3 meanC = (_airCentre[ia] * a + _airCentre[ib] * b) / sum;
+            Vector3 meanP = (_airPelvis[ia] * a + _airPelvis[ib] * b) / sum;
+            Vector3 meanD = (_airDir[ia] * a + _airDir[ib] * b).normalized;
+            float k = strength * (1f - Mathf.Clamp01(Settings.flightBodyBounce));
+            steady = Quaternion.Slerp(Quaternion.identity, Quaternion.FromToRotation(dirNow, meanD), k);
+            target = cNow + (meanC - cNow) * k + (_pelvisRest + Lift - meanP) * strength;
+        }
+
+        Quaternion turn = FlightRotation() * steady;
+        mt.localRotation = turn * _modelRestLocalRot;
+        mt.localPosition = target + turn * (_modelRestLocalPos - cNow) + _flightOffset;
+        ShownLift = target + turn * (pNow - cNow) + _flightOffset - _pelvisRest;
     }
 
     Transform FindBone(string name)

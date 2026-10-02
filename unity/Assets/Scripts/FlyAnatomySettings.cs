@@ -75,9 +75,10 @@ public class FlyAnatomySettings : ScriptableObject
     public bool texturedShowHair = false;
 
     [Header("Animation schedule")]
-    [Tooltip("The loop: the fly stands still, then grooms (idle_look, front "
-             + "legs rubbing), and repeats. Each still stretch lasts its own "
-             + "random time between these two, in seconds.")]
+    [Tooltip("The loop: the fly stands still, grooms (idle_look, front legs "
+             + "rubbing), stands still, looks left then right (look_around, "
+             + "from FruitFlyMale_look.fbx), and repeats. Each still stretch "
+             + "lasts its own random time between these two, in seconds.")]
     [Min(0f)] public float idleMinSeconds = 30f;
     [Min(0f)] public float idleMaxSeconds = 60f;
     [Tooltip("Seconds of grooming, rounded to whole cycles of the clip.")]
@@ -86,11 +87,107 @@ public class FlyAnatomySettings : ScriptableObject
              + "the standing pose, seconds.")]
     [Range(0f, 2f)] public float groomBlendSeconds = 0.5f;
 
+    [Header("Flight (1 key)")]
+    [Tooltip("1 in either fly view: flutter up, hover while turning to set "
+             + "off, fly one level circle away behind the takeoff point - "
+             + "across the shot, round and away at one side, back across "
+             + "small on the far side, round toward the camera at the other - "
+             + "then pause over the start and land slowly. Seconds of "
+             + "hovering after takeoff.")]
+    [Min(0f)] public float flightHoverSeconds = 1.2f;
+    [Tooltip("Seconds for the loop, flightRampSeconds of it easing at each "
+             + "end.")]
+    [Min(1f)] public float flightPathSeconds = 9f;
+    [Tooltip("Seconds the loop takes to get up to speed from the hover, and "
+             + "to slow back into it.")]
+    [Range(0.1f, 3f)] public float flightRampSeconds = 1f;
+    [Tooltip("Seconds of hovering back over the start before landing, while "
+             + "the fly turns back to face the way it started.")]
+    [Min(0f)] public float flightReturnHoverSeconds = 1.8f;
+    [Tooltip("Vertical field of view, degrees, of the fly camera once it has "
+             + "pulled back for a flight. The camera is perspective only then, "
+             + "opening from nearly orthographic as it pulls back. Wider is "
+             + "closer, so distance shrinks the fly faster.")]
+    [Range(5f, 90f)] public float flightFov = 30f;
+    [Tooltip("How many times smaller the fly looks on the far side of the "
+             + "loop than at the start. Sets the loop's size: the far side is "
+             + "this many times the camera's distance away. Larger is a wider "
+             + "loop, which goes further out of the sides of the shot.")]
+    [Range(1.2f, 6f)] public float flightFarShrink = 2.6f;
+    [Tooltip("How much wider across the shot the loop is than it is deep: "
+             + "1 is a circle, above 1 an oval that swings further out of "
+             + "the sides.")]
+    [Range(0.5f, 3f)] public float flightLoopWidth = 1.5f;
+    [Tooltip("Set off to the left of the shot, as the reference plane does; "
+             + "off, to the right.")]
+    public bool flightLoopLeft = true;
+    [Tooltip("Share of the wingbeat clips' body bob and pitch kept in "
+             + "flight. The rest is steadied out, about the body's average "
+             + "pose over each clip's loop. 0 holds the body still, 1 plays "
+             + "the clips as authored.")]
+    [Range(0f, 1f)] public float flightBodyBounce = 0.06f;
+    [Tooltip("How much faster the fly flies across the far side than near "
+             + "the camera. 1 is a steady speed, which already looks slower "
+             + "far away.")]
+    [Range(1f, 4f)] public float flightFarSpeedup = 1f;
+    [Tooltip("How far above the start the far side of the loop sits on "
+             + "screen, as a share of the half-height. The height is solved "
+             + "for it, so the loop looks as if seen from its own level "
+             + "whatever the camera's downward look.")]
+    [Range(-1f, 1f)] public float flightFarRise = 0.05f;
+    [Tooltip("Turn the fly to face along the path. Off, it keeps facing the "
+             + "way it started and side-slips round it, as real flies can.")]
+    public bool flightFaceHeading = true;
+    [Tooltip("Fastest the fly turns, degrees per second.")]
+    [Min(10f)] public float flightTurnRate = 360f;
+    [Tooltip("Rate of turn, degrees per second, at which the fly shows the "
+             + "full bank and the full banking-turn clip. The orbit turns at "
+             + "about 360 / (flightPathSeconds - flightRampSeconds).")]
+    [Min(10f)] public float flightFullBankTurnRate = 60f;
+    [Tooltip("Roll into a turn at flightFullBankTurnRate, degrees.")]
+    [Range(0f, 60f)] public float flightBankDegrees = 25f;
+    [Tooltip("Playback speed of the wingbeat clips (hover, forward flight, "
+             + "turns); 1 is native.")]
+    [Range(0.1f, 1f)] public float flightWingSpeed = 0.5f;
+    [Tooltip("Playback speed of the takeoff; 1 is native (0.5 s), 0.5 "
+             + "flutters up over about 1 s.")]
+    [Range(0.1f, 1f)] public float flightTakeoffSpeed = 0.5f;
+    [Tooltip("Playback speed of the landing; 1 is native (0.5 s), 0.2 settles "
+             + "over about 2.4 s.")]
+    [Range(0.1f, 1f)] public float flightLandSpeed = 0.2f;
+    [Tooltip("Blend between the flight clips, seconds.")]
+    [Range(0f, 0.5f)] public float flightCrossfadeSeconds = 0.15f;
+    [Tooltip("How often the fly is posed, and the fly views redrawn, while it "
+             + "flies and while the camera pulls back or returns; 0 is every "
+             + "frame. Higher than animationHz / overlayRenderHz so the "
+             + "wingbeat and the path read smoothly, for the ~12 s a flight "
+             + "lasts.")]
+    [Range(0f, 60f)] public float flightAnimationHz = 30f;
+    [Range(0f, 60f)] public float flightRenderHz = 30f;
+    [Tooltip("Seconds for the camera to pull back when the fly takes off, and "
+             + "to return once it has landed.")]
+    [Range(0.1f, 3f)] public float flightCameraSeconds = 1f;
+    [Tooltip("Margin around the whole flight in the pulled-back shot; 1 is "
+             + "tight.")]
+    [Range(1f, 2f)] public float flightFramePadding = 1.25f;
+    [Tooltip("Editor only: save the fly column as PNGs during each flight, to "
+             + "unity/Temp/FlyFlightFrames (cleared at each takeoff). Each "
+             + "frame waits on the GPU, so leave it off when not reviewing.")]
+    public bool editorCaptureFlight = true;
+    [Tooltip("Frames per second saved by editorCaptureFlight.")]
+    [Range(1f, 30f)] public float editorCaptureHz = 5f;
+
     [Header("View")]
     [Tooltip("Screen area the fly fills, as fractions of the window: x, y from "
              + "the bottom-left, then width and height. The default is the space "
              + "left of the track. - and = scale it about its centre.")]
     public Rect viewport = new Rect(0f, 0.029f, 0.477f, 0.922f);
+    [Tooltip("Draw the fly over the whole window behind the track instead of "
+             + "in a black panel: framed in the viewport as before, but free to "
+             + "fly out of it, showing wherever the track view is background "
+             + "and hidden behind the road. Needs the overhead track camera and "
+             + "overlayRenderHz above 0; otherwise the panel is used.")]
+    public bool flyBehindTrack = true;
     [Tooltip("Share of the takeoff climb that shows on screen. The camera frames "
              + "the fly at rest, so at 1 the fly climbs out of the top of its "
              + "column; at 0 it flaps in place.")]
