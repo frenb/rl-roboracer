@@ -125,7 +125,7 @@ class RpcClient:
         grpc.aio.AioRpcError with code DEADLINE_EXCEEDED on timeout;
         callers in RobotApi catch this and convert to a counter +
         log + continue (mirrors the asyncio.TimeoutError sites in
-        DoReset/DoApplyForce/DoMove).
+        DoReset/DoApplyForce).
         """
         req = ros_service_pb2.PublishRequest(topic=topic, msg_type=msg_type, data=json.dumps(data))
         await self.stub.Publish(
@@ -141,15 +141,10 @@ class RobotApi:
         self.apply_force_event = asyncio.Event()
         self.apply_force_events = {}
         self.has_reached_goal = False
-        self.move_events = {}
         self.scene_data_events = {}
-        self.have_scene_data = asyncio.Event()
         self.have_car_scene_data = asyncio.Event()
         self.next_id = 0
-        self.latest_scene_data = None
         self.latest_car_scene_data = None
-        self.latest_overhead_camera_frame = None
-        self.have_overhead_camera_frame = asyncio.Event()
         self.latest_front_camera_frame = None
         self.front_camera_frames = OrderedDict()
         self.front_camera_events = {}
@@ -160,7 +155,7 @@ class RobotApi:
         # branch below. Exposed via get_timeout_counts() so the trainer
         # in robotaxi.py can aggregate across all ParallelPyEnvironment
         # workers and write the totals as tf.summary scalars under the
-        # `timeouts/` namespace in TensorBoard. The six buckets map to
+        # `timeouts/` namespace in TensorBoard. The five buckets map to
         # the timeout-handling sites in this file:
         #   - reset:       DoReset, 4s wait on reset_event
         #   - apply_force: DoApplyForce, first wait on apply_force_event
@@ -168,10 +163,8 @@ class RobotApi:
         #   - front_camera: GetFrontCameraFrame, wait on
         #                  front_camera_events[cmd_id]. Not armed by
         #                  donut / donut_no_hint (those never call it).
-        #   - move:        DoMove, either of the two wait_for()s in its
-        #                  shared try/except (rare in current training)
-        #   - publish:     _do_sim_command / DoMove's grpc Publish RPC
-        #                  itself hits DEADLINE_EXCEEDED. This counter
+        #   - publish:     _do_sim_command's / PublishRollouts' grpc
+        #                  Publish RPC fails. This counter
         #                  ticking - especially after a long no-traffic
         #                  window like BC pretraining - means the
         #                  HTTP/2 channel to ros-server went stale and
@@ -181,7 +174,6 @@ class RobotApi:
         self.apply_force_timeouts = 0
         self.scene_data_timeouts = 0
         self.front_camera_timeouts = 0
-        self.move_timeouts = 0
         self.publish_timeouts = 0
 
     def get_timeout_counts(self):
@@ -198,7 +190,6 @@ class RobotApi:
             'apply_force_timeouts': self.apply_force_timeouts,
             'scene_data_timeouts': self.scene_data_timeouts,
             'front_camera_timeouts': self.front_camera_timeouts,
-            'move_timeouts': self.move_timeouts,
             'publish_timeouts': self.publish_timeouts,
         }
 
@@ -209,11 +200,8 @@ class RobotApi:
 
     async def Initialize(self):
         # Set up subscribers
-        self.loop.create_task(self.rpc_client.Subscribe('scene_data', 'niryo_moveit/SceneData', self._on_scene_data))
         self.loop.create_task(self.rpc_client.Subscribe('car_scene_data', 'niryo_moveit/CarSceneData', self._on_car_scene_data))
         self.loop.create_task(self.rpc_client.Subscribe('sim_status', 'niryo_moveit/SimStatus', self._on_sim_status))
-        self.loop.create_task(self.rpc_client.Subscribe('move_action/result', 'niryo_moveit/MoveActionResult', self._on_move_action_result))
-        self.loop.create_task(self.rpc_client.Subscribe('camera/overhead', 'niryo_moveit/Camera', self._on_overhead_camera_frame))
         self.loop.create_task(self.rpc_client.Subscribe('camera/front', 'niryo_moveit/Camera', self._on_front_camera_frame))
 
     def _on_sim_status(self, sim_status):
@@ -223,14 +211,6 @@ class RobotApi:
         if (sim_status['status'] == 2):
              self.apply_force_event.set()
 
-    def _on_scene_data(self, scene_data):
-        #print("in on_scene_data")
-        self.latest_scene_data = scene_data
-        self.have_scene_data.set()
-        # Check if there are command waiting on this scene data
-        if scene_data['last_executed_cmd_id'] in self.scene_data_events:
-            self.scene_data_events[scene_data['last_executed_cmd_id']].set()
-    
     def _on_car_scene_data(self, car_scene_data):
         #print("in on_car_scene_data")
         self.latest_car_scene_data = car_scene_data
@@ -245,10 +225,6 @@ class RobotApi:
         if car_scene_data['last_executed_cmd_id'] in self.scene_data_events:
             self.scene_data_events[car_scene_data['last_executed_cmd_id']].set()
             #print("in _on_car_scene_data for " + str(car_scene_data['last_executed_cmd_id']))
-
-    def _on_overhead_camera_frame(self, frame):
-        self.latest_overhead_camera_frame = frame
-        self.have_overhead_camera_frame.set()
 
     def _cached_front_camera_at_or_after(self, cmd_id):
         """Exact seq, else the newest cached frame with seq >= cmd_id.
@@ -302,11 +278,6 @@ class RobotApi:
                 flush=True)
 
 
-    def _on_move_action_result(self, result):
-        if result['cmd_id'] in self.move_events:
-            self.move_events[result['cmd_id']].set()
-    
-    
     async def _do_sim_command(self, command):
         # Catch the gRPC deadline from rpc_client.Publish here rather
         # than letting it propagate out through DoReset / DoApplyForce
@@ -359,12 +330,6 @@ class RobotApi:
         # print("++++++++++++++++++++++")
         return result
 
-    def DoMoveBlocking(self, action):
-        return asyncio.run_coroutine_threadsafe(self.DoMove(action), self.loop).result()
-        
-    def GetSceneDataBlocking(self):
-        return asyncio.run_coroutine_threadsafe(self.GetSceneData(), self.loop).result()
-    
     def GetCarSceneDataBlocking(self):
         return asyncio.run_coroutine_threadsafe(self.GetCarSceneData(), self.loop).result()
 
@@ -478,95 +443,10 @@ class RobotApi:
         del self.scene_data_events[cmd_id]
         return self.latest_car_scene_data
 
-    async def DoMove(self, action, timeout=0.2):
-        cmd_id = self._next_id()
-        action['cmd_id'] = cmd_id
-        
-        self.move_events[cmd_id] = asyncio.Event()
-        self.scene_data_events[cmd_id] = asyncio.Event()
-        # Same DEADLINE_EXCEEDED handling as _do_sim_command above; see
-        # that method for the full rationale. Catching here keeps DoMove
-        # from raising into _worker (which would crash the actor
-        # subprocess) on a stuck channel; the next wait_for() in the
-        # try block below times out cleanly so the trainer recovers.
-        try:
-            await self.rpc_client.Publish(
-                'move_action/goal', 'niryo_moveit/MoveActionGoal', action)
-        except aio.AioRpcError as e:
-            self.publish_timeouts += 1
-            if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
-                print(
-                    f'move_action/goal publish DEADLINE_EXCEEDED after '
-                    f'{RpcClient.PUBLISH_TIMEOUT_S}s; channel may be stale.',
-                    flush=True)
-            else:
-                print(
-                    f'move_action/goal publish RPC error {e.code()}: '
-                    f'{e.details()}',
-                    flush=True)
-
-        # Wait for command completion & newest scene data including command.
-        try:
-            await asyncio.wait_for(self.move_events[cmd_id].wait(), timeout)
-            await asyncio.wait_for(self.scene_data_events[cmd_id].wait(), timeout)
-            
-        except asyncio.TimeoutError:
-            self.move_timeouts += 1
-            print('timed out waiting for move. Ignoring')
-
-
-        # Cleanup.
-        del self.move_events[cmd_id]
-        del self.scene_data_events[cmd_id]
-    
-    # async def DoMove(self, action, timeout=0.2):
-    #     cmd_id = self._next_id()
-    #     action['cmd_id'] = cmd_id
-    #     print("in DoMove")
-    #     print(action)
-    #     await self._do_sim_command( { 'cmd' : 1 , 'ApplyForce': action.apply_force} )
-    #     try:
-    #         await asyncio.wait_for(self.apply_force_event.wait(), 2)
-    #         print("we did it")
-    #         print(self.latest_car_scene_data)
-    #     except asyncio.TimeoutError:
-    #         print('timed out waiting for applyforce. Ignoring')
-
-    async def DoTrajectory(self, trajectory):
-        action = {'cmd': {
-            'cmd_type': 1,
-            'trajectory': trajectory
-        }}
-        await self.DoMove(action, 10)
-
-    async def DoOpenGripper(self):
-        action = {'cmd': {
-            'cmd_type': 2
-        }}
-        await self.DoMove(action, 10)
-
-    async def DoCloseGripper(self):
-        action = {'cmd': {
-            'cmd_type': 3
-        }}
-        await self.DoMove(action, 10)
-
-    async def GetSceneData(self):
-        if not self.latest_scene_data:
-            await self.have_scene_data.wait()
-        return self.latest_scene_data
-    
     async def GetCarSceneData(self):
         if not self.latest_car_scene_data:
             await self.have_car_scene_data.wait()
         return self.latest_car_scene_data
-
-    async def GetOverheadCameraFrame(self):
-        if not self.latest_overhead_camera_frame:
-            await self.have_overhead_camera_frame.wait()
-            self.have_overhead_camera_frame.clear()
-        res = self.latest_overhead_camera_frame
-        return res
 
     async def GetFrontCameraFrame(self, cmd_id=None):
         """Wait for the CSI frame whose header.seq matches cmd_id.

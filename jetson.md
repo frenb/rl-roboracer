@@ -476,7 +476,7 @@ Match the live Jetson feed, not a cinematic Unity cam. Values from `csi_camera.l
 | Topic the rest of the stack should treat as “the car camera” | **`/csi_cam_0/image_raw`** | Sim: `camera/front` (see §3). Deploy: same Nano topic. |
 | ROS type on the car | `sensor_msgs/Image` | Same pixels; gym may wrap as `niryo_moveit/Camera` (one `sensor_msgs/Image frame`) because that is what ROS-TCP already knows |
 | Size / rate | **640×480 @ ~20 Hz**, `gscam` + `nvarguscamerasrc`, `flip_method=0` | Render **640×480**. Do **not** stream 20 Hz over gRPC (see §3). Capture **one frame per env step** (same cadence as `car_scene_data`) |
-| Encoding | typically **`rgb8`** | Unity `ReadPixels` is RGBA. Strip alpha **in Unity or** in `frame_to_tensor` (already drops every 4th byte). Publish `encoding=rgb8`, `is_bigendian=0`, `step=width*3` |
+| Encoding | typically **`rgb8`** | Unity `ReadPixels` is RGBA. Strip alpha **in Unity**. Publish `encoding=rgb8`, `is_bigendian=0`, `step=width*3` |
 | `frame_id` | CSI / `camera_visual` | `camera_visual` (or `csi_cam_0`) so Foxglove/TF stories match |
 | Mount | URDF `base_link → camera_visual` (front stalk, slightly down) | Child of the car body at the **same translation/rotation** as `jetracer.urdf` `camera_visual`. Optical axis = robot **+x** (nose), **not** an orbit/chase cam |
 | Intrinsics | `cam_640x480.yaml` (`K`, `D`, `P`) | Set Unity vertical FOV from `fy`: `vfov_deg = 2 * atan(height / (2 * fy)) * 180/π`. Horizontal follows aspect 640/480. Copy `fx, fy, cx, cy` into a shared `camera_intrinsics.json` used by gym + Jetson preprocess |
@@ -497,7 +497,7 @@ Copy `fx, fy` from the yaml on the Jetson (`$(find jetracer)/config/camera_calib
 
 Existing leftovers (do **not** reuse as-is):
 
-- `SimController` had `publishedCamera` + `CameraPublisher` targeting **`camera/overhead`** — disabled. That was a **top-down** view for the arm gym / `utility.frame_to_tensor`, not the JetRacer.
+- `SimController` had `publishedCamera` + `CameraPublisher` targeting **`camera/overhead`** — disabled. That was a **top-down** view for the arm gym, not the JetRacer.
 - `CarController.Cam2` / `WaymoDriverCamera` is a commented chase/driver cam — wrong FOV and pose.
 - `SceneDataPublisher` does not attach pixels to `CarSceneData`. Keep it that way; images stay on their own topic so `Sphere` / 31-D rays stay stable.
 
@@ -536,7 +536,6 @@ Unity JetRacerCsiCamera
 
 **`RobotApi` (`rl_agent/api.py`):**
 
-- Today: `Subscribe('camera/overhead', 'niryo_moveit/Camera', _on_overhead_camera_frame)` and `GetOverheadCameraFrame()`.
 - Add the same pair for `camera/front` (`_on_front_camera_frame` / `GetFrontCameraFrame`).
 - Tie the wait to **`last_executed_cmd_id`** the same way `DoApplyForce` waits on `car_scene_data`. Either stamp the image `header.seq` / a custom field with `cmd_id`, or treat “latest frame after `FORCE_APPLIED`” as the step image. Uncorrelated 20 Hz frames will desync rays vs pixels.
 
@@ -555,8 +554,6 @@ Unity JetRacerCsiCamera
   }
 }
 ```
-
-`rl_agent/utility.py` `frame_to_tensor()` already decodes that shape for the overhead cam (assumes RGBA and strips alpha). For `rgb8` from the new publisher, skip the alpha strip or branch on `encoding`.
 
 **Bandwidth:** one 160×120×3 frame per env step is ~56 KB raw (~75 KB base64). Fine. Full 640×480 at 20 Hz through gRPC will stall actors. Compress (`jpeg` in `encoding` + `sensor_msgs/CompressedImage`) only if you must send full res; then decode in Python with OpenCV/`tf.io.decode_jpeg`.
 

@@ -4,8 +4,6 @@ Keep this file copy-pasteable onto the Nano: numpy + cv2 only. Do not import
 tensorflow, rospy, or anything under rl_agent. Unity gym path is pinhole
 (undistort=False). The car runs cv2.undistort with K/D from
 config/camera_calibration/cam_640x480.yaml, then the same resize.
-
-utility.frame_to_tensor assumes RGBA and must not be used for CSI rgb8.
 """
 from __future__ import annotations
 

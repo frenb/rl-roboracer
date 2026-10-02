@@ -35,11 +35,9 @@ Unity SceneDataPublisher
 |---|---|
 | `JetRacerCsiCamera` + 640×480 RT, 80° VFOV, mount `(0, 1.82, 1.70)`, 5° down | Implemented. P-view only. |
 | `unity_node.py` `camera/overhead` | Listed. Overhead leftover from the arm gym. |
-| `RobotApi.Subscribe('camera/overhead')` + `GetOverheadCameraFrame()` | Wired. Nothing in `DonutCourse` / actor / critic reads it. |
 | `RobotApi.Subscribe('camera/front')` + `GetFrontCameraFrame(cmd_id)` | **Phase 3 done.** Wait-on-`header.seq`. Not called by `donut` / `donut_no_hint`. |
 | `SimController` `CameraPublisher` | Commented out. Wrong viewpoint (overhead). |
 | `CsiFramePublisher` | **Phase 1 done.** One 84×84 `rgb8` per `cmd_id` on `camera/front`. |
-| `utility.frame_to_tensor` | Assumes **RGBA** and strips every 4th byte. Wrong for CSI `rgb8`. |
 | `vision.image_to_obs` | **Phase 4 done.** float32 `[84,84,3]` in `[0,1]`. Gym: `undistort=False`. |
 | Actor / critic | MLP on 31/32-D. **Phase 6:** `donut_camera` uses Conv-SAC (`camera_networks.py`). |
 | Demo TFRecords / AWAC / BC | Vector-only (`FULL_OBSERVATION_SIZE = 32`). |
@@ -229,7 +227,6 @@ What landed:
    on the image, so current training is unchanged.
 4. Timeout: `front_camera_timeouts` (2 s). Last good image, else 84×84
    `rgb8` zeros + a log line. Does not raise into the actor.
-5. Do **not** use `GetOverheadCameraFrame` for driving.
 
 First live frame also prints
 `[front_camera] first frame 84x84 encoding=rgb8 seq=…` on the actor
@@ -276,9 +273,6 @@ then downsample. `load_camera_calibration(path)` reads that yaml.
 Do **not** add Pillow. Prefer Unity-side downsample over
 `sensor_msgs/CompressedImage` for v1. No ImageNet mean/std unless
 **both** sim and real use it.
-
-`utility.frame_to_tensor` stays for the overhead leftover; do not reuse
-it for CSI.
 
 The bind-mount of `./rl_agent` is enough for the module. OpenCV is in
 the image only after `pip install` (running container) or a
