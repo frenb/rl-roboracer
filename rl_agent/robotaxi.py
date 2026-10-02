@@ -1370,7 +1370,6 @@ def main(
 
     #tempdir = tempfile.gettempdir()
     tempdir = "/tmp/active/"
-    env_name = "NiryoPoleCart-v0" # @param {type:"string"}
     #tf.debugging.experimental.enable_dump_debug_info(tempdir, tensor_debug_mode="FULL_HEALTH", circular_buffer_size=-1)
     num_iterations=num_iterations_val # @param {type:"integer"}
     initial_collect_steps = initial_collect_steps_val # @param {type:"integer"}

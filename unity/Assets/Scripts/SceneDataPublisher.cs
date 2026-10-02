@@ -86,7 +86,6 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
     private void Publish()
     {
         CarSceneData sceneCarDataMessage = new CarSceneData();
-        SceneData sceneDataMessage = new SceneData();
         if (car != null) {
             CarController cc = car.GetComponent<CarController>();
             // Always stamp the cmd_id so the trainer's scene_data_events[cmd_id]
@@ -152,15 +151,7 @@ public class SceneDataPublisher : MonoBehaviour, IRosComponent
                 sceneCarDataMessage.car.goal_3 =  GetGoalCount("Goal-3");
                 sceneCarDataMessage.car.goal_4 =  GetGoalCount("Goal-4");
                 sceneCarDataMessage.car.acceleration = cc.GetAcceleration();
-                sceneDataMessage.object_location.x = car.transform.position.x;
-                sceneDataMessage.object_location.y = car.transform.position.y;
-                sceneDataMessage.object_location.z = car.transform.position.z;
-                sceneDataMessage.pole_cart.pole_angular_speed = sceneCarDataMessage.car.speed;
-                sceneDataMessage.pole_cart.upright = sceneCarDataMessage.car.has_reached_goal;
             }
-            // Mirror the cmd_id onto the SceneData message too (always, not
-            // just inside the GoalsAlive block).
-            sceneDataMessage.last_executed_cmd_id = sceneCarDataMessage.last_executed_cmd_id;
         }
         ros.Send(topicName, sceneCarDataMessage);
         // One CSI frame per cmd_id (not the 20 Hz scene_data loop).

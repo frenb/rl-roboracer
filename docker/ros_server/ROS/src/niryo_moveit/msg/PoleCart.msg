@@ -1,7 +1,0 @@
-
-float64 hand_tangent_speed
-float64 pole_hand_angle
-float64 pole_hand_angle_b
-float64 pole_angular_speed
-float64 pole_angular_speed_b
-bool upright

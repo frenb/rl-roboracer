@@ -34,9 +34,7 @@ Unity SceneDataPublisher
 | Piece | State |
 |---|---|
 | `JetRacerCsiCamera` + 640×480 RT, 80° VFOV, mount `(0, 1.82, 1.70)`, 5° down | Implemented. P-view only. |
-| `unity_node.py` `camera/overhead` | Listed. Overhead leftover from the arm gym. |
 | `RobotApi.Subscribe('camera/front')` + `GetFrontCameraFrame(cmd_id)` | **Phase 3 done.** Wait-on-`header.seq`. Not called by `donut` / `donut_no_hint`. |
-| `SimController` `CameraPublisher` | Commented out. Wrong viewpoint (overhead). |
 | `CsiFramePublisher` | **Phase 1 done.** One 84×84 `rgb8` per `cmd_id` on `camera/front`. |
 | `vision.image_to_obs` | **Phase 4 done.** float32 `[84,84,3]` in `[0,1]`. Gym: `undistort=False`. |
 | Actor / critic | MLP on 31/32-D. **Phase 6:** `donut_camera` uses Conv-SAC (`camera_networks.py`). |
@@ -53,16 +51,13 @@ as `car_scene_data`. The Jetson already publishes `/csi_cam_0/image_raw`
 
 | Item | Choice |
 |---|---|
-| Sim topic | **`camera/front`**, type `niryo_moveit/Camera` (`sensor_msgs/Image frame`). Do not reuse `camera/overhead`. |
+| Sim topic | **`camera/front`**, type `niryo_moveit/Camera` (`sensor_msgs/Image frame`). |
 | Jetson topic | **`/csi_cam_0/image_raw`**, type `sensor_msgs/Image`. Nano never speaks `niryo_moveit`. |
 | When to capture | **Once per env step**, same `cmd_id` as `car_scene_data`. Not 20 Hz. |
 | Net size | **84×84×3** float32 in `[0, 1]` to start (or 160×120). Render 640×480 in Unity; downsample **before** gRPC. |
 | Distortion | Leave Unity pinhole. **`cv2.undistort` on the Nano** with `config/camera_calibration/cam_640x480.yaml` so both sides look pinhole. |
 | Sync | Stamp image `header.seq` = `cmd_id` (or wait for the first frame after `FORCE_APPLIED` for that id). Uncorrelated frames desync rays vs pixels. |
 | Pixels on `CarSceneData` / `Sphere`? | **No.** Breaks every existing parser. |
-
-Keep `camera/overhead` in the routing table so leftover subscribers do not
-break. Never pipe it into the driving policy.
 
 ---
 
@@ -194,7 +189,7 @@ not use this table.
      bash -c 'source /opt/ros/noetic/setup.bash && source /catkin_ws/devel/setup.bash && rostopic list | grep camera'
    ```
 
-   Pass: both `/camera/front` and `/camera/overhead`.
+   Pass: `/camera/front` is listed.
 4. Press **F** in Unity, then:
 
    ```powershell
@@ -455,7 +450,7 @@ for the vector half of that adapter.
 
 ## 13. What not to do
 
-- Pipe `camera/overhead` into the driving policy (wrong viewpoint).
+- Pipe the top-down view into the driving policy (wrong viewpoint).
 - Stream 640×480 @ 20 Hz through `virtual_endpoint`.
 - Put pixels on `CarSceneData` / `Sphere.msg`.
 - Flatten the image into the 31-D MLP.

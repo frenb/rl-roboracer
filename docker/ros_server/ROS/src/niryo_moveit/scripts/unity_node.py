@@ -3,8 +3,7 @@
 import rospy
 
 from ros_tcp_endpoint import TcpServer, RosPublisher, RosSubscriber, RosService, UnityService
-from niryo_moveit.msg import SceneData, CarSceneData
-from niryo_moveit.msg import SimCommand, SimStatus, Camera
+from niryo_moveit.msg import CarSceneData, SimCommand, SimStatus, Camera
 from std_msgs.msg import String
 
 
@@ -16,11 +15,9 @@ def main():
 
     # Start the Server Endpoint with a ROS communication objects dictionary for routing messages
     tcp_server.start({
-        'scene_data': RosPublisher('scene_data', SceneData),
         'car_scene_data': RosPublisher('car_scene_data', CarSceneData),
         'sim_command': RosSubscriber('sim_command', SimCommand, tcp_server),
         'sim_status': RosPublisher('sim_status', SimStatus),
-        'camera/overhead': RosPublisher('camera/overhead', Camera),
         'camera/front': RosPublisher('camera/front', Camera),
         # Trajectory-rollout viz: the trainer publishes a JSON payload as a
         # std_msgs/String on `policy_rollouts` (see rl_agent/rollout_viz.py).

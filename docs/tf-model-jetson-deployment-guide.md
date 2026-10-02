@@ -83,9 +83,8 @@ The table is **static**. A topic that is not listed never reaches Unity, even if
 | Topic | Type | Role in robotaxi training |
 |---|---|---|
 | `car_scene_data` | `niryo_moveit/CarSceneData` | **The observation.** One message per physics tick after a command. |
-| `scene_data` | `niryo_moveit/SceneData` | Arm / leftover gym. Trainer subscribes; `DonutCourse` does **not** use it. |
 | `sim_status` | `niryo_moveit/SimStatus` | Handshake: reset done / force applied. |
-| `camera/overhead` | `niryo_moveit/Camera` | Optional overhead frame. **Not** in the 31-D policy. |
+| `camera/front` | `niryo_moveit/Camera` | On-car CSI frame, one per `cmd_id`. **Not** in the 31-D policy. |
 
 **ROS → Unity** (`RosSubscriber` — trainer writes, Unity reads):
 
@@ -242,7 +241,7 @@ Notes that will bite you if ignored:
 - Sim rays are **SphereCast radius 0.15 m**, max **50 m** (forward **100 m**). RPLiDAR A1 is a **2D beam**, ~12 m, ~1° bins, noise, glass, and a **blind zone under the bumper**.
 - Sim `laser_frame` equivalent is the car heading. On the Jetson, `lidar.launch` must keep **`base_footprint → laser_frame` yaw = 0** (scan angle 0 = nose). A 180° TF swaps left/right in the vector and the policy will steer into walls.
 - **No frame stacking. No running normalization.** Feed raw meters and m/s, same as Unity.
-- **No camera** in this policy. `/csi_cam_0/image_raw` and sim `camera/overhead` are unused.
+- **No camera** in this policy. `/csi_cam_0/image_raw` and sim `camera/front` are unused.
 
 ### 3.2 Action: 2 floats the policy emits vs Twist the car eats
 
@@ -502,7 +501,7 @@ The gym will still go Unity → ROS-TCP → `ros-server` → gRPC → trainer. T
 
 ## 9. Non-goals for v1
 
-- Camera / vision policies (ignore `camera/overhead` and `/csi_cam_0/image_raw`).
+- Camera / vision policies (ignore `camera/front` and `/csi_cam_0/image_raw`).
 - Running SAC **training** on the Nano.
 - Sharing `/cmd_vel` with `explore_lite` or the joystick.
 - Assuming `/odom_combined` is `nav_msgs/Odometry` (it is not).

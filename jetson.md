@@ -461,7 +461,7 @@ publishing those frames as `camera/front` and training a vision course is
 This section keeps the Nano camera contract; it does **not** implement
 those nodes.
 
-Today’s SAC policies (`donut` / `donut_no_hint`) are **1-D vectors** (31 or 32 floats). They do **not** use the CSI camera. `/csi_cam_0/image_raw` is published on the Nano for Foxglove only. In the Unity gym, overhead-camera publish is **commented out** in `SimController.cs`; `unity_node.py` still lists `camera/overhead`, and `RobotApi` already subscribes — nothing in `DonutCourse` or the actor/critic reads it.
+Today’s SAC policies (`donut` / `donut_no_hint`) are **1-D vectors** (31 or 32 floats). They do **not** use the CSI camera. `/csi_cam_0/image_raw` is published on the Nano for Foxglove only. The arm-era `camera/overhead` topic has been removed from the Unity gym and `unity_node.py`.
 
 This section is the plan to make the **gym camera look like the JetRacer CSI**, ship frames over the existing ROS-TCP → gRPC plane, and turn them into a tensor the policy can train and (later) run on. It does **not** implement the nodes.
 
@@ -497,7 +497,7 @@ Copy `fx, fy` from the yaml on the Jetson (`$(find jetracer)/config/camera_calib
 
 Existing leftovers (do **not** reuse as-is):
 
-- `SimController` had `publishedCamera` + `CameraPublisher` targeting **`camera/overhead`** — disabled. That was a **top-down** view for the arm gym, not the JetRacer.
+- The arm gym's top-down `camera/overhead` publisher has been removed; it was never the JetRacer's viewpoint.
 - `CarController.Cam2` / `WaymoDriverCamera` is a commented chase/driver cam — wrong FOV and pose.
 - `SceneDataPublisher` does not attach pixels to `CarSceneData`. Keep it that way; images stay on their own topic so `Sphere` / 31-D rays stay stable.
 
@@ -509,7 +509,7 @@ Build a **forward CSI stand-in**:
 4. Culling: render the same collision/visual meshes the lidar would “see” as surfaces (no editor gizmos, no HUD).
 5. On each **applied force** (same moment `CarSceneData` is sent), blit RT → `Texture2D`, `GetPixels32`, drop A, pack `sensor_msgs/Image` (`height=480`, `width=640`, `encoding=rgb8`, `data=RGB bytes`).
 6. **Downsample before publish** for training (recommended **160×120** or **84×84** RGB). 640×480×3 ≈ 900 KB raw; gRPC JSON + base64 is worse. The policy never needs full CSI resolution. Keep a `full_res` flag for Foxglove dumps only.
-7. Publish on **`camera/front`** (new), not `camera/overhead`.
+7. Publish on **`camera/front`** (new).
 8. Domain randomization (after the first vision job works): exposure, noise, motion blur, slight pitch/roll of the mount (±5°), and random JPEG quality if you compress.
 
 Optional but useful: also publish `sensor_msgs/CameraInfo` once (latched) with the yaml `K`/`D` so a later undistort node is identical in sim and on the Nano.
@@ -618,7 +618,7 @@ Call it:
 
 ### 6. What not to do
 
-- Do not pipe `camera/overhead` into the driving policy (wrong viewpoint).
+- Do not pipe the top-down view into the driving policy (wrong viewpoint).
 - Do not publish 640×480×20 Hz through `virtual_endpoint`.
 - Do not add pixels to `CarSceneData` / `Sphere.msg` (breaks every existing parser).
 - Do not assume `/csi_cam_0/image_raw` exists in the Docker gym, or `niryo_moveit/Camera` exists on Melodic.

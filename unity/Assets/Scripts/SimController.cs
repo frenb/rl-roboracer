@@ -24,13 +24,6 @@ public class SimController : MonoBehaviour
     // ApplyForce reset message. Leave null to keep a static hand-built scene.
     public TrackGenerator trackGenerator;
 
-    // public GameObject streamCamera;
-    // public GameObject publishedCamera;
-    // public string publishedCameraTopic = "camera/overhead";
-    // public GameObject niryoOne { get; private set; }
-    // public GameObject target { get; private set; }
-    // public GameObject targetPlacement { get; private set; 
-
     public GameObject car { get; private set; }
     public GameObject carProxy;
     public GameObject goal;
@@ -41,7 +34,6 @@ public class SimController : MonoBehaviour
     private bool sentStarted = false;
     private static SimController _instance = null;
     private SceneDataPublisher sceneDataPublisher;
-    // private CameraPublisher cameraPublisher;
     private enum Command
     {
         RESTART = 0,
@@ -110,13 +102,6 @@ public class SimController : MonoBehaviour
         // drives that camera's transform. Display only - the policy's camera
         // input comes from JetRacerCsiCamera via its own RenderTexture.
         AttachOverheadFit();
-        // // Publish camera frames for computer vision.
-        // if (publishedCamera != null)
-        // {
-        //     cameraPublisher = gameObject.AddComponent(typeof(CameraPublisher)) as CameraPublisher;
-        //     cameraPublisher.camera = publishedCamera.GetComponent<UnityEngine.Camera>();
-        //     cameraPublisher.topic = publishedCameraTopic;
-        // }
         Debug.Log("ros.rosIPAddress=" + ros.rosIPAddress);
         Debug.Log("ros.overrideUnityIP=" + ros.overrideUnityIP);
         ros.Subscribe<SimCommand>(simCommandTopic, onCommand);
