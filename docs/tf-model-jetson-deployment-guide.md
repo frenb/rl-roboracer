@@ -70,7 +70,7 @@ This is how data moves **today**. The Jetson node must **replace** this plane, n
 
 The trainer **never opens a ROS socket**. Default gRPC target is `ros-server:50051` (Compose alias `ros-server-0`). Scaled actors use `ros-server-N:50051`.
 
-`ros-server` also bind-mounts `./rl_agent` → `/python_ws/src` and `../saved_models` → `/saved_models`. The SavedModel files sit on disk for the trainer; **`ros-server` does not load them**. `start.sh` runs `roslaunch niryo_moveit part_3.launch` (plus a Python workspace server on 60062). Env: `UNITY_MACHINE_IP=host.docker.internal`, `ROBOT_TYPE=robotaxi`.
+`ros-server` also bind-mounts `./rl_agent` → `/python_ws/src` and `../saved_models` → `/saved_models`. The SavedModel files sit on disk for the trainer; **`ros-server` does not load them**. `start.sh` runs `roslaunch niryo_moveit part_3.launch`. Env: `UNITY_MACHINE_IP=host.docker.internal`, `ROBOT_TYPE=robotaxi`.
 
 **ROS versions do not match the car.** Sim ROS is **Noetic** in Docker. The Jetson is **Melodic**. You cannot `rostopic` the gym graph onto the Nano, and the `niryo_moveit` `.msg` package is **not installed** on the Jetson.
 

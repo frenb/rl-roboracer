@@ -64,8 +64,6 @@ COPY ./docker/ros_server/ROS/src/ros_tcp_endpoint         $ROS_WORKSPACE/src/ros
 COPY ./docker/ros_server/ROS/src/virtual_endpoint         $ROS_WORKSPACE/src/virtual_endpoint
 COPY ./docker/ros_server/ROS/src/rospy_message_converter  $ROS_WORKSPACE/src/rospy_message_converter
 COPY ./docker/ros_server/ROS/src/start.sh                 $ROS_WORKSPACE/src/start.sh
-COPY ./docker/ros_server/ROS/src/ros_log_tail_server.py   $ROS_WORKSPACE/src/ros_log_tail_server.py
-COPY ./docker/ros_server/ROS/src/python_workspace_server.py $ROS_WORKSPACE/src/python_workspace_server.py
 COPY ./docker/ros_server/python_ws                        $PYTHON_WORKSPACE
 
 COPY ./rl_agent/robotaxi.py $PYTHON_WORKSPACE/src/robotaxi.py
