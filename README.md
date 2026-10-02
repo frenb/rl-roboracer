@@ -405,8 +405,8 @@ that kit. **P** switches Main Camera ↔ CSI (`CameraViewSwitcher`).
 
 | Change | Why |
 |---|---|
-| `JetRacer_Physics` / `JetRacer_Physics_wcourse` prefabs (mesh + rigidbody) instead of `RiggedWaymo` | Same silhouette, wheelbase, and collision as the kit, not the taxi |
-| Play scene `Assets/Scenes/w-course-jetracer.unity` (enabled in `EditorBuildSettings`) | Kit `Tarmac_c` tiles on layer **Road** (6), not the grey-cube `generated_course_jetracer` |
+| `JetRacer_Physics_wcourse` prefab (mesh + rigidbody) is the `carPrefab` in every course scene | Same silhouette, wheelbase, and collision as the kit |
+| Play scene `Assets/Scenes/w-course-jetracer.unity` (enabled in `EditorBuildSettings`) | Kit `Tarmac_c` tiles on layer **Road** (6) |
 | `Goal` treats `JetRacer_Physics` as the car (walks parents + `attachedRigidbody`); goal meshes on the Road layer | Hits register; CSI can see the spheres |
 | `JetRacerCsiCamera` on the car: 640×480, aspect 4:3, skybox clear, near **0.05 m**, far **200 m**, no HDR/MSAA | Match `gscam` **640×480** and `config/camera_calibration/cam_640x480.yaml` size |
 | Yaml `fx` / `fy` stored on `JetRacerCsiIntrinsics`; **visual VFOV opened to 80°** (yaml `fx` is ~62°) | Strict `fy`/`fx` left too little tarmac ahead of the hood |
@@ -416,7 +416,6 @@ that kit. **P** switches Main Camera ↔ CSI (`CameraViewSwitcher`).
 | CSI hides `Sky_Dome` (finite mesh bowl, not a skybox) | Nested `Example_Track_A` + the bowl caused “bubbling” / horizon clipping |
 | CSI defaults: trajectory / goals / rays **off**; **T / G / R** toggle those on CSI only | Real CSI has no debug overlays |
 | P-view undocks the render texture, letterboxes 4:3, does not blit via OnGUI | Game view was “Display 1 No cameras rendering” while the RT was the only target |
-| Fantasy Skybox FREE imported | Assign a skybox mat in Lighting and disable `Sky_Dome` in the scene |
 | `CsiFramePublisher`: one 84×84 `rgb8` per `cmd_id` on `camera/front` | Vision Phase 1–2. HUD `csi cmd …`; PNGs in `unity/CsiFrameDumps/`; **F** dumps. `unity_node.py` lists the topic ([guide](docs/csi-camera-observation-guide.md#4-phase-1--unity-one-csi-frame-per-applyforce)) |
 
 Still **not** on the learning loop: CSI frames are for the operator (P-view).

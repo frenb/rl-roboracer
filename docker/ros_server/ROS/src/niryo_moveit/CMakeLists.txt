@@ -20,8 +20,6 @@ roslaunch_add_file_check(launch)
 
 add_message_files(DIRECTORY msg)
 
-add_service_files(DIRECTORY srv)
-
 add_action_files(DIRECTORY action FILES MoveAction.action)
 
 catkin_python_setup()
@@ -38,7 +36,6 @@ generate_messages(
 catkin_package()
 
 catkin_install_python(PROGRAMS
-  scripts/pose_planner.py
   scripts/remote_node.py
   scripts/unity_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

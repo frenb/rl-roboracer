@@ -38,7 +38,7 @@ RUN ln -s /usr/bin/python3 /usr/bin/python
 RUN python -m pip install --upgrade pip
 RUN python -m pip install grpcio google-api-python-client
 RUN pip3 install tensorboard
-RUN pip3 install -U tensorboard-plugin-profile
+RUN pip3 install tensorboard-plugin-profile==2.18.0
 RUN pip3 install pymongo
 RUN pip3 install numpy==1.23.1
 RUN pip3 install scipy
@@ -60,8 +60,6 @@ COPY ./docker/ros_server/python_ws $PYTHON_WORKSPACE
 
 COPY ./docker/ros_server/ROS/src/moveit_msgs              $ROS_WORKSPACE/src/moveit_msgs
 COPY ./docker/ros_server/ROS/src/niryo_moveit             $ROS_WORKSPACE/src/niryo_moveit
-COPY ./docker/ros_server/ROS/src/niryo_one_ros            $ROS_WORKSPACE/src/niryo_one_ros
-COPY ./docker/ros_server/ROS/src/niryo_one_urdf           $ROS_WORKSPACE/src/niryo_one_urdf
 COPY ./docker/ros_server/ROS/src/ros_tcp_endpoint         $ROS_WORKSPACE/src/ros_tcp_endpoint
 COPY ./docker/ros_server/ROS/src/virtual_endpoint         $ROS_WORKSPACE/src/virtual_endpoint
 COPY ./docker/ros_server/ROS/src/rospy_message_converter  $ROS_WORKSPACE/src/rospy_message_converter

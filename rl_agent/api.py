@@ -66,12 +66,7 @@ class RpcClient:
     # to ros-server's gRPC endpoint on the local Docker network -
     # normal latency is sub-millisecond, so 3s is generous and any
     # excess means the channel is wedged.
-    #
-    # CALL_SERVICE_TIMEOUT_S: services like niryo_moveit/PosePlanner
-    # do real work (motion planning) and can legitimately take
-    # multiple seconds, so the deadline is correspondingly larger.
     PUBLISH_TIMEOUT_S = 3.0
-    CALL_SERVICE_TIMEOUT_S = 10.0
 
     def __init__(self, addr):
         # gRPC keepalive: ping the peer every 600s (10 min) when the
@@ -135,21 +130,6 @@ class RpcClient:
         req = ros_service_pb2.PublishRequest(topic=topic, msg_type=msg_type, data=json.dumps(data))
         await self.stub.Publish(
             req, timeout=self.PUBLISH_TIMEOUT_S if timeout is None else timeout)
-
-    async def Plan(self, plan_request, timeout=None):
-        """Call the niryo_moveit/PosePlanner service.
-
-        timeout=None uses CALL_SERVICE_TIMEOUT_S; the planner is real
-        compute and can take seconds, so the default is larger than
-        Publish's. Override for very-large planning problems.
-        """
-        req = ros_service_pb2.ServiceRequest(
-            service_name='pose_planner',
-            service_type='niryo_moveit/PosePlanner',
-            request=json.dumps(plan_request))
-        res = await self.stub.CallService(
-            req, timeout=self.CALL_SERVICE_TIMEOUT_S if timeout is None else timeout)
-        return json.loads(res.response)
 
 class RobotApi:
 
@@ -570,20 +550,6 @@ class RobotApi:
             'cmd_type': 3
         }}
         await self.DoMove(action, 10)
-
-    async def GetPlan(self, pose):
-        scene_data = await self.GetSceneData()
-        plan_request = {
-            'joint_00': scene_data['joint_00'],
-            'joint_01': scene_data['joint_01'],
-            'joint_02': scene_data['joint_02'],
-            'joint_03': scene_data['joint_03'],
-            'joint_04': scene_data['joint_04'],
-            'joint_05': scene_data['joint_05'],
-            'pose': pose 
-        }
-        plan = await self.rpc_client.Plan(plan_request)
-        return plan
 
     async def GetSceneData(self):
         if not self.latest_scene_data:
