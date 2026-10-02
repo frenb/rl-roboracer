@@ -3,8 +3,15 @@ FROM docker_ros-server:working
 ENV ROS_WORKSPACE=/catkin_ws
 ENV PYTHON_WORKSPACE=/python_ws
 
+# The base image ships its own copies of these packages (plus retired arm
+# packages); COPY merges rather than replaces, so stale msg files would
+# otherwise still be compiled by add_message_files.
+RUN rm -rf $ROS_WORKSPACE/build $ROS_WORKSPACE/devel \
+           $ROS_WORKSPACE/src/niryo_moveit $ROS_WORKSPACE/src/moveit_msgs \
+           $ROS_WORKSPACE/src/niryo_one_ros $ROS_WORKSPACE/src/niryo_one_urdf \
+           $ROS_WORKSPACE/src/*.py
+
 # Copy each directory explicitly to avoid workspace cruft
-COPY ./ROS/src/moveit_msgs $ROS_WORKSPACE/src/moveit_msgs
 COPY ./ROS/src/niryo_moveit $ROS_WORKSPACE/src/niryo_moveit
 COPY ./ROS/src/ros_tcp_endpoint $ROS_WORKSPACE/src/ros_tcp_endpoint
 COPY ./ROS/src/virtual_endpoint $ROS_WORKSPACE/src/virtual_endpoint

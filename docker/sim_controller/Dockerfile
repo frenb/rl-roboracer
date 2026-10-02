@@ -58,7 +58,6 @@ ENV ROS_WORKSPACE=/catkin_ws
 
 COPY ./docker/ros_server/python_ws $PYTHON_WORKSPACE
 
-COPY ./docker/ros_server/ROS/src/moveit_msgs              $ROS_WORKSPACE/src/moveit_msgs
 COPY ./docker/ros_server/ROS/src/niryo_moveit             $ROS_WORKSPACE/src/niryo_moveit
 COPY ./docker/ros_server/ROS/src/ros_tcp_endpoint         $ROS_WORKSPACE/src/ros_tcp_endpoint
 COPY ./docker/ros_server/ROS/src/virtual_endpoint         $ROS_WORKSPACE/src/virtual_endpoint

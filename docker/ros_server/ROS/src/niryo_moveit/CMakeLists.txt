@@ -7,20 +7,15 @@ find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
   ros_tcp_endpoint
   message_generation
-  moveit_msgs
   sensor_msgs
   controller_manager
   roslaunch
-  trajectory_msgs
   genmsg
-  actionlib_msgs
 )
 
 roslaunch_add_file_check(launch)
 
 add_message_files(DIRECTORY msg)
-
-add_action_files(DIRECTORY action FILES MoveAction.action)
 
 catkin_python_setup()
 
@@ -28,9 +23,7 @@ generate_messages(
   DEPENDENCIES
   geometry_msgs
   std_msgs
-  moveit_msgs
   sensor_msgs
-  actionlib_msgs
 )
 
 catkin_package()

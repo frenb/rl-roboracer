@@ -86,8 +86,6 @@ The table is **static**. A topic that is not listed never reaches Unity, even if
 | `scene_data` | `niryo_moveit/SceneData` | Arm / leftover gym. Trainer subscribes; `DonutCourse` does **not** use it. |
 | `sim_status` | `niryo_moveit/SimStatus` | Handshake: reset done / force applied. |
 | `camera/overhead` | `niryo_moveit/Camera` | Optional overhead frame. **Not** in the 31-D policy. |
-| `move_action/result` | `niryo_moveit/MoveActionResult` | Arm gym. Unused for donut. |
-| `move_action/feedback` | `niryo_moveit/MoveActionFeedback` | Same. |
 
 **ROS → Unity** (`RosSubscriber` — trainer writes, Unity reads):
 
@@ -95,7 +93,6 @@ The table is **static**. A topic that is not listed never reaches Unity, even if
 |---|---|---|
 | `sim_command` | `niryo_moveit/SimCommand` | **The action / reset.** `cmd=0` restart track, `cmd=1` apply force. |
 | `policy_rollouts` | `std_msgs/String` | JSON viz for `TrajectoryRolloutViz`. Not on the learning loop. |
-| `move_action/goal` | `niryo_moveit/MoveActionGoal` | Arm gym only. |
 
 There is **no** `/scan`, `/cmd_vel`, `/odom`, or `sensor_msgs/*` on this graph.
 

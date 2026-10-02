@@ -40,7 +40,6 @@ public class SimController : MonoBehaviour
     private ROSConnection ros;
     private bool sentStarted = false;
     private static SimController _instance = null;
-    private MoveService moveService;
     private SceneDataPublisher sceneDataPublisher;
     // private CameraPublisher cameraPublisher;
     private enum Command
@@ -81,7 +80,6 @@ public class SimController : MonoBehaviour
         InstantiateObjects(af);
         ros = ROSConnection.instance;
         // // Ros nodes instatiates here after world created.
-        moveService = gameObject.AddComponent(typeof(MoveService)) as MoveService;
         sceneDataPublisher = gameObject.AddComponent(typeof(SceneDataPublisher)) as SceneDataPublisher;
         // Auto-attach the policy trajectory-rollout visualizer so any build
         // renders the candidate-path fan when the trainer publishes on the
@@ -370,7 +368,6 @@ public class SimController : MonoBehaviour
     public void ApplyForce(ApplyForce af)
     {
         Debug.Log("SimController::Applying Force " + af);
-        // moveService.UpdateWorldRefs();
         // car.transform.RotateAround(
         //     transform.position,
         //     transform.up, 
