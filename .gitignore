@@ -106,3 +106,7 @@ unity/Assets/Materials/lambert3.mat*
 unity/Assets/Materials/phong1.mat*
 unity/Assets/Materials/phong3.mat*
 unity/Assets/drosophila.unity*
+
+# Frames from the watermarked Envato stock preview, used only as a flight-path
+# reference for the fly animation. Not ours to redistribute.
+docs/video/plane-ref/
