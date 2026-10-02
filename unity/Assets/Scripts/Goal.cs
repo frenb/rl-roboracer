@@ -41,7 +41,7 @@ public class Goal : MonoBehaviour
 
     static bool NameIsCar(string name)
     {
-        return name.Contains("RiggedWaymo") || name.Contains("JetRacer_Physics");
+        return name.Contains("JetRacer_Physics");
     }
 
     void OnTriggerEnter(Collider hit)

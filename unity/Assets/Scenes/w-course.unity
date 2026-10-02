@@ -3493,11 +3493,6 @@ Transform:
   m_CorrespondingSourceObject: {fileID: 400004, guid: a4bad9ab0e8bdc84e9342ad87206af5a, type: 3}
   m_PrefabInstance: {fileID: 918892685}
   m_PrefabAsset: {fileID: 0}
---- !u!1 &940363625 stripped
-GameObject:
-  m_CorrespondingSourceObject: {fileID: 2148758728699398440, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
-  m_PrefabInstance: {fileID: 1016949307598283809}
-  m_PrefabAsset: {fileID: 0}
 --- !u!1001 &942529205
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -8204,8 +8199,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   manualControlEnabled: 1
-  carProxy: {fileID: 940363625}
-  carPrefab: {fileID: 2148758728699398440, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
+  carProxy: {fileID: 0}
+  carPrefab: {fileID: 176681151281432401, guid: 7a385230db056ed44b7c8d77f3d51729, type: 3}
   spherePrefab: {fileID: 2964540799174209130, guid: db5833446367a5f46b26f99298e414a9, type: 3}
   car: {fileID: 0}
   sphere: {fileID: 0}
@@ -8498,11 +8493,11 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   simCommandTopic: sim_command
   simStatusTopic: sim_status
-  carPrefab: {fileID: 2148758728699398440, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
+  carPrefab: {fileID: 176681151281432401, guid: 7a385230db056ed44b7c8d77f3d51729, type: 3}
   idealTrajectoryPrefab: {fileID: 0}
   spherePrefab: {fileID: 2964540799174209130, guid: db5833446367a5f46b26f99298e414a9, type: 3}
   goalObject: {fileID: 1295961001}
-  carProxy: {fileID: 940363625}
+  carProxy: {fileID: 0}
   goal: {fileID: 0}
 --- !u!4 &2052515055
 Transform:
@@ -8592,71 +8587,6 @@ Transform:
   m_CorrespondingSourceObject: {fileID: 400004, guid: a4bad9ab0e8bdc84e9342ad87206af5a, type: 3}
   m_PrefabInstance: {fileID: 2134263199}
   m_PrefabAsset: {fileID: 0}
---- !u!1001 &1016949307598283809
-PrefabInstance:
-  m_ObjectHideFlags: 0
-  serializedVersion: 2
-  m_Modification:
-    m_TransformParent: {fileID: 0}
-    m_Modifications:
-    - target: {fileID: 1628680191424697234, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
-      propertyPath: m_RootOrder
-      value: 1
-      objectReference: {fileID: 0}
-    - target: {fileID: 1628680191424697234, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
-      propertyPath: m_LocalPosition.x
-      value: -0.7
-      objectReference: {fileID: 0}
-    - target: {fileID: 1628680191424697234, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
-      propertyPath: m_LocalPosition.y
-      value: 3
-      objectReference: {fileID: 0}
-    - target: {fileID: 1628680191424697234, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
-      propertyPath: m_LocalPosition.z
-      value: 3.6
-      objectReference: {fileID: 0}
-    - target: {fileID: 1628680191424697234, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
-      propertyPath: m_LocalRotation.w
-      value: 0.9999977
-      objectReference: {fileID: 0}
-    - target: {fileID: 1628680191424697234, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
-      propertyPath: m_LocalRotation.x
-      value: -0.0021642747
-      objectReference: {fileID: 0}
-    - target: {fileID: 1628680191424697234, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
-      propertyPath: m_LocalRotation.y
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 1628680191424697234, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
-      propertyPath: m_LocalRotation.z
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 1628680191424697234, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
-      propertyPath: m_LocalEulerAnglesHint.x
-      value: -0.248
-      objectReference: {fileID: 0}
-    - target: {fileID: 1628680191424697234, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
-      propertyPath: m_LocalEulerAnglesHint.y
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 1628680191424697234, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
-      propertyPath: m_LocalEulerAnglesHint.z
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 2148758728699398440, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
-      propertyPath: m_Name
-      value: CarProxy
-      objectReference: {fileID: 0}
-    - target: {fileID: 2148758728699398440, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
-      propertyPath: m_IsActive
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 2148758728699398443, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
-      propertyPath: m_Enabled
-      value: 1
-      objectReference: {fileID: 0}
-    m_RemovedComponents: []
-  m_SourcePrefab: {fileID: 100100000, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
 --- !u!1001 &6327563334912653334
 PrefabInstance:
   m_ObjectHideFlags: 0

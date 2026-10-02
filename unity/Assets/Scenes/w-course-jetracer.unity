@@ -9913,7 +9913,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   manualControlEnabled: 1
   carProxy: {fileID: 0}
-  carPrefab: {fileID: 2148758728699398440, guid: cc143ae623b7dcb45965d2c83a96f97d, type: 3}
+  carPrefab: {fileID: 176681151281432401, guid: 7a385230db056ed44b7c8d77f3d51729, type: 3}
   spherePrefab: {fileID: 2964540799174209130, guid: db5833446367a5f46b26f99298e414a9, type: 3}
   car: {fileID: 0}
   sphere: {fileID: 0}
