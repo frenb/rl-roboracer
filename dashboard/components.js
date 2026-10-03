@@ -10,7 +10,7 @@
  *   formatters.statusBadge(status)        -> badge HTML for NOT_STARTED/IN_PROGRESS/DONE
  *   formatters.jobTypeBadge(type)         -> badge HTML for TRAIN/DEMO/EVAL/BC_...
  *   formatters.modelTypeBadge(type)       -> badge HTML for SacAgent/GreedyPolicy/RandomPyPolicy
- *   formatters.robotTypeBadge(type)       -> badge HTML for robotaxi/niryo
+ *   formatters.robotTypeBadge(type)       -> badge HTML for the robot type
  *   formatters.rewardDesignBadge(row)     -> design name + vN pill, clickable
  *                                            (data-action="view-reward-design")
  *   formatters.experimentDesignBadge(row) -> design name + vN pill, clickable
@@ -1607,7 +1607,7 @@
     statuses: ['NOT_STARTED', 'IN_PROGRESS', 'DONE'],
     jobTypes: ['TRAIN', 'DEMO', 'EVAL', 'BC_TRAINING_ONLY'],
     modelTypes: ['SacAgent', 'GreedyPolicy', 'RandomPyPolicy', 'FlyPyPolicy'],
-    robotTypes: ['robotaxi', 'niryo'],
+    robotTypes: ['robotaxi'],
     // Value is what the trainer sees; label is what the picker shows.
     // "trainer default" is a sentinel, not a course: it is stripped in
     // buildJobPayload so the trainer's ROBOTAXI_COURSE_TYPE env-var

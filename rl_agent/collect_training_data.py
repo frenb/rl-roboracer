@@ -759,9 +759,9 @@ def add_model(path, robot_type, model_type, training_iterations, avg_return=None
     # "_id": ObjectID(),
     # model_type: 'SacAgent',
     # training_iterations: 50000,
-    # location: '/saved_models/niryo/SacAgent/8',
+    # location: '/saved_models/robotaxi/SacAgent/8',
     # notes: 'this is a dummy field',
-    # robot_type: 'niryo'
+    # robot_type: 'robotaxi'
     ts = time.time()
     iso_date = datetime.datetime.fromtimestamp(ts, None)
     db.models.insert_one(

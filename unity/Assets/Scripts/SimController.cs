@@ -12,9 +12,6 @@ public class SimController : MonoBehaviour
             return _instance;
         }
     }
-    // public GameObject niryoOnePrefab;
-    // public GameObject targetPrefab;
-    // public GameObject targetPlacementPrefab;
     public GameObject carPrefab;
     public GameObject idealTrajectoryPrefab;
     public GameObject spherePrefab;
