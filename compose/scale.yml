@@ -26,7 +26,7 @@
 # them as ros-server-0:50051 .. ros-server-3:50051.
 
 x-ros-server-base: &ros-server-base
-  image: docker_ros-server:thin
+  image: ${IMAGE_PREFIX:-}docker_ros-server:thin
   restart: always
   extra_hosts:
     - "host.docker.internal:host-gateway"
@@ -57,7 +57,7 @@ x-ros-server-base: &ros-server-base
 services:
   ros-server-1:
     <<: *ros-server-base
-    container_name: rl-roboracer-ros-server-1-pinned
+    container_name: ${COMPOSE_PROJECT_NAME:-rl-roboracer}-ros-server-1-pinned
     ports:
       - "10001:10000"
       - "50052:50051"
@@ -68,7 +68,7 @@ services:
 
   ros-server-2:
     <<: *ros-server-base
-    container_name: rl-roboracer-ros-server-2-pinned
+    container_name: ${COMPOSE_PROJECT_NAME:-rl-roboracer}-ros-server-2-pinned
     ports:
       - "10002:10000"
       - "50053:50051"
@@ -79,7 +79,7 @@ services:
 
   ros-server-3:
     <<: *ros-server-base
-    container_name: rl-roboracer-ros-server-3-pinned
+    container_name: ${COMPOSE_PROJECT_NAME:-rl-roboracer}-ros-server-3-pinned
     ports:
       - "10003:10000"
       - "50054:50051"

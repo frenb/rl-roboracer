@@ -12,14 +12,14 @@
 
 services:
   ros-server:
-    image: docker_ros-server:thin
+    image: ${IMAGE_PREFIX:-}docker_ros-server:thin
     # Pin the container name so Compose doesn't auto-suffix it with the
     # replica index ("-1"). Without this, the base container ends up
     # named "<project>-ros-server-1", which Docker's embedded DNS then
     # also resolves under the short name "ros-server-1" - colliding
     # with the actual ros-server-1 service brought up by compose/scale.yml
     # and silently routing actor-1's worker to actor-0's container.
-    container_name: rl-roboracer-ros-server-base
+    container_name: ${COMPOSE_PROJECT_NAME:-rl-roboracer}-ros-server-base
     restart: always
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -97,7 +97,7 @@ services:
       ME_CONFIG_MONGODB_URL: ${MONGO_URL:-mongodb://root:${MONGO_ROOT_PASSWORD:-example}@mongo:27017/}
 
   sim-controller:
-    image: sim_controller:latest
+    image: ${IMAGE_PREFIX:-}sim_controller:latest
     build:
       context: .
       dockerfile: docker/sim_controller/Dockerfile
@@ -277,7 +277,7 @@ services:
   # grabs the rest by default - set TF_FORCE_GPU_ALLOW_GROWTH=true on the
   # trainer before running both at once.
   fly-brain:
-    image: fly_brain:latest
+    image: ${IMAGE_PREFIX:-}fly_brain:latest
     build:
       context: ./docker/fly_brain
       dockerfile: Dockerfile
@@ -320,7 +320,7 @@ services:
   #   docker/madscientist/entrypoint.sh         - boot + gating
   #   rl_agent/madscientist/                    - agent code package
   madscientist:
-    image: madscientist:latest
+    image: ${IMAGE_PREFIX:-}madscientist:latest
     build:
       context: ./docker/madscientist
       dockerfile: Dockerfile
