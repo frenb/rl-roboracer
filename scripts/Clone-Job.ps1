@@ -52,7 +52,7 @@
 
 .PARAMETER MongoConn
     MongoDB connection string used inside the mongo container. Defaults to the
-    stack's root credentials.
+    stack's root credentials, read from the container's MONGODB_ROOT_PASSWORD.
 
 .EXAMPLE
     # Clone a job and attach the v4 goal-count-speed reward design, retiring the source.
@@ -73,7 +73,7 @@ param(
     [string]$Notes,
     [switch]$SetSourceDone,
     [switch]$DryRun,
-    [string]$MongoConn = 'mongodb://root:example@localhost:27017/robotaxi?authSource=admin'
+    [string]$MongoConn
 )
 
 $ErrorActionPreference = 'Stop'
@@ -146,7 +146,12 @@ try {
     docker compose cp $localTmp ("mongo:" + $containerTmp)
     if ($LASTEXITCODE -ne 0) { throw "docker compose cp failed ($LASTEXITCODE)" }
 
-    docker compose exec -T mongo mongosh $MongoConn --quiet --file $containerTmp
+    if ($MongoConn) {
+        docker compose exec -T mongo mongosh $MongoConn --quiet --file $containerTmp
+    } else {
+        # No inner double quotes: Windows PowerShell 5 strips them from native args.
+        docker compose exec -T mongo bash -c 'exec mongosh -u root -p ${MONGODB_ROOT_PASSWORD} --authenticationDatabase admin localhost:27017/robotaxi --quiet --file $0' $containerTmp
+    }
     if ($LASTEXITCODE -ne 0) { throw "mongosh clone script failed ($LASTEXITCODE)" }
 } finally {
     Pop-Location

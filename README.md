@@ -85,8 +85,12 @@ New-Item -ItemType Directory -Force `
 
 Empty dirs are enough to start. Copy demo tfrecords or checkpoints into
 those folders when you have them. Optional: `Copy-Item .env.example .env`
-if you will enable the Mad Scientist (off by default) or want to keep the
-tfrecords corpus somewhere other than `..\tfrecords` (`TFRECORDS_DIR`).
+if you will enable the Mad Scientist (off by default), want to keep the
+tfrecords corpus somewhere other than `..\tfrecords` (`TFRECORDS_DIR`), or
+want a Mongo password other than the default `example`
+(`MONGO_ROOT_PASSWORD`). Mongo and mongo-express only listen on
+localhost; `.env.example` explains how to change the password on an
+existing database.
 
 ### 4. Build the Docker images
 
@@ -352,8 +356,8 @@ docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller `
 | `ros-server-1`   | 10001 / 50052     | Actor 1: same, scale-overlay                              |
 | `ros-server-2`   | 10002 / 50053     | Actor 2: same, scale-overlay                              |
 | `ros-server-3`   | 10003 / 50054     | Actor 3: same, scale-overlay                              |
-| `mongo`          | 27017             | Job / model / leaderboard storage                         |
-| `mongo-express`  | 8081              | Mongo admin UI                                            |
+| `mongo`          | 27017 (localhost) | Job / model / leaderboard storage                         |
+| `mongo-express`  | 8081 (localhost)  | Mongo admin UI                                            |
 | `sim-controller` | 6006              | Tensorboard for the live training run                     |
 | `fly-brain`      | 50061             | Frozen fly connectome over gRPC (see Developer notes)     |
 | `dashboard`      | 80                | Golden Layout UI (iframes Tensorboard, logs, jobs, models) |

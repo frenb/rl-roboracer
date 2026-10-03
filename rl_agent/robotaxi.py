@@ -294,9 +294,7 @@ except (ValueError, OSError) as _e:  # noqa: BLE001
     # gracefully. The periodic checkpoint is the real safety net.
     print(f"robotaxi: could not install SIGTERM handler: {_e}", flush=True)
 
-client = MongoClient('mongo', 
-    username='root',
-    password='example')
+client = MongoClient(os.environ.get('MONGO_URL', 'mongodb://root:example@mongo:27017/'))
 # db = client.local
 #set database_name variable to environment variable DATABASE_NAME
 database_name = os.environ['DATABASE_NAME']

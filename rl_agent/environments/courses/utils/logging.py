@@ -1,9 +1,7 @@
 from pymongo import MongoClient
 import os
 
-client = MongoClient('mongo', 
-    username='root',
-    password='example')
+client = MongoClient(os.environ.get('MONGO_URL', 'mongodb://root:example@mongo:27017/'))
 db = client[os.environ['DATABASE_NAME']]
 
 def log_reward(job_id, type, score, diff=None, extra_data=None, step_costs=[], position_history=[], stat_array=[]):

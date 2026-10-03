@@ -742,9 +742,7 @@ def get_save_dir_name(policy):
     save_dir_root_docker = get_save_dir_root_docker(policy)
     return os.path.join(path,next_dir_name), os.path.join(save_dir_root_docker,next_dir_name)
 
-client = MongoClient('mongo:27017', 
-    username='root',
-    password='example')
+client = MongoClient(os.environ.get('MONGO_URL', 'mongodb://root:example@mongo:27017/'))
 # `local` is a MongoDB-reserved, unreplicated system database (oplog etc.) -
 # writes to it fail with "retryable writes is not supported for unreplicated
 # ns: local.models" once retryable writes are enforced. robotaxi.py's own

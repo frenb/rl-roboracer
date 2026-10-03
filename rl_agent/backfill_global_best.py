@@ -32,20 +32,18 @@ Usage (from the host)
 Add --dry-run to see what would change without writing.
 """
 import argparse
+import os
 import sys
 
 from pymongo import MongoClient
 
 
 def _open_db():
-    # Same connection params the trainer uses (see robotaxi.py top-of-
-    # file). When invoked inside the sim-controller container this
-    # resolves "mongo" via Docker's service alias.
+    # Same connection the trainer uses (see robotaxi.py top-of-file).
+    # When invoked inside the sim-controller container this resolves
+    # "mongo" via Docker's service alias.
     client = MongoClient(
-        "mongo",
-        username="root",
-        password="example",
-        authSource="admin",
+        os.environ.get("MONGO_URL", "mongodb://root:example@mongo:27017/"),
         serverSelectionTimeoutMS=10000)
     # Ping so we fail fast rather than hanging on the first query.
     client.admin.command("ping")

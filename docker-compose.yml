@@ -64,15 +64,20 @@ services:
     # Bitnami Mongo image" in README.md for the stock-mongo:6.0 path.
     image: bitnamilegacy/mongodb:6.0
     restart: always
+    # Credentials come from .env. The password is only applied when the
+    # data dir is first initialised; to change it on an existing install,
+    # run db.changeUserPassword in mongosh first (see README).
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: example
-      MONGODB_ROOT_PASSWORD: example
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-example}
+      MONGODB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-example}
       MONGODB_REPLICA_SET_MODE: primary
       MONGODB_ADVERTISED_HOSTNAME: mongo
-      MONGODB_REPLICA_SET_KEY: 64321d2b6ce8b4318b337bb1
+      MONGODB_REPLICA_SET_KEY: ${MONGO_REPLICA_SET_KEY:-64321d2b6ce8b4318b337bb1}
+    # Loopback only: containers reach it as mongo:27017 on the compose
+    # network; host tools (mongosh, Clone-Job.ps1) use localhost.
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - type: bind
         source: ../mongodb
@@ -85,11 +90,11 @@ services:
     image: mongo-express
     restart: always
     ports:
-      - "8081:8081"
+      - "127.0.0.1:8081:8081"
     environment:
       ME_CONFIG_MONGODB_ADMINUSERNAME: root
-      ME_CONFIG_MONGODB_ADMINPASSWORD: example
-      ME_CONFIG_MONGODB_URL: mongodb://root:example@mongo:27017/
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD:-example}
+      ME_CONFIG_MONGODB_URL: ${MONGO_URL:-mongodb://root:${MONGO_ROOT_PASSWORD:-example}@mongo:27017/}
 
   sim-controller:
     image: sim_controller:latest
@@ -103,6 +108,7 @@ services:
       - SAVED_MODELS_DIR=/saved_models
       - ROBOT_TYPE=robotaxi
       - DATABASE_NAME=robotaxi
+      - MONGO_URL=${MONGO_URL:-mongodb://root:${MONGO_ROOT_PASSWORD:-example}@mongo:27017/}
       # Silence the per-env-step `ACTION accel=... steer=...` trace from
       # rl_agent/environments/robotaxi_env.py. Each actor emits one
       # ACTION line per step, so under multi-env training this is
@@ -212,6 +218,7 @@ services:
       - "8082:8082"  # WebSocket server for real-time data updates
     environment:
       - DATABASE_NAME=robotaxi
+      - MONGODB_URL=${MONGO_URL:-mongodb://root:${MONGO_ROOT_PASSWORD:-example}@mongo:27017/}
       # Shared secret the dashboard uses to VERIFY the HMAC-signed
       # magic-link decision tokens minted by the madscientist
       # email_bridge. Must match the madscientist service's value.
@@ -328,7 +335,7 @@ services:
 
       # ---- Mongo -----------------------------------------------------
       # Same DSN the dashboard server uses (see dashboard/src/server.ts).
-      MONGO_URL: ${MONGO_URL:-mongodb://root:example@mongo:27017/}
+      MONGO_URL: ${MONGO_URL:-mongodb://root:${MONGO_ROOT_PASSWORD:-example}@mongo:27017/}
 
       # ---- LLM API keys (REQUIRED when MADSCIENTIST_ENABLED=true) ----
       # Both keys go on the host's environment (or .env file); compose
