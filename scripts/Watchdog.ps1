@@ -124,8 +124,12 @@ function Write-WdLog([string]$msg) {
 }
 
 function Invoke-Mongo([string]$evalJs) {
-    # -T disables TTY so output is clean; returns stdout lines.
-    docker compose exec -T mongo mongosh --quiet -u root -p example `
+    # -T disables TTY so output is clean; returns stdout lines. The password
+    # is the mongo container's own, so it follows MONGO_ROOT_PASSWORD in .env.
+    if (-not $script:MongoPw) {
+        $script:MongoPw = (docker compose exec -T mongo printenv MONGODB_ROOT_PASSWORD | Out-String).Trim()
+    }
+    docker compose exec -T mongo mongosh --quiet -u root -p $script:MongoPw `
         --authenticationDatabase admin robotaxi --eval $evalJs 2>$null
 }
 

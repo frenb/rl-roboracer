@@ -85,7 +85,8 @@ function Get-JobStatusJson {
     $tmpFile = Join-Path $RepoRoot "scripts\_monitor_query_tmp.js"
     [System.IO.File]::WriteAllText($tmpFile, $js, [System.Text.UTF8Encoding]::new($false))
     docker compose cp $tmpFile mongo:/tmp/_monitor_query_tmp.js *> $null
-    docker compose exec -T mongo mongosh -u root -p example --authenticationDatabase admin robotaxi --quiet /tmp/_monitor_query_tmp.js
+    $mongoPw = (docker compose exec -T mongo printenv MONGODB_ROOT_PASSWORD | Out-String).Trim()
+    docker compose exec -T mongo mongosh -u root -p $mongoPw --authenticationDatabase admin robotaxi --quiet /tmp/_monitor_query_tmp.js
     Remove-Item $tmpFile -ErrorAction SilentlyContinue
 }
 

@@ -65,15 +65,9 @@ def _parse_args():
         action="store_true",
         help="Print proposed changes without writing to Mongo.")
     p.add_argument(
-        "--mongo-host",
-        default=os.environ.get("MONGO_HOST", "mongo"),
-        help="Mongo host (default: 'mongo', matches the sim-controller container's DNS alias).")
-    p.add_argument(
-        "--mongo-user",
-        default=os.environ.get("MONGO_USER", "root"))
-    p.add_argument(
-        "--mongo-password",
-        default=os.environ.get("MONGO_PASSWORD", "example"))
+        "--mongo-url",
+        default=os.environ.get("MONGO_URL", "mongodb://root:example@mongo:27017/"),
+        help="Mongo connection string (default: $MONGO_URL, as the trainer uses).")
     p.add_argument(
         "--db-name",
         default=os.environ.get("DATABASE_NAME", "robotaxi"))
@@ -83,9 +77,7 @@ def _parse_args():
 def main():
     args = _parse_args()
 
-    client = MongoClient(args.mongo_host,
-                         username=args.mongo_user,
-                         password=args.mongo_password)
+    client = MongoClient(args.mongo_url)
     db = client[args.db_name]
 
     # Build a sorted list of TRAIN jobs with usable windows. We

@@ -219,6 +219,7 @@ services:
     environment:
       - DATABASE_NAME=robotaxi
       - MONGODB_URL=${MONGO_URL:-mongodb://root:${MONGO_ROOT_PASSWORD:-example}@mongo:27017/}
+      - MONGO_URL=${MONGO_URL:-mongodb://root:${MONGO_ROOT_PASSWORD:-example}@mongo:27017/}
       # Shared secret the dashboard uses to VERIFY the HMAC-signed
       # magic-link decision tokens minted by the madscientist
       # email_bridge. Must match the madscientist service's value.
