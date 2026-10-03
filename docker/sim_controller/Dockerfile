@@ -38,7 +38,9 @@ RUN ln -s /usr/bin/python3 /usr/bin/python
 RUN python -m pip install --upgrade pip
 RUN python -m pip install grpcio google-api-python-client
 RUN pip3 install tensorboard
-RUN pip3 install tensorboard-plugin-profile==2.18.0
+# 2.14 matches TensorBoard 2.14; 2.15+ need etils and 2.18+ use 3.10-only
+# syntax, so on this image's Python 3.8 the Profile plugin fails to load.
+RUN pip3 install tensorboard-plugin-profile==2.14.0
 RUN pip3 install pymongo
 RUN pip3 install numpy==1.23.1
 RUN pip3 install scipy
