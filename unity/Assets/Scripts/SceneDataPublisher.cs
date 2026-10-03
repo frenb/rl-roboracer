@@ -1,4 +1,4 @@
-using RosMessageTypes.NiryoMoveit;
+using RosMessageTypes.Roboracer;
 using UnityEngine;
 using ROSGeometry;
 using System.Collections;

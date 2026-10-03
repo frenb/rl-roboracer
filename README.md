@@ -1580,7 +1580,7 @@ reloads its scene after the first send would otherwise draw nothing forever.
 
 #### The ROS routing table (the thing that silently breaks new topics)
 
-`docker/ros_server/ROS/src/niryo_moveit/scripts/unity_node.py` starts the
+`docker/ros_server/ROS/src/roboracer/scripts/unity_node.py` starts the
 ROS-TCP endpoint with a dict deciding **which topics cross the ROS↔Unity bridge
 and in which direction**:
 

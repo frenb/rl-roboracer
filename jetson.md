@@ -474,7 +474,7 @@ Match the live Jetson feed, not a cinematic Unity cam. Values from `csi_camera.l
 | Property | JetRacer (OOTB) | Unity gym must do |
 |---|---|---|
 | Topic the rest of the stack should treat as “the car camera” | **`/csi_cam_0/image_raw`** | Sim: `camera/front` (see §3). Deploy: same Nano topic. |
-| ROS type on the car | `sensor_msgs/Image` | Same pixels; gym may wrap as `niryo_moveit/Camera` (one `sensor_msgs/Image frame`) because that is what ROS-TCP already knows |
+| ROS type on the car | `sensor_msgs/Image` | Same pixels; gym may wrap as `roboracer/Camera` (one `sensor_msgs/Image frame`) because that is what ROS-TCP already knows |
 | Size / rate | **640×480 @ ~20 Hz**, `gscam` + `nvarguscamerasrc`, `flip_method=0` | Render **640×480**. Do **not** stream 20 Hz over gRPC (see §3). Capture **one frame per env step** (same cadence as `car_scene_data`) |
 | Encoding | typically **`rgb8`** | Unity `ReadPixels` is RGBA. Strip alpha **in Unity**. Publish `encoding=rgb8`, `is_bigendian=0`, `step=width*3` |
 | `frame_id` | CSI / `camera_visual` | `camera_visual` (or `csi_cam_0`) so Foxglove/TF stories match |
@@ -529,10 +529,10 @@ Unity JetRacerCsiCamera
 **Register the topic.** `unity_node.py`’s table is **static**. Add:
 
 ```
-'camera/front': RosPublisher('camera/front', Camera),   # niryo_moveit/Camera
+'camera/front': RosPublisher('camera/front', Camera),   # roboracer/Camera
 ```
 
-(`niryo_moveit/Camera.msg` is `sensor_msgs/Image frame`. Reuse it so you do not invent a second image type. Do **not** expect `/csi_cam_0/image_raw` to exist inside `ros-server` — that name is Melodic/Jetson only.)
+(`roboracer/Camera.msg` is `sensor_msgs/Image frame`. Reuse it so you do not invent a second image type. Do **not** expect `/csi_cam_0/image_raw` to exist inside `ros-server` — that name is Melodic/Jetson only.)
 
 **`RobotApi` (`rl_agent/api.py`):**
 
@@ -557,7 +557,7 @@ Unity JetRacerCsiCamera
 
 **Bandwidth:** one 160×120×3 frame per env step is ~56 KB raw (~75 KB base64). Fine. Full 640×480 at 20 Hz through gRPC will stall actors. Compress (`jpeg` in `encoding` + `sensor_msgs/CompressedImage`) only if you must send full res; then decode in Python with OpenCV/`tf.io.decode_jpeg`.
 
-**Jetson side (deploy, later):** the car already has `/csi_cam_0/image_raw`. The policy node does **not** subscribe to `camera/front` or `niryo_moveit/Camera`. It subscribes to **`/csi_cam_0/image_raw`**, runs the **same** `image_to_obs()` as the gym (resize, RGB, `/255`, optional undistort), and feeds the CNN. `ros-server` / ROS-TCP never run on the Nano.
+**Jetson side (deploy, later):** the car already has `/csi_cam_0/image_raw`. The policy node does **not** subscribe to `camera/front` or `roboracer/Camera`. It subscribes to **`/csi_cam_0/image_raw`**, runs the **same** `image_to_obs()` as the gym (resize, RGB, `/255`, optional undistort), and feeds the CNN. `ros-server` / ROS-TCP never run on the Nano.
 
 ### 4. Feed and process so the model can consume it
 
@@ -621,7 +621,7 @@ Call it:
 - Do not pipe the top-down view into the driving policy (wrong viewpoint).
 - Do not publish 640×480×20 Hz through `virtual_endpoint`.
 - Do not add pixels to `CarSceneData` / `Sphere.msg` (breaks every existing parser).
-- Do not assume `/csi_cam_0/image_raw` exists in the Docker gym, or `niryo_moveit/Camera` exists on Melodic.
+- Do not assume `/csi_cam_0/image_raw` exists in the Docker gym, or `roboracer/Camera` exists on Melodic.
 - Do not run a vision policy on `/cmd_vel` while `explore_foxglove` or `joy` is also publishing.
 
 ## Devices

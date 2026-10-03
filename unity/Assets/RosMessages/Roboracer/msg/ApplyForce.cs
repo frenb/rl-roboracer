@@ -5,11 +5,11 @@ using System.Collections.Generic;
 using System.Text;
 using RosMessageGeneration;
 
-namespace RosMessageTypes.NiryoMoveit
+namespace RosMessageTypes.Roboracer
 {
     public class ApplyForce : Message
     {
-        public const string RosMessageName = "niryo_moveit/ApplyForce";
+        public const string RosMessageName = "roboracer/ApplyForce";
 
         public double acceleration;
         public double steering_angle;
@@ -18,7 +18,7 @@ namespace RosMessageTypes.NiryoMoveit
         // Procedural-track curriculum knobs (see TrackGenerator). Appended
         // AFTER num_obstacles so the binary layout extends the existing
         // message without shifting prior field offsets. MUST stay in the same
-        // order as niryo_moveit/ApplyForce.msg.
+        // order as roboracer/ApplyForce.msg.
         public double corner_radius;
         public double curvature_difficulty;
         // Per-edge chicane counts (2026-07-18): replaces curvature_difficulty

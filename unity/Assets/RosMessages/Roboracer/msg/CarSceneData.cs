@@ -5,11 +5,11 @@ using System.Collections.Generic;
 using System.Text;
 using RosMessageGeneration;
 
-namespace RosMessageTypes.NiryoMoveit
+namespace RosMessageTypes.Roboracer
 {
     public class CarSceneData : Message
     {
-        public const string RosMessageName = "niryo_moveit/CarSceneData";
+        public const string RosMessageName = "roboracer/CarSceneData";
 
         public Sphere car;
         public int last_executed_cmd_id;

@@ -10,7 +10,7 @@ which take precedence for those files.
 |---|---|---|---|
 | ROS-TCP-Endpoint | `docker/ros_server/ROS/src/ros_tcp_endpoint` | Apache 2.0 | [Unity-Technologies/ROS-TCP-Endpoint](https://github.com/Unity-Technologies/ROS-TCP-Endpoint) |
 | ROS-TCP-Connector 0.1.2-preview | `unity/Packages/com.unity.robotics.ros-tcp-connector` | Apache 2.0 | [Unity-Technologies/ROS-TCP-Connector](https://github.com/Unity-Technologies/ROS-TCP-Connector) |
-| `niryo_moveit` (message and node scaffolding) | `docker/ros_server/ROS/src/niryo_moveit` | Apache 2.0 | [Unity-Technologies/Unity-Robotics-Hub](https://github.com/Unity-Technologies/Unity-Robotics-Hub) pick-and-place tutorial |
+| `roboracer` package (message and node scaffolding, originally `niryo_moveit`) | `docker/ros_server/ROS/src/roboracer` | Apache 2.0 | [Unity-Technologies/Unity-Robotics-Hub](https://github.com/Unity-Technologies/Unity-Robotics-Hub) pick-and-place tutorial |
 | rospy_message_converter | `docker/ros_server/ROS/src/rospy_message_converter` | BSD | [uos/rospy_message_converter](https://github.com/uos/rospy_message_converter) |
 
 The C# message classes under `unity/Assets/RosMessages` are generated from the

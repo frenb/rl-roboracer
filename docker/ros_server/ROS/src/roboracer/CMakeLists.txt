@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.0.2)
-project(niryo_moveit)
+project(roboracer)
 
 find_package(catkin REQUIRED COMPONENTS
   rospy
@@ -43,7 +43,7 @@ install(DIRECTORY config DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
 #############
 
 ## Add gtest based cpp test target and link libraries
-# catkin_add_gtest(${PROJECT_NAME}-test test/test_niryo_moveit.cpp)
+# catkin_add_gtest(${PROJECT_NAME}-test test/test_roboracer.cpp)
 # if(TARGET ${PROJECT_NAME}-test)
 #   target_link_libraries(${PROJECT_NAME}-test ${PROJECT_NAME})
 # endif()

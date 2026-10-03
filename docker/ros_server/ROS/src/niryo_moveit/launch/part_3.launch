@@ -1,5 +1,0 @@
-<launch>
-    <rosparam file="$(find niryo_moveit)/config/params.yaml" command="load"/>
-    <node name="unity_node" pkg="niryo_moveit" type="unity_node.py" args="--wait" output="screen" respawn="true" />
-    <node name="remote_node" pkg="niryo_moveit" type="remote_node.py" args="--wait" output="screen"/>
-</launch>

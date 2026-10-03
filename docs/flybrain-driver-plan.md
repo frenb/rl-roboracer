@@ -607,7 +607,7 @@ comfortably under a few MB.
 **Do this.** Add two topics: `fly_brain_geometry` (the step 7 file, published
 once when Unity connects) and `fly_brain_activity` (per-neuron intensity as
 base64 `uint8`, at 20 Hz). **Both must be added to the static routing table in
-`docker/ros_server/ROS/src/niryo_moveit/scripts/unity_node.py` as
+`docker/ros_server/ROS/src/roboracer/scripts/unity_node.py` as
 `RosSubscriber` entries** or Unity will never receive them.
 
 **Why it matters.** That routing table is static — the embedded ROS-TCP

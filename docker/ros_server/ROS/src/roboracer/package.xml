@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>niryo_moveit</name>
+  <name>roboracer</name>
   <version>0.0.0</version>
-  <description>The niryo_moveit package</description>
+  <description>The roboracer package</description>
 
 
   <maintainer email="unity-robotics@unity3d.com">Unity Robotics</maintainer>

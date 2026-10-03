@@ -12,7 +12,7 @@ from virtual_endpoint.proto import ros_service_pb2
 
 # CSI publish size (Unity CsiFramePublisher). Used for the zeros fallback
 # when a step's frame is missing so Phase 4 image_to_obs still sees a
-# well-formed niryo_moveit/Camera dict.
+# well-formed roboracer/Camera dict.
 FRONT_CAMERA_HEIGHT = 84
 FRONT_CAMERA_WIDTH = 84
 FRONT_CAMERA_ENCODING = 'rgb8'
@@ -27,7 +27,7 @@ RESET_WAIT_S = 20.0
 
 
 def _front_camera_cmd_id(frame):
-    """Read Unity's cmd_id from niryo_moveit/Camera JSON (header.seq)."""
+    """Read Unity's cmd_id from roboracer/Camera JSON (header.seq)."""
     try:
         return int(frame['frame']['header']['seq'])
     except (KeyError, TypeError, ValueError):
@@ -200,9 +200,9 @@ class RobotApi:
 
     async def Initialize(self):
         # Set up subscribers
-        self.loop.create_task(self.rpc_client.Subscribe('car_scene_data', 'niryo_moveit/CarSceneData', self._on_car_scene_data))
-        self.loop.create_task(self.rpc_client.Subscribe('sim_status', 'niryo_moveit/SimStatus', self._on_sim_status))
-        self.loop.create_task(self.rpc_client.Subscribe('camera/front', 'niryo_moveit/Camera', self._on_front_camera_frame))
+        self.loop.create_task(self.rpc_client.Subscribe('car_scene_data', 'roboracer/CarSceneData', self._on_car_scene_data))
+        self.loop.create_task(self.rpc_client.Subscribe('sim_status', 'roboracer/SimStatus', self._on_sim_status))
+        self.loop.create_task(self.rpc_client.Subscribe('camera/front', 'roboracer/Camera', self._on_front_camera_frame))
 
     def _on_sim_status(self, sim_status):
         #print("sim_status: " + str(sim_status))
@@ -249,7 +249,7 @@ class RobotApi:
             self.front_camera_frames.popitem(last=False)
 
     def _on_front_camera_frame(self, frame):
-        # gRPC JSON is niryo_moveit/Camera: {frame: sensor_msgs/Image}.
+        # gRPC JSON is roboracer/Camera: {frame: sensor_msgs/Image}.
         # Unity stamps header.seq = cmd_id. Store by that id so
         # GetFrontCameraFrame can return a frame that arrived before
         # the waiter registered (CSI is published after car_scene_data).
@@ -293,7 +293,7 @@ class RobotApi:
         # by the time the next RPC fires costs us one warning line.
         try:
             await self.rpc_client.Publish(
-                'sim_command', 'niryo_moveit/SimCommand', command)
+                'sim_command', 'roboracer/SimCommand', command)
         except aio.AioRpcError as e:
             self.publish_timeouts += 1
             if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:

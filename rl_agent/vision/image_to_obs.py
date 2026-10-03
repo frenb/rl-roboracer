@@ -41,7 +41,7 @@ def image_to_obs(msg_or_uint8, encoding=None, src_hw=None, dst_hw=DST_HW,
                  undistort=False, K=None, D=None):
     """float32 [H, W, 3] in [0, 1], RGB.
 
-    msg_or_uint8: niryo_moveit/Camera dict, sensor_msgs/Image dict,
+    msg_or_uint8: roboracer/Camera dict, sensor_msgs/Image dict,
     packed uint8 bytes, or uint8 ndarray [H, W, C].
     encoding: rgb8 (gym), rgba8 (overhead leftover), or bgr8 (some
     gscam feeds). Inferred from a dict message when omitted.

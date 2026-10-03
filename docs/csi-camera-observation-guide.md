@@ -51,8 +51,8 @@ as `car_scene_data`. The Jetson already publishes `/csi_cam_0/image_raw`
 
 | Item | Choice |
 |---|---|
-| Sim topic | **`camera/front`**, type `niryo_moveit/Camera` (`sensor_msgs/Image frame`). |
-| Jetson topic | **`/csi_cam_0/image_raw`**, type `sensor_msgs/Image`. Nano never speaks `niryo_moveit`. |
+| Sim topic | **`camera/front`**, type `roboracer/Camera` (`sensor_msgs/Image frame`). |
+| Jetson topic | **`/csi_cam_0/image_raw`**, type `sensor_msgs/Image`. Nano never speaks `roboracer`. |
 | When to capture | **Once per env step**, same `cmd_id` as `car_scene_data`. Not 20 Hz. |
 | Net size | **84×84×3** float32 in `[0, 1]` to start (or 160×120). Render 640×480 in Unity; downsample **before** gRPC. |
 | Distortion | Leave Unity pinhole. **`cv2.undistort` on the Nano** with `config/camera_calibration/cam_640x480.yaml` so both sides look pinhole. |
@@ -73,7 +73,7 @@ Unity JetRacerCsiCamera  (640×480 RT)
     --> tf-agents TimeStep
 ```
 
-gRPC JSON (`niryo_moveit/Camera`):
+gRPC JSON (`roboracer/Camera`):
 
 ```json
 {
@@ -114,7 +114,7 @@ What landed:
 1. **`CsiFramePublisher`** auto-added from `SimController.Start()`. Does
    not revive the overhead `CameraPublisher`.
 2. After `WaitForEndOfFrame`, dedicated 640×480 RT → `Graphics.Blit` to
-   **84×84** → `rgb8` `niryo_moveit/Camera`:
+   **84×84** → `rgb8` `roboracer/Camera`:
    - `header.frame_id = camera_visual`
    - `header.seq = cmd_id`
    - `step = 252`
@@ -163,7 +163,7 @@ only when you want the standalone gym to do this.
 **Status: implemented.** `unity_node.py` now has:
 
 ```python
-'camera/front': RosPublisher('camera/front', Camera),  # niryo_moveit/Camera
+'camera/front': RosPublisher('camera/front', Camera),  # roboracer/Camera
 ```
 
 The table is **static** and baked into the image. After editing, copy
@@ -212,7 +212,7 @@ Phase 5 (`donut_camera`) is the first consumer.
 What landed:
 
 1. `Initialize()` also
-   `Subscribe('camera/front', 'niryo_moveit/Camera', _on_front_camera_frame)`.
+   `Subscribe('camera/front', 'roboracer/Camera', _on_front_camera_frame)`.
 2. `latest_front_camera_frame` + `front_camera_frames[cmd_id]` (last 16)
    + `front_camera_events[cmd_id]` (mirror `scene_data_events`).
    `header.seq` is the `cmd_id`.
@@ -276,7 +276,7 @@ the image only after `pip install` (running container) or a
 **Jetson:** Melodic stock nodes are **Python 2**. Do not import
 `rl_agent` on the Nano. Copy `image_to_obs.py` into a **Py3** sidecar
 (or TFLite runtime) that subscribes to `/csi_cam_0/image_raw`. The car
-typically already has `cv2`. `niryo_moveit` msgs are **not** installed
+typically already has `cv2`. `roboracer` msgs are **not** installed
 there.
 
 ### How to assess Phase 4
@@ -454,7 +454,7 @@ for the vector half of that adapter.
 - Stream 640×480 @ 20 Hz through `virtual_endpoint`.
 - Put pixels on `CarSceneData` / `Sphere.msg`.
 - Flatten the image into the 31-D MLP.
-- Assume `/csi_cam_0/image_raw` exists in Docker, or `niryo_moveit/Camera`
+- Assume `/csi_cam_0/image_raw` exists in Docker, or `roboracer/Camera`
   exists on Melodic.
 - Load a `donut` / `donut_no_hint` checkpoint into a `donut_camera` env
   (or the reverse).

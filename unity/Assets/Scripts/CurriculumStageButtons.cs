@@ -2,7 +2,7 @@ using UnityEngine;
 // Active Input Handling is "Input System Package (New)" only, matching
 // HudOverlay's toggle-key pattern.
 using UnityEngine.InputSystem;
-using RosMessageTypes.NiryoMoveit;
+using RosMessageTypes.Roboracer;
 
 /// <summary>
 /// Manual curriculum-stage picker: draws one button per curriculum stage so

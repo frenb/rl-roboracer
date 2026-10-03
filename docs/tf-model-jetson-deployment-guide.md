@@ -6,7 +6,7 @@ Putting Unity CSI frames on the training loop (`camera/front`,
 `donut_camera`) is a separate plan:
 [`csi-camera-observation-guide.md`](csi-camera-observation-guide.md).
 
-The two stacks were never designed as one system. Training already has a ROS graph, but it is a **custom gym graph** inside the `ros-server` Docker container (`niryo_moveit` messages, ROS-TCP to Unity, gRPC to the trainer). The car speaks **standard Jetson topics** (`/scan`, `/odom_raw`, `/cmd_vel`) on ROS Melodic. Those graphs do not share message types. Deployment is a **new adapter** that rebuilds the 31-D observation from Jetson sensors and writes Twist — it does **not** reuse `car_scene_data` / `sim_command` on the Nano.
+The two stacks were never designed as one system. Training already has a ROS graph, but it is a **custom gym graph** inside the `ros-server` Docker container (`roboracer` messages, ROS-TCP to Unity, gRPC to the trainer). The car speaks **standard Jetson topics** (`/scan`, `/odom_raw`, `/cmd_vel`) on ROS Melodic. Those graphs do not share message types. Deployment is a **new adapter** that rebuilds the 31-D observation from Jetson sensors and writes Twist — it does **not** reuse `car_scene_data` / `sim_command` on the Nano.
 
 ---
 
@@ -16,8 +16,8 @@ The two stacks were never designed as one system. Training already has a ROS gra
 |---|---|---|
 | OS / ROS | `ros-server` = **ROS Noetic** (Python 3) in Docker; trainer is a separate Py3 GPU container | Ubuntu 18.04, **ROS Melodic**, **Python 2** for stock nodes |
 | Policy format | `tf.saved_model` from `PolicySaver(GreedyPolicy)`, loaded **inside `sim-controller`**, never as a ROS node | Nothing loads SavedModels today |
-| Perception on the wire | Unity publishes `niryo_moveit/CarSceneData` on `car_scene_data` | RPLiDAR **`/scan`**, wheel **`/odom_raw`**, IMU **`/imu`** |
-| Command on the wire | Trainer publishes `niryo_moveit/SimCommand` on `sim_command` | **`geometry_msgs/Twist`** on **`/cmd_vel`**: `linear.x` m/s, `angular.z` steer angle (TEB uses `cmd_angle_instead_rotvel`) |
+| Perception on the wire | Unity publishes `roboracer/CarSceneData` on `car_scene_data` | RPLiDAR **`/scan`**, wheel **`/odom_raw`**, IMU **`/imu`** |
+| Command on the wire | Trainer publishes `roboracer/SimCommand` on `sim_command` | **`geometry_msgs/Twist`** on **`/cmd_vel`**: `linear.x` m/s, `angular.z` steer angle (TEB uses `cmd_angle_instead_rotvel`) |
 | Time | One **blocking** env step per action (`DoApplyForce` waits on `cmd_id`) | Async 10–20 Hz sensors, 20–50 Hz cmd loop |
 | Localization | Unity world pose (not in the policy obs for `donut_no_hint`) | `odom` TF, optional gmapping `/map` |
 | Safety | Unity crash + stuck detector | `lidar_estop`, `invert_linear`, joy/explore fighting `/cmd_vel` |
@@ -48,7 +48,7 @@ This is how data moves **today**. The Jetson node must **replace** this plane, n
   +---------------------+                +--------------------------------------+
   |  Unity gym          |  ROS-TCP       |  ros-server                          |
   |  CarController      |  :10000        |  image: docker_ros-server:thin       |
-  |  SceneDataPublisher |<-------------->|  ROS Noetic + niryo_moveit           |
+  |  SceneDataPublisher |<-------------->|  ROS Noetic + roboracer           |
   |  TrajectoryRolloutViz                |  unity_node.py  (TcpServer)          |
   +---------------------+                |  virtual_endpoint gRPC :50051        |
                                          +----------------^---------------------+
@@ -70,9 +70,9 @@ This is how data moves **today**. The Jetson node must **replace** this plane, n
 
 The trainer **never opens a ROS socket**. Default gRPC target is `ros-server:50051` (Compose alias `ros-server-0`). Scaled actors use `ros-server-N:50051`.
 
-`ros-server` also bind-mounts `./rl_agent` → `/python_ws/src` and `../saved_models` → `/saved_models`. The SavedModel files sit on disk for the trainer; **`ros-server` does not load them**. `start.sh` runs `roslaunch niryo_moveit part_3.launch`. Env: `UNITY_MACHINE_IP=host.docker.internal`, `ROBOT_TYPE=robotaxi`.
+`ros-server` also bind-mounts `./rl_agent` → `/python_ws/src` and `../saved_models` → `/saved_models`. The SavedModel files sit on disk for the trainer; **`ros-server` does not load them**. `start.sh` runs `roslaunch roboracer roboracer.launch`. Env: `UNITY_MACHINE_IP=host.docker.internal`, `ROBOT_TYPE=robotaxi`.
 
-**ROS versions do not match the car.** Sim ROS is **Noetic** in Docker. The Jetson is **Melodic**. You cannot `rostopic` the gym graph onto the Nano, and the `niryo_moveit` `.msg` package is **not installed** on the Jetson.
+**ROS versions do not match the car.** Sim ROS is **Noetic** in Docker. The Jetson is **Melodic**. You cannot `rostopic` the gym graph onto the Nano, and the `roboracer` `.msg` package is **not installed** on the Jetson.
 
 ### 2.2 ROS-TCP routing table (`unity_node.py`)
 
@@ -82,28 +82,28 @@ The table is **static**. A topic that is not listed never reaches Unity, even if
 
 | Topic | Type | Role in robotaxi training |
 |---|---|---|
-| `car_scene_data` | `niryo_moveit/CarSceneData` | **The observation.** One message per physics tick after a command. |
-| `sim_status` | `niryo_moveit/SimStatus` | Handshake: reset done / force applied. |
-| `camera/front` | `niryo_moveit/Camera` | On-car CSI frame, one per `cmd_id`. **Not** in the 31-D policy. |
+| `car_scene_data` | `roboracer/CarSceneData` | **The observation.** One message per physics tick after a command. |
+| `sim_status` | `roboracer/SimStatus` | Handshake: reset done / force applied. |
+| `camera/front` | `roboracer/Camera` | On-car CSI frame, one per `cmd_id`. **Not** in the 31-D policy. |
 
 **ROS → Unity** (`RosSubscriber` — trainer writes, Unity reads):
 
 | Topic | Type | Role |
 |---|---|---|
-| `sim_command` | `niryo_moveit/SimCommand` | **The action / reset.** `cmd=0` restart track, `cmd=1` apply force. |
+| `sim_command` | `roboracer/SimCommand` | **The action / reset.** `cmd=0` restart track, `cmd=1` apply force. |
 | `policy_rollouts` | `std_msgs/String` | JSON viz for `TrajectoryRolloutViz`. Not on the learning loop. |
 
 There is **no** `/scan`, `/cmd_vel`, `/odom`, or `sensor_msgs/*` on this graph.
 
-### 2.3 Message schemas (gym package `niryo_moveit`)
+### 2.3 Message schemas (gym package `roboracer`)
 
-Definitions live in `docker/ros_server/ROS/src/niryo_moveit/msg/`. gRPC carries the same fields as JSON objects.
+Definitions live in `docker/ros_server/ROS/src/roboracer/msg/`. gRPC carries the same fields as JSON objects.
 
 **`SimCommand.msg`** (trainer → Unity):
 
 ```
 int32 cmd                         # 0 = reset / restart, 1 = apply force
-niryo_moveit/ApplyForce ApplyForce
+roboracer/ApplyForce ApplyForce
 ```
 
 **`ApplyForce.msg`:**
@@ -130,7 +130,7 @@ int32   chicanes_west
 **`CarSceneData.msg`:**
 
 ```
-niryo_moveit/Sphere car
+roboracer/Sphere car
 int32 last_executed_cmd_id        # correlates this obs to the ApplyForce that produced it
 ```
 
@@ -164,7 +164,7 @@ EVAL uses the **same** ROS loop as collect. The model never talks to Unity.
 ```
 1. Policy (in sim-controller) emits [accel, steer]
 2. RobotApi.DoApplyForceBlocking
-      → gRPC Publish  topic=sim_command  type=niryo_moveit/SimCommand
+      → gRPC Publish  topic=sim_command  type=roboracer/SimCommand
 3. virtual_endpoint converts JSON → ROS msg, publishes on the Noetic graph
 4. unity_node ROS-TCP forwards SimCommand to Unity
 5. Unity CarController.ApplyForce(accel, steer)
@@ -183,8 +183,8 @@ Reset is the same path with `cmd=0` and a wait on `sim_status == 1`.
 
 | Sim gym (today) | Jetson OOTB (`jetson.md`) |
 |---|---|
-| `car_scene_data` (`niryo_moveit/CarSceneData`) | **does not exist** |
-| `sim_command` (`niryo_moveit/SimCommand`) | **does not exist** |
+| `car_scene_data` (`roboracer/CarSceneData`) | **does not exist** |
+| `sim_command` (`roboracer/SimCommand`) | **does not exist** |
 | `sim_status` | **does not exist** |
 | — | `/scan` (`sensor_msgs/LaserScan`, `frame_id=laser_frame`) |
 | — | `/odom_raw` (`nav_msgs/Odometry`) — **use this for velocity** |
@@ -204,7 +204,7 @@ A Jetson policy node **replaces** steps 2–10:
 
 Do **not**:
 
-- Install `niryo_moveit` msgs on the Nano or publish `CarSceneData`.
+- Install `roboracer` msgs on the Nano or publish `CarSceneData`.
 - Point `RobotApi` at the Jetson (`ros-server:50051` is the gym only).
 - Run the `ros-server` container on the Nano as the car’s ROS master.
 - Expect Unity `cmd_id` handshake. The real loop is async; you pick a rate (start 10 Hz).
@@ -484,8 +484,8 @@ The gym will still go Unity → ROS-TCP → `ros-server` → gRPC → trainer. T
 |---|---|
 | Compose: `ros-server` + `sim-controller` | `docker-compose.yml` (ports 10000, 50051; mounts `/saved_models`) |
 | `ros-server` image / entry | `docker/ros_server/Dockerfile` (Noetic), `docker/ros_server/ROS/src/start.sh` |
-| ROS-TCP topic table | `docker/ros_server/ROS/src/niryo_moveit/scripts/unity_node.py` |
-| Gym msg schemas | `docker/ros_server/ROS/src/niryo_moveit/msg/` (`CarSceneData`, `Sphere`, `SimCommand`, `ApplyForce`, `SimStatus`) |
+| ROS-TCP topic table | `docker/ros_server/ROS/src/roboracer/scripts/unity_node.py` |
+| Gym msg schemas | `docker/ros_server/ROS/src/roboracer/msg/` (`CarSceneData`, `Sphere`, `SimCommand`, `ApplyForce`, `SimStatus`) |
 | gRPC JSON bridge | `protos/virtual_endpoint/proto/ros_service.proto`; server inside the `ros-server` image |
 | Trainer ↔ ROS | `rl_agent/api.py` (`RobotApi`, `DoApplyForce`, `DoReset`, Subscribe/Publish) |
 | Trainer, SavedModel save/load | `rl_agent/robotaxi.py` (`PolicySaver`, `load_saved_model`, `run_policy`) |
@@ -506,5 +506,5 @@ The gym will still go Unity → ROS-TCP → `ros-server` → gRPC → trainer. T
 - Sharing `/cmd_vel` with `explore_lite` or the joystick.
 - Assuming `/odom_combined` is `nav_msgs/Odometry` (it is not).
 - Deploying a `donut` 32-D model by “padding” a fake goal angle.
-- Porting `niryo_moveit` msgs, ROS-TCP, or `RobotApi` gRPC onto the Jetson.
+- Porting `roboracer` msgs, ROS-TCP, or `RobotApi` gRPC onto the Jetson.
 - Running `docker_ros-server:thin` as the car’s ROS master.

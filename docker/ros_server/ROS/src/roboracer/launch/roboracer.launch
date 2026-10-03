@@ -1,0 +1,5 @@
+<launch>
+    <rosparam file="$(find roboracer)/config/params.yaml" command="load"/>
+    <node name="unity_node" pkg="roboracer" type="unity_node.py" args="--wait" output="screen" respawn="true" />
+    <node name="remote_node" pkg="roboracer" type="remote_node.py" args="--wait" output="screen"/>
+</launch>

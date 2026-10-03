@@ -1,4 +1,4 @@
-using RosMessageTypes.NiryoMoveit;
+using RosMessageTypes.Roboracer;
 using UnityEngine;
 
 public class SimController : MonoBehaviour
@@ -114,7 +114,7 @@ public class SimController : MonoBehaviour
     /// </summary>
     private void AttachOverheadFit()
     {
-        // Fully qualified: RosMessageTypes.NiryoMoveit is in scope here and
+        // Fully qualified: RosMessageTypes.Roboracer is in scope here and
         // has its own Camera message type (CsiFramePublisher publishes one).
         var go = GameObject.Find("Main Camera");
         if (go == null || go.GetComponent<UnityEngine.Camera>() == null)

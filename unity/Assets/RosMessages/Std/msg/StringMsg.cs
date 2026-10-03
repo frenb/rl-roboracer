@@ -7,12 +7,12 @@ using RosMessageGeneration;
 
 namespace RosMessageTypes.Std
 {
-    // std_msgs/String. Hand-added (the project only generated niryo_moveit
+    // std_msgs/String. Hand-added (the project only generated roboracer
     // types) so the trainer's policy_rollouts topic - a JSON payload shipped
     // as a std_msgs/String - can be subscribed to by TrajectoryRolloutViz.
     // Wire layout matches the standard length-prefixed UTF8 string the base
     // Message.SerializeString / DeserializeString helpers produce (same as
-    // the string fields in niryo_moveit/Sphere).
+    // the string fields in roboracer/Sphere).
     public class StringMsg : Message
     {
         public const string RosMessageName = "std_msgs/String";

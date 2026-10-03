@@ -5,11 +5,11 @@ using System.Collections.Generic;
 using System.Text;
 using RosMessageGeneration;
 
-namespace RosMessageTypes.NiryoMoveit
+namespace RosMessageTypes.Roboracer
 {
     public class Sphere : Message
     {
-        public const string RosMessageName = "niryo_moveit/Sphere";
+        public const string RosMessageName = "roboracer/Sphere";
 
         public double speed;
         public double location_x;

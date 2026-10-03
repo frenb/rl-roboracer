@@ -5,11 +5,11 @@ using System.Collections.Generic;
 using System.Text;
 using RosMessageGeneration;
 
-namespace RosMessageTypes.NiryoMoveit
+namespace RosMessageTypes.Roboracer
 {
     public class SimCommand : Message
     {
-        public const string RosMessageName = "niryo_moveit/SimCommand";
+        public const string RosMessageName = "roboracer/SimCommand";
 
         public int cmd;
         public ApplyForce ApplyForce;

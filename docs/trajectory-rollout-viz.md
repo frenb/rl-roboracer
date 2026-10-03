@@ -13,7 +13,7 @@ and how much spread/uncertainty there is in its action choices.
 
 End-to-end pipeline as actually shipped. Key files: `rl_agent/rollout_viz.py`,
 `unity/Assets/Scripts/TrajectoryRolloutViz.cs`,
-`docker/ros_server/ROS/src/niryo_moveit/scripts/unity_node.py`.
+`docker/ros_server/ROS/src/roboracer/scripts/unity_node.py`.
 
 ### Sampling — background thread, not in-loop (diverges from §5)
 

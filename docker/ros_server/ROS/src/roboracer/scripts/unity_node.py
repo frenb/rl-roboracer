@@ -3,7 +3,7 @@
 import rospy
 
 from ros_tcp_endpoint import TcpServer, RosPublisher, RosSubscriber, RosService, UnityService
-from niryo_moveit.msg import CarSceneData, SimCommand, SimStatus, Camera
+from roboracer.msg import CarSceneData, SimCommand, SimStatus, Camera
 from std_msgs.msg import String
 
 

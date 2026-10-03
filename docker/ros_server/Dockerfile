@@ -28,7 +28,7 @@ ENV ROS_WORKSPACE=/catkin_ws
 ENV PYTHON_WORKSPACE=/python_ws
 
 # Copy each directory explicitly to avoid workspace cruft
-COPY ./ROS/src/niryo_moveit $ROS_WORKSPACE/src/niryo_moveit
+COPY ./ROS/src/roboracer $ROS_WORKSPACE/src/roboracer
 COPY ./ROS/src/ros_tcp_endpoint $ROS_WORKSPACE/src/ros_tcp_endpoint
 COPY ./ROS/src/virtual_endpoint $ROS_WORKSPACE/src/virtual_endpoint
 COPY ./ROS/src/rospy_message_converter $ROS_WORKSPACE/src/rospy_message_converter

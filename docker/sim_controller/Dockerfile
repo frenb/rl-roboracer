@@ -57,8 +57,10 @@ ENV PYTHON_WORKSPACE=/python_ws
 ENV ROS_WORKSPACE=/catkin_ws
 
 COPY ./docker/ros_server/python_ws $PYTHON_WORKSPACE
+# Before the ROS sources so editing them doesn't re-download TensorFlow.
+RUN /bin/bash -c "cd /python_ws && pip install --default-timeout=120 --retries 10 -r requirements.txt"
 
-COPY ./docker/ros_server/ROS/src/niryo_moveit             $ROS_WORKSPACE/src/niryo_moveit
+COPY ./docker/ros_server/ROS/src/roboracer             $ROS_WORKSPACE/src/roboracer
 COPY ./docker/ros_server/ROS/src/ros_tcp_endpoint         $ROS_WORKSPACE/src/ros_tcp_endpoint
 COPY ./docker/ros_server/ROS/src/virtual_endpoint         $ROS_WORKSPACE/src/virtual_endpoint
 COPY ./docker/ros_server/ROS/src/rospy_message_converter  $ROS_WORKSPACE/src/rospy_message_converter
@@ -73,7 +75,6 @@ COPY ./docker/ros_server/tutorial /
 
 RUN /bin/bash -c "find $ROS_WORKSPACE -type f -print0 | xargs -0 dos2unix"
 RUN dos2unix /tutorial && dos2unix /setup.sh && chmod +x /setup.sh && /setup.sh && rm /setup.sh
-RUN /bin/bash -c "cd /python_ws && pip install -r requirements.txt"
 
 # Focal ships pyOpenSSL 19.0.0 as an apt package under
 # /usr/lib/python3/dist-packages. Every pip install above lands in

@@ -163,7 +163,7 @@ public class CsiFramePublisher : MonoBehaviour
             step = (uint)(PubWidth * 3),
             data = rgb
         };
-        var msg = new RosMessageTypes.NiryoMoveit.Camera(img);
+        var msg = new RosMessageTypes.Roboracer.Camera(img);
 
         if (_ros != null)
             _ros.Send(Topic, msg);

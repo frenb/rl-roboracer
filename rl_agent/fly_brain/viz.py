@@ -6,7 +6,7 @@ Step 8 of docs/flybrain-driver-plan.md. Two topics, deliberately split:
   fly_brain_activity  per-neuron intensity as uint8, ~2 KB a frame
 
 Both must also appear as ``RosSubscriber`` entries in
-``docker/ros_server/ROS/src/niryo_moveit/scripts/unity_node.py``. That routing
+``docker/ros_server/ROS/src/roboracer/scripts/unity_node.py``. That routing
 table is static -- the embedded ROS-TCP connector never registers subscribers
 dynamically -- so an unlisted topic publishes fine here and silently never
 arrives in Unity.
