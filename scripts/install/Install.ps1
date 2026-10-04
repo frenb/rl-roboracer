@@ -372,10 +372,11 @@ function Stop-UnityClients {
 
 $FailureCatalog = @(
     @{ Id = 'download-truncated'; Phases = @('build'); Fix = 'retry'
-       Pattern = 'DO NOT MATCH THE HASHES'
-       Diagnosis = 'A download was cut short. Docker Desktop''s network intermittently truncates large downloads.'
+       Pattern = 'DO NOT MATCH THE HASHES|BadZipFile: Bad CRC-32'
+       Diagnosis = 'A download was cut short or corrupted. Docker Desktop''s network intermittently truncates large downloads.'
        Advice = 'Retrying; finished build steps are cached, so the retry resumes where it failed.'
-       Samples = @('#20 5.798 ERROR: THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE. If you have updated the package versions, please update the hashes.') }
+       Samples = @('#20 5.798 ERROR: THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE. If you have updated the package versions, please update the hashes.',
+                   "#26 2.736 zipfile.BadZipFile: Bad CRC-32 for file 'numpy/core/tests/data/umath-validation-set-log1p.csv'") }
 
     @{ Id = 'docker-vm-crash'; Phases = @('build'); Fix = 'restart-docker'
        Pattern = 'failed to receive status: rpc error|error reading from server: EOF|session healthcheck failed|desc = connection error'
@@ -1265,6 +1266,20 @@ function Get-SeedJson {
     (Get-Content $path -Raw).Replace('{{UNITY_BINARY_DIR}}', $UnityBinaryDir.Replace('\', '\\'))
 }
 
+# On an empty data folder Mongo runs its first-time setup and then restarts,
+# so one successful ping is not enough; require three in a row.
+function Wait-MongoReady([int]$TimeoutSec = 240) {
+    $streak = 0
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $r = Invoke-Mongo 'print(db.runCommand({ping: 1}).ok)'
+        if ($r.Code -eq 0 -and $r.Out -match '(?m)^1\s*$') { $streak++ } else { $streak = 0 }
+        if ($streak -ge 3) { return $true }
+        Start-Sleep -Seconds 5
+    }
+    $false
+}
+
 function Invoke-SeedPhase {
     Invoke-Phase 'seed' 'Starter gyms, reward design and experiment designs' -Detect {
         if (-not (Test-Path $RepoDir)) { return $null }
@@ -1281,6 +1296,10 @@ function Invoke-SeedPhase {
         $have = ($r.Out -split "`n" | Where-Object { $_ -match '^\s*\d+\s*$' } | Select-Object -Last 1)
         if ($r.Code -eq 0 -and $have -and [int]$have -eq $want) { return "all $want starter documents present" }
     } -Install {
+        Write-Info 'waiting for MongoDB to finish starting (a new database restarts once after setup) ...'
+        if (-not (Wait-MongoReady)) {
+            Stop-WithDiagnosis 'container' (Get-ServiceLogs @('mongo')) 'MongoDB did not answer within 4 minutes'
+        }
         $tmp = Join-Path $StateDir 'rl-seed.json'
         [IO.File]::WriteAllText($tmp, (Get-SeedJson), (New-Object Text.UTF8Encoding $false))
         foreach ($copy in @(@($tmp, 'mongo:/tmp/rl-seed.json'), @((Join-Path $RepoDir 'scripts\install\seed\seed.js'), 'mongo:/tmp/rl-seed.js'))) {
