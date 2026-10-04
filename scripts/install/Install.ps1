@@ -1024,10 +1024,18 @@ function Invoke-UnityPhase {
 # Phase 7 - start
 # ---------------------------------------------------------------------------
 
+# The ROS-TCP bridge opens a short-lived connection per message, so an
+# established socket is only visible by chance. ros-server logs a handshake
+# each time a Unity client starts; look for one newer than the client.
 function Get-UnityRosConnection {
     foreach ($p in @(Get-UnityClientProcess)) {
         $c = Get-NetTCPConnection -OwningProcess $p.Id -RemotePort 10000 -State Established -ErrorAction SilentlyContinue
         if ($c) { return "Unity pid $($p.Id) connected to 127.0.0.1:10000" }
+        if (-not $p.StartTime) { continue }
+        $since = $p.StartTime.ToUniversalTime().AddSeconds(-5).ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $logs = (Invoke-Compose @('logs', '--no-color', '--since', $since, 'ros-server') -Quiet).Out
+        $line = ($logs -split "`n" | Where-Object { $_ -match 'ROS-Unity Handshake received' } | Select-Object -Last 1)
+        if ($line) { return "Unity pid $($p.Id) completed the ROS handshake ($(($line -replace '^.*?\|\s*', '').Trim()))" }
     }
     $null
 }
