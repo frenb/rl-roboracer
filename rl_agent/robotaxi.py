@@ -5304,6 +5304,11 @@ def do_job(job, num_envs=1):
             chicanes_west_val=_job_int("chicanes_west_val", 0),
             gym_name_val=job.get("gym_name") or "",
         )
+        # Job-doc "bc_pretrain_steps" overrides main()'s default (0 = go
+        # straight to SAC). An experiment design that sets it still wins.
+        if job.get("bc_pretrain_steps") not in (None, ""):
+            base_kwargs["bc_pretrain_steps_val"] = _job_int(
+                "bc_pretrain_steps", 5000)
         if is_resume:
             print(
                 f"do_job: RESUMING job {job['_id']} - found existing "

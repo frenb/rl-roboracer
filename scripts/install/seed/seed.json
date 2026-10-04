@@ -1,0 +1,454 @@
+{
+  "gyms": [
+    {
+      "_id": {
+        "$oid": "6aafa685c2736b990584403f"
+      },
+      "name": "wCourseJetRacer2026.09.20-v13",
+      "file_path": "{{UNITY_BINARY_DIR}}\\wCourseJetRacer2026.09.20-v13\\robotaxi gym level 1.exe",
+      "description": "",
+      "archived": false,
+      "created_at": {
+        "$date": {
+          "$numberLong": "1789896325786"
+        }
+      },
+      "updated_at": {
+        "$date": {
+          "$numberLong": "1789896325786"
+        }
+      }
+    },
+    {
+      "_id": {
+        "$oid": "6abc6906a249d535d4d976e3"
+      },
+      "name": "FlyBrain-wCourseJetRacer2026.09.28-v49",
+      "file_path": "{{UNITY_BINARY_DIR}}\\wCourseJetRacer2026.09.28-v49\\robotaxi gym level 1.exe",
+      "description": "",
+      "archived": false,
+      "created_at": {
+        "$date": {
+          "$numberLong": "1790732550996"
+        }
+      },
+      "updated_at": {
+        "$date": {
+          "$numberLong": "1790732550996"
+        }
+      }
+    }
+  ],
+  "reward_designs": [
+    {
+      "_id": {
+        "$oid": "6a3350e52ddfadd149b0db2f"
+      },
+      "name": "Goal-count speed (v4, TIME_COST 0.0073)",
+      "description": "v3 goal-count with TIME_COST=0.0073, calibrated so a dawdling episode (~42 goals over 3000 steps / ~71 steps-per-goal) breaks even at 0, while the real productive agent (~21 steps/goal) scores strongly positive. Restores best-model selection. GOAL_BONUS=1.0, CRASH_PENALTY=-1.0.",
+      "code": "\"\"\"Goal-count speed reward (v4, TIME_COST 0.0073) + per-episode logging.\n\nLogs each episode's reward decomposition on termination so the calibration is\nexact: goals, goal-bonus sum, time-cost sum, crash, total. This sum matches the\ntf-agents undiscounted AverageReturn, letting us reconcile the eval numbers.\n\nTune: GOAL_BONUS, TIME_COST, CRASH_PENALTY, QUICKNESS_REF.\n\"\"\"\n\nGOAL_BONUS = 1.0\nTIME_COST = 0.0073\nCRASH_PENALTY = -1.0\nQUICKNESS_REF = 100.0\n\n_state = {\"verified\": False, \"goals\": 0, \"goal_bonus_sum\": 0.0,\n          \"time_cost_sum\": 0.0, \"steps\": 0}\n\n\ndef reward_standard(data, data_arr, step_costs, *, defaults, course):\n    r = -TIME_COST\n    _state[\"time_cost_sum\"] += TIME_COST\n    _state[\"steps\"] += 1\n    if not _state.get(\"verified\"):\n        _state[\"verified\"] = True\n        speed = data.get(\"car\", {}).get(\"speed\")\n        print(f\"[goal-count-v4 VERIFY] first reward_standard: speed={speed} \"\n              f\"reward={r:+.4f} GOAL_BONUS={GOAL_BONUS} TIME_COST={TIME_COST} \"\n              f\"CRASH_PENALTY={CRASH_PENALTY}\", flush=True)\n    return r\n\n\ndef reward_success(data, data_arr, step_costs, position_history, *, defaults, course):\n    try:\n        steps = course.steps_since_last_goal\n    except Exception:\n        steps = 0\n    if steps is None:\n        steps = 0\n    quickness = max(0.0, 1.0 - float(steps) / QUICKNESS_REF)\n    bonus = GOAL_BONUS * (0.5 + 0.5 * quickness)\n    _state[\"goals\"] += 1\n    _state[\"goal_bonus_sum\"] += bonus\n    _state[\"steps\"] += 1\n    return bonus\n\n\ndef reward_failure(data, data_arr, step_costs, position_history, *, defaults, course):\n    _state[\"steps\"] += 1\n    total = _state[\"goal_bonus_sum\"] - _state[\"time_cost_sum\"] + CRASH_PENALTY\n    print(f\"[goal-count-v4 EPISODE] goals={_state['goals']} \"\n          f\"goal_bonus_sum={_state['goal_bonus_sum']:.3f} \"\n          f\"time_cost_sum=-{_state['time_cost_sum']:.3f} \"\n          f\"crash={CRASH_PENALTY:.3f} steps={_state['steps']} \"\n          f\"total={total:.3f}\", flush=True)\n    _state[\"goals\"] = 0\n    _state[\"goal_bonus_sum\"] = 0.0\n    _state[\"time_cost_sum\"] = 0.0\n    _state[\"steps\"] = 0\n    return CRASH_PENALTY\n",
+      "author": "cursor-agent",
+      "archived": false,
+      "version": {
+        "$numberInt": "3"
+      },
+      "created_at": {
+        "$date": {
+          "$numberLong": "1781747941582"
+        }
+      },
+      "updated_at": {
+        "$date": {
+          "$numberLong": "1781747941582"
+        }
+      }
+    }
+  ],
+  "experiment_designs": [
+    {
+      "_id": "experiment-default",
+      "actor_fc_layers_x": {
+        "$numberInt": "512"
+      },
+      "actor_fc_layers_y": {
+        "$numberInt": "512"
+      },
+      "actor_learning_rate": {
+        "$numberDouble": "0.00003"
+      },
+      "alpha_learning_rate": {
+        "$numberDouble": "0.00003"
+      },
+      "archived": false,
+      "author": "system",
+      "batch_size": {
+        "$numberInt": "256"
+      },
+      "bc_pretrain_steps": {
+        "$numberInt": "5000"
+      },
+      "collect_steps_per_iteration": {
+        "$numberInt": "1"
+      },
+      "created_at": {
+        "$date": {
+          "$numberLong": "1779672097921"
+        }
+      },
+      "critic_fc_layers_x": {
+        "$numberInt": "512"
+      },
+      "critic_fc_layers_y": {
+        "$numberInt": "512"
+      },
+      "critic_learning_rate": {
+        "$numberDouble": "0.00003"
+      },
+      "demo_min_keep": {
+        "$numberInt": "0"
+      },
+      "demo_prefill_count": {
+        "$numberInt": "50000"
+      },
+      "demo_sample_ratio": {
+        "$numberInt": "0"
+      },
+      "description": "Canonical defaults baked into rl_agent/robotaxi.py::main(). Every other experiment design should be compared against this one so changes are interpretable. Don't edit - clone for variants.",
+      "eval_interval": {
+        "$numberInt": "5000"
+      },
+      "gamma": {
+        "$numberDouble": "0.99"
+      },
+      "initial_collect_steps": {
+        "$numberInt": "500"
+      },
+      "log_interval": {
+        "$numberInt": "5000"
+      },
+      "name": "Default",
+      "num_eval_episodes": {
+        "$numberInt": "10"
+      },
+      "num_iterations": {
+        "$numberInt": "50000"
+      },
+      "policy_save_interval": {
+        "$numberInt": "50"
+      },
+      "replay_buffer_capacity": {
+        "$numberInt": "75000"
+      },
+      "reward_scale_factor": {
+        "$numberInt": "1"
+      },
+      "target_update_period": {
+        "$numberInt": "1"
+      },
+      "target_update_tau": {
+        "$numberDouble": "0.005"
+      },
+      "updated_at": {
+        "$date": {
+          "$numberLong": "1790215869699"
+        }
+      },
+      "version": {
+        "$numberInt": "2"
+      },
+      "awac_beta": {
+        "$numberInt": "1"
+      },
+      "awac_lambda": {
+        "$numberInt": "0"
+      },
+      "awac_lambda_decay_steps": {
+        "$numberInt": "0"
+      },
+      "awac_weight_clip": {
+        "$numberInt": "20"
+      },
+      "chicanes_east": {
+        "$numberInt": "0"
+      },
+      "chicanes_north": {
+        "$numberInt": "0"
+      },
+      "chicanes_south": {
+        "$numberInt": "0"
+      },
+      "chicanes_west": {
+        "$numberInt": "0"
+      },
+      "corner_radius": {
+        "$numberInt": "10"
+      },
+      "curriculum_stages": null,
+      "curriculum_start_stage": {
+        "$numberInt": "0"
+      },
+      "curvature_difficulty": {
+        "$numberInt": "0"
+      },
+      "env_discount": {
+        "$numberDouble": "0.9"
+      },
+      "eval_time_fraction": {
+        "$numberDouble": "0.25"
+      },
+      "eval_train_interval_sec": {
+        "$numberInt": "0"
+      }
+    },
+    {
+      "_id": {
+        "$oid": "6a64abc311c73b63d4709ed1"
+      },
+      "description": "Clone of reward_scale10 ED (6a52cfe1) with reward_scale_factor 10->1. Diagnosed the stage-0 collapse of job 6a63e680: reward_scale=10 on an O(1) reward (GOAL_BONUS 1.0, CRASH -1.0) inflated MSE critic loss ~100x (critic_loss 130-660, oscillating) and over-weighted reward vs entropy so alpha collapsed 1.0->0.18 and the policy went deterministic/crash-prone by ~40k steps. Lowering to 1.0 keeps Q ~O(5-13), stabilizes the critic, and restores the reward/entropy balance. Single-variable change; everything else (curriculum, LRs 3e-5, AWAC lambda 0.5, demos) identical.",
+      "author": "cursor-agent",
+      "archived": false,
+      "version": {
+        "$numberInt": "1"
+      },
+      "created_at": {
+        "$date": {
+          "$numberLong": "1784982467764"
+        }
+      },
+      "updated_at": "2026-07-25T12:27:47.764Z",
+      "replay_buffer_capacity": {
+        "$numberInt": "300000"
+      },
+      "demo_prefill_count": {
+        "$numberInt": "100000"
+      },
+      "demo_min_keep": {
+        "$numberInt": "100000"
+      },
+      "demo_sample_ratio": {
+        "$numberDouble": "0.25"
+      },
+      "env_discount": {
+        "$numberInt": "1"
+      },
+      "eval_time_fraction": {
+        "$numberDouble": "0.1"
+      },
+      "bc_pretrain_steps": {
+        "$numberInt": "0"
+      },
+      "reward_scale_factor": {
+        "$numberInt": "1"
+      },
+      "awac_lambda": {
+        "$numberDouble": "0.5"
+      },
+      "awac_beta": {
+        "$numberInt": "1"
+      },
+      "awac_weight_clip": {
+        "$numberInt": "20"
+      },
+      "awac_lambda_decay_steps": {
+        "$numberInt": "0"
+      },
+      "name": "AWAC + No-BC + curriculum (5-stage) + reward_scale1",
+      "curriculum_stages": [
+        {
+          "corner_radius": {
+            "$numberInt": "10"
+          },
+          "curvature_difficulty": {
+            "$numberInt": "0"
+          },
+          "chicanes_north": {
+            "$numberInt": "0"
+          },
+          "chicanes_east": {
+            "$numberInt": "0"
+          },
+          "chicanes_south": {
+            "$numberInt": "0"
+          },
+          "chicanes_west": {
+            "$numberInt": "0"
+          },
+          "advance_goals": {
+            "$numberInt": "9"
+          },
+          "consecutive": {
+            "$numberInt": "3"
+          }
+        },
+        {
+          "corner_radius": {
+            "$numberInt": "9"
+          },
+          "curvature_difficulty": {
+            "$numberDouble": "0.15"
+          },
+          "chicanes_north": {
+            "$numberInt": "0"
+          },
+          "chicanes_east": {
+            "$numberInt": "0"
+          },
+          "chicanes_south": {
+            "$numberInt": "1"
+          },
+          "chicanes_west": {
+            "$numberInt": "0"
+          },
+          "advance_goals": {
+            "$numberInt": "9"
+          },
+          "consecutive": {
+            "$numberInt": "3"
+          }
+        },
+        {
+          "corner_radius": {
+            "$numberInt": "8"
+          },
+          "curvature_difficulty": {
+            "$numberDouble": "0.3"
+          },
+          "chicanes_north": {
+            "$numberInt": "0"
+          },
+          "chicanes_east": {
+            "$numberInt": "1"
+          },
+          "chicanes_south": {
+            "$numberInt": "1"
+          },
+          "chicanes_west": {
+            "$numberInt": "0"
+          },
+          "advance_goals": {
+            "$numberInt": "9"
+          },
+          "consecutive": {
+            "$numberInt": "3"
+          }
+        },
+        {
+          "corner_radius": {
+            "$numberDouble": "7.5"
+          },
+          "curvature_difficulty": {
+            "$numberDouble": "0.6"
+          },
+          "chicanes_north": {
+            "$numberInt": "2"
+          },
+          "chicanes_east": {
+            "$numberInt": "1"
+          },
+          "chicanes_south": {
+            "$numberInt": "2"
+          },
+          "chicanes_west": {
+            "$numberInt": "1"
+          },
+          "advance_goals": {
+            "$numberInt": "9"
+          },
+          "consecutive": {
+            "$numberInt": "3"
+          }
+        },
+        {
+          "corner_radius": {
+            "$numberDouble": "7.5"
+          },
+          "curvature_difficulty": {
+            "$numberInt": "1"
+          },
+          "chicanes_north": {
+            "$numberInt": "3"
+          },
+          "chicanes_east": {
+            "$numberInt": "1"
+          },
+          "chicanes_south": {
+            "$numberInt": "3"
+          },
+          "chicanes_west": {
+            "$numberInt": "1"
+          }
+        }
+      ],
+      "corner_radius": {
+        "$numberInt": "14"
+      },
+      "curvature_difficulty": {
+        "$numberInt": "0"
+      }
+    },
+    {
+      "_id": {
+        "$oid": "6ab859550573fbba9c5d96c2"
+      },
+      "name": "AWAC + BC + reward_scale1 (no curriculum)",
+      "description": "Same as \"AWAC + No-BC + reward_scale1 (no curriculum)\" with 5000 steps of BC pretraining on the expert demos before SAC starts. Built for the fly courses, whose demos are a scene DEMO corpus replayed through the brain (fly_brain/demo_corpus.py).",
+      "author": "cursor-agent",
+      "archived": false,
+      "version": {
+        "$numberInt": "1"
+      },
+      "created_at": {
+        "$date": {
+          "$numberLong": "1790466413970"
+        }
+      },
+      "updated_at": {
+        "$date": {
+          "$numberLong": "1790466413970"
+        }
+      },
+      "bc_pretrain_steps": {
+        "$numberInt": "5000"
+      },
+      "replay_buffer_capacity": {
+        "$numberInt": "300000"
+      },
+      "demo_prefill_count": {
+        "$numberInt": "100000"
+      },
+      "demo_min_keep": {
+        "$numberInt": "100000"
+      },
+      "demo_sample_ratio": {
+        "$numberDouble": "0.25"
+      },
+      "reward_scale_factor": {
+        "$numberInt": "1"
+      },
+      "awac_beta": {
+        "$numberInt": "1"
+      },
+      "awac_lambda": {
+        "$numberDouble": "0.5"
+      },
+      "awac_lambda_decay_steps": {
+        "$numberInt": "0"
+      },
+      "awac_weight_clip": {
+        "$numberInt": "20"
+      },
+      "corner_radius": {
+        "$numberInt": "14"
+      },
+      "curvature_difficulty": {
+        "$numberInt": "0"
+      },
+      "env_discount": {
+        "$numberInt": "1"
+      },
+      "eval_time_fraction": {
+        "$numberDouble": "0.1"
+      }
+    }
+  ]
+}

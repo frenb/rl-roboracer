@@ -15,10 +15,15 @@
       3 docker      Docker Desktop (winget), engine running, GPU visible
       4 workspace   Repo clone, sibling data folders, .env
       5 images      ros-server + sim-controller images built and verified
-      6 unity       Unity client unpacked into unity\Builds\latest\
+      6 unity       The starter gyms unpacked into <InstallDir>\UnityBinary\,
+                    the default one (v13) also into unity\Builds\latest\
         demos       Expert-demo recording the donut TRAIN jobs start from
       7 start       Stack up, one Unity client connected to ros-server
-      8 firstjob    A short TRAIN job queued and producing training steps
+        seed        Starter gyms, reward design and experiment designs in
+                    MongoDB (seed\seed.json; existing documents are kept)
+      8 firstjob    A short TRAIN job on the default gym, straight into SAC
+                    training (no BC pretrain, no first eval), producing
+                    training steps and TensorBoard scalars
 
     Every phase records what it found and what it did in
     install-report.json, with outcome installed / already-present /
@@ -47,15 +52,11 @@
 .PARAMETER Branch
     Branch to check out.
 
-.PARAMETER UnityZip
-    Unity client zip: a URL or a local path. Defaults to the GitHub Release
-    asset for -UnityReleaseTag. A "<zip>.sha256" next to it is verified when
-    present.
-
-.PARAMETER DemoZip
-    Zip of the expert-demonstration recording that TRAIN jobs on the donut
-    course start from: a URL or a local path, defaulting to the release asset
-    roboracer-demos-donut.zip. Unpacked into tfrecords\job_<id>.
+.PARAMETER AssetDir
+    Local folder holding the release assets (the gym zips and
+    roboracer-demos-donut.zip, each optionally with a "<zip>.sha256").
+    Without it the assets are downloaded from the GitHub Release
+    -UnityReleaseTag.
 
 .PARAMETER ProjectName
     Compose project name written to .env (COMPOSE_PROJECT_NAME). Only needed
@@ -110,9 +111,8 @@ param(
     [string]$InstallDir = (Join-Path $env:USERPROFILE 'rl-roboracer'),
     [string]$RepoUrl = 'https://github.com/frenb/rl-roboracer.git',
     [string]$Branch = 'main',
-    [string]$UnityZip = '',
+    [string]$AssetDir = '',
     [string]$UnityReleaseTag = 'v0.1',
-    [string]$DemoZip = '',
     [string]$ProjectName = '',
     [string]$ImagePrefix = '',
     [int]$FirstJobIterations = 2000,
@@ -136,8 +136,14 @@ $ProgressPreference = 'SilentlyContinue'
 $ScriptParams = $PSBoundParameters
 
 $GithubRepo     = 'frenb/rl-roboracer'
-$UnityAssetName = 'roboracer-unity-windows.zip'
 $DemoAssetName  = 'roboracer-demos-donut.zip'
+# Ids and names must match the gyms in seed\seed.json. Each ships as
+# roboracer-gym-<Folder>.zip; the first one is the default client.
+$Gyms = @(
+    @{ Id = '6aafa685c2736b990584403f'; Name = 'wCourseJetRacer2026.09.20-v13'; Folder = 'wCourseJetRacer2026.09.20-v13' },
+    @{ Id = '6abc6906a249d535d4d976e3'; Name = 'FlyBrain-wCourseJetRacer2026.09.28-v49'; Folder = 'wCourseJetRacer2026.09.28-v49' }
+)
+$GymExeName     = 'robotaxi gym level 1.exe'
 # Must match COURSE_DEFAULT_DEMO_JOB_IDS['donut'] in rl_agent/robotaxi.py.
 $DemoJobId      = '64168c1b58d4d8ccdb76e721'
 $MinBuild       = 19045
@@ -152,6 +158,8 @@ $RunStamp   = Get-Date -Format 'yyyyMMdd-HHmmss'
 $ReportPath = Join-Path $StateDir 'install-report.json'
 $RunReportPath = Join-Path $StateDir "install-report-$RunStamp.json"
 $RepoDir    = Join-Path $InstallDir 'rl-roboracer'
+$UnityBinaryDir = Join-Path $InstallDir 'UnityBinary'
+$DefaultGymExe  = Join-Path $UnityBinaryDir "$($Gyms[0].Folder)\$GymExeName"
 $RunOnceKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce'
 $RunOnceName = 'rl-roboracer-install'
 
@@ -323,11 +331,12 @@ function Invoke-InImage([string]$Image, [string]$Script) {
     Invoke-Native 'docker' @('run', '--rm', '--entrypoint', 'bash', $Image, '-c', "echo $b64 | base64 -d | bash") -Quiet
 }
 
-function Invoke-Mongo([string]$Js) {
+function Invoke-Mongo([string]$Js, [string]$File = '') {
     $pw = Get-EnvValue 'MONGO_ROOT_PASSWORD'
     if (-not $pw) { $pw = 'example' }
-    Invoke-Compose @('exec', '-T', 'mongo', 'mongosh', '--quiet', '-u', 'root', '-p', $pw,
-                     '--authenticationDatabase', 'admin', 'robotaxi', '--eval', $Js) -Quiet
+    $script = if ($File) { @('--file', $File) } else { @('--eval', $Js) }
+    Invoke-Compose (@('exec', '-T', 'mongo', 'mongosh', '--quiet', '-u', 'root', '-p', $pw,
+                      '--authenticationDatabase', 'admin', 'robotaxi') + $script) -Quiet
 }
 
 function Get-UnityClientProcess {
@@ -336,6 +345,17 @@ function Get-UnityClientProcess {
         $_.Path -and $_.Path.StartsWith($buildsRoot, [StringComparison]::OrdinalIgnoreCase) -and
         $_.Path -notmatch 'UnityCrashHandler'
     }
+}
+
+# The wrapper relaunches a client it sees exit, so it has to go first.
+function Stop-UnityClients {
+    $wrappers = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -like "*$RepoDir\scripts\RunClientWrapper.ps1*" })
+    $wrappers | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    $clients = @(Get-UnityClientProcess)
+    $clients | Stop-Process -Force -ErrorAction SilentlyContinue
+    if ($clients) { Start-Sleep -Seconds 3 }
+    $wrappers.Count + $clients.Count
 }
 
 # ---------------------------------------------------------------------------
@@ -994,40 +1014,59 @@ function Invoke-ImagesPhase {
 # Phase 6 - Unity client
 # ---------------------------------------------------------------------------
 
+function Get-GymMarker([string]$Dir) {
+    $marker = Join-Path $Dir '.roboracer-client.json'
+    if (-not (Test-Path (Join-Path $Dir $GymExeName)) -or -not (Test-Path $marker)) { return $null }
+    try { Get-Content $marker -Raw | ConvertFrom-Json } catch { $null }
+}
+
+function Install-Gym($Gym) {
+    $dest = Join-Path $UnityBinaryDir $Gym.Folder
+    $asset = Get-VerifiedAsset "roboracer-gym-$($Gym.Folder).zip"
+    $tmp = Join-Path $StateDir 'unity-unpack'
+    if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+    Expand-Archive -LiteralPath $asset.Zip -DestinationPath $tmp
+    $root = $tmp
+    $top = @(Get-ChildItem $tmp)
+    if ($top.Count -eq 1 -and $top[0].PSIsContainer) { $root = $top[0].FullName }
+    if (-not (Test-Path (Join-Path $root $GymExeName))) { Stop-Phase "$($asset.Source) has no '$GymExeName' at its top level" }
+    if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+    New-Item -ItemType Directory -Force $UnityBinaryDir | Out-Null
+    Move-Item -LiteralPath $root -Destination $dest
+    if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+    [pscustomobject]@{ gym = $Gym.Name; source = $asset.Source; sha256 = $asset.Sha256; installedAt = (Get-Date).ToString('s') } |
+        ConvertTo-Json | Set-Content -Path (Join-Path $dest '.roboracer-client.json') -Encoding UTF8
+    "$($Gym.Name) ($($asset.Check))"
+}
+
 function Invoke-UnityPhase {
     $latest = Join-Path $RepoDir 'unity\Builds\latest'
-    $marker = Join-Path $latest '.roboracer-client.json'
-    Invoke-Phase 'unity' 'Unity client' -Detect {
-        if ((Test-Path $marker) -and (Get-ChildItem $latest -Filter '*.exe' -File | Where-Object { $_.Name -notmatch 'UnityCrashHandler' })) {
-            $m = Get-Content $marker -Raw | ConvertFrom-Json
-            return "client from $($m.source) (sha256 $($m.sha256.Substring(0,12))...) in unity\Builds\latest"
+    $default = $Gyms[0]
+    Invoke-Phase 'unity' "Unity gyms ($(($Gyms | ForEach-Object { $_.Name }) -join ', '))" -Detect {
+        $missing = @($Gyms | Where-Object { -not (Get-GymMarker (Join-Path $UnityBinaryDir $_.Folder)) })
+        $m = Get-GymMarker $latest
+        if (-not $missing -and $m -and ($m.PSObject.Properties.Name -contains 'gym') -and $m.gym -eq $default.Name) {
+            return "$($Gyms.Count) gyms in $UnityBinaryDir; default $($default.Name) in unity\Builds\latest"
         }
     } -Install {
-        $asset = Get-VerifiedAsset $UnityZip $UnityAssetName
-        $source = $asset.Source; $zip = $asset.Zip; $actual = $asset.Sha256; $check = $asset.Check
-        $tmp = Join-Path $StateDir 'unity-unpack'
-        if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
-        Expand-Archive -LiteralPath $zip -DestinationPath $tmp
-        $root = $tmp
-        $top = @(Get-ChildItem $tmp)
-        if ($top.Count -eq 1 -and $top[0].PSIsContainer) { $root = $top[0].FullName }
-        $exes = @(Get-ChildItem $root -Filter '*.exe' -File | Where-Object { $_.Name -notmatch 'UnityCrashHandler' })
-        if ($exes.Count -ne 1) { Stop-Phase "expected one game .exe in the zip, found $($exes.Count)" }
+        $done = @()
+        foreach ($g in $Gyms) {
+            if (-not (Get-GymMarker (Join-Path $UnityBinaryDir $g.Folder))) { $done += Install-Gym $g }
+        }
+        $stopped = Stop-UnityClients
+        if ($stopped) { Write-Info "stopped $stopped running Unity client process(es) to replace unity\Builds\latest" }
         if (Test-Path $latest) { Remove-Item $latest -Recurse -Force }
-        New-Item -ItemType Directory -Force (Split-Path $latest) | Out-Null
-        Move-Item -LiteralPath $root -Destination $latest
-        if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
-        [pscustomobject]@{ source = $source; sha256 = $actual; installedAt = (Get-Date).ToString('s') } |
-            ConvertTo-Json | Set-Content -Path $marker -Encoding UTF8
-        "unpacked $($exes[0].Name) from $source ($check)"
+        New-Item -ItemType Directory -Force $latest | Out-Null
+        Copy-Item -Path (Join-Path $UnityBinaryDir "$($default.Folder)\*") -Destination $latest -Recurse -Force
+        $installed = if ($done) { "unpacked $($done -join '; ')" } else { 'gyms already unpacked' }
+        "$installed; default $($default.Name) copied into unity\Builds\latest"
     }
 }
 
-# Resolves a release asset (a local zip path, a URL, or by default the
-# GitHub release asset) to a local zip and verifies "<zip>.sha256" when one
-# is published next to it.
-function Get-VerifiedAsset([string]$Source, [string]$AssetName) {
-    if (-not $Source) { $Source = "https://github.com/$GithubRepo/releases/download/$UnityReleaseTag/$AssetName" }
+# Resolves a release asset (from -AssetDir, or by default the GitHub release)
+# to a local zip and verifies "<zip>.sha256" when one is published next to it.
+function Get-VerifiedAsset([string]$AssetName) {
+    $Source = if ($AssetDir) { Join-Path $AssetDir $AssetName } else { "https://github.com/$GithubRepo/releases/download/$UnityReleaseTag/$AssetName" }
     $zip = $Source; $expected = $null
     if ($Source -match '^https?://') {
         $zip = Join-Path $StateDir $AssetName
@@ -1059,7 +1098,7 @@ function Invoke-DemosPhase {
         $files = @(Get-ChildItem $dir -Filter '*.tfrecord' -File -ErrorAction SilentlyContinue)
         if ($files) { return "$($files.Count) recording(s), $([math]::Round(($files | Measure-Object Length -Sum).Sum / 1MB)) MB in tfrecords\job_$DemoJobId" }
     } -Install {
-        $asset = Get-VerifiedAsset $DemoZip $DemoAssetName
+        $asset = Get-VerifiedAsset $DemoAssetName
         $tmp = Join-Path $StateDir 'demo-unpack'
         if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
         Expand-Archive -LiteralPath $asset.Zip -DestinationPath $tmp
@@ -1181,7 +1220,8 @@ function Invoke-StartPhase {
         if (-not (Get-UnityClientProcess)) {
             $wrapper = Join-Path $RepoDir 'scripts\RunClientWrapper.ps1'
             Start-Process -FilePath 'powershell.exe' -WindowStyle Minimized -ArgumentList @(
-                '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$wrapper`"", '-Index', '0', '-GymPollSeconds', '0')
+                '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$wrapper`"", '-Index', '0',
+                '-GymPollSeconds', '10', '-GymSource', "`"$DefaultGymExe`"")
         }
         if (-not (Wait-Until { [bool](Get-UnityRosConnection) } -TimeoutSec 180 -What 'the Unity client to connect to ros-server')) {
             $playerLog = Join-Path $RepoDir 'unity\Builds\latest\Player.log'
@@ -1202,8 +1242,57 @@ function Invoke-StartPhase {
 }
 
 # ---------------------------------------------------------------------------
+# Phase 7b - starter documents
+# ---------------------------------------------------------------------------
+
+function Get-SeedJson {
+    $path = Join-Path $RepoDir 'scripts\install\seed\seed.json'
+    if (-not (Test-Path $path)) { Stop-Phase "seed file missing: $path" }
+    (Get-Content $path -Raw).Replace('{{UNITY_BINARY_DIR}}', $UnityBinaryDir.Replace('\', '\\'))
+}
+
+function Invoke-SeedPhase {
+    Invoke-Phase 'seed' 'Starter gyms, reward design and experiment designs' -Detect {
+        if (-not (Test-Path $RepoDir)) { return $null }
+        $seed = (Get-SeedJson | ConvertFrom-Json)
+        $want = 0; $checks = @()
+        foreach ($coll in $seed.PSObject.Properties.Name) {
+            foreach ($doc in $seed.$coll) {
+                $want++
+                $id = if ($doc._id -is [string]) { "'$($doc._id)'" } else { "ObjectId('$($doc._id.'$oid')')" }
+                $checks += "db.getCollection('$coll').countDocuments({_id: $id})"
+            }
+        }
+        $r = Invoke-Mongo "print($($checks -join ' + '))"
+        $have = ($r.Out -split "`n" | Where-Object { $_ -match '^\s*\d+\s*$' } | Select-Object -Last 1)
+        if ($r.Code -eq 0 -and $have -and [int]$have -eq $want) { return "all $want starter documents present" }
+    } -Install {
+        $tmp = Join-Path $StateDir 'rl-seed.json'
+        [IO.File]::WriteAllText($tmp, (Get-SeedJson), (New-Object Text.UTF8Encoding $false))
+        foreach ($copy in @(@($tmp, 'mongo:/tmp/rl-seed.json'), @((Join-Path $RepoDir 'scripts\install\seed\seed.js'), 'mongo:/tmp/rl-seed.js'))) {
+            $c = Invoke-Compose @('cp', $copy[0], $copy[1]) -Quiet
+            if ($c.Code -ne 0) { Stop-Phase "could not copy $(Split-Path $copy[0] -Leaf) into the mongo container: $($c.Out)" }
+        }
+        $r = Invoke-Mongo '' -File '/tmp/rl-seed.js'
+        $line = ($r.Out -split "`n" | Where-Object { $_ -match '^SEEDED ' } | Select-Object -Last 1)
+        if ($r.Code -ne 0 -or -not $line) { Stop-Phase "seeding failed: $($r.Out)" }
+        "inserted (new/total) $($line -replace '^SEEDED ', '')"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Phase 8 - first TRAIN job
 # ---------------------------------------------------------------------------
+
+# Tag count across all TensorBoard runs, or -1 while TensorBoard is unreachable.
+function Get-TensorBoardTagCount {
+    try {
+        $tags = Invoke-RestMethod -Uri 'http://127.0.0.1:6006/data/plugin/scalars/tags' -TimeoutSec 10
+        $n = 0
+        foreach ($run in $tags.PSObject.Properties) { $n += @($run.Value.PSObject.Properties).Count }
+        $n
+    } catch { -1 }
+}
 
 function Get-FirstJobStatus {
     $r = Invoke-Mongo "const j = db.jobs.findOne({installer_first_job: true}, {status: 1}); print(j ? j.status : 'NONE')"
@@ -1224,7 +1313,7 @@ function Stop-TrainerFailure([string]$Message) {
 }
 
 function Invoke-FirstJobPhase {
-    Invoke-Phase 'firstjob' "First TRAIN job ($FirstJobIterations iterations)" -Detect {
+    Invoke-Phase 'firstjob' "First TRAIN job ($FirstJobIterations iterations on $($Gyms[0].Name))" -Detect {
         if (-not (Test-Path $RepoDir)) { return $null }
         $s = Get-FirstJobStatus
         if ($s -in 'IN_PROGRESS', 'DONE') { return "installer's first job already exists (status $s)" }
@@ -1234,9 +1323,14 @@ function Invoke-FirstJobPhase {
             Write-Info 'the previous first job failed; queueing a new one'
         }
         if ((Get-FirstJobStatus) -eq 'NONE') {
-            $js = "db.jobs.insertOne({job_type: 'TRAIN', model_type: 'SacAgent', robot_type: 'robotaxi', " +
+            # Straight into SAC: no BC pretrain on the demos, no eval before
+            # the first training step.
+            $js = "const g = db.gyms.findOne({_id: ObjectId('$($Gyms[0].Id)')}); " +
+                  "db.jobs.insertOne({job_type: 'TRAIN', model_type: 'SacAgent', robot_type: 'robotaxi', " +
                   "num_iterations: $FirstJobIterations, status: 'NOT_STARTED', create_date: new Date(), " +
                   "demo_job_id: '', pass_through_actions: false, nn_size_x: '', nn_size_y: '', seed: 0, " +
+                  "skip_first_eval: true, bc_pretrain_steps: 0, " +
+                  "gym_id: g ? g._id.toString() : '', gym_name: g ? g.name : '', gym_file_path: g ? g.file_path : '', " +
                   "percent_complete: 0, installer_first_job: true}).insertedId.toString()"
             $r = Invoke-Mongo $js
             if ($r.Code -ne 0) { Stop-Phase "could not insert the job: $($r.Out)" }
@@ -1248,8 +1342,11 @@ function Invoke-FirstJobPhase {
         $ok = Wait-Until { @(Get-TrainLines).Count -ge 2 -or (Get-FirstJobStatus) -eq 'FAILED' } -TimeoutSec ($FirstJobWaitMinutes * 60) -IntervalSec 20 -What 'training steps'
         if ((Get-FirstJobStatus) -eq 'FAILED') { Stop-TrainerFailure 'the first training job failed' }
         if (-not $ok) { Stop-TrainerFailure "no training steps after $FirstJobWaitMinutes minutes" }
+        if (-not (Wait-Until { (Get-TensorBoardTagCount) -gt 0 } -TimeoutSec 300 -IntervalSec 15 -What 'TensorBoard scalars')) {
+            Stop-TrainerFailure "training is running but TensorBoard shows no scalars after 5 minutes (http://127.0.0.1:6006)"
+        }
         $lines = @(Get-TrainLines)
-        "job $(Get-FirstJobStatus); $($lines.Count) training iterations so far; last: $($lines[-1])"
+        "job $(Get-FirstJobStatus); $($lines.Count) training iterations so far; $(Get-TensorBoardTagCount) TensorBoard scalar tags; last: $($lines[-1])"
     }
 }
 
@@ -1305,6 +1402,7 @@ try {
         Invoke-DemosPhase
         if (-not $DryRun) {
             Invoke-StartPhase
+            Invoke-SeedPhase
             if (-not $NoFirstJob) { Invoke-FirstJobPhase }
         }
     }

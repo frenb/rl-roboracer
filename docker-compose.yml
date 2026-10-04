@@ -195,7 +195,10 @@ services:
     # archived runs show up in TB within ~5s of the user clicking
     # Compare, rather than the user staring at "no scalars" for up to
     # half a minute waiting for TB's next filesystem scan.
-    command: sh -c "(tensorboard --bind_all --logdir_spec=current:/tmp/active,compare:/tmp/tb_compare --reload_multifile true --reload_interval 5 &1> /tmp/tb.log) && cd /python_ws/src && python -u robotaxi.py 2>&1 | tee robotaxi.out"
+    # The output also goes to /tmp/trainer.log: that is the file the
+    # dashboard's log viewer tails (see dashboard/src/server.ts), and the
+    # same file manual trainer restarts write to.
+    command: sh -c "(tensorboard --bind_all --logdir_spec=current:/tmp/active,compare:/tmp/tb_compare --reload_multifile true --reload_interval 5 &1> /tmp/tb.log) && cd /python_ws/src && python -u robotaxi.py 2>&1 | tee robotaxi.out /tmp/trainer.log"
     # No `links:` block. Compose's legacy links: ["ros-server"] would
     # also auto-add per-link aliases of the form
     #   <linked-container>:<service>-<replica-index>
