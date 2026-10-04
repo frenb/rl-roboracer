@@ -138,7 +138,9 @@ $StartServices  = @('ros-server', 'mongo', 'mongo-express', 'sim-controller', 'd
 $DockerExe      = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
 
 $StateDir   = Join-Path $env:LOCALAPPDATA 'rl-roboracer-install'
+$RunStamp   = Get-Date -Format 'yyyyMMdd-HHmmss'
 $ReportPath = Join-Path $StateDir 'install-report.json'
+$RunReportPath = Join-Path $StateDir "install-report-$RunStamp.json"
 $RepoDir    = Join-Path $InstallDir 'rl-roboracer'
 $RunOnceKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce'
 $RunOnceName = 'rl-roboracer-install'
@@ -216,8 +218,9 @@ function Test-TcpPort([int]$Port) {
 }
 
 function Save-Report {
-    [pscustomobject]@{ results = @($script:Report); diagnoses = @($script:Diagnoses) } |
-        ConvertTo-Json -Depth 5 | Set-Content -Path $ReportPath -Encoding UTF8
+    $json = [pscustomobject]@{ results = @($script:Report); diagnoses = @($script:Diagnoses) } | ConvertTo-Json -Depth 5
+    Set-Content -Path $ReportPath -Value $json -Encoding UTF8
+    Set-Content -Path $RunReportPath -Value $json -Encoding UTF8
 }
 
 function Add-Result([string]$Phase, [string]$Outcome, [string]$Evidence, [double]$Seconds) {
@@ -422,6 +425,12 @@ $FailureCatalog = @(
        Advice = 'Recreate the containers from the current install folder: docker compose up -d --force-recreate.'
        Samples = @('npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open ''/dashboard/package.json''',
                    'python: can''t open file ''robotaxi.py'': [Errno 2] No such file or directory') }
+
+    @{ Id = 'mongo-data-permission'; Phases = @('container'); Fix = 'mongo-owner'
+       Pattern = '/bitnami/mongodb[^\n]*Permission denied|Permission denied[^\n]*/bitnami/mongodb'
+       Diagnosis = 'MongoDB (which runs as user 1001) cannot write to its data folder. Folders that Docker creates itself on a Windows drive come out owned by root and read-only to everyone else.'
+       Advice = 'Give the folder to user 1001: docker compose run --rm --no-deps --user root --entrypoint chown mongo -R 1001:1001 /bitnami/mongodb'
+       Samples = @('mongo-1  | mkdir: cannot create directory ''/bitnami/mongodb/data'': Permission denied') }
 
     @{ Id = 'mongo-auth'; Phases = @('trainer', 'container'); Fix = 'none'
        Pattern = 'Authentication failed|AuthenticationFailed|bad auth'
@@ -637,10 +646,17 @@ function Invoke-Preflight {
         $problems += 'winget is missing. Install "App Installer" from the Microsoft Store, then re-run.'
     }
 
+    # Any HTTP answer, including Docker Hub's 401, proves the host is reachable.
+    # Plain WebRequest keeps those expected errors out of the transcript.
     foreach ($url in @('https://github.com', 'https://pypi.org/simple/pip/', 'https://registry-1.docker.io/v2/')) {
-        try { Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -TimeoutSec 20 | Out-Null }
+        $req = [Net.WebRequest]::Create($url)
+        $req.Method = 'HEAD'; $req.Timeout = 20000
+        try { $req.GetResponse().Close() }
         catch {
-            if (-not ($_.Exception.PSObject.Properties['Response'] -and $_.Exception.Response)) { $problems += "Cannot reach $url ($($_.Exception.Message))." }
+            $ex = $_.Exception
+            if ($ex.InnerException) { $ex = $ex.InnerException }
+            if (($ex -is [Net.WebException]) -and $ex.Response) { $ex.Response.Close() }
+            else { $problems += "Cannot reach $url ($($ex.Message))." }
         }
     }
 
@@ -1027,18 +1043,32 @@ function Get-FailingServices {
 
 # A service that crashes on start still leaves "compose up" exiting 0, so
 # look for restart loops and diagnose them from the service's own log.
+function Get-ServiceLogs([string[]]$Services) {
+    $out = (Invoke-Compose (@('logs', '--no-color', '--tail', '60') + $Services) -Quiet).Out
+    $out -replace "\x1b\[[0-9;]*m", ''
+}
+
+# Mongo runs as uid 1001, but a data folder Docker created on a Windows drive
+# comes out root-owned and not writable by others.
+function Set-MongoDataOwner {
+    $r = Invoke-Compose @('run', '--rm', '--no-deps', '--user', 'root', '--entrypoint', 'chown', 'mongo', '-R', '1001:1001', '/bitnami/mongodb') -Quiet
+    if ($r.Code -ne 0) { Write-Warn "could not change the owner of the mongodb folder: $(($r.Out -split "`n" | Select-Object -Last 1))" }
+    $r.Code -eq 0
+}
+
 function Assert-NoCrashLoop {
     $failing = Get-FailingServices
     if (-not $failing) { return }
-    $logs = (Invoke-Compose (@('logs', '--no-color', '--tail', '60') + $failing) -Quiet).Out
+    $logs = Get-ServiceLogs $failing
     $hit = Find-Failure 'container' $logs
-    if ($hit -and $hit.Entry.Fix -eq 'recreate') {
+    if ($hit -and $hit.Entry.Fix -in 'recreate', 'mongo-owner') {
         Show-Diagnosis $hit
-        Add-Diagnosis 'container' $hit "recreated $($failing -join ', ')"
+        if ($hit.Entry.Fix -eq 'mongo-owner') { [void](Set-MongoDataOwner) }
+        Add-Diagnosis 'container' $hit "$(if ($hit.Entry.Fix -eq 'mongo-owner') { 'gave mongodb folder to uid 1001, ' })recreated $($failing -join ', ')"
         [void](Invoke-Compose (@('up', '-d', '--no-build', '--force-recreate') + $failing) -Quiet)
         $failing = Get-FailingServices
         if (-not $failing) { return }
-        $logs = (Invoke-Compose (@('logs', '--no-color', '--tail', '60') + $failing) -Quiet).Out
+        $logs = Get-ServiceLogs $failing
     }
     Stop-WithDiagnosis 'container' $logs "these services keep crashing: $($failing -join ', ')"
 }
@@ -1051,6 +1081,10 @@ function Invoke-StartPhase {
         $conn = Get-UnityRosConnection
         if ($missing.Count -eq 0 -and $conn) { return "services running: $($StartServices -join ', '); $conn" }
     } -Install {
+        $mongoDir = Join-Path $InstallDir 'mongodb'
+        if (-not (Get-ChildItem $mongoDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+            if (Set-MongoDataOwner) { Write-Info 'gave the empty mongodb folder to the Mongo user (uid 1001)' }
+        }
         $r = Invoke-Compose (@('up', '-d', '--no-build') + $StartServices)
         if ($r.Code -ne 0) {
             $hit = Find-Failure 'compose-up' $r.Out
@@ -1152,7 +1186,7 @@ if ($SelfTest) {
 }
 
 New-Item -ItemType Directory -Force $StateDir | Out-Null
-$LogPath = Join-Path $StateDir ("install-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$LogPath = Join-Path $StateDir "install-$RunStamp.log"
 Start-Transcript -Path $LogPath -Append | Out-Null
 
 Write-Host "rl-roboracer installer  (log: $LogPath)" -ForegroundColor White
