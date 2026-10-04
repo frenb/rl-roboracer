@@ -749,6 +749,20 @@ function Invoke-GitPhase {
 function Start-DockerEngine {
     if (Test-Native 'docker' @('info')) { return 0 }
     if (-not (Test-Path $DockerExe)) { Stop-Phase "Docker Desktop is not installed at $DockerExe" }
+    # Docker Desktop runs for one signed-in user at a time; a copy left
+    # running by another account (e.g. after "Switch user") blocks ours.
+    $mySession = [Diagnostics.Process]::GetCurrentProcess().SessionId
+    $other = @(Get-Process 'Docker Desktop' -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -ne $mySession })
+    if ($other) {
+        $owner = $null
+        try {
+            $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $($other[0].Id)"
+            $o = Invoke-CimMethod -InputObject $cim -MethodName GetOwner
+            if ($o.ReturnValue -eq 0) { $owner = $o.User }
+        } catch { }
+        $who = if ($owner) { "the Windows account '$owner'" } else { "another signed-in Windows account (session $($other[0].SessionId))" }
+        Stop-Phase "Docker Desktop is already running for $who, and it only runs for one account at a time. Sign in to that account, quit Docker Desktop (tray whale icon > Quit Docker Desktop) and sign out, then run this installer again."
+    }
     Write-Info 'Starting Docker Desktop (the first start can take a few minutes) ...'
     Start-Process -FilePath $DockerExe | Out-Null
     $sw = [Diagnostics.Stopwatch]::StartNew()
