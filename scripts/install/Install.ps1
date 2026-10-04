@@ -25,6 +25,11 @@
     failure, which is how a test on a supposedly clean machine catches an
     install step that silently did nothing.
 
+    When a step fails, its output is matched against a catalog of known
+    failures (see "Failure catalog" below). A match prints what went wrong
+    and what to do, may apply a fix (retry, restart Docker Desktop, clean
+    rebuild, wsl --update), and is recorded under "diagnoses" in the report.
+
     Run from a downloaded copy:
       powershell -ExecutionPolicy Bypass -File .\Install.ps1
 
@@ -83,6 +88,16 @@
 .PARAMETER BuildRetries
     Attempts per image build. Docker Desktop's network intermittently
     truncates downloads; finished build steps are cached, so a retry resumes.
+
+.PARAMETER AutoFix
+    Apply catalogued fixes that would otherwise ask first (restart Docker
+    Desktop, clear the build cache, run wsl --update). Fixes that affect
+    other software, such as stopping another program on a needed port, still
+    ask.
+
+.PARAMETER SelfTest
+    Check the failure catalog against its own sample log lines, then exit.
+    Changes nothing.
 #>
 [CmdletBinding()]
 param(
@@ -101,7 +116,9 @@ param(
     [switch]$NoFirstJob,
     [switch]$AcceptDockerLicense,
     [switch]$Rebuild,
-    [int]$BuildRetries = 6
+    [int]$BuildRetries = 6,
+    [switch]$AutoFix,
+    [switch]$SelfTest
 )
 
 Set-StrictMode -Version 2.0
@@ -126,11 +143,8 @@ $RepoDir    = Join-Path $InstallDir 'rl-roboracer'
 $RunOnceKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce'
 $RunOnceName = 'rl-roboracer-install'
 
-New-Item -ItemType Directory -Force $StateDir | Out-Null
-$LogPath = Join-Path $StateDir ("install-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
-Start-Transcript -Path $LogPath -Append | Out-Null
-
 $script:Report = New-Object System.Collections.ArrayList
+$script:Diagnoses = New-Object System.Collections.ArrayList
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -202,7 +216,8 @@ function Test-TcpPort([int]$Port) {
 }
 
 function Save-Report {
-    $script:Report | ConvertTo-Json -Depth 4 | Set-Content -Path $ReportPath -Encoding UTF8
+    [pscustomobject]@{ results = @($script:Report); diagnoses = @($script:Diagnoses) } |
+        ConvertTo-Json -Depth 5 | Set-Content -Path $ReportPath -Encoding UTF8
 }
 
 function Add-Result([string]$Phase, [string]$Outcome, [string]$Evidence, [double]$Seconds) {
@@ -308,6 +323,263 @@ function Get-UnityClientProcess {
         $_.Path -and $_.Path.StartsWith($buildsRoot, [StringComparison]::OrdinalIgnoreCase) -and
         $_.Path -notmatch 'UnityCrashHandler'
     }
+}
+
+# ---------------------------------------------------------------------------
+# Failure catalog
+#
+# Known failures: where they show up (Phases), how to recognise them
+# (Pattern), what they mean, what the user should do, and which fix the
+# installer may apply. Samples are real log lines; -SelfTest checks every
+# sample is recognised as its own entry. Order matters: the first match wins.
+#
+# Fix kinds: retry (automatic), restart-docker / rebuild-clean / wsl-update
+# (ask first, or -AutoFix), port-owner (always asks), signout, none.
+# ---------------------------------------------------------------------------
+
+$FailureCatalog = @(
+    @{ Id = 'download-truncated'; Phases = @('build'); Fix = 'retry'
+       Pattern = 'DO NOT MATCH THE HASHES'
+       Diagnosis = 'A download was cut short. Docker Desktop''s network intermittently truncates large downloads.'
+       Advice = 'Retrying; finished build steps are cached, so the retry resumes where it failed.'
+       Samples = @('#20 5.798 ERROR: THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE. If you have updated the package versions, please update the hashes.') }
+
+    @{ Id = 'docker-vm-crash'; Phases = @('build'); Fix = 'restart-docker'
+       Pattern = 'failed to receive status: rpc error|error reading from server: EOF|session healthcheck failed|desc = connection error'
+       Diagnosis = 'Docker Desktop''s engine crashed or restarted during the build, usually while unpacking a large image.'
+       Advice = 'Restart Docker Desktop, then run the installer again.'
+       Samples = @('ERROR: failed to build: failed to receive status: rpc error: code = Unavailable desc = error reading from server: EOF',
+                   'session healthcheck failed fatally: Unavailable: connection error: desc = "transport: Error while dialing: only one connection allowed"') }
+
+    @{ Id = 'disk-full'; Phases = @('*'); Fix = 'none'
+       Pattern = 'no space left on device|not enough space on the disk'
+       Diagnosis = 'The disk Docker uses is full.'
+       Advice = 'Free space, then re-run. "docker system df" shows what Docker uses; "docker builder prune -af" and "docker image prune -a" reclaim build cache and unused images.'
+       Samples = @('failed to copy files: write /var/lib/docker/tmp/buildkit-mount/x.whl: no space left on device') }
+
+    @{ Id = 'network-flaky'; Phases = @('build', 'git', 'download'); Fix = 'retry'
+       Pattern = 'Temporary failure in name resolution|Could not resolve host|Read timed out|ReadTimeoutError|Connection reset by peer|TLS handshake timeout|i/o timeout|Connection timed out|unable to access ''https'
+       Diagnosis = 'A network request failed or timed out.'
+       Advice = 'Retrying. If it keeps failing, check the internet connection, VPN or proxy.'
+       Samples = @('pip._vendor.urllib3.exceptions.ReadTimeoutError: HTTPSConnectionPool(host=''files.pythonhosted.org'', port=443): Read timed out.',
+                   'fatal: unable to access ''https://github.com/frenb/rl-roboracer.git/'': Could not resolve host: github.com') }
+
+    @{ Id = 'illegal-instruction'; Phases = @('verify', 'trainer'); Fix = 'none'
+       Pattern = 'Illegal instruction'
+       Diagnosis = 'This CPU, or the emulator running the container, lacks instructions (AVX) that TensorFlow''s prebuilt packages need.'
+       Advice = 'The installer cannot fix this; this machine cannot run the trainer image as built.'
+       Samples = @('bash: line 3:    12 Illegal instruction     (core dumped) python3 -c ''import tensorflow''') }
+
+    @{ Id = 'corrupted-layers'; Phases = @('verify'); Fix = 'rebuild-clean'
+       Pattern = 'cannot import name|ImportError|SyntaxError|No module named|is only \d+ KB - corrupted layer'
+       Diagnosis = 'The image built, but files inside it are damaged or missing. A crashed earlier build most likely left half-written layers in Docker''s build cache, which this build reused.'
+       Advice = 'Clear Docker''s build cache and rebuild this image without cache.'
+       Samples = @('ImportError: cannot import name ''LazyLoader'' from ''tensorflow.python.util.lazy_loader'' (/usr/local/lib/python3.8/dist-packages/tensorflow/python/util/lazy_loader.py)',
+                   'tensorflow folder is only 122900 KB - corrupted layer') }
+
+    @{ Id = 'port-in-use'; Phases = @('compose-up', 'unity-client'); Fix = 'port-owner'
+       Pattern = 'Ports are not available|port is already allocated|bind: (address already in use|Only one usage of each socket address|An attempt was made to access a socket)|SocketException[^\n]*(Address already in use|Only one usage)'
+       Diagnosis = 'Another program is already using a port this stack needs.'
+       Advice = 'Stop the program using the port, then re-run.'
+       Samples = @('Error response from daemon: Ports are not available: exposing port TCP 0.0.0.0:80 -> 0.0.0.0:0: listen tcp 0.0.0.0:80: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.',
+                   'Error response from daemon: driver failed programming external connectivity: Bind for 0.0.0.0:6006 failed: port is already allocated',
+                   'System.Net.Sockets.SocketException (0x80004005): Only one usage of each socket address (protocol/network address/port) is normally permitted.') }
+
+    @{ Id = 'docker-access-denied'; Phases = @('docker-start'); Fix = 'signout'
+       Pattern = 'dockerDesktopLinuxEngine: Access is denied|permission denied while trying to connect to the Docker daemon'
+       Diagnosis = 'Your account cannot use Docker yet. Docker Desktop added it to the docker-users group, which only takes effect at the next sign-in.'
+       Advice = 'Sign out of Windows and back in, then run the installer again.'
+       Samples = @('error during connect: in the default daemon configuration on Windows, the docker client must be run with elevated privileges to connect: open //./pipe/dockerDesktopLinuxEngine: Access is denied.') }
+
+    @{ Id = 'wsl-outdated'; Phases = @('docker-start'); Fix = 'wsl-update'
+       Pattern = 'WSL (needs|requires) (updating|an update)|WSL kernel version too low|wsl --update'
+       Diagnosis = 'WSL needs an update before Docker Desktop can start.'
+       Advice = 'Run "wsl --update" as administrator, then restart Docker Desktop.'
+       Samples = @('WSL needs updating. Your version of WSL is too old. Run ''wsl --update'' to update it.') }
+
+    @{ Id = 'docker-not-running'; Phases = @('docker-start'); Fix = 'none'
+       Pattern = 'dockerDesktopLinuxEngine: The system cannot find the file specified|Is the docker daemon running|Cannot connect to the Docker daemon'
+       Diagnosis = 'Docker Desktop''s engine is not running and did not start.'
+       Advice = 'Open Docker Desktop from the Start menu, answer any prompts it shows, wait until it says "Engine running", then re-run.'
+       Samples = @('error during connect: Get "http://%2F%2F.%2Fpipe%2FdockerDesktopLinuxEngine/v1.47/info": open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.') }
+
+    @{ Id = 'gpu-not-in-docker'; Phases = @('docker-gpu'); Fix = 'wsl-update'
+       Pattern = 'could not select device driver[^\n]*gpu|nvidia-container-cli|libnvidia-ml\.so|Failed to initialize NVML|no CUDA-capable device'
+       Diagnosis = 'Docker cannot reach the NVIDIA GPU.'
+       Advice = 'Run "wsl --update" and restart Docker Desktop. If that does not help, install the latest NVIDIA driver from https://www.nvidia.com/Download/index.aspx.'
+       Samples = @('docker: Error response from daemon: could not select device driver "" with capabilities: [[gpu]].',
+                   'nvidia-container-cli: initialization error: WSL environment detected but no adapters were found: unknown.') }
+
+    @{ Id = 'clone-target-exists'; Phases = @('git'); Fix = 'none'
+       Pattern = 'already exists and is not an empty directory'
+       Diagnosis = 'The install folder already contains an rl-roboracer folder that is not a git checkout.'
+       Advice = 'Move or delete that folder, or pass a different -InstallDir.'
+       Samples = @('fatal: destination path ''C:\Users\me\rl-roboracer\rl-roboracer'' already exists and is not an empty directory.') }
+
+    @{ Id = 'mongo-auth'; Phases = @('trainer'); Fix = 'none'
+       Pattern = 'Authentication failed|AuthenticationFailed|bad auth'
+       Diagnosis = 'The trainer cannot log in to MongoDB. The password in .env differs from the one the database was created with, typically because the mongodb folder was reused from an earlier install.'
+       Advice = 'Put the original password back in .env as MONGO_ROOT_PASSWORD. Or, to start with an empty database: stop the stack, empty the mongodb folder, and start it again.'
+       Samples = @('pymongo.errors.OperationFailure: Authentication failed., full error: {''ok'': 0.0, ''errmsg'': ''Authentication failed.'', ''code'': 18, ''codeName'': ''AuthenticationFailed''}') }
+
+    @{ Id = 'mongo-unreachable'; Phases = @('trainer'); Fix = 'none'
+       Pattern = 'ServerSelectionTimeoutError'
+       Diagnosis = 'The trainer cannot reach MongoDB.'
+       Advice = 'Check the mongo container with "docker compose ps mongo" and "docker compose logs mongo".'
+       Samples = @('pymongo.errors.ServerSelectionTimeoutError: mongo:27017: [Errno -3] Temporary failure in name resolution') }
+
+    @{ Id = 'gpu-oom'; Phases = @('trainer'); Fix = 'none'
+       Pattern = 'ResourceExhaustedError|CUDA_ERROR_OUT_OF_MEMORY|OOM when allocating'
+       Diagnosis = 'The GPU ran out of memory.'
+       Advice = 'Close other programs using the GPU (games, other ML jobs, a second training stack), then re-run.'
+       Samples = @('tensorflow.python.framework.errors_impl.ResourceExhaustedError: OOM when allocating tensor with shape[512,512] and type float') }
+
+    @{ Id = 'cuda-init'; Phases = @('trainer'); Fix = 'none'
+       Pattern = 'failed call to cuInit|CUDA_ERROR_NO_DEVICE|Could not load dynamic library .libcuda'
+       Diagnosis = 'TensorFlow inside the trainer cannot use the GPU.'
+       Advice = 'Update the NVIDIA driver, run "wsl --update", restart Docker Desktop, then re-run.'
+       Samples = @('E tensorflow/stream_executor/cuda/cuda_driver.cc:271] failed call to cuInit: CUDA_ERROR_NO_DEVICE: no CUDA-capable device is detected') }
+
+    @{ Id = 'python-traceback'; Phases = @('trainer'); Fix = 'none'
+       Pattern = 'Traceback \(most recent call last\)'
+       Diagnosis = 'The trainer stopped with a Python error.'
+       Advice = 'The error is shown above; the full log is rl_agent\robotaxi.out. Include it if you report the problem.'
+       Samples = @("Traceback (most recent call last):`n  File ""robotaxi.py"", line 1, in <module>`nKeyError: 'x'") }
+)
+
+function Find-Failure([string]$Phase, [string]$Text) {
+    if (-not $Text) { return $null }
+    foreach ($e in $FailureCatalog) {
+        if (($e.Phases -notcontains $Phase) -and ($e.Phases -notcontains '*')) { continue }
+        $m = [regex]::Match($Text, $e.Pattern, 'IgnoreCase')
+        if (-not $m.Success) { continue }
+        $start = $Text.LastIndexOf("`n", [math]::Max(0, $m.Index - 1)) + 1
+        if ($m.Index -eq 0) { $start = 0 }
+        $end = $Text.IndexOf("`n", $m.Index)
+        if ($end -lt 0) { $end = $Text.Length }
+        $line = $Text.Substring($start, $end - $start).Trim()
+        $port = 0
+        $pm = [regex]::Match($line, '(?:0\.0\.0\.0|127\.0\.0\.1|\[::\]|localhost):(\d+)')
+        if ($pm.Success) { $port = [int]$pm.Groups[1].Value }
+        return [pscustomobject]@{ Id = $e.Id; Entry = $e; Line = $line; Port = $port }
+    }
+    $null
+}
+
+function Show-Diagnosis($Hit) {
+    $shown = if ($Hit.Line.Length -gt 220) { $Hit.Line.Substring(0, 220) + '...' } else { $Hit.Line }
+    Write-Host "    Diagnosis [$($Hit.Id)]: $($Hit.Entry.Diagnosis)" -ForegroundColor Yellow
+    Write-Host "      seen: $shown" -ForegroundColor DarkGray
+    Write-Host "      what to do: $($Hit.Entry.Advice)" -ForegroundColor Yellow
+}
+
+function Add-Diagnosis([string]$Phase, $Hit, [string]$Action) {
+    [void]$script:Diagnoses.Add([pscustomobject]@{
+        phase = $Phase; id = $Hit.Id; seen = $Hit.Line; action = $Action; at = (Get-Date).ToString('s')
+    })
+    Save-Report
+}
+
+# Diagnoses $Text, records it, and stops the phase with the catalog's advice
+# (or the plain message when nothing matches).
+function Stop-WithDiagnosis([string]$Phase, [string]$Text, [string]$Message) {
+    $hit = Find-Failure $Phase $Text
+    if ($hit) {
+        Show-Diagnosis $hit
+        Add-Diagnosis $Phase $hit 'advised'
+        Stop-Phase "$Message [$($hit.Id)] $($hit.Entry.Advice)"
+    }
+    $tail = (($Text -split "`n") | Where-Object { $_.Trim() } | Select-Object -Last 4) -join ' | '
+    Stop-Phase "$Message. Last output: $tail"
+}
+
+function Confirm-Fix([string]$Question, [switch]$AffectsOtherSoftware) {
+    if ($DryRun) { return $false }
+    if ($AutoFix -and -not $AffectsOtherSoftware) { Write-Info "$Question -> yes (-AutoFix)"; return $true }
+    $answer = Read-Host "    $Question [y/N]"
+    $answer -match '^(y|yes)$'
+}
+
+function Restart-DockerDesktop {
+    Write-Info 'Restarting Docker Desktop ...'
+    if (Test-Native 'docker' @('desktop', 'version')) {
+        [void](Invoke-Native 'docker' @('desktop', 'restart') -Quiet)
+    } else {
+        Get-Process -Name 'Docker Desktop' -ErrorAction SilentlyContinue | Stop-Process -Force
+        Start-Sleep -Seconds 10
+        Start-Process -FilePath $DockerExe | Out-Null
+    }
+    if (-not (Wait-Until { Test-Native 'docker' @('info') } -TimeoutSec 300 -IntervalSec 10 -What 'Docker Desktop to come back')) {
+        Stop-Phase 'Docker Desktop did not come back within 5 minutes after the restart'
+    }
+}
+
+function Invoke-WslUpdate {
+    $code = Invoke-Elevated 'wsl.exe' '--update'
+    if ($code -ne 0) { Write-Warn "wsl --update exited with $code" }
+    Restart-DockerDesktop
+}
+
+function Get-PortOwner([int]$Port) {
+    $rows = @((Invoke-Native 'docker' @('ps', '--filter', "publish=$Port", '--format', '{{.Names}}|{{.Labels}}') -Quiet).Out -split "`n" | Where-Object { $_.Trim() })
+    if ($rows) {
+        $name, $labels = $rows[0] -split '\|', 2
+        $project = ([regex]::Match($labels, 'com\.docker\.compose\.project=([^,]+)')).Groups[1].Value
+        return [pscustomobject]@{ Kind = 'docker'; Name = $name; Project = $project; Text = "Docker container '$name'" + $(if ($project) { " (compose project '$project')" } else { '' }) }
+    }
+    $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($conn) {
+        if ($conn.OwningProcess -eq 4) {
+            return [pscustomobject]@{ Kind = 'system'; Name = 'System'; Project = ''; Text = 'the Windows HTTP service (http.sys), often IIS or "World Wide Web Publishing Service"; "netsh http show servicestate" lists who registered it' }
+        }
+        $p = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+        $pname = if ($p) { $p.ProcessName } else { 'unknown' }
+        return [pscustomobject]@{ Kind = 'process'; Name = $pname; Project = ''; Text = "program '$pname' (pid $($conn.OwningProcess))" }
+    }
+    $null
+}
+
+# Returns $true when the port was freed and the caller should retry.
+function Resolve-PortConflict([int]$Port) {
+    if ($Port -le 0) { return $false }
+    $owner = Get-PortOwner $Port
+    if (-not $owner) { Write-Info "Port $Port is no longer in use."; return $true }
+    Write-Host "      port $Port is used by $($owner.Text)" -ForegroundColor Yellow
+    if ($owner.Kind -eq 'docker' -and $owner.Project) {
+        if (Confirm-Fix "Stop compose project '$($owner.Project)' so this install can use port ${Port}? (docker compose -p $($owner.Project) stop)" -AffectsOtherSoftware) {
+            [void](Invoke-Native 'docker' @('compose', '-p', $owner.Project, 'stop'))
+            return $true
+        }
+    }
+    $false
+}
+
+function Invoke-SelfTest {
+    $failures = 0; $checked = 0
+    foreach ($e in $FailureCatalog) {
+        foreach ($s in $e.Samples) {
+            foreach ($ph in $e.Phases) {
+                $phase = if ($ph -eq '*') { 'build' } else { $ph }
+                $checked++
+                $hit = Find-Failure $phase $s
+                $got = if ($hit) { $hit.Id } else { '(none)' }
+                if ($got -ne $e.Id) { $failures++; Write-Host "FAIL  $($e.Id) sample in phase '$phase' matched $got" -ForegroundColor Red }
+            }
+        }
+    }
+    foreach ($clean in @('#44 naming to docker.io/library/sim_controller:latest done', 'TRAIN end:   iter=3/2000 train_step=3 loss=1.2')) {
+        foreach ($ph in 'build', 'verify', 'compose-up', 'docker-start', 'docker-gpu', 'git', 'trainer', 'unity-client') {
+            $checked++
+            $hit = Find-Failure $ph $clean
+            if ($hit) { $failures++; Write-Host "FAIL  healthy line matched $($hit.Id) in phase '$ph': $clean" -ForegroundColor Red }
+        }
+    }
+    $portSample = ($FailureCatalog | Where-Object { $_.Id -eq 'port-in-use' }).Samples[0]
+    $port = (Find-Failure 'compose-up' $portSample).Port
+    $checked++
+    if ($port -ne 80) { $failures++; Write-Host "FAIL  port extraction gave $port, expected 80" -ForegroundColor Red }
+    Write-Host "Failure catalog self-test: $($FailureCatalog.Count) entries, $checked checks, $failures failures."
+    $failures
 }
 
 # ---------------------------------------------------------------------------
@@ -418,13 +690,23 @@ function Start-DockerEngine {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $ok = Wait-Until { Test-Native 'docker' @('info') } -TimeoutSec 300 -IntervalSec 10
     if (-not $ok) {
+        $info = (Invoke-Native 'docker' @('info') -Quiet).Out
         $groups = (Invoke-Native 'whoami' @('/groups') -Quiet).Out
         $groupExists = Test-Native 'net' @('localgroup', 'docker-users')
         if ($groupExists -and $groups -notmatch 'docker-users') {
-            $script:SignOutNeeded = $true
-            Stop-Phase 'Docker Desktop added your account to the docker-users group. Sign out of Windows and back in, then run this script again.'
+            $info += "`nopen //./pipe/dockerDesktopLinuxEngine: Access is denied."
         }
-        Stop-Phase 'Docker Desktop did not start within 5 minutes. Open it from the Start menu, finish any prompts, then re-run.'
+        $hit = Find-Failure 'docker-start' $info
+        if ($hit -and $hit.Entry.Fix -eq 'signout') { $script:SignOutNeeded = $true }
+        if ($hit -and $hit.Entry.Fix -eq 'wsl-update') {
+            Show-Diagnosis $hit
+            if (Confirm-Fix 'Run "wsl --update" now (needs administrator rights) and restart Docker Desktop?') {
+                Add-Diagnosis 'docker-start' $hit 'wsl --update + restart Docker Desktop'
+                Invoke-WslUpdate
+                return [int]$sw.Elapsed.TotalSeconds
+            }
+        }
+        Stop-WithDiagnosis 'docker-start' $info 'Docker Desktop did not start within 5 minutes'
     }
     [int]$sw.Elapsed.TotalSeconds
 }
@@ -432,7 +714,18 @@ function Start-DockerEngine {
 function Test-DockerGpu {
     $r = Invoke-Native 'docker' @('run', '--rm', '--gpus', 'all', $CudaTestImage, 'nvidia-smi', '-L') -Quiet
     if ($r.Code -ne 0 -or $r.Out -notmatch 'GPU 0') {
-        Stop-Phase "Docker cannot see the GPU (docker run --gpus all ... nvidia-smi failed). Update the NVIDIA driver and run 'wsl --update'. Output: $($r.Out)"
+        $hit = Find-Failure 'docker-gpu' $r.Out
+        if ($hit -and $hit.Entry.Fix -eq 'wsl-update') {
+            Show-Diagnosis $hit
+            if (Confirm-Fix 'Run "wsl --update" now (needs administrator rights), restart Docker Desktop and test again?') {
+                Add-Diagnosis 'docker-gpu' $hit 'wsl --update + restart Docker Desktop'
+                Invoke-WslUpdate
+                $r = Invoke-Native 'docker' @('run', '--rm', '--gpus', 'all', $CudaTestImage, 'nvidia-smi', '-L') -Quiet
+            }
+        }
+        if ($r.Code -ne 0 -or $r.Out -notmatch 'GPU 0') {
+            Stop-WithDiagnosis 'docker-gpu' $r.Out 'Docker cannot see the GPU'
+        }
     }
     ($r.Out -split "`n" | Where-Object { $_ -match 'GPU 0' } | Select-Object -First 1).Trim()
 }
@@ -492,7 +785,16 @@ function Invoke-WorkspacePhase {
         if (-not (Test-Path (Join-Path $RepoDir '.git'))) {
             New-Item -ItemType Directory -Force $InstallDir | Out-Null
             $r = Invoke-Native 'git' @('clone', '--branch', $Branch, $RepoUrl, $RepoDir)
-            if ($r.Code -ne 0) { Stop-Phase "git clone $RepoUrl failed" }
+            if ($r.Code -ne 0) {
+                $hit = Find-Failure 'git' $r.Out
+                if ($hit -and $hit.Entry.Fix -eq 'retry') {
+                    Show-Diagnosis $hit
+                    Add-Diagnosis 'git' $hit 'retry'
+                    Start-Sleep -Seconds 15
+                    $r = Invoke-Native 'git' @('clone', '--branch', $Branch, $RepoUrl, $RepoDir)
+                }
+                if ($r.Code -ne 0) { Stop-WithDiagnosis 'git' $r.Out "git clone $RepoUrl failed" }
+            }
             $sha = (Invoke-Native 'git' @('-C', $RepoDir, 'rev-parse', '--short', 'HEAD') -Quiet).Out.Trim()
             $did += "cloned $Branch@$sha"
         }
@@ -505,11 +807,19 @@ function Invoke-WorkspacePhase {
             $lines = @(Get-Content (Join-Path $RepoDir '.env.example'))
             $lines += ''
             $lines += '# ---- Written by scripts/install/Install.ps1 ----'
-            $lines += "MONGO_ROOT_PASSWORD=$(New-RandomSecret)"
+            # Mongo only applies the password when it first creates the
+            # database, so a reused mongodb folder keeps its old one.
+            $mongoInUse = @(Get-ChildItem (Join-Path $InstallDir 'mongodb') -Force -ErrorAction SilentlyContinue).Count -gt 0
+            if ($mongoInUse) {
+                Write-Warn 'The mongodb folder already holds a database. Not generating a new password: set MONGO_ROOT_PASSWORD in .env to the password that database was created with (the default is "example").'
+                $did += 'wrote .env (kept the default Mongo password: existing database found)'
+            } else {
+                $lines += "MONGO_ROOT_PASSWORD=$(New-RandomSecret)"
+                $did += 'wrote .env with a random Mongo password'
+            }
             if ($ProjectName) { $lines += "COMPOSE_PROJECT_NAME=$ProjectName" }
             if ($ImagePrefix) { $lines += "IMAGE_PREFIX=$ImagePrefix" }
             [IO.File]::WriteAllLines($envFile, $lines)
-            $did += 'wrote .env with a random Mongo password'
         }
         $did -join '; '
     }
@@ -542,10 +852,71 @@ function Test-Images {
         if (-not (Test-Native 'docker' @('image', 'inspect', $img))) { return @{ ok = $false; why = "$img missing" } }
         $check = if ($svc -eq 'sim-controller') { $SimCheck } else { $RosCheck }
         $r = Invoke-InImage $img $check
-        if ($r.Code -ne 0) { return @{ ok = $false; why = "$img failed verification: $(($r.Out -split "`n" | Select-Object -Last 3) -join ' | ')" } }
+        if ($r.Code -ne 0) { return @{ ok = $false; svc = $svc; why = "$img failed verification: $(($r.Out -split "`n" | Select-Object -Last 3) -join ' | ')"; out = $r.Out } }
         $evidence += "$img ok ($((($r.Out -split "`n") | Where-Object { $_ } | Select-Object -Last 2) -join ', '))"
     }
     @{ ok = $true; why = ($evidence -join '; ') }
+}
+
+# Builds one service, retrying the failures the catalog says a retry fixes.
+# Returns the number of attempts used.
+function Build-Service([string]$Svc, [string]$Image, [switch]$NoCache) {
+    $buildLog = Join-Path $StateDir 'build.log'
+    $restarted = $false
+    for ($i = 1; $i -le $BuildRetries; $i++) {
+        Write-Info "Building $Svc ($Image), attempt $i of $BuildRetries. The first build takes 20-60 minutes; log: $buildLog"
+        $buildArgs = @('build', '--progress=plain')
+        if ($NoCache -and $i -eq 1) { $buildArgs += '--no-cache' }
+        $r = Invoke-Compose ($buildArgs + @($Svc)) -Quiet
+        Add-Content -Path $buildLog -Value $r.Out
+        if ($r.Code -eq 0) { return $i }
+
+        $hit = Find-Failure 'build' $r.Out
+        if (-not $hit) {
+            $err = ($r.Out -split "`n" | Where-Object { $_ -match 'ERROR' } | Select-Object -Last 2) -join ' | '
+            Write-Warn "attempt $i failed with an unrecognised error, retrying: $err"
+            continue
+        }
+        Show-Diagnosis $hit
+        switch ($hit.Entry.Fix) {
+            'retry' { Add-Diagnosis 'build' $hit "retry (attempt $i)"; Start-Sleep -Seconds 10 }
+            'restart-docker' {
+                if (-not $restarted -and (Confirm-Fix 'Restart Docker Desktop now? Running containers stop and restart with it.')) {
+                    Add-Diagnosis 'build' $hit 'restart Docker Desktop, retry'
+                    Restart-DockerDesktop
+                    $restarted = $true
+                } else {
+                    Add-Diagnosis 'build' $hit 'advised'
+                    Stop-Phase "building $Svc failed [$($hit.Id)] $($hit.Entry.Advice)"
+                }
+            }
+            default { Add-Diagnosis 'build' $hit 'advised'; Stop-Phase "building $Svc failed [$($hit.Id)] $($hit.Entry.Advice)" }
+        }
+    }
+    Stop-Phase "building $Svc failed $BuildRetries times; see $buildLog"
+}
+
+# Verifies the images; on a catalogued failure that a clean rebuild fixes,
+# clears the build cache and rebuilds that image once. Returns evidence.
+function Confirm-ImagesHealthy {
+    $t = Test-Images
+    if ($t.ok) { return $t.why }
+    if (-not $t.ContainsKey('out')) { Stop-Phase $t.why }
+    $hit = Find-Failure 'verify' $t.out
+    if (-not $hit -or $hit.Entry.Fix -ne 'rebuild-clean') { Stop-WithDiagnosis 'verify' $t.out $t.why }
+    Show-Diagnosis $hit
+    if (-not (Confirm-Fix "Clear Docker's build cache (for all projects on this PC) and rebuild $($t.svc) without cache?")) {
+        Add-Diagnosis 'verify' $hit 'advised'
+        Stop-Phase "$($t.why) [$($hit.Id)] $($hit.Entry.Advice)"
+    }
+    Add-Diagnosis 'verify' $hit "prune build cache, rebuild $($t.svc) without cache"
+    $img = (Get-ComposeImages)[$t.svc]
+    [void](Invoke-Native 'docker' @('rmi', '-f', $img) -Quiet)
+    [void](Invoke-Native 'docker' @('builder', 'prune', '-af') -Quiet)
+    $script:BuildAttempts[$t.svc] = Build-Service $t.svc $img -NoCache
+    $t = Test-Images
+    if (-not $t.ok) { Stop-Phase "$($t.why) (still failing after a clean rebuild)" }
+    "$($t.why) (repaired by a clean rebuild)"
 }
 
 function Invoke-ImagesPhase {
@@ -556,26 +927,12 @@ function Invoke-ImagesPhase {
         Write-Info $t.why
     } -Install {
         $images = Get-ComposeImages
-        $buildLog = Join-Path $StateDir 'build.log'
         foreach ($svc in $BuildServices) {
-            $built = $false
-            for ($i = 1; $i -le $BuildRetries; $i++) {
-                Write-Info "Building $svc ($($images[$svc])), attempt $i of $BuildRetries. This takes 20-60 minutes the first time; log: $buildLog"
-                $buildArgs = @('build', '--progress=plain')
-                if ($Rebuild -and $i -eq 1) { $buildArgs += '--no-cache' }
-                $r = Invoke-Compose ($buildArgs + @($svc)) -Quiet
-                Add-Content -Path $buildLog -Value $r.Out
-                if ($r.Code -eq 0) { $built = $true; break }
-                $err = ($r.Out -split "`n" | Where-Object { $_ -match 'ERROR' } | Select-Object -Last 2) -join ' | '
-                Write-Warn "attempt $i failed: $err"
-            }
-            if (-not $built) { Stop-Phase "building $svc failed $BuildRetries times; see $buildLog" }
-            $script:BuildAttempts[$svc] = $i
+            $script:BuildAttempts[$svc] = Build-Service $svc $images[$svc] -NoCache:$Rebuild
         }
-        $t = Test-Images
-        if (-not $t.ok) { Stop-Phase $t.why }
+        $health = Confirm-ImagesHealthy
         $attempts = ($script:BuildAttempts.GetEnumerator() | ForEach-Object { "$($_.Key) in $($_.Value) attempt(s)" }) -join ', '
-        "built $attempts; $($t.why)"
+        "built $attempts; $health"
     }
 }
 
@@ -651,7 +1008,17 @@ function Invoke-StartPhase {
         if ($missing.Count -eq 0 -and $conn) { return "services running: $($StartServices -join ', '); $conn" }
     } -Install {
         $r = Invoke-Compose (@('up', '-d', '--no-build') + $StartServices)
-        if ($r.Code -ne 0) { Stop-Phase 'docker compose up failed' }
+        if ($r.Code -ne 0) {
+            $hit = Find-Failure 'compose-up' $r.Out
+            if ($hit -and $hit.Entry.Fix -eq 'port-owner') {
+                Show-Diagnosis $hit
+                if (Resolve-PortConflict $hit.Port) {
+                    Add-Diagnosis 'compose-up' $hit "freed port $($hit.Port), retried"
+                    $r = Invoke-Compose (@('up', '-d', '--no-build') + $StartServices)
+                }
+            }
+            if ($r.Code -ne 0) { Stop-WithDiagnosis 'compose-up' $r.Out 'docker compose up failed' }
+        }
         if (-not (Wait-Until { Test-TcpPort 10000 } -TimeoutSec 120 -What 'ros-server on port 10000')) { Stop-Phase 'ros-server did not open port 10000 within 2 minutes' }
         if (-not (Wait-Until { Test-TcpPort 6006 } -TimeoutSec 180 -What 'TensorBoard on port 6006')) { Stop-Phase 'TensorBoard did not open port 6006 within 3 minutes' }
         Start-Sleep -Seconds 8
@@ -661,7 +1028,17 @@ function Invoke-StartPhase {
                 '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$wrapper`"", '-Index', '0', '-GymPollSeconds', '0')
         }
         if (-not (Wait-Until { [bool](Get-UnityRosConnection) } -TimeoutSec 180 -What 'the Unity client to connect to ros-server')) {
-            Stop-Phase 'the Unity client did not connect to ros-server within 3 minutes; check unity\Builds\latest\Player.log'
+            $playerLog = Join-Path $RepoDir 'unity\Builds\latest\Player.log'
+            $text = if (Test-Path $playerLog) { (Get-Content $playerLog -Tail 300) -join "`n" } else { '' }
+            $hit = Find-Failure 'unity-client' $text
+            if ($hit -and $hit.Entry.Fix -eq 'port-owner') {
+                Show-Diagnosis $hit
+                Add-Diagnosis 'unity-client' $hit 'advised'
+                $owner = Get-PortOwner 5005
+                if ($owner) { Write-Host "      port 5005 is used by $($owner.Text)" -ForegroundColor Yellow }
+                Stop-Phase "the Unity client could not open its port 5005 [$($hit.Id)]; stop the program using it, then re-run"
+            }
+            Stop-WithDiagnosis 'unity-client' $text "the Unity client did not connect to ros-server within 3 minutes (log: $playerLog)"
         }
         $dash = if (Wait-Until { Test-TcpPort 80 } -TimeoutSec 300 -IntervalSec 10 -What 'the dashboard (first start runs npm install)') { 'dashboard up' } else { 'dashboard still starting' }
         "services started; $(Get-UnityRosConnection); $dash"
@@ -684,6 +1061,12 @@ function Get-TrainLines {
     @(Select-String -Path $out -Pattern 'TRAIN end:\s+iter=' | ForEach-Object { $_.Line.Trim() })
 }
 
+function Stop-TrainerFailure([string]$Message) {
+    $out = Join-Path $RepoDir 'rl_agent\robotaxi.out'
+    $text = if (Test-Path $out) { (Get-Content $out -Tail 300) -join "`n" } else { '' }
+    Stop-WithDiagnosis 'trainer' $text "$Message (log: $out)"
+}
+
 function Invoke-FirstJobPhase {
     Invoke-Phase 'firstjob' "First TRAIN job ($FirstJobIterations iterations)" -Detect {
         if (-not (Test-Path $RepoDir)) { return $null }
@@ -700,10 +1083,10 @@ function Invoke-FirstJobPhase {
             Write-Info "Queued job $(($r.Out -split "`n" | Select-Object -Last 1).Trim())"
         }
         if (-not (Wait-Until { (Get-FirstJobStatus) -in 'IN_PROGRESS', 'DONE' } -TimeoutSec 600 -IntervalSec 10 -What 'the trainer to pick up the job')) {
-            Stop-Phase "the trainer did not start the job within 10 minutes (status $(Get-FirstJobStatus)); see rl_agent\robotaxi.out"
+            Stop-TrainerFailure "the trainer did not start the job within 10 minutes (status $(Get-FirstJobStatus))"
         }
         $ok = Wait-Until { (Get-TrainLines).Count -ge 2 } -TimeoutSec ($FirstJobWaitMinutes * 60) -IntervalSec 20 -What 'training steps'
-        if (-not $ok) { Stop-Phase "no training steps after $FirstJobWaitMinutes minutes; see rl_agent\robotaxi.out" }
+        if (-not $ok) { Stop-TrainerFailure "no training steps after $FirstJobWaitMinutes minutes" }
         $lines = Get-TrainLines
         "job $(Get-FirstJobStatus); $($lines.Count) training iterations so far; last: $($lines[-1])"
     }
@@ -717,6 +1100,15 @@ $script:RebootNeeded = $false
 $script:SignOutNeeded = $false
 $script:BuildAttempts = @{}
 $exitCode = 0
+
+if ($SelfTest) {
+    $selfTestFailures = Invoke-SelfTest
+    exit [int]($selfTestFailures -gt 0)
+}
+
+New-Item -ItemType Directory -Force $StateDir | Out-Null
+$LogPath = Join-Path $StateDir ("install-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+Start-Transcript -Path $LogPath -Append | Out-Null
 
 Write-Host "rl-roboracer installer  (log: $LogPath)" -ForegroundColor White
 Write-Host "Install folder: $InstallDir"
@@ -772,6 +1164,10 @@ try {
     Write-Host ''
     Write-Host 'Summary' -ForegroundColor White
     $script:Report | Format-Table phase, outcome, seconds -AutoSize | Out-String | Write-Host
+    if ($script:Diagnoses.Count) {
+        Write-Host 'Known problems recognised during this run:'
+        $script:Diagnoses | Format-Table phase, id, action -AutoSize | Out-String | Write-Host
+    }
     Write-Host "Report: $ReportPath"
     if ($exitCode -eq 0 -and -not $DryRun) {
         Write-Host ''
