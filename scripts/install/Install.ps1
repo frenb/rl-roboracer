@@ -1092,6 +1092,14 @@ function Get-UnityRosConnection {
     $null
 }
 
+function Get-RosServerStartTime {
+    $id = ((Invoke-Compose @('ps', '-q', 'ros-server') -Quiet).Out -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
+    if (-not $id) { return $null }
+    $raw = (Invoke-Native 'docker' @('inspect', '-f', '{{.State.StartedAt}}', $id.Trim()) -Quiet).Out.Trim()
+    if ($raw -notmatch '^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)') { return $null }
+    [datetime]::SpecifyKind([datetime]::ParseExact($Matches[1], 'yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture), 'Utc')
+}
+
 function Get-FailingServices {
     Start-Sleep -Seconds 20
     $rows = (Invoke-Compose @('ps', '-a', '--format', '{{.Service}}|{{.State}}') -Quiet).Out -split "`n"
@@ -1161,6 +1169,15 @@ function Invoke-StartPhase {
         if (-not (Wait-Until { Test-TcpPort 10000 } -TimeoutSec 120 -What 'ros-server on port 10000')) { Stop-Phase 'ros-server did not open port 10000 within 2 minutes' }
         if (-not (Wait-Until { Test-TcpPort 6006 } -TimeoutSec 180 -What 'TensorBoard on port 6006')) { Stop-Phase 'TensorBoard did not open port 6006 within 3 minutes' }
         Start-Sleep -Seconds 8
+        # Unity sends its ROS handshake only at startup, so a client that
+        # outlived a ros-server restart never connects to the new one.
+        $rosStarted = Get-RosServerStartTime
+        $stale = @(Get-UnityClientProcess | Where-Object { $rosStarted -and $_.StartTime -and $_.StartTime.ToUniversalTime() -lt $rosStarted })
+        if ($stale) {
+            Write-Info "restarting $($stale.Count) Unity client(s) started before the current ros-server"
+            $stale | Stop-Process -Force -ErrorAction SilentlyContinue
+            [void](Wait-Until { [bool](Get-UnityClientProcess) } -TimeoutSec 45 -What 'the client wrapper to relaunch Unity')
+        }
         if (-not (Get-UnityClientProcess)) {
             $wrapper = Join-Path $RepoDir 'scripts\RunClientWrapper.ps1'
             Start-Process -FilePath 'powershell.exe' -WindowStyle Minimized -ArgumentList @(
