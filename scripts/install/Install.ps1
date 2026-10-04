@@ -1228,10 +1228,10 @@ function Invoke-FirstJobPhase {
         if (-not (Wait-Until { (Get-FirstJobStatus) -in 'IN_PROGRESS', 'DONE', 'FAILED' } -TimeoutSec 600 -IntervalSec 10 -What 'the trainer to pick up the job')) {
             Stop-TrainerFailure "the trainer did not start the job within 10 minutes (status $(Get-FirstJobStatus))"
         }
-        $ok = Wait-Until { (Get-TrainLines).Count -ge 2 -or (Get-FirstJobStatus) -eq 'FAILED' } -TimeoutSec ($FirstJobWaitMinutes * 60) -IntervalSec 20 -What 'training steps'
+        $ok = Wait-Until { @(Get-TrainLines).Count -ge 2 -or (Get-FirstJobStatus) -eq 'FAILED' } -TimeoutSec ($FirstJobWaitMinutes * 60) -IntervalSec 20 -What 'training steps'
         if ((Get-FirstJobStatus) -eq 'FAILED') { Stop-TrainerFailure 'the first training job failed' }
         if (-not $ok) { Stop-TrainerFailure "no training steps after $FirstJobWaitMinutes minutes" }
-        $lines = Get-TrainLines
+        $lines = @(Get-TrainLines)
         "job $(Get-FirstJobStatus); $($lines.Count) training iterations so far; last: $($lines[-1])"
     }
 }

@@ -380,6 +380,8 @@ def get_policy_type_name(policy):
 
 def get_next_model_version(policy):
     path=get_save_dir_root(policy)
+    # A fresh install's saved_models has no <robot>/<agent> tree yet.
+    os.makedirs(path, exist_ok=True)
     file_list = os.listdir(path)
     sorted_file_list=sorted(file_list,key=str,reverse=True)
     num_dirs = len(sorted_file_list)
