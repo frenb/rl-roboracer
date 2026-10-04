@@ -4,7 +4,7 @@
     first TRAIN job producing training steps.
 
 .DESCRIPTION
-    Runs nine phases in order. Each phase first checks whether its work is
+    Runs ten phases in order. Each phase first checks whether its work is
     already done, so the script can be re-run at any time and resumes where
     it stopped (including after the reboot WSL needs).
 
@@ -16,6 +16,7 @@
       4 workspace   Repo clone, sibling data folders, .env
       5 images      ros-server + sim-controller images built and verified
       6 unity       Unity client unpacked into unity\Builds\latest\
+        demos       Expert-demo recording the donut TRAIN jobs start from
       7 start       Stack up, one Unity client connected to ros-server
       8 firstjob    A short TRAIN job queued and producing training steps
 
@@ -50,6 +51,11 @@
     Unity client zip: a URL or a local path. Defaults to the GitHub Release
     asset for -UnityReleaseTag. A "<zip>.sha256" next to it is verified when
     present.
+
+.PARAMETER DemoZip
+    Zip of the expert-demonstration recording that TRAIN jobs on the donut
+    course start from: a URL or a local path, defaulting to the release asset
+    roboracer-demos-donut.zip. Unpacked into tfrecords\job_<id>.
 
 .PARAMETER ProjectName
     Compose project name written to .env (COMPOSE_PROJECT_NAME). Only needed
@@ -106,6 +112,7 @@ param(
     [string]$Branch = 'main',
     [string]$UnityZip = '',
     [string]$UnityReleaseTag = 'v0.1',
+    [string]$DemoZip = '',
     [string]$ProjectName = '',
     [string]$ImagePrefix = '',
     [int]$FirstJobIterations = 2000,
@@ -130,6 +137,9 @@ $ScriptParams = $PSBoundParameters
 
 $GithubRepo     = 'frenb/rl-roboracer'
 $UnityAssetName = 'roboracer-unity-windows.zip'
+$DemoAssetName  = 'roboracer-demos-donut.zip'
+# Must match COURSE_DEFAULT_DEMO_JOB_IDS['donut'] in rl_agent/robotaxi.py.
+$DemoJobId      = '64168c1b58d4d8ccdb76e721'
 $MinBuild       = 19045
 $MinDriverMajor = 495
 $CudaTestImage  = 'nvidia/cuda:11.0.3-base-ubuntu20.04'
@@ -456,8 +466,15 @@ $FailureCatalog = @(
        Advice = 'Update the NVIDIA driver, run "wsl --update", restart Docker Desktop, then re-run.'
        Samples = @('E tensorflow/stream_executor/cuda/cuda_driver.cc:271] failed call to cuInit: CUDA_ERROR_NO_DEVICE: no CUDA-capable device is detected') }
 
+    @{ Id = 'demo-data-missing'; Phases = @('trainer'); Fix = 'none'
+       Pattern = 'No such file or directory: ''/tfrecords/job_[0-9a-f]+'
+       Diagnosis = 'The training job needs expert demonstrations recorded by an earlier DEMO job (a /tfrecords/job_<id> folder), and this install does not have that recording.'
+       Advice = 'Put that job''s recording in the tfrecords folder next to the repo, or give the job demo_job_ids of a DEMO job recorded on this install.'
+       Samples = @('FileNotFoundError: [Errno 2] No such file or directory: ''/tfrecords/job_64168c1b58d4d8ccdb76e721''') }
+
     @{ Id = 'python-traceback'; Phases = @('trainer'); Fix = 'none'
        Pattern = 'Traceback \(most recent call last\)'
+       Seen = '(?m)^[A-Za-z_][\w.]*(Error|Exception)\b[^\n]*'
        Diagnosis = 'The trainer stopped with a Python error.'
        Advice = 'The error is shown above; the full log is rl_agent\robotaxi.out. Include it if you report the problem.'
        Samples = @("Traceback (most recent call last):`n  File ""robotaxi.py"", line 1, in <module>`nKeyError: 'x'") }
@@ -474,6 +491,10 @@ function Find-Failure([string]$Phase, [string]$Text) {
         $end = $Text.IndexOf("`n", $m.Index)
         if ($end -lt 0) { $end = $Text.Length }
         $line = $Text.Substring($start, $end - $start).Trim()
+        if ($e.ContainsKey('Seen')) {
+            $seen = [regex]::Matches($Text.Substring($m.Index), $e.Seen)
+            if ($seen.Count) { $line = $seen[$seen.Count - 1].Value.Trim() }
+        }
         $port = 0
         $pm = [regex]::Match($line, '(?:0\.0\.0\.0|127\.0\.0\.1|\[::\]|localhost):(\d+)')
         if ($pm.Success) { $port = [int]$pm.Groups[1].Value }
@@ -982,26 +1003,8 @@ function Invoke-UnityPhase {
             return "client from $($m.source) (sha256 $($m.sha256.Substring(0,12))...) in unity\Builds\latest"
         }
     } -Install {
-        $source = $UnityZip
-        if (-not $source) { $source = "https://github.com/$GithubRepo/releases/download/$UnityReleaseTag/$UnityAssetName" }
-        $zip = $source; $expected = $null
-        if ($source -match '^https?://') {
-            $zip = Join-Path $StateDir $UnityAssetName
-            Write-Info "Downloading $source"
-            Invoke-WebRequest -Uri $source -OutFile $zip -UseBasicParsing
-            try { $expected = ((Invoke-WebRequest -Uri "$source.sha256" -UseBasicParsing).Content -split '\s+')[0] } catch { $expected = $null }
-        } elseif (Test-Path "$source.sha256") {
-            $expected = ((Get-Content "$source.sha256" -Raw) -split '\s+')[0]
-        }
-        if (-not (Test-Path $zip)) { Stop-Phase "Unity client zip not found: $zip" }
-        $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-        if ($expected) {
-            if ($actual -ne $expected.ToLower()) { Stop-Phase "checksum mismatch for $zip (expected $expected, got $actual)" }
-            $check = 'checksum verified'
-        } else {
-            Write-Warn 'No .sha256 found next to the zip; skipping checksum verification.'
-            $check = 'no checksum available'
-        }
+        $asset = Get-VerifiedAsset $UnityZip $UnityAssetName
+        $source = $asset.Source; $zip = $asset.Zip; $actual = $asset.Sha256; $check = $asset.Check
         $tmp = Join-Path $StateDir 'unity-unpack'
         if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
         Expand-Archive -LiteralPath $zip -DestinationPath $tmp
@@ -1017,6 +1020,55 @@ function Invoke-UnityPhase {
         [pscustomobject]@{ source = $source; sha256 = $actual; installedAt = (Get-Date).ToString('s') } |
             ConvertTo-Json | Set-Content -Path $marker -Encoding UTF8
         "unpacked $($exes[0].Name) from $source ($check)"
+    }
+}
+
+# Resolves a release asset (a local zip path, a URL, or by default the
+# GitHub release asset) to a local zip and verifies "<zip>.sha256" when one
+# is published next to it.
+function Get-VerifiedAsset([string]$Source, [string]$AssetName) {
+    if (-not $Source) { $Source = "https://github.com/$GithubRepo/releases/download/$UnityReleaseTag/$AssetName" }
+    $zip = $Source; $expected = $null
+    if ($Source -match '^https?://') {
+        $zip = Join-Path $StateDir $AssetName
+        Write-Info "Downloading $Source"
+        Invoke-WebRequest -Uri $Source -OutFile $zip -UseBasicParsing
+        try { $expected = ((Invoke-WebRequest -Uri "$Source.sha256" -UseBasicParsing).Content -split '\s+')[0] } catch { $expected = $null }
+    } elseif (Test-Path "$Source.sha256") {
+        $expected = ((Get-Content "$Source.sha256" -Raw) -split '\s+')[0]
+    }
+    if (-not (Test-Path $zip)) { Stop-Phase "$AssetName not found: $zip" }
+    $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+    if ($expected) {
+        if ($actual -ne $expected.ToLower()) { Stop-Phase "checksum mismatch for $zip (expected $expected, got $actual)" }
+        $check = 'checksum verified'
+    } else {
+        Write-Warn "No .sha256 found next to $AssetName; skipping checksum verification."
+        $check = 'no checksum available'
+    }
+    [pscustomobject]@{ Source = $Source; Zip = $zip; Sha256 = $actual; Check = $check }
+}
+
+# ---------------------------------------------------------------------------
+# Phase 6b - expert demonstrations
+# ---------------------------------------------------------------------------
+
+function Invoke-DemosPhase {
+    $dir = Join-Path $InstallDir "tfrecords\job_$DemoJobId"
+    Invoke-Phase 'demos' "Expert demonstrations for the donut course (job $DemoJobId)" -Detect {
+        $files = @(Get-ChildItem $dir -Filter '*.tfrecord' -File -ErrorAction SilentlyContinue)
+        if ($files) { return "$($files.Count) recording(s), $([math]::Round(($files | Measure-Object Length -Sum).Sum / 1MB)) MB in tfrecords\job_$DemoJobId" }
+    } -Install {
+        $asset = Get-VerifiedAsset $DemoZip $DemoAssetName
+        $tmp = Join-Path $StateDir 'demo-unpack'
+        if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+        Expand-Archive -LiteralPath $asset.Zip -DestinationPath $tmp
+        $records = @(Get-ChildItem $tmp -Recurse -Filter '*.tfrecord' -File)
+        if (-not $records) { Stop-Phase "$DemoAssetName contains no .tfrecord files" }
+        New-Item -ItemType Directory -Force $dir | Out-Null
+        $records | ForEach-Object { Move-Item -LiteralPath $_.FullName -Destination $dir -Force }
+        Remove-Item $tmp -Recurse -Force
+        "unpacked $($records.Count) recording(s), $([math]::Round(($records | Measure-Object Length -Sum).Sum / 1MB)) MB into tfrecords\job_$DemoJobId from $($asset.Source) ($($asset.Check))"
     }
 }
 
@@ -1160,6 +1212,10 @@ function Invoke-FirstJobPhase {
         $s = Get-FirstJobStatus
         if ($s -in 'IN_PROGRESS', 'DONE') { return "installer's first job already exists (status $s)" }
     } -Install {
+        if ((Get-FirstJobStatus) -eq 'FAILED') {
+            [void](Invoke-Mongo "db.jobs.updateMany({installer_first_job: true, status: 'FAILED'}, {`$set: {installer_first_job: false}})")
+            Write-Info 'the previous first job failed; queueing a new one'
+        }
         if ((Get-FirstJobStatus) -eq 'NONE') {
             $js = "db.jobs.insertOne({job_type: 'TRAIN', model_type: 'SacAgent', robot_type: 'robotaxi', " +
                   "num_iterations: $FirstJobIterations, status: 'NOT_STARTED', create_date: new Date(), " +
@@ -1169,10 +1225,11 @@ function Invoke-FirstJobPhase {
             if ($r.Code -ne 0) { Stop-Phase "could not insert the job: $($r.Out)" }
             Write-Info "Queued job $(($r.Out -split "`n" | Select-Object -Last 1).Trim())"
         }
-        if (-not (Wait-Until { (Get-FirstJobStatus) -in 'IN_PROGRESS', 'DONE' } -TimeoutSec 600 -IntervalSec 10 -What 'the trainer to pick up the job')) {
+        if (-not (Wait-Until { (Get-FirstJobStatus) -in 'IN_PROGRESS', 'DONE', 'FAILED' } -TimeoutSec 600 -IntervalSec 10 -What 'the trainer to pick up the job')) {
             Stop-TrainerFailure "the trainer did not start the job within 10 minutes (status $(Get-FirstJobStatus))"
         }
-        $ok = Wait-Until { (Get-TrainLines).Count -ge 2 } -TimeoutSec ($FirstJobWaitMinutes * 60) -IntervalSec 20 -What 'training steps'
+        $ok = Wait-Until { (Get-TrainLines).Count -ge 2 -or (Get-FirstJobStatus) -eq 'FAILED' } -TimeoutSec ($FirstJobWaitMinutes * 60) -IntervalSec 20 -What 'training steps'
+        if ((Get-FirstJobStatus) -eq 'FAILED') { Stop-TrainerFailure 'the first training job failed' }
         if (-not $ok) { Stop-TrainerFailure "no training steps after $FirstJobWaitMinutes minutes" }
         $lines = Get-TrainLines
         "job $(Get-FirstJobStatus); $($lines.Count) training iterations so far; last: $($lines[-1])"
@@ -1228,6 +1285,7 @@ try {
     if (-not $DryRun -or (Test-Path $RepoDir)) {
         Invoke-ImagesPhase
         Invoke-UnityPhase
+        Invoke-DemosPhase
         if (-not $DryRun) {
             Invoke-StartPhase
             if (-not $NoFirstJob) { Invoke-FirstJobPhase }
