@@ -416,13 +416,20 @@ $FailureCatalog = @(
        Advice = 'Move or delete that folder, or pass a different -InstallDir.'
        Samples = @('fatal: destination path ''C:\Users\me\rl-roboracer\rl-roboracer'' already exists and is not an empty directory.') }
 
-    @{ Id = 'mongo-auth'; Phases = @('trainer'); Fix = 'none'
+    @{ Id = 'repo-files-missing'; Phases = @('container'); Fix = 'recreate'
+       Pattern = 'ENOENT[^\n]*package\.json|can''t open file ''[^'']*\.py''|No such file or directory[^\n]*\.py'''
+       Diagnosis = 'A container cannot see the repo files it runs from. Usually the install folder was deleted or moved while its containers still existed; Docker restarted them and recreated the missing folders empty.'
+       Advice = 'Recreate the containers from the current install folder: docker compose up -d --force-recreate.'
+       Samples = @('npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open ''/dashboard/package.json''',
+                   'python: can''t open file ''robotaxi.py'': [Errno 2] No such file or directory') }
+
+    @{ Id = 'mongo-auth'; Phases = @('trainer', 'container'); Fix = 'none'
        Pattern = 'Authentication failed|AuthenticationFailed|bad auth'
        Diagnosis = 'The trainer cannot log in to MongoDB. The password in .env differs from the one the database was created with, typically because the mongodb folder was reused from an earlier install.'
        Advice = 'Put the original password back in .env as MONGO_ROOT_PASSWORD. Or, to start with an empty database: stop the stack, empty the mongodb folder, and start it again.'
        Samples = @('pymongo.errors.OperationFailure: Authentication failed., full error: {''ok'': 0.0, ''errmsg'': ''Authentication failed.'', ''code'': 18, ''codeName'': ''AuthenticationFailed''}') }
 
-    @{ Id = 'mongo-unreachable'; Phases = @('trainer'); Fix = 'none'
+    @{ Id = 'mongo-unreachable'; Phases = @('trainer', 'container'); Fix = 'none'
        Pattern = 'ServerSelectionTimeoutError'
        Diagnosis = 'The trainer cannot reach MongoDB.'
        Advice = 'Check the mongo container with "docker compose ps mongo" and "docker compose logs mongo".'
@@ -568,7 +575,7 @@ function Invoke-SelfTest {
         }
     }
     foreach ($clean in @('#44 naming to docker.io/library/sim_controller:latest done', 'TRAIN end:   iter=3/2000 train_step=3 loss=1.2')) {
-        foreach ($ph in 'build', 'verify', 'compose-up', 'docker-start', 'docker-gpu', 'git', 'trainer', 'unity-client') {
+        foreach ($ph in 'build', 'verify', 'compose-up', 'docker-start', 'docker-gpu', 'git', 'trainer', 'unity-client', 'container') {
             $checked++
             $hit = Find-Failure $ph $clean
             if ($hit) { $failures++; Write-Host "FAIL  healthy line matched $($hit.Id) in phase '$ph': $clean" -ForegroundColor Red }
@@ -772,7 +779,7 @@ function New-RandomSecret([int]$Length = 32) {
 
 function Invoke-WorkspacePhase {
     Invoke-Phase 'workspace' "Repo and data folders in $InstallDir" -Detect {
-        $haveRepo = Test-Path (Join-Path $RepoDir '.git')
+        $haveRepo = Test-Path (Join-Path $RepoDir '.git\HEAD')
         $haveEnv  = Test-Path (Join-Path $RepoDir '.env')
         $haveData = @('saved_models', 'mongodb', 'tfrecords' | Where-Object { -not (Test-Path (Join-Path $InstallDir $_)) }).Count -eq 0
         if ($haveRepo -and $haveEnv -and $haveData) {
@@ -782,7 +789,17 @@ function Invoke-WorkspacePhase {
         }
     } -Install {
         $did = @()
-        if (-not (Test-Path (Join-Path $RepoDir '.git'))) {
+        if (-not (Test-Path (Join-Path $RepoDir '.git\HEAD'))) {
+            # Docker recreates missing bind-mount sources as empty folders when
+            # containers outlive a deleted install, and the trainer then writes
+            # its log there; such a leftover blocks the clone.
+            if (Test-Path $RepoDir) {
+                $content = @(Get-ChildItem $RepoDir -Recurse -File -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch '\.(out|log)$' })
+                if ($content.Count -eq 0) {
+                    Remove-Item -LiteralPath $RepoDir -Recurse -Force
+                    $did += 'removed a leftover repo folder that held only logs'
+                }
+            }
             New-Item -ItemType Directory -Force $InstallDir | Out-Null
             $r = Invoke-Native 'git' @('clone', '--branch', $Branch, $RepoUrl, $RepoDir)
             if ($r.Code -ne 0) {
@@ -999,6 +1016,33 @@ function Get-UnityRosConnection {
     $null
 }
 
+function Get-FailingServices {
+    Start-Sleep -Seconds 20
+    $rows = (Invoke-Compose @('ps', '-a', '--format', '{{.Service}}|{{.State}}') -Quiet).Out -split "`n"
+    @($rows | ForEach-Object {
+        $svc, $state = $_.Trim() -split '\|', 2
+        if ($svc -and $StartServices -contains $svc -and $state -match 'restarting|exited|dead') { $svc }
+    })
+}
+
+# A service that crashes on start still leaves "compose up" exiting 0, so
+# look for restart loops and diagnose them from the service's own log.
+function Assert-NoCrashLoop {
+    $failing = Get-FailingServices
+    if (-not $failing) { return }
+    $logs = (Invoke-Compose (@('logs', '--no-color', '--tail', '60') + $failing) -Quiet).Out
+    $hit = Find-Failure 'container' $logs
+    if ($hit -and $hit.Entry.Fix -eq 'recreate') {
+        Show-Diagnosis $hit
+        Add-Diagnosis 'container' $hit "recreated $($failing -join ', ')"
+        [void](Invoke-Compose (@('up', '-d', '--no-build', '--force-recreate') + $failing) -Quiet)
+        $failing = Get-FailingServices
+        if (-not $failing) { return }
+        $logs = (Invoke-Compose (@('logs', '--no-color', '--tail', '60') + $failing) -Quiet).Out
+    }
+    Stop-WithDiagnosis 'container' $logs "these services keep crashing: $($failing -join ', ')"
+}
+
 function Invoke-StartPhase {
     Invoke-Phase 'start' 'Start the stack and one Unity client' -NoExpectClean -Detect {
         if (-not (Test-Path $RepoDir)) { return $null }
@@ -1019,6 +1063,7 @@ function Invoke-StartPhase {
             }
             if ($r.Code -ne 0) { Stop-WithDiagnosis 'compose-up' $r.Out 'docker compose up failed' }
         }
+        Assert-NoCrashLoop
         if (-not (Wait-Until { Test-TcpPort 10000 } -TimeoutSec 120 -What 'ros-server on port 10000')) { Stop-Phase 'ros-server did not open port 10000 within 2 minutes' }
         if (-not (Wait-Until { Test-TcpPort 6006 } -TimeoutSec 180 -What 'TensorBoard on port 6006')) { Stop-Phase 'TensorBoard did not open port 6006 within 3 minutes' }
         Start-Sleep -Seconds 8
