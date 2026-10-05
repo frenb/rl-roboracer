@@ -1228,7 +1228,8 @@ function Invoke-StartPhase {
         if (-not (Wait-Until { Test-TcpPort 10000 } -TimeoutSec 120 -What 'ros-server on port 10000')) { Stop-Phase 'ros-server did not open port 10000 within 2 minutes' }
         if (-not (Wait-Until { Test-TcpPort 6006 } -TimeoutSec 180 -What 'TensorBoard on port 6006')) { Stop-Phase 'TensorBoard did not open port 6006 within 3 minutes' }
         # First start generates its gRPC stubs and downloads the ~260 MB connectome.
-        if (-not (Wait-Until { Test-TcpPort 50061 } -TimeoutSec 900 -IntervalSec 10 -What 'fly-brain on port 50061 (first start downloads the connectome)')) {
+        $flyUp = { (Invoke-Compose @('exec', '-T', 'fly-brain', 'python', '-c', "import socket; socket.create_connection(('127.0.0.1', 50061), 2)") -Quiet).Code -eq 0 }
+        if (-not (Wait-Until $flyUp -TimeoutSec 900 -IntervalSec 10 -What 'fly-brain on port 50061 (first start downloads the connectome)')) {
             Stop-WithDiagnosis 'container' (Get-ServiceLogs @('fly-brain')) 'fly-brain did not open port 50061 within 15 minutes'
         }
         Start-Sleep -Seconds 8

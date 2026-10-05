@@ -316,9 +316,11 @@ services:
         source: ./protos
         target: /protos
         read_only: true
-    ports:
-      # gRPC. Exposed on the host so debug clients can run outside Compose.
-      - "50061:50061"
+    # gRPC on 50061 is reached as fly-brain:50061 inside Compose and is not
+    # published: Windows reserves the 50000-50259 area in moving blocks
+    # (Hyper-V/WSL excluded port ranges), so a host binding there fails at
+    # random. For a debug client on the host, add a ports entry on a port
+    # outside `netsh interface ipv4 show excludedportrange protocol=tcp`.
     networks:
       default:
 
