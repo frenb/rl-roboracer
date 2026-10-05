@@ -149,8 +149,8 @@ $DemoJobId      = '64168c1b58d4d8ccdb76e721'
 $MinBuild       = 19045
 $MinDriverMajor = 495
 $CudaTestImage  = 'nvidia/cuda:11.0.3-base-ubuntu20.04'
-$BuildServices  = @('ros-server', 'sim-controller')
-$StartServices  = @('ros-server', 'mongo', 'mongo-express', 'sim-controller', 'dashboard')
+$BuildServices  = @('ros-server', 'sim-controller', 'fly-brain')
+$StartServices  = @('ros-server', 'mongo', 'mongo-express', 'sim-controller', 'dashboard', 'fly-brain')
 $DockerExe      = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
 
 $StateDir   = Join-Path $env:LOCALAPPDATA 'rl-roboracer-install'
@@ -933,13 +933,18 @@ source /opt/ros/noetic/setup.bash && source /catkin_ws/devel/setup.bash
 python3 -c 'from roboracer.msg import CarSceneData, SimCommand, SimStatus, Camera; from ros_tcp_endpoint import TcpServer; from virtual_endpoint import VirtualNode; print("unity_node and remote_node imports ok")'
 '@
 
+$FlyCheck = @'
+set -eo pipefail
+python -c 'import flybrain, cupy, grpc, google.protobuf; print("flybrain", flybrain.__version__ if hasattr(flybrain, "__version__") else "ok", "grpc", grpc.__version__)'
+'@
+
 function Test-Images {
     $images = Get-ComposeImages
     $evidence = @()
     foreach ($svc in $BuildServices) {
         $img = $images[$svc]
         if (-not (Test-Native 'docker' @('image', 'inspect', $img))) { return @{ ok = $false; why = "$img missing" } }
-        $check = if ($svc -eq 'sim-controller') { $SimCheck } else { $RosCheck }
+        $check = switch ($svc) { 'sim-controller' { $SimCheck } 'fly-brain' { $FlyCheck } default { $RosCheck } }
         $r = Invoke-InImage $img $check
         if ($r.Code -ne 0) { return @{ ok = $false; svc = $svc; why = "$img failed verification: $(($r.Out -split "`n" | Select-Object -Last 3) -join ' | ')"; out = $r.Out } }
         $evidence += "$img ok ($((($r.Out -split "`n") | Where-Object { $_ } | Select-Object -Last 2) -join ', '))"
@@ -1009,7 +1014,7 @@ function Confirm-ImagesHealthy {
 }
 
 function Invoke-ImagesPhase {
-    Invoke-Phase 'images' 'Docker images (ros-server, sim-controller)' -Detect {
+    Invoke-Phase 'images' "Docker images ($($BuildServices -join ', '))" -Detect {
         if ($Rebuild) { return $null }
         $t = Test-Images
         if ($t.ok) { return $t.why }
@@ -1222,6 +1227,10 @@ function Invoke-StartPhase {
         Assert-NoCrashLoop
         if (-not (Wait-Until { Test-TcpPort 10000 } -TimeoutSec 120 -What 'ros-server on port 10000')) { Stop-Phase 'ros-server did not open port 10000 within 2 minutes' }
         if (-not (Wait-Until { Test-TcpPort 6006 } -TimeoutSec 180 -What 'TensorBoard on port 6006')) { Stop-Phase 'TensorBoard did not open port 6006 within 3 minutes' }
+        # First start generates its gRPC stubs and downloads the ~260 MB connectome.
+        if (-not (Wait-Until { Test-TcpPort 50061 } -TimeoutSec 900 -IntervalSec 10 -What 'fly-brain on port 50061 (first start downloads the connectome)')) {
+            Stop-WithDiagnosis 'container' (Get-ServiceLogs @('fly-brain')) 'fly-brain did not open port 50061 within 15 minutes'
+        }
         Start-Sleep -Seconds 8
         # Unity sends its ROS handshake only at startup, so a client that
         # outlived a ros-server restart never connects to the new one.

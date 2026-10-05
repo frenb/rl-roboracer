@@ -285,6 +285,10 @@ services:
       context: ./docker/fly_brain
       dockerfile: Dockerfile
     restart: unless-stopped
+    # The server's gRPC stubs (docker/fly_brain/gen/) are generated, not
+    # committed, so a fresh clone builds them on first start. The connectome
+    # itself (~260 MB) downloads into /fly_data on the first FlyBrain().
+    command: bash -c "[ -f /fly_brain/gen/fly_brain/proto/fly_brain_pb2.py ] || bash /fly_brain/gen_protos.sh; exec python -u /fly_brain/fly_brain_server.py"
     environment:
       - FLY_DATA=/fly_data
       - FLY_DEVICE=cuda
