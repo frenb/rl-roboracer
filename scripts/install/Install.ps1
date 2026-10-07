@@ -21,6 +21,8 @@
       7 start       Stack up, one Unity client connected to ros-server
         seed        Starter gyms, reward design and experiment designs in
                     MongoDB (seed\seed.json; existing documents are kept)
+        autostart   Startup-folder shortcut that restarts the Unity client
+                    supervisor at each sign-in (Start-ClientAtLogon.ps1)
       8 firstjob    A short TRAIN job on the default gym, straight into SAC
                     training (no BC pretrain, no first eval), producing
                     training steps and TensorBoard scalars
@@ -350,7 +352,7 @@ function Get-UnityClientProcess {
 # The wrapper relaunches a client it sees exit, so it has to go first.
 function Stop-UnityClients {
     $wrappers = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and $_.CommandLine -like "*$RepoDir\scripts\RunClientWrapper.ps1*" })
+        Where-Object { $_.CommandLine -and ($_.CommandLine -like "*$RepoDir\scripts\RunClientWrapper.ps1*" -or $_.CommandLine -like "*$RepoDir\scripts\install\Start-ClientAtLogon.ps1*") })
     $wrappers | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     $clients = @(Get-UnityClientProcess)
     $clients | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -1324,6 +1326,36 @@ function Invoke-SeedPhase {
 }
 
 # ---------------------------------------------------------------------------
+# Phase 7c - Unity client at sign-in
+# ---------------------------------------------------------------------------
+
+function Get-AutostartShortcut {
+    $name = if ($ProjectName) { "rl-roboracer Unity client ($ProjectName).lnk" } else { 'rl-roboracer Unity client.lnk' }
+    Join-Path ([Environment]::GetFolderPath('Startup')) $name
+}
+
+function Invoke-AutostartPhase {
+    $lnk = Get-AutostartShortcut
+    $script = Join-Path $RepoDir 'scripts\install\Start-ClientAtLogon.ps1'
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -GymSource `"$DefaultGymExe`""
+    Invoke-Phase 'autostart' 'Start the Unity client at sign-in' -Detect {
+        if (-not (Test-Path $lnk)) { return $null }
+        $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+        if ($s.Arguments -eq $arguments) { return "Startup shortcut present: $lnk" }
+    } -Install {
+        if (-not (Test-Path $script)) { Stop-Phase "missing $script" }
+        $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+        $s.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $s.Arguments = $arguments
+        $s.WorkingDirectory = $RepoDir
+        $s.WindowStyle = 7
+        $s.Description = 'Waits for Docker and ros-server, then supervises the rl-roboracer Unity client (gym switching on).'
+        $s.Save()
+        "Startup shortcut $lnk starts the client wrapper on $($Gyms[0].Name) at each sign-in"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Phase 8 - first TRAIN job
 # ---------------------------------------------------------------------------
 
@@ -1446,6 +1478,7 @@ try {
         if (-not $DryRun) {
             Invoke-StartPhase
             Invoke-SeedPhase
+            Invoke-AutostartPhase
             if (-not $NoFirstJob) { Invoke-FirstJobPhase }
         }
     }

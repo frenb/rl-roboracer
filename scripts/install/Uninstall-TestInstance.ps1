@@ -76,6 +76,12 @@ try {
     $ErrorActionPreference = $old
 }
 
+$startup = [Environment]::GetFolderPath('Startup')
+$shell = New-Object -ComObject WScript.Shell
+Get-ChildItem $startup -Filter 'rl-roboracer Unity client*.lnk' -ErrorAction SilentlyContinue |
+    Where-Object { $shell.CreateShortcut($_.FullName).Arguments -like "*$repo*" } |
+    ForEach-Object { Write-Host "  removing Startup shortcut $($_.Name)"; Remove-Item -LiteralPath $_.FullName -Force }
+
 Write-Host "  deleting $InstallDir"
 Remove-Item -LiteralPath $InstallDir -Recurse -Force
 Write-Host 'Done.'
