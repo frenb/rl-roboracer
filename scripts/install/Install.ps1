@@ -68,6 +68,11 @@
     Prefix for locally built image names, written to .env (IMAGE_PREFIX).
     Same purpose as -ProjectName.
 
+.PARAMETER Clients
+    Number of Unity clients (1-4) started now and at each sign-in. More
+    than one also starts ros-server-1..N-1 (compose/scale.yml); the trainer
+    must then run with --num-envs N. Fly courses need 1. Default 1.
+
 .PARAMETER FirstJobIterations
     num_iterations of the first TRAIN job.
 
@@ -117,6 +122,7 @@ param(
     [string]$UnityReleaseTag = 'v0.1',
     [string]$ProjectName = '',
     [string]$ImagePrefix = '',
+    [ValidateRange(1, 4)][int]$Clients = 1,
     [int]$FirstJobIterations = 2000,
     [int]$FirstJobWaitMinutes = 30,
     [switch]$ExpectClean,
@@ -1245,10 +1251,7 @@ function Invoke-StartPhase {
             [void](Wait-Until { [bool](Get-UnityClientProcess) } -TimeoutSec 45 -What 'the client wrapper to relaunch Unity')
         }
         if (-not (Get-UnityClientProcess)) {
-            $wrapper = Join-Path $RepoDir 'scripts\RunClientWrapper.ps1'
-            Start-Process -FilePath 'powershell.exe' -WindowStyle Minimized -ArgumentList @(
-                '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$wrapper`"", '-Index', '0',
-                '-GymPollSeconds', '10', '-GymSource', "`"$DefaultGymExe`"")
+            Start-Process -FilePath 'powershell.exe' -WindowStyle Minimized -ArgumentList (Get-ClientLauncherArguments)
         }
         if (-not (Wait-Until { [bool](Get-UnityRosConnection) } -TimeoutSec 180 -What 'the Unity client to connect to ros-server')) {
             $playerLog = Join-Path $RepoDir 'unity\Builds\latest\Player.log'
@@ -1334,11 +1337,16 @@ function Get-AutostartShortcut {
     Join-Path ([Environment]::GetFolderPath('Startup')) $name
 }
 
+function Get-ClientLauncherArguments {
+    $script = Join-Path $RepoDir 'scripts\install\Start-ClientAtLogon.ps1'
+    "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -N $Clients -GymSource `"$DefaultGymExe`""
+}
+
 function Invoke-AutostartPhase {
     $lnk = Get-AutostartShortcut
     $script = Join-Path $RepoDir 'scripts\install\Start-ClientAtLogon.ps1'
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -GymSource `"$DefaultGymExe`""
-    Invoke-Phase 'autostart' 'Start the Unity client at sign-in' -Detect {
+    $arguments = Get-ClientLauncherArguments
+    Invoke-Phase 'autostart' "Start $Clients Unity client(s) at sign-in" -Detect {
         if (-not (Test-Path $lnk)) { return $null }
         $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
         if ($s.Arguments -eq $arguments) { return "Startup shortcut present: $lnk" }
@@ -1351,7 +1359,7 @@ function Invoke-AutostartPhase {
         $s.WindowStyle = 7
         $s.Description = 'Waits for Docker and ros-server, then supervises the rl-roboracer Unity client (gym switching on).'
         $s.Save()
-        "Startup shortcut $lnk starts the client wrapper on $($Gyms[0].Name) at each sign-in"
+        "Startup shortcut $lnk starts $Clients client(s) on $($Gyms[0].Name) at each sign-in"
     }
 }
 
