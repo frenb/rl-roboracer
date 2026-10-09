@@ -28,7 +28,9 @@
     # The doctor diagnoses failures, including ones before the repo is cloned.
     # Without it the install still runs, with catalog diagnoses only.
     function Get-DoctorFiles([string]$Path) {
-        foreach ($e in Invoke-RestMethod -UseBasicParsing "https://api.github.com/repos/$repo/contents/${Path}?ref=$branch") {
+        # Assigned first: Windows PowerShell 5.1 emits the JSON array as one object.
+        $entries = Invoke-RestMethod -UseBasicParsing "https://api.github.com/repos/$repo/contents/${Path}?ref=$branch"
+        foreach ($e in $entries) {
             if ($e.type -eq 'dir' -and $e.name -notin 'eval', 'assets') { Get-DoctorFiles $e.path }
             elseif ($e.type -eq 'file') { $e.path }
         }
