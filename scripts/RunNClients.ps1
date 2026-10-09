@@ -202,6 +202,9 @@ if ($UseWindowsTerminal) {
 }
 $useWt = ($null -ne $wtCommand)
 $wtWindowName = 'robotaxi-stack'
+# Full path: Windows Terminal 1.24 fails a new tab whose commandline is a
+# bare 'powershell' with 0x80070002 (file not found).
+$powershellExe = Join-Path $PSHOME 'powershell.exe'
 
 $gridLayoutMsg = if ($GridCols -gt 0 -and $GridRows -gt 0) {
     "${GridCols}x${GridRows} grid on primary monitor"
@@ -253,7 +256,7 @@ for ($i = 0; $i -lt $N; $i++) {
             '-w', $wtWindowName
             'new-tab'
             '--title', "actor-$i"
-            'powershell'
+            "`"$powershellExe`""
             $psCmdLine
         ) -join ' '
         $startArgs.FilePath     = 'wt.exe'
@@ -261,7 +264,7 @@ for ($i = 0; $i -lt $N; $i++) {
         $proc = Start-Process @startArgs
         Write-Host "  [$i] tab created in wt window '$wtWindowName' -> $exePath"
     } else {
-        $startArgs.FilePath     = 'powershell'
+        $startArgs.FilePath     = $powershellExe
         $startArgs.ArgumentList = $psCmdLine
         $proc = Start-Process @startArgs
         Write-Host "  [$i] supervisor PID=$($proc.Id) -> $exePath"

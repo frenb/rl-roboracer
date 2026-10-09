@@ -145,6 +145,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Windows Terminal tabs inherit the launching shell's environment, which
+# has been seen without System32 on PATH; robocopy (gym switch) lives there.
+$system32 = [Environment]::SystemDirectory
+if (-not (($env:Path -split ';' | ForEach-Object { $_.TrimEnd('\') }) -contains $system32)) {
+    Write-Host "[$Index] PATH is missing $system32; adding it."
+    $env:Path = "$system32;$([Environment]::GetFolderPath('Windows'));$env:Path"
+}
+
 # Self-register with the shared stack-state directory so Stop-Stack
 # can find this supervisor by PID without needing to ask WMI. The
 # matching Unregister-Supervisor call lives in the try/finally
