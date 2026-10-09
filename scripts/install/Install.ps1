@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-    Install rl-roboracer on a Windows PC with an NVIDIA GPU, from nothing to a
-    first TRAIN job producing training steps.
+    InstallZero for rl-roboracer: installs it on a Windows PC with an NVIDIA
+    GPU, from nothing to a first TRAIN job producing training steps.
 
 .DESCRIPTION
     Runs ten phases in order. Each phase first checks whether its work is
@@ -57,8 +57,11 @@
 .PARAMETER AssetDir
     Local folder holding the release assets (the gym zips and
     roboracer-demos-donut.zip, each optionally with a "<zip>.sha256").
-    Without it the assets are downloaded from the GitHub Release
-    -UnityReleaseTag.
+    Default: the folder this script is in, when the gym zips are there;
+    otherwise they are downloaded from the GitHub Release -UnityReleaseTag.
+    Likewise a rl-roboracer.bundle next to the script is cloned (branch
+    rltest) instead of -RepoUrl, and a doctor-assets folder beside the
+    script's folder is used as -DoctorAssets.
 
 .PARAMETER ProjectName
     Compose project name written to .env (COMPOSE_PROJECT_NAME). Only needed
@@ -112,6 +115,45 @@
 .PARAMETER SelfTest
     Check the failure catalog against its own sample log lines, then exit.
     Changes nothing.
+
+.PARAMETER Doctor
+    Which model diagnoses a failed install (scripts\install\doctor). The
+    doctor only investigates and reports a root cause and fix; it changes
+    nothing. Without -Doctor the installer asks once (the answer is kept for
+    resumed runs); a non-interactive run uses none.
+      none                      catalog diagnoses only
+      local                     a bundled local model picked for this PC
+      gpt-oss, gemma, qwen,     a specific bundled local model
+      granite                   (needs -DoctorAssets)
+      anthropic, openai, xai,   a hosted model; sends logs and command output
+      google                    from this PC (secret values removed) to that
+                                provider. The API key is read from the
+                                environment or asked for, and never saved.
+      <provider>:<model-id>     a specific hosted model, e.g. xai:grok-4.7
+      <file>.gguf               a specific local model file
+
+.PARAMETER DoctorAssets
+    Folder with the llama.cpp builds and .gguf models for local doctor
+    models. Default: RL_DOCTOR_ASSETS, else the doctor's own assets folder.
+
+.EXAMPLE
+    .\Install.ps1
+    Installs from GitHub into %USERPROFILE%\rl-roboracer and asks which
+    doctor model to use.
+
+.EXAMPLE
+    .\Install.ps1 -Doctor xai
+    Same, with Grok 4.7 as the doctor (XAI_API_KEY is read from the
+    environment or asked for).
+
+.EXAMPLE
+    C:\Users\Public\rl-roboracer-test\Install.ps1 -Doctor gemma
+    The rltest clean test: the code, gyms and doctor models staged by
+    Prepare-RlTest.ps1 next to it are found without options.
+
+.EXAMPLE
+    .\Install.ps1 -DryRun
+    Reports what is present and what would be installed; changes nothing.
 #>
 [CmdletBinding()]
 param(
@@ -133,7 +175,9 @@ param(
     [switch]$Rebuild,
     [int]$BuildRetries = 6,
     [switch]$AutoFix,
-    [switch]$SelfTest
+    [switch]$SelfTest,
+    [string]$Doctor = '',
+    [string]$DoctorAssets = ''
 )
 
 Set-StrictMode -Version 2.0
@@ -151,6 +195,23 @@ $Gyms = @(
     @{ Id = '6aafa685c2736b990584403f'; Name = 'wCourseJetRacer2026.09.20-v13'; Folder = 'wCourseJetRacer2026.09.20-v13' },
     @{ Id = '6abc6906a249d535d4d976e3'; Name = 'FlyBrain-wCourseJetRacer2026.09.28-v49'; Folder = 'wCourseJetRacer2026.09.28-v49' }
 )
+# Files staged next to the installer (by Prepare-RlTest.ps1, or a copied
+# folder for an offline install) are used without options. They go into
+# $ScriptParams because a resumed run starts from a copy in $StateDir.
+if ($PSScriptRoot) {
+    if (-not $AssetDir -and (Test-Path (Join-Path $PSScriptRoot "roboracer-gym-$($Gyms[0].Folder).zip"))) {
+        $AssetDir = $PSScriptRoot; $ScriptParams['AssetDir'] = $AssetDir
+    }
+    $stagedBundle = Join-Path $PSScriptRoot 'rl-roboracer.bundle'
+    if (-not $ScriptParams.ContainsKey('RepoUrl') -and (Test-Path $stagedBundle)) {
+        $RepoUrl = $stagedBundle; $ScriptParams['RepoUrl'] = $RepoUrl
+        if (-not $ScriptParams.ContainsKey('Branch')) { $Branch = 'rltest'; $ScriptParams['Branch'] = $Branch }
+    }
+    $stagedDoctorAssets = Join-Path (Split-Path $PSScriptRoot -Parent) 'doctor-assets'
+    if (-not $DoctorAssets -and -not $env:RL_DOCTOR_ASSETS -and (Test-Path $stagedDoctorAssets)) {
+        $DoctorAssets = $stagedDoctorAssets; $ScriptParams['DoctorAssets'] = $DoctorAssets
+    }
+}
 $GymExeName     = 'robotaxi gym level 1.exe'
 # Must match COURSE_DEFAULT_DEMO_JOB_IDS['donut'] in rl_agent/robotaxi.py.
 $DemoJobId      = '64168c1b58d4d8ccdb76e721'
@@ -550,6 +611,8 @@ function Add-Diagnosis([string]$Phase, $Hit, [string]$Action) {
 # (or the plain message when nothing matches).
 function Stop-WithDiagnosis([string]$Phase, [string]$Text, [string]$Message) {
     $hit = Find-Failure $Phase $Text
+    $script:FailureContext = [pscustomobject]@{ Phase = $Phase; Text = $Text; Message = $Message
+        Catalog = $(if ($hit) { "$($hit.Id): $($hit.Entry.Diagnosis) Advice given: $($hit.Entry.Advice)" } else { '' }) }
     if ($hit) {
         Show-Diagnosis $hit
         Add-Diagnosis $Phase $hit 'advised'
@@ -1100,7 +1163,11 @@ function Get-VerifiedAsset([string]$AssetName) {
         $zip = Join-Path $StateDir $AssetName
         Write-Info "Downloading $Source"
         Invoke-WebRequest -Uri $Source -OutFile $zip -UseBasicParsing
-        try { $expected = ((Invoke-WebRequest -Uri "$Source.sha256" -UseBasicParsing).Content -split '\s+')[0] } catch { $expected = $null }
+        # GitHub serves .sha256 as application/octet-stream, so .Content would be bytes.
+        try {
+            Invoke-WebRequest -Uri "$Source.sha256" -OutFile "$zip.sha256" -UseBasicParsing
+            $expected = ((Get-Content "$zip.sha256" -Raw).Trim() -split '\s+')[0]
+        } catch { $expected = $null }
     } elseif (Test-Path "$Source.sha256") {
         $expected = ((Get-Content "$Source.sha256" -Raw) -split '\s+')[0]
     }
@@ -1434,12 +1501,172 @@ function Invoke-FirstJobPhase {
 }
 
 # ---------------------------------------------------------------------------
+# Doctor - diagnoses a failed install with a local or hosted model
+# ---------------------------------------------------------------------------
+
+$DoctorChoices = @(
+    @{ Key = 'none';      Kind = 'none';   Label = 'none (catalog diagnoses only)' }
+    @{ Key = 'local';     Kind = 'local';  Model = '';                           Label = 'local model picked for this PC' }
+    @{ Key = 'gpt-oss';   Kind = 'local';  Model = 'gpt-oss-20b-MXFP4.gguf';     Label = 'gpt-oss-20b (local; ~14 GB GPU memory or 24 GB RAM)' }
+    @{ Key = 'gemma';     Kind = 'local';  Model = 'gemma-4-E4B-it-Q4_K_M.gguf'; Label = 'Gemma 4 E4B (local; small, runs anywhere)' }
+    @{ Key = 'qwen';      Kind = 'local';  Model = 'Qwen3.5-9B-Q4_K_M.gguf';     Label = 'Qwen3.5 9B (local)' }
+    @{ Key = 'granite';   Kind = 'local';  Model = 'granite-4.1-8b-Q4_K_M.gguf'; Label = 'Granite 4.1 8B (local)' }
+    @{ Key = 'anthropic'; Kind = 'remote'; Remote = 'anthropic:claude-opus-5-5';      Label = 'Claude Opus 5.5 (hosted, Anthropic)' }
+    @{ Key = 'openai';    Kind = 'remote'; Remote = 'openai:gpt-5.6-sol';             Label = 'GPT 5.6 sol (hosted, OpenAI)' }
+    @{ Key = 'xai';       Kind = 'remote'; Remote = 'xai:grok-4.7';                   Label = 'Grok 4.7 (hosted, xAI)' }
+    @{ Key = 'google';    Kind = 'remote'; Remote = 'google:gemini-3.1-pro-preview';  Label = 'Gemini 3.1 Pro (hosted, Google)' }
+)
+$DoctorProviders = @{
+    anthropic = @{ Vars = @('ANTHROPIC_API_KEY'); Models = 'https://api.anthropic.com/v1/models' }
+    openai    = @{ Vars = @('OPENAI_API_KEY');    Models = 'https://api.openai.com/v1/models' }
+    xai       = @{ Vars = @('XAI_API_KEY');       Models = 'https://api.x.ai/v1/models' }
+    google    = @{ Vars = @('GOOGLE_GEMINI_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY'); Models = 'https://generativelanguage.googleapis.com/v1beta/openai/models' }
+}
+$DoctorChoiceFile = Join-Path $StateDir 'doctor-choice.txt'
+
+function ConvertTo-DoctorSpec([string]$Choice) {
+    $c = $Choice.Trim()
+    $known = $DoctorChoices | Where-Object { $_.Key -eq $c.ToLowerInvariant() } | Select-Object -First 1
+    $s = if ($known) { $known }
+         elseif ($c -match '^(anthropic|openai|xai|google):.+') { @{ Key = $c; Kind = 'remote'; Remote = $c; Label = "$c (hosted)" } }
+         elseif ($c -match '\.gguf$') { @{ Key = $c; Kind = 'local'; Model = $c; Label = "$c (local)" } }
+         else { return $null }
+    [pscustomobject]@{ Key = $s.Key; Kind = $s.Kind; Label = $s.Label
+        Model = $(if ($s.ContainsKey('Model')) { $s.Model } else { '' }); Remote = $(if ($s.ContainsKey('Remote')) { $s.Remote } else { '' }) }
+}
+
+function Read-DoctorChoice {
+    Write-Host ''
+    Write-Host 'If the install fails, the InstallZero doctor can investigate and report the cause and the fix.' -ForegroundColor White
+    Write-Host 'It only reads (logs, files, docker and system state); it changes nothing.'
+    for ($i = 0; $i -lt $DoctorChoices.Count; $i++) { Write-Host ("  {0,2}  {1,-10} {2}" -f ($i + 1), $DoctorChoices[$i].Key, $DoctorChoices[$i].Label) }
+    while ($true) {
+        $a = (Read-Host 'Doctor model [1]').Trim()
+        if (-not $a) { return 'none' }
+        if ($a -match '^\d+$' -and [int]$a -ge 1 -and [int]$a -le $DoctorChoices.Count) { return $DoctorChoices[[int]$a - 1].Key }
+        if (ConvertTo-DoctorSpec $a) { return $a }
+        Write-Host "    '$a' is not one of the choices; type a number, a name, provider:model-id or a .gguf file."
+    }
+}
+
+function Get-DoctorApiKey([string]$Provider) {
+    foreach ($var in $DoctorProviders[$Provider].Vars) {
+        foreach ($scope in 'Process', 'User', 'Machine') { $k = [Environment]::GetEnvironmentVariable($var, $scope); if ($k) { return $k } }
+    }
+    $null
+}
+
+function Test-DoctorApiKey([string]$Provider, [string]$Key) {
+    $h = @{ Authorization = "Bearer $Key" }
+    if ($Provider -eq 'anthropic') { $h['x-api-key'] = $Key; $h['anthropic-version'] = '2023-06-01' }
+    try { [void](Invoke-WebRequest -UseBasicParsing -Uri $DoctorProviders[$Provider].Models -Headers $h -TimeoutSec 20); $true } catch { $false }
+}
+
+# Resolves -Doctor (or the saved or prompted choice) into $script:DoctorSpec,
+# and makes sure what it needs is there: model files for local, an API key
+# for hosted (kept in this process only).
+function Initialize-Doctor {
+    $choice = $Doctor
+    if (-not $choice -and (Test-Path $DoctorChoiceFile)) { $choice = (Get-Content $DoctorChoiceFile -Raw).Trim() }
+    if (-not $choice) {
+        $choice = if ([Environment]::UserInteractive -and $Host.Name -eq 'ConsoleHost') { Read-DoctorChoice } else { 'none' }
+    }
+    $spec = ConvertTo-DoctorSpec $choice
+    if (-not $spec) { Write-Warn "Unknown -Doctor '$choice'; continuing without the doctor."; $spec = ConvertTo-DoctorSpec 'none' }
+    Set-Content -Path $DoctorChoiceFile -Value $spec.Key -Encoding UTF8
+
+    if ($spec.Kind -eq 'local') {
+        $assets = @($DoctorAssets, $env:RL_DOCTOR_ASSETS, (Join-Path $PSScriptRoot 'doctor\assets')) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+        $gguf = if ($assets) { @(Get-ChildItem $assets -Filter *.gguf -ErrorAction SilentlyContinue) } else { @() }
+        if (-not $gguf -or ($spec.Model -and -not ($gguf.Name -contains $spec.Model))) {
+            Write-Warn "Doctor model $(if ($spec.Model) { $spec.Model } else { '(any .gguf)' }) not found in $(if ($assets) { $assets } else { '-DoctorAssets / RL_DOCTOR_ASSETS' }); continuing without the doctor."
+            $spec = ConvertTo-DoctorSpec 'none'
+        } else {
+            $env:RL_DOCTOR_ASSETS = (Resolve-Path $assets).Path
+        }
+    }
+    if ($spec.Kind -eq 'remote') {
+        $provider = ($spec.Remote -split ':', 2)[0]
+        $key = Get-DoctorApiKey $provider
+        $tries = 0
+        while ($true) {
+            if (-not $key) {
+                if (-not ([Environment]::UserInteractive -and $Host.Name -eq 'ConsoleHost') -or $tries -ge 2) { break }
+                $sec = Read-Host "    $($DoctorProviders[$provider].Vars[0]) (input hidden; Enter to skip the doctor)" -AsSecureString
+                $key = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+                $tries++
+                if (-not $key) { break }
+            }
+            if (Test-DoctorApiKey $provider $key) { break }
+            Write-Warn "$provider did not accept that API key."
+            $key = $null
+        }
+        if ($key) {
+            [Environment]::SetEnvironmentVariable($DoctorProviders[$provider].Vars[0], $key, 'Process')
+            Write-Info "Hosted doctor: logs and command output from this PC go to $provider when a phase fails, with secret values removed."
+        } else {
+            Write-Warn "No working $provider API key; continuing without the doctor."
+            $spec = ConvertTo-DoctorSpec 'none'
+        }
+    }
+    $script:DoctorSpec = $spec
+    Write-Info "Doctor: $($spec.Label)"
+}
+
+function Find-DoctorScript {
+    @((Join-Path $RepoDir 'scripts\install\doctor\Doctor.ps1'), (Join-Path $PSScriptRoot 'doctor\Doctor.ps1')) |
+        Where-Object { Test-Path $_ } | Select-Object -First 1
+}
+
+# Runs the doctor on the failure that stopped the install and adds its
+# diagnosis to the report. Never throws: a doctor problem must not hide the
+# install failure.
+function Invoke-InstallDoctor([string]$Message) {
+    if (-not $script:DoctorSpec -or $script:DoctorSpec.Kind -eq 'none' -or $DryRun) { return }
+    try {
+        $doctorScript = Find-DoctorScript
+        if (-not $doctorScript) { Write-Warn 'The doctor is not available yet (the repo is not cloned and no doctor folder sits next to this script).'; return }
+        $ctx = $script:FailureContext
+        $failed = @($script:Report | Where-Object { $_.outcome -eq 'failed' }) | Select-Object -Last 1
+        $phase = if ($failed) { $failed.phase } elseif ($ctx) { $ctx.Phase } else { 'unknown' }
+        $problem = @(
+            "The InstallZero installer for rl-roboracer (scripts\install\Install.ps1) stopped in phase '$phase'."
+            "Installer message: $Message"
+            $(if ($ctx -and $ctx.Catalog) { "The installer's failure catalog matched: $($ctx.Catalog)" } else { "The installer's failure catalog did not recognise this failure." })
+            "Installer state, logs and report: $StateDir (install-*.log, build*.log, install-report.json). Install folder: $InstallDir."
+            $(if ($ctx -and $ctx.Text) { "Last output of the failing step:`n" + ((($ctx.Text -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -Last 60) -join "`n") })
+            'Find the root cause and the exact fix, so the installer passes when it is run again.'
+        ) -join "`n"
+        $problemFile = Join-Path $StateDir "doctor-problem-$RunStamp.txt"
+        $resultFile = Join-Path $StateDir "doctor-result-$RunStamp.json"
+        Set-Content -Path $problemFile -Value $problem -Encoding UTF8
+        $doctorRepo = @($RepoDir, $InstallDir, $env:USERPROFILE) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        $doctorArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $doctorScript, '-ProblemFile', $problemFile, '-ResultFile', $resultFile, '-RepoDir', $doctorRepo)
+        if ($script:DoctorSpec.Kind -eq 'remote') { $doctorArgs += @('-Remote', $script:DoctorSpec.Remote) }
+        elseif ($script:DoctorSpec.Model) { $doctorArgs += @('-Model', $script:DoctorSpec.Model) }
+        Write-Host ''
+        Write-Host "Asking the doctor ($($script:DoctorSpec.Label)) to investigate; this takes a few minutes ..." -ForegroundColor Cyan
+        & (Join-Path $PSHOME 'powershell.exe') @doctorArgs 2>&1 | ForEach-Object { Write-Host "    $_" }
+        if (-not (Test-Path $resultFile)) { Write-Warn 'The doctor produced no result.'; return }
+        $r = Get-Content $resultFile -Raw | ConvertFrom-Json
+        [void]$script:Diagnoses.Add([pscustomobject]@{
+            phase = $phase; id = 'doctor'; seen = $r.root_cause; action = "doctor $($r.model), confidence $($r.confidence): $($r.fix)"
+            at = (Get-Date).ToString('s'); doctor = $r })
+        Save-Report
+    } catch {
+        Write-Warn "The doctor failed: $_"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 $script:RebootNeeded = $false
 $script:SignOutNeeded = $false
 $script:BuildAttempts = @{}
+$script:FailureContext = $null
+$script:DoctorSpec = $null
 $exitCode = 0
 
 if ($SelfTest) {
@@ -1451,10 +1678,13 @@ New-Item -ItemType Directory -Force $StateDir | Out-Null
 $LogPath = Join-Path $StateDir "install-$RunStamp.log"
 Start-Transcript -Path $LogPath -Append | Out-Null
 
-Write-Host "rl-roboracer installer  (log: $LogPath)" -ForegroundColor White
+Write-Host "InstallZero: rl-roboracer  (log: $LogPath)" -ForegroundColor White
 Write-Host "Install folder: $InstallDir"
+Write-Host "Code: $RepoUrl ($Branch)"
+Write-Host "Gyms and demos: $(if ($AssetDir) { $AssetDir } else { "https://github.com/$GithubRepo/releases/tag/$UnityReleaseTag" })"
 if ($DryRun) { Write-Host 'Dry run: nothing will be changed.' -ForegroundColor Yellow }
 Remove-ItemProperty -Path $RunOnceKey -Name $RunOnceName -ErrorAction SilentlyContinue
+if (-not $DryRun) { Initialize-Doctor }
 
 try {
     Invoke-Preflight
@@ -1497,6 +1727,7 @@ try {
     } else {
         Write-Host "Install stopped: $($_.Exception.Message)" -ForegroundColor Red
         $exitCode = if ($script:SignOutNeeded) { 3 } else { 1 }
+        if ($exitCode -eq 1) { Invoke-InstallDoctor $_.Exception.Message }
     }
 } catch {
     Write-Host ''
@@ -1504,6 +1735,7 @@ try {
     Write-Host $_.ScriptStackTrace
     Add-Result 'installer' 'failed' "$_" 0
     $exitCode = 1
+    Invoke-InstallDoctor "unexpected installer error: $_"
 } finally {
     Write-Host ''
     Write-Host 'Summary' -ForegroundColor White
