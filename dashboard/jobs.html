@@ -1113,6 +1113,26 @@
         }
       })();
 
+      // A gym can name the course and designs it was validated with
+      // (default_course_type / default_reward_design_id /
+      // default_experiment_design_id); picking the gym preselects them,
+      // and each stays editable. A default whose option is missing (e.g.
+      // an archived design) leaves that picker as it was.
+      document.getElementById('f-gym').addEventListener('change', async (ev) => {
+        const rows = await RoboracerUI.fetchJobList('gyms');
+        const gym = rows.find((r) => String(r._id) === ev.target.value);
+        if (!gym) return;
+        for (const [id, value] of [['f-course', gym.default_course_type],
+                                   ['f-reward-design', gym.default_reward_design_id],
+                                   ['f-experiment-design', gym.default_experiment_design_id]]) {
+          const sel = document.getElementById(id);
+          if (!value || sel.value === String(value)) continue;
+          if (![...sel.options].some((o) => o.value === String(value))) continue;
+          sel.value = String(value);
+          sel.dispatchEvent(new Event('change'));
+        }
+      });
+
       document.getElementById('f-job-type').addEventListener('change', updateJobHint);
       document.getElementById('f-course').addEventListener('change', updateJobHint);
       // The hint reads model type too, for the FlyPyPolicy EVAL case.

@@ -20,11 +20,14 @@
         demos       Expert-demo recording the donut TRAIN jobs start from
       7 start       Stack up, one Unity client connected to ros-server
         seed        Starter gyms, reward design and experiment designs in
-                    MongoDB (seed\seed.json; existing documents are kept)
+                    MongoDB (seed\seed.json). Each gym names its reference
+                    course, reward design and experiment design; existing
+                    documents only gain the fields they are missing
         autostart   Startup-folder shortcut that restarts the Unity client
                     supervisor at each sign-in (Start-ClientAtLogon.ps1)
-      8 firstjob    A short TRAIN job on the default gym, straight into SAC
-                    training (no BC pretrain, no first eval), producing
+      8 firstjob    A short TRAIN job on the default gym with that gym's
+                    reference course and designs (no first eval; BC
+                    pretrain only if the design sets it), producing
                     training steps and TensorBoard scalars
 
     Every phase records what it found and what it did in
@@ -1371,7 +1374,8 @@ function Invoke-SeedPhase {
             foreach ($doc in $seed.$coll) {
                 $want++
                 $id = if ($doc._id -is [string]) { "'$($doc._id)'" } else { "ObjectId('$($doc._id.'$oid')')" }
-                $checks += "db.getCollection('$coll').countDocuments({_id: $id})"
+                $fields = @($doc.PSObject.Properties.Name | Where-Object { $_ -ne '_id' } | ForEach-Object { "'$_': {`$exists: true}" })
+                $checks += "db.getCollection('$coll').countDocuments({_id: $id, $($fields -join ', ')})"
             }
         }
         $r = Invoke-Mongo "print($($checks -join ' + '))"
@@ -1391,7 +1395,7 @@ function Invoke-SeedPhase {
         $r = Invoke-Mongo '' -File '/tmp/rl-seed.js'
         $line = ($r.Out -split "`n" | Where-Object { $_ -match '^SEEDED ' } | Select-Object -Last 1)
         if ($r.Code -ne 0 -or -not $line) { Stop-Phase "seeding failed: $($r.Out)" }
-        "inserted (new/total) $($line -replace '^SEEDED ', '')"
+        "inserted (new/total, plus documents that gained missing fields) $($line -replace '^SEEDED ', '')"
     }
 }
 
@@ -1473,18 +1477,30 @@ function Invoke-FirstJobPhase {
             Write-Info 'the previous first job failed; queueing a new one'
         }
         if ((Get-FirstJobStatus) -eq 'NONE') {
-            # Straight into SAC: no BC pretrain on the demos, no eval before
-            # the first training step.
-            $js = "const g = db.gyms.findOne({_id: ObjectId('$($Gyms[0].Id)')}); " +
-                  "db.jobs.insertOne({job_type: 'TRAIN', model_type: 'SacAgent', robot_type: 'robotaxi', " +
+            # No eval before the first training step, and no BC pretrain
+            # unless the experiment design asks for it. Course, reward design
+            # and experiment design are the gym's seeded defaults, stamped
+            # the way the New-job form stamps them; an experiment design's
+            # fields win over the job's, so it must not set num_iterations.
+            $js = "const g = db.gyms.findOne({_id: ObjectId('$($Gyms[0].Id)')}) || {}; " +
+                  "const byId = (c, id) => id ? (db.getCollection(c).findOne({_id: id}) || db.getCollection(c).findOne({_id: ObjectId.isValid(id) ? ObjectId(id) : id})) : null; " +
+                  "const rd = byId('reward_designs', g.default_reward_design_id); " +
+                  "const ed = byId('experiment_designs', g.default_experiment_design_id); " +
+                  "const job = {job_type: 'TRAIN', model_type: 'SacAgent', robot_type: 'robotaxi', " +
                   "num_iterations: $FirstJobIterations, status: 'NOT_STARTED', create_date: new Date(), " +
                   "demo_job_id: '', pass_through_actions: false, nn_size_x: '', nn_size_y: '', seed: 0, " +
                   "skip_first_eval: true, bc_pretrain_steps: 0, " +
-                  "gym_id: g ? g._id.toString() : '', gym_name: g ? g.name : '', gym_file_path: g ? g.file_path : '', " +
-                  "percent_complete: 0, installer_first_job: true}).insertedId.toString()"
+                  "gym_id: g._id ? g._id.toString() : '', gym_name: g.name || '', gym_file_path: g.file_path || '', " +
+                  "percent_complete: 0, installer_first_job: true}; " +
+                  "if (g.default_course_type) job.course_type = g.default_course_type; " +
+                  "if (rd) { job.reward_design_id = rd._id.toString(); job.reward_design_name = rd.name; } " +
+                  "if (ed) { job.experiment_design_id = ed._id.toString(); job.experiment_design_name = ed.name; } " +
+                  "print('designs: ' + (job.course_type || 'trainer default') + ' / ' + (job.reward_design_name || 'course default reward') + ' / ' + (job.experiment_design_name || 'trainer defaults')); " +
+                  "print(db.jobs.insertOne(job).insertedId.toString())"
             $r = Invoke-Mongo $js
             if ($r.Code -ne 0) { Stop-Phase "could not insert the job: $($r.Out)" }
-            Write-Info "Queued job $(($r.Out -split "`n" | Select-Object -Last 1).Trim())"
+            $outLines = @($r.Out -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            Write-Info "Queued job $($outLines[-1]) ($(($outLines | Where-Object { $_ -like 'designs: *' } | Select-Object -Last 1) -replace '^designs: ', 'course / reward / experiment: '))"
         }
         if (-not (Wait-Until { (Get-FirstJobStatus) -in 'IN_PROGRESS', 'DONE', 'FAILED' } -TimeoutSec 600 -IntervalSec 10 -What 'the trainer to pick up the job')) {
             Stop-TrainerFailure "the trainer did not start the job within 10 minutes (status $(Get-FirstJobStatus))"

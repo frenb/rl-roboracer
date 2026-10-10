@@ -6,7 +6,10 @@
       },
       "name": "wCourseJetRacer2026.09.20-v13",
       "file_path": "{{UNITY_BINARY_DIR}}\\wCourseJetRacer2026.09.20-v13\\robotaxi gym level 1.exe",
-      "description": "",
+      "description": "W-course JetRacer on the donut_no_hint course (31-dim, no angle-to-goal). Reference spec: Goal-count speed (v4) reward with AWAC + BC + reward_scale1 (no curriculum) and the installed donut expert demos, read 31-wide.",
+      "default_course_type": "donut_no_hint",
+      "default_reward_design_id": "6a3350e52ddfadd149b0db2f",
+      "default_experiment_design_id": "6ab859550573fbba9c5d96c2",
       "archived": false,
       "created_at": {
         "$date": {
@@ -25,7 +28,10 @@
       },
       "name": "FlyBrain-wCourseJetRacer2026.09.28-v49",
       "file_path": "{{UNITY_BINARY_DIR}}\\wCourseJetRacer2026.09.28-v49\\robotaxi gym level 1.exe",
-      "description": "",
+      "description": "W-course JetRacer driven through the fly connectome (fly-brain service) on the fly_donut_flow course. Reference spec: Goal-count speed (v4) reward with the AWAC + No-BC (no curriculum) design. Run one Unity client: the fly-brain service holds a single brain.",
+      "default_course_type": "fly_donut_flow",
+      "default_reward_design_id": "6a3350e52ddfadd149b0db2f",
+      "default_experiment_design_id": "6aca0340f1e5b0a0c0de0001",
       "archived": false,
       "created_at": {
         "$date": {
@@ -409,6 +415,70 @@
       },
       "bc_pretrain_steps": {
         "$numberInt": "5000"
+      },
+      "replay_buffer_capacity": {
+        "$numberInt": "300000"
+      },
+      "demo_prefill_count": {
+        "$numberInt": "100000"
+      },
+      "demo_min_keep": {
+        "$numberInt": "100000"
+      },
+      "demo_sample_ratio": {
+        "$numberDouble": "0.25"
+      },
+      "reward_scale_factor": {
+        "$numberInt": "1"
+      },
+      "awac_beta": {
+        "$numberInt": "1"
+      },
+      "awac_lambda": {
+        "$numberDouble": "0.5"
+      },
+      "awac_lambda_decay_steps": {
+        "$numberInt": "0"
+      },
+      "awac_weight_clip": {
+        "$numberInt": "20"
+      },
+      "corner_radius": {
+        "$numberInt": "14"
+      },
+      "curvature_difficulty": {
+        "$numberInt": "0"
+      },
+      "env_discount": {
+        "$numberInt": "1"
+      },
+      "eval_time_fraction": {
+        "$numberDouble": "0.1"
+      }
+    },
+    {
+      "_id": {
+        "$oid": "6aca0340f1e5b0a0c0de0001"
+      },
+      "name": "AWAC + No-BC + reward_scale1 (no curriculum)",
+      "description": "Reference design for the fly courses (fly_donut, fly_donut_flow): SAC with AWAC and protected demo replay, no BC pretraining, no curriculum, reward_scale_factor 1. A fly job that names no demo job (demo_job_ids) has no corpus, so the trainer zeroes the demo and AWAC settings and runs pure SAC from scratch with the learning rates, buffer and eval cadence below. Clone it and add BC steps to get \"AWAC + BC + reward_scale1 (no curriculum)\".",
+      "author": "system",
+      "archived": false,
+      "version": {
+        "$numberInt": "1"
+      },
+      "created_at": {
+        "$date": {
+          "$numberLong": "1791624000000"
+        }
+      },
+      "updated_at": {
+        "$date": {
+          "$numberLong": "1791624000000"
+        }
+      },
+      "bc_pretrain_steps": {
+        "$numberInt": "0"
       },
       "replay_buffer_capacity": {
         "$numberInt": "300000"
