@@ -66,6 +66,16 @@ changing anything. After the first run, the full list of options is in
 When it finishes: dashboard http://localhost, TensorBoard
 http://localhost:6006. The manual steps below are for development setups.
 
+To uninstall:
+
+```powershell
+irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/uninstall.ps1 | iex
+```
+
+It asks before removing anything, and asks separately before deleting
+trained models and the database. It removes only rl-roboracer's containers,
+volumes and built images, and leaves WSL, Git and Docker Desktop installed.
+
 ## Setup
 
 Do these once, in order, on a Windows host with an NVIDIA GPU. Scripts

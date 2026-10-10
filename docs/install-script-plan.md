@@ -94,7 +94,7 @@ scripts\install\
   Prereqs.psm1         WSL, Git, Docker Desktop
   Workspace.psm1       clone, sibling folders, .env
   Stack.psm1           image builds, Unity client, start, first job
-  Uninstall-TestInstance.ps1   resets a Part 3 Tier A test instance
+  Uninstall.ps1              resets a Part 3 Tier A test instance
 ```
 
 ### Phases
@@ -198,7 +198,7 @@ The false positives to remove, and how:
 | `unity\Builds\latest\` | The test clone starts with none; the client must come from the release download |
 | Mongo data | The test instance's empty `mongodb` folder |
 
-`Uninstall-TestInstance.ps1` removes the test folder, its containers,
+`Uninstall.ps1` removes the test folder, its containers,
 volumes, images and build cache, restoring the starting point. Run it before
 every Tier A run.
 

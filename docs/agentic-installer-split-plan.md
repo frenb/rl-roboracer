@@ -48,7 +48,7 @@ the doctor plan, only the doctor is offline).
 | `doctor/Doctor.ps1`, `Tools.ps1` (incl. read-only command policy), `Llm.ps1` | **doctor** | Hosted-model specs (`anthropic:`, `openai:`, `xai:`, `google:`) stay as an option alongside local models. |
 | `doctor/kb/` | **knowledge pack** | Per-article licences are already recorded in `kb/README.md`. |
 | `doctor/eval/` (scenarios, `Invoke-DoctorEval.ps1`, `Measure-LlmRuntime.ps1`), `MODELS.md` | **eval harness** + per-project scenario files | The generic harness moves; the 12 rl-roboracer scenarios stay here as the first project suite. |
-| `Uninstall-TestInstance.ps1` | **engine** `uninstall` / test-instance reset | Driven by what the manifest declared. |
+| `Uninstall.ps1` | **engine** `uninstall` / test-instance reset | Driven by what the manifest declared. |
 | `Start-ClientAtLogon.ps1`, `seed/` | stay in rl-roboracer | Project phases. |
 
 ## Architecture
