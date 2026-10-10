@@ -12,14 +12,14 @@
 
 services:
   ros-server:
-    image: docker_ros-server:thin
+    image: ${IMAGE_PREFIX:-}docker_ros-server:thin
     # Pin the container name so Compose doesn't auto-suffix it with the
     # replica index ("-1"). Without this, the base container ends up
     # named "<project>-ros-server-1", which Docker's embedded DNS then
     # also resolves under the short name "ros-server-1" - colliding
     # with the actual ros-server-1 service brought up by compose/scale.yml
     # and silently routing actor-1's worker to actor-0's container.
-    container_name: rl-roboracer-ros-server-base
+    container_name: ${COMPOSE_PROJECT_NAME:-rl-roboracer}-ros-server-base
     restart: always
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -97,7 +97,7 @@ services:
       ME_CONFIG_MONGODB_URL: ${MONGO_URL:-mongodb://root:${MONGO_ROOT_PASSWORD:-example}@mongo:27017/}
 
   sim-controller:
-    image: sim_controller:latest
+    image: ${IMAGE_PREFIX:-}sim_controller:latest
     build:
       context: .
       dockerfile: docker/sim_controller/Dockerfile
@@ -195,7 +195,10 @@ services:
     # archived runs show up in TB within ~5s of the user clicking
     # Compare, rather than the user staring at "no scalars" for up to
     # half a minute waiting for TB's next filesystem scan.
-    command: sh -c "(tensorboard --bind_all --logdir_spec=current:/tmp/active,compare:/tmp/tb_compare --reload_multifile true --reload_interval 5 &1> /tmp/tb.log) && cd /python_ws/src && python -u robotaxi.py 2>&1 | tee robotaxi.out"
+    # The output also goes to /tmp/trainer.log: that is the file the
+    # dashboard's log viewer tails (see dashboard/src/server.ts), and the
+    # same file manual trainer restarts write to.
+    command: sh -c "(tensorboard --bind_all --logdir_spec=current:/tmp/active,compare:/tmp/tb_compare --reload_multifile true --reload_interval 5 &1> /tmp/tb.log) && cd /python_ws/src && python -u robotaxi.py 2>&1 | tee robotaxi.out /tmp/trainer.log"
     # No `links:` block. Compose's legacy links: ["ros-server"] would
     # also auto-add per-link aliases of the form
     #   <linked-container>:<service>-<replica-index>
@@ -277,11 +280,15 @@ services:
   # grabs the rest by default - set TF_FORCE_GPU_ALLOW_GROWTH=true on the
   # trainer before running both at once.
   fly-brain:
-    image: fly_brain:latest
+    image: ${IMAGE_PREFIX:-}fly_brain:latest
     build:
       context: ./docker/fly_brain
       dockerfile: Dockerfile
     restart: unless-stopped
+    # The server's gRPC stubs (docker/fly_brain/gen/) are generated, not
+    # committed, so a fresh clone builds them on first start. The connectome
+    # itself (~260 MB) downloads into /fly_data on the first FlyBrain().
+    command: bash -c "[ -f /fly_brain/gen/fly_brain/proto/fly_brain_pb2.py ] || bash /fly_brain/gen_protos.sh; exec python -u /fly_brain/fly_brain_server.py"
     environment:
       - FLY_DATA=/fly_data
       - FLY_DEVICE=cuda
@@ -309,9 +316,11 @@ services:
         source: ./protos
         target: /protos
         read_only: true
-    ports:
-      # gRPC. Exposed on the host so debug clients can run outside Compose.
-      - "50061:50061"
+    # gRPC on 50061 is reached as fly-brain:50061 inside Compose and is not
+    # published: Windows reserves the 50000-50259 area in moving blocks
+    # (Hyper-V/WSL excluded port ranges), so a host binding there fails at
+    # random. For a debug client on the host, add a ports entry on a port
+    # outside `netsh interface ipv4 show excludedportrange protocol=tcp`.
     networks:
       default:
 
@@ -320,7 +329,7 @@ services:
   #   docker/madscientist/entrypoint.sh         - boot + gating
   #   rl_agent/madscientist/                    - agent code package
   madscientist:
-    image: madscientist:latest
+    image: ${IMAGE_PREFIX:-}madscientist:latest
     build:
       context: ./docker/madscientist
       dockerfile: Dockerfile

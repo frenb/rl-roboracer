@@ -30,6 +30,52 @@ LATEST/
 └── tfrecords/         # demonstration trajectories (bind-mounted)
 ```
 
+## Quick install (Windows)
+
+The installer is InstallZero, an agentic installer that diagnoses its own
+failures. On Windows 10 or 11 with an NVIDIA GPU and at least 60 GB free, open
+PowerShell (not as administrator) and run:
+
+```powershell
+irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/install.ps1 | iex
+```
+
+It installs WSL 2, Git and Docker Desktop if they are missing (asking for
+administrator rights when it needs them), clones the repo into
+`%USERPROFILE%\rl-roboracer`, builds the Docker images (30-60 minutes the
+first time), downloads the Unity gyms, starts the stack and one Unity client,
+and queues a short first training job. It may ask you to restart Windows or
+sign out and back in. After a restart it continues by itself; after a sign-out,
+run the same command again.
+
+At the start it asks which model, if any, the InstallZero doctor should use
+to diagnose a failed install:
+a local model, or a hosted one (Anthropic, OpenAI, xAI, Google) with your API
+key. The key is kept in memory for that run only.
+
+To pass options, use this form instead:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/install.ps1))) -Doctor xai -InstallDir D:\rl
+```
+
+`-DryRun` reports what is present and what would be installed, without
+changing anything. After the first run, the full list of options is in
+`Get-Help $env:LOCALAPPDATA\rl-roboracer-install\Install.ps1 -Detailed`.
+
+When it finishes: dashboard http://localhost, TensorBoard
+http://localhost:6006. The manual steps below are for development setups.
+
+To uninstall:
+
+```powershell
+irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/uninstall.ps1 | iex
+```
+
+It asks before removing anything, and asks separately before deleting
+trained models and the database. It removes only rl-roboracer's containers,
+volumes and built images, and leaves WSL, Git and Docker Desktop installed.
+
 ## Setup
 
 Do these once, in order, on a Windows host with an NVIDIA GPU. Scripts
