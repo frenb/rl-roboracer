@@ -180,6 +180,13 @@ Expected along the way on a clean account:
 - The image build takes 30-60 minutes; this account has no build cache.
 - It ends once the first TRAIN job is producing training steps and
   TensorBoard (http://localhost:6006) shows scalars.
+- The first job runs on the v13 gym with that gym's reference spec: course
+  `donut_no_hint`, reward design `Goal-count speed (v4, TIME_COST 0.0073)`, experiment
+  design `AWAC + BC + reward_scale1 (no curriculum)`. The design runs 5,000
+  BC pretraining steps on the donut demos before SAC starts.
+  In the dashboard's New-job form, picking a gym preselects its reference
+  spec; for `FlyBrain-wCourseJetRacer2026.09.28-v49` that is course
+  `fly_donut_flow` with `AWAC + No-BC + reward_scale1 (no curriculum)`.
 
 ## 4. Exercise the doctor when the install passes
 
