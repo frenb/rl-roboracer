@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/InstallZero/installzero/main/schemas/catalog-entry-1.json",
+  "id": "mongo-auth",
+  "version": 1,
+  "order": 150,
+  "phases": ["trainer", "container"],
+  "pattern": "Authentication failed|AuthenticationFailed|bad auth",
+  "diagnosis": "The trainer cannot log in to MongoDB. The password in .env differs from the one the database was created with, typically because the mongodb folder was reused from an earlier install.",
+  "advice": "Put the original password back in .env as MONGO_ROOT_PASSWORD. Or, to start with an empty database: stop the stack, empty the mongodb folder, and start it again.",
+  "fix": { "action": "none" },
+  "samples": ["pymongo.errors.OperationFailure: Authentication failed., full error: {'ok': 0.0, 'errmsg': 'Authentication failed.', 'code': 18, 'codeName': 'AuthenticationFailed'}"],
+  "source": "curated"
+}

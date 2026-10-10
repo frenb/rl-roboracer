@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/InstallZero/installzero/main/schemas/catalog-entry-1.json",
+  "id": "mongo-unreachable",
+  "version": 1,
+  "order": 160,
+  "phases": ["trainer", "container"],
+  "pattern": "ServerSelectionTimeoutError",
+  "diagnosis": "The trainer cannot reach MongoDB.",
+  "advice": "Check the mongo container with \"docker compose ps mongo\" and \"docker compose logs mongo\".",
+  "fix": { "action": "none" },
+  "samples": ["pymongo.errors.ServerSelectionTimeoutError: mongo:27017: [Errno -3] Temporary failure in name resolution"],
+  "source": "curated"
+}

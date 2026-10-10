@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/InstallZero/installzero/main/schemas/catalog-entry-1.json",
+  "id": "mongo-data-permission",
+  "version": 1,
+  "order": 140,
+  "phases": ["container"],
+  "pattern": "/bitnami/mongodb[^\\n]*Permission denied|Permission denied[^\\n]*/bitnami/mongodb",
+  "diagnosis": "MongoDB (which runs as user 1001) cannot write to its data folder. Folders that Docker creates itself on a Windows drive come out owned by root and read-only to everyone else.",
+  "advice": "Give the folder to user 1001: docker compose run --rm --no-deps --user root --entrypoint chown mongo -R 1001:1001 /bitnami/mongodb",
+  "fix": { "action": "mongo-owner" },
+  "samples": ["mongo-1  | mkdir: cannot create directory '/bitnami/mongodb/data': Permission denied"],
+  "source": "curated"
+}
