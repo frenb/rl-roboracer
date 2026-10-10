@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/InstallZero/installzero/main/schemas/catalog-entry-1.json",
+  "id": "demo-data-missing",
+  "version": 1,
+  "order": 190,
+  "phases": ["trainer"],
+  "pattern": "No such file or directory: '/tfrecords/job_[0-9a-f]+",
+  "diagnosis": "The training job needs expert demonstrations recorded by an earlier DEMO job (a /tfrecords/job_<id> folder), and this install does not have that recording.",
+  "advice": "Put that job's recording in the tfrecords folder next to the repo, or give the job demo_job_ids of a DEMO job recorded on this install.",
+  "fix": { "action": "none" },
+  "samples": ["FileNotFoundError: [Errno 2] No such file or directory: '/tfrecords/job_64168c1b58d4d8ccdb76e721'"],
+  "source": "curated"
+}

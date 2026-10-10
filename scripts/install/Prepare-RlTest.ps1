@@ -13,10 +13,11 @@
                                        env file), as branch "rltest". Made with a
                                        temporary git index: your branch,
                                        index and working tree are untouched.
-      <StageDir>\Install.ps1, Reset-TestAccount.ps1, doctor\
+      <StageDir>\Install.ps1, Reset-TestAccount.ps1, catalog\, doctor\
                                        the installer, the reset script, and
-                                       a copy of the doctor for failures that
-                                       happen before the repo is cloned
+                                       copies of the failure catalog and the
+                                       doctor for failures that happen before
+                                       the repo is cloned
       <StageDir>\RUN-TEST.md           docs/rltest-clean-test.md
       <DoctorAssetsDir>                llama.cpp builds (unpacked) and the
                                        chosen local models
@@ -101,13 +102,17 @@ try {
     Remove-Item $bare -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# 2. Installer, reset script, doctor copy, instructions.
-Write-Host 'Copying the installer, reset script, doctor and instructions ...' -ForegroundColor Cyan
+# 2. Installer, reset script, catalog and doctor copies, instructions.
+Write-Host 'Copying the installer, reset script, failure catalog, doctor and instructions ...' -ForegroundColor Cyan
 Copy-Item (Join-Path $PSScriptRoot 'Install.ps1'), (Join-Path $PSScriptRoot 'Reset-TestAccount.ps1') $StageDir -Force
 $doctorStage = Join-Path $StageDir 'doctor'
 if (Test-Path $doctorStage) { Remove-Item $doctorStage -Recurse -Force }
 New-Item -ItemType Directory -Force $doctorStage | Out-Null
 Get-ChildItem (Join-Path $PSScriptRoot 'doctor') -Exclude 'assets' | Copy-Item -Destination $doctorStage -Recurse -Force
+$catalogStage = Join-Path $StageDir 'catalog'
+if (Test-Path $catalogStage) { Remove-Item $catalogStage -Recurse -Force }
+New-Item -ItemType Directory -Force $catalogStage | Out-Null
+Copy-Item (Join-Path $PSScriptRoot 'catalog\*.json') $catalogStage -Force
 Copy-Item (Join-Path $repo 'docs\rltest-clean-test.md') (Join-Path $StageDir 'RUN-TEST.md') -Force
 Remove-Item (Join-Path $StageDir 'RUN-TEST.txt') -ErrorAction SilentlyContinue
 foreach ($asset in 'roboracer-gym-wCourseJetRacer2026.09.20-v13.zip', 'roboracer-gym-wCourseJetRacer2026.09.28-v49.zip', 'roboracer-demos-donut.zip') {

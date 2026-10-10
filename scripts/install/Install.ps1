@@ -116,8 +116,9 @@
     ask.
 
 .PARAMETER SelfTest
-    Check the failure catalog against its own sample log lines, then exit.
-    Changes nothing.
+    Check the failure catalog (catalog\*.json beside this script, else the
+    repo's scripts\install\catalog) against its own sample log lines, then
+    exit. Also fails on entries that cannot be loaded. Changes nothing.
 
 .PARAMETER Doctor
     Which model diagnoses a failed install (scripts\install\doctor). The
@@ -359,7 +360,16 @@ function Invoke-Phase {
 
 function Register-Resume {
     $self = Join-Path $StateDir 'Install.ps1'
-    if ($PSCommandPath -and ($PSCommandPath -ne $self)) { Copy-Item -LiteralPath $PSCommandPath -Destination $self -Force }
+    if ($PSCommandPath -and ($PSCommandPath -ne $self)) {
+        Copy-Item -LiteralPath $PSCommandPath -Destination $self -Force
+        $catalog = Get-FailureCatalogDir
+        $selfCatalog = Join-Path $StateDir 'catalog'
+        if ($catalog -and ($catalog -ne $selfCatalog)) {
+            if (Test-Path $selfCatalog) { Remove-Item $selfCatalog -Recurse -Force }
+            New-Item -ItemType Directory -Force $selfCatalog | Out-Null
+            Copy-Item (Join-Path $catalog '*.json') $selfCatalog -Force
+        }
+    }
     if (-not (Test-Path $self)) {
         Write-Warn 'Cannot resume automatically (the script was not run from a file). Run it again after the restart.'
         return
@@ -433,149 +443,68 @@ function Stop-UnityClients {
 # ---------------------------------------------------------------------------
 # Failure catalog
 #
-# Known failures: where they show up (Phases), how to recognise them
-# (Pattern), what they mean, what the user should do, and which fix the
+# Known failures, one JSON file each in catalog\ beside this script (or the
+# cloned repo's scripts\install\catalog): where they show up (phases), how to
+# recognise them (pattern, plus an optional "seen" regex for the line to
+# show), what they mean, what the user should do, and which named fix the
 # installer may apply. Samples are real log lines; -SelfTest checks every
-# sample is recognised as its own entry. Order matters: the first match wins.
+# sample is recognised as its own entry. Entries are tried in ascending
+# "order" and the first match wins.
 #
-# Fix kinds: retry (automatic), restart-docker / rebuild-clean / wsl-update
-# (ask first, or -AutoFix), port-owner (always asks), signout, none.
+# Fix actions: retry (automatic), restart-docker / rebuild-clean / wsl-update
+# (ask first, or -AutoFix), port-owner (always asks), signout, recreate,
+# mongo-owner, none.
 # ---------------------------------------------------------------------------
 
-$FailureCatalog = @(
-    @{ Id = 'download-truncated'; Phases = @('build'); Fix = 'retry'
-       Pattern = 'DO NOT MATCH THE HASHES|BadZipFile: Bad CRC-32'
-       Diagnosis = 'A download was cut short or corrupted. Docker Desktop''s network intermittently truncates large downloads.'
-       Advice = 'Retrying; finished build steps are cached, so the retry resumes where it failed.'
-       Samples = @('#20 5.798 ERROR: THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE. If you have updated the package versions, please update the hashes.',
-                   "#26 2.736 zipfile.BadZipFile: Bad CRC-32 for file 'numpy/core/tests/data/umath-validation-set-log1p.csv'") }
+$FixActions = @('retry', 'restart-docker', 'rebuild-clean', 'wsl-update', 'port-owner', 'signout', 'recreate', 'mongo-owner', 'none')
+$script:FailureCatalog = $null
+$script:FailureCatalogSkipped = @()
 
-    @{ Id = 'docker-vm-crash'; Phases = @('build'); Fix = 'restart-docker'
-       Pattern = 'failed to receive status: rpc error|error reading from server: EOF|session healthcheck failed|desc = connection error'
-       Diagnosis = 'Docker Desktop''s engine crashed or restarted during the build, usually while unpacking a large image.'
-       Advice = 'Restart Docker Desktop, then run the installer again.'
-       Samples = @('ERROR: failed to build: failed to receive status: rpc error: code = Unavailable desc = error reading from server: EOF',
-                   'session healthcheck failed fatally: Unavailable: connection error: desc = "transport: Error while dialing: only one connection allowed"') }
+function Get-FailureCatalogDir {
+    @((Join-Path $PSScriptRoot 'catalog'), (Join-Path $RepoDir 'scripts\install\catalog')) |
+        Where-Object { Test-Path (Join-Path $_ '*.json') } | Select-Object -First 1
+}
 
-    @{ Id = 'disk-full'; Phases = @('*'); Fix = 'none'
-       Pattern = 'no space left on device|not enough space on the disk'
-       Diagnosis = 'The disk Docker uses is full.'
-       Advice = 'Free space, then re-run. "docker system df" shows what Docker uses; "docker builder prune -af" and "docker image prune -a" reclaim build cache and unused images.'
-       Samples = @('failed to copy files: write /var/lib/docker/tmp/buildkit-mount/x.whl: no space left on device') }
-
-    @{ Id = 'network-flaky'; Phases = @('build', 'git', 'download'); Fix = 'retry'
-       Pattern = 'Temporary failure in name resolution|Could not resolve host|Read timed out|ReadTimeoutError|Connection reset by peer|TLS handshake timeout|i/o timeout|Connection timed out|unable to access ''https'
-       Diagnosis = 'A network request failed or timed out.'
-       Advice = 'Retrying. If it keeps failing, check the internet connection, VPN or proxy.'
-       Samples = @('pip._vendor.urllib3.exceptions.ReadTimeoutError: HTTPSConnectionPool(host=''files.pythonhosted.org'', port=443): Read timed out.',
-                   'fatal: unable to access ''https://github.com/frenb/rl-roboracer.git/'': Could not resolve host: github.com') }
-
-    @{ Id = 'illegal-instruction'; Phases = @('verify', 'trainer'); Fix = 'none'
-       Pattern = 'Illegal instruction'
-       Diagnosis = 'This CPU, or the emulator running the container, lacks instructions (AVX) that TensorFlow''s prebuilt packages need.'
-       Advice = 'The installer cannot fix this; this machine cannot run the trainer image as built.'
-       Samples = @('bash: line 3:    12 Illegal instruction     (core dumped) python3 -c ''import tensorflow''') }
-
-    @{ Id = 'corrupted-layers'; Phases = @('verify'); Fix = 'rebuild-clean'
-       Pattern = 'cannot import name|ImportError|SyntaxError|No module named|is only \d+ KB - corrupted layer'
-       Diagnosis = 'The image built, but files inside it are damaged or missing. A crashed earlier build most likely left half-written layers in Docker''s build cache, which this build reused.'
-       Advice = 'Clear Docker''s build cache and rebuild this image without cache.'
-       Samples = @('ImportError: cannot import name ''LazyLoader'' from ''tensorflow.python.util.lazy_loader'' (/usr/local/lib/python3.8/dist-packages/tensorflow/python/util/lazy_loader.py)',
-                   'tensorflow folder is only 122900 KB - corrupted layer') }
-
-    @{ Id = 'port-in-use'; Phases = @('compose-up', 'unity-client'); Fix = 'port-owner'
-       Pattern = 'Ports are not available|port is already allocated|bind: (address already in use|Only one usage of each socket address|An attempt was made to access a socket)|SocketException[^\n]*(Address already in use|Only one usage)'
-       Diagnosis = 'Another program is already using a port this stack needs.'
-       Advice = 'Stop the program using the port, then re-run.'
-       Samples = @('Error response from daemon: Ports are not available: exposing port TCP 0.0.0.0:80 -> 0.0.0.0:0: listen tcp 0.0.0.0:80: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.',
-                   'Error response from daemon: driver failed programming external connectivity: Bind for 0.0.0.0:6006 failed: port is already allocated',
-                   'System.Net.Sockets.SocketException (0x80004005): Only one usage of each socket address (protocol/network address/port) is normally permitted.') }
-
-    @{ Id = 'docker-access-denied'; Phases = @('docker-start'); Fix = 'signout'
-       Pattern = 'dockerDesktopLinuxEngine: Access is denied|permission denied while trying to connect to the Docker daemon'
-       Diagnosis = 'Your account cannot use Docker yet. Docker Desktop added it to the docker-users group, which only takes effect at the next sign-in.'
-       Advice = 'Sign out of Windows and back in, then run the installer again.'
-       Samples = @('error during connect: in the default daemon configuration on Windows, the docker client must be run with elevated privileges to connect: open //./pipe/dockerDesktopLinuxEngine: Access is denied.') }
-
-    @{ Id = 'wsl-outdated'; Phases = @('docker-start'); Fix = 'wsl-update'
-       Pattern = 'WSL (needs|requires) (updating|an update)|WSL kernel version too low|wsl --update'
-       Diagnosis = 'WSL needs an update before Docker Desktop can start.'
-       Advice = 'Run "wsl --update" as administrator, then restart Docker Desktop.'
-       Samples = @('WSL needs updating. Your version of WSL is too old. Run ''wsl --update'' to update it.') }
-
-    @{ Id = 'docker-not-running'; Phases = @('docker-start'); Fix = 'none'
-       Pattern = 'dockerDesktopLinuxEngine: The system cannot find the file specified|Is the docker daemon running|Cannot connect to the Docker daemon'
-       Diagnosis = 'Docker Desktop''s engine is not running and did not start.'
-       Advice = 'Open Docker Desktop from the Start menu, answer any prompts it shows, wait until it says "Engine running", then re-run.'
-       Samples = @('error during connect: Get "http://%2F%2F.%2Fpipe%2FdockerDesktopLinuxEngine/v1.47/info": open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.') }
-
-    @{ Id = 'gpu-not-in-docker'; Phases = @('docker-gpu'); Fix = 'wsl-update'
-       Pattern = 'could not select device driver[^\n]*gpu|nvidia-container-cli|libnvidia-ml\.so|Failed to initialize NVML|no CUDA-capable device'
-       Diagnosis = 'Docker cannot reach the NVIDIA GPU.'
-       Advice = 'Run "wsl --update" and restart Docker Desktop. If that does not help, install the latest NVIDIA driver from https://www.nvidia.com/Download/index.aspx.'
-       Samples = @('docker: Error response from daemon: could not select device driver "" with capabilities: [[gpu]].',
-                   'nvidia-container-cli: initialization error: WSL environment detected but no adapters were found: unknown.') }
-
-    @{ Id = 'clone-target-exists'; Phases = @('git'); Fix = 'none'
-       Pattern = 'already exists and is not an empty directory'
-       Diagnosis = 'The install folder already contains an rl-roboracer folder that is not a git checkout.'
-       Advice = 'Move or delete that folder, or pass a different -InstallDir.'
-       Samples = @('fatal: destination path ''C:\Users\me\rl-roboracer\rl-roboracer'' already exists and is not an empty directory.') }
-
-    @{ Id = 'repo-files-missing'; Phases = @('container'); Fix = 'recreate'
-       Pattern = 'ENOENT[^\n]*package\.json|can''t open file ''[^'']*\.py''|No such file or directory[^\n]*\.py'''
-       Diagnosis = 'A container cannot see the repo files it runs from. Usually the install folder was deleted or moved while its containers still existed; Docker restarted them and recreated the missing folders empty.'
-       Advice = 'Recreate the containers from the current install folder: docker compose up -d --force-recreate.'
-       Samples = @('npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open ''/dashboard/package.json''',
-                   'python: can''t open file ''robotaxi.py'': [Errno 2] No such file or directory') }
-
-    @{ Id = 'mongo-data-permission'; Phases = @('container'); Fix = 'mongo-owner'
-       Pattern = '/bitnami/mongodb[^\n]*Permission denied|Permission denied[^\n]*/bitnami/mongodb'
-       Diagnosis = 'MongoDB (which runs as user 1001) cannot write to its data folder. Folders that Docker creates itself on a Windows drive come out owned by root and read-only to everyone else.'
-       Advice = 'Give the folder to user 1001: docker compose run --rm --no-deps --user root --entrypoint chown mongo -R 1001:1001 /bitnami/mongodb'
-       Samples = @('mongo-1  | mkdir: cannot create directory ''/bitnami/mongodb/data'': Permission denied') }
-
-    @{ Id = 'mongo-auth'; Phases = @('trainer', 'container'); Fix = 'none'
-       Pattern = 'Authentication failed|AuthenticationFailed|bad auth'
-       Diagnosis = 'The trainer cannot log in to MongoDB. The password in .env differs from the one the database was created with, typically because the mongodb folder was reused from an earlier install.'
-       Advice = 'Put the original password back in .env as MONGO_ROOT_PASSWORD. Or, to start with an empty database: stop the stack, empty the mongodb folder, and start it again.'
-       Samples = @('pymongo.errors.OperationFailure: Authentication failed., full error: {''ok'': 0.0, ''errmsg'': ''Authentication failed.'', ''code'': 18, ''codeName'': ''AuthenticationFailed''}') }
-
-    @{ Id = 'mongo-unreachable'; Phases = @('trainer', 'container'); Fix = 'none'
-       Pattern = 'ServerSelectionTimeoutError'
-       Diagnosis = 'The trainer cannot reach MongoDB.'
-       Advice = 'Check the mongo container with "docker compose ps mongo" and "docker compose logs mongo".'
-       Samples = @('pymongo.errors.ServerSelectionTimeoutError: mongo:27017: [Errno -3] Temporary failure in name resolution') }
-
-    @{ Id = 'gpu-oom'; Phases = @('trainer'); Fix = 'none'
-       Pattern = 'ResourceExhaustedError|CUDA_ERROR_OUT_OF_MEMORY|OOM when allocating'
-       Diagnosis = 'The GPU ran out of memory.'
-       Advice = 'Close other programs using the GPU (games, other ML jobs, a second training stack), then re-run.'
-       Samples = @('tensorflow.python.framework.errors_impl.ResourceExhaustedError: OOM when allocating tensor with shape[512,512] and type float') }
-
-    @{ Id = 'cuda-init'; Phases = @('trainer'); Fix = 'none'
-       Pattern = 'failed call to cuInit|CUDA_ERROR_NO_DEVICE|Could not load dynamic library .libcuda'
-       Diagnosis = 'TensorFlow inside the trainer cannot use the GPU.'
-       Advice = 'Update the NVIDIA driver, run "wsl --update", restart Docker Desktop, then re-run.'
-       Samples = @('E tensorflow/stream_executor/cuda/cuda_driver.cc:271] failed call to cuInit: CUDA_ERROR_NO_DEVICE: no CUDA-capable device is detected') }
-
-    @{ Id = 'demo-data-missing'; Phases = @('trainer'); Fix = 'none'
-       Pattern = 'No such file or directory: ''/tfrecords/job_[0-9a-f]+'
-       Diagnosis = 'The training job needs expert demonstrations recorded by an earlier DEMO job (a /tfrecords/job_<id> folder), and this install does not have that recording.'
-       Advice = 'Put that job''s recording in the tfrecords folder next to the repo, or give the job demo_job_ids of a DEMO job recorded on this install.'
-       Samples = @('FileNotFoundError: [Errno 2] No such file or directory: ''/tfrecords/job_64168c1b58d4d8ccdb76e721''') }
-
-    @{ Id = 'python-traceback'; Phases = @('trainer'); Fix = 'none'
-       Pattern = 'Traceback \(most recent call last\)'
-       Seen = '(?m)^[A-Za-z_][\w.]*(Error|Exception)\b[^\n]*'
-       Diagnosis = 'The trainer stopped with a Python error.'
-       Advice = 'The error is shown above; the full log is rl_agent\robotaxi.out. Include it if you report the problem.'
-       Samples = @("Traceback (most recent call last):`n  File ""robotaxi.py"", line 1, in <module>`nKeyError: 'x'") }
-)
+# Loaded on first use. Before the repo is cloned, a run without a catalog
+# folder beside the script has no catalog and leaves failures undiagnosed.
+function Get-FailureCatalog {
+    if ($null -ne $script:FailureCatalog) { return $script:FailureCatalog }
+    $dir = Get-FailureCatalogDir
+    if (-not $dir) { return @() }
+    $script:FailureCatalogSkipped = @()
+    $entries = foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.json' | Sort-Object Name) {
+        $j = $null
+        try { $j = [IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { }
+        $has = if ($j) { @($j.PSObject.Properties.Name) } else { @() }
+        $seen = if ($has -contains 'seen') { $j.seen } else { '' }
+        $missing = @('id', 'phases', 'pattern', 'diagnosis', 'advice', 'fix', 'samples') | Where-Object { $has -notcontains $_ }
+        $problem = if (-not $j) { 'not valid JSON' }
+                   elseif ($missing) { "missing $($missing -join ', ')" }
+                   elseif ($j.id -ne $f.BaseName) { "id '$($j.id)' does not match the file name" }
+                   elseif (@($j.fix.PSObject.Properties.Name) -notcontains 'action' -or $j.fix.action -notin $FixActions) { 'fix.action is missing or not a known fix action' }
+                   else {
+                       try { [void][regex]::new($j.pattern); if ($seen) { [void][regex]::new($seen) }; $null }
+                       catch { "invalid regex: $($_.Exception.Message)" }
+                   }
+        if ($problem) {
+            $script:FailureCatalogSkipped += "$($f.Name): $problem"
+            Write-Warn "Skipping failure catalog entry $($f.Name): $problem"
+            continue
+        }
+        $e = @{ Id = $j.id; Phases = @($j.phases); Pattern = $j.pattern; Diagnosis = $j.diagnosis; Advice = $j.advice
+                Fix = $j.fix.action; Samples = @($j.samples)
+                Version = $(if ($has -contains 'version') { [int]$j.version } else { 1 })
+                Order = $(if ($has -contains 'order') { [int]$j.order } else { [int]::MaxValue }) }
+        if ($seen) { $e.Seen = $seen }
+        $e
+    }
+    $script:FailureCatalog = @($entries | Sort-Object { $_.Order }, { $_.Id })
+    $script:FailureCatalog
+}
 
 function Find-Failure([string]$Phase, [string]$Text) {
     if (-not $Text) { return $null }
-    foreach ($e in $FailureCatalog) {
+    foreach ($e in (Get-FailureCatalog)) {
         if (($e.Phases -notcontains $Phase) -and ($e.Phases -notcontains '*')) { continue }
         $m = [regex]::Match($Text, $e.Pattern, 'IgnoreCase')
         if (-not $m.Success) { continue }
@@ -688,7 +617,14 @@ function Resolve-PortConflict([int]$Port) {
 
 function Invoke-SelfTest {
     $failures = 0; $checked = 0
-    foreach ($e in $FailureCatalog) {
+    $catalog = @(Get-FailureCatalog)
+    $checked++
+    if (-not $catalog.Count) { $failures++; Write-Host "FAIL  no failure catalog found (looked in $(Join-Path $PSScriptRoot 'catalog') and $(Join-Path $RepoDir 'scripts\install\catalog'))" -ForegroundColor Red }
+    foreach ($s in $script:FailureCatalogSkipped) { $checked++; $failures++; Write-Host "FAIL  catalog entry skipped: $s" -ForegroundColor Red }
+    foreach ($dup in @($catalog | Group-Object { $_.Order } | Where-Object { $_.Count -gt 1 })) {
+        $checked++; $failures++; Write-Host "FAIL  catalog entries share order $($dup.Name): $(($dup.Group | ForEach-Object { $_.Id }) -join ', ')" -ForegroundColor Red
+    }
+    foreach ($e in $catalog) {
         foreach ($s in $e.Samples) {
             foreach ($ph in $e.Phases) {
                 $phase = if ($ph -eq '*') { 'build' } else { $ph }
@@ -706,11 +642,11 @@ function Invoke-SelfTest {
             if ($hit) { $failures++; Write-Host "FAIL  healthy line matched $($hit.Id) in phase '$ph': $clean" -ForegroundColor Red }
         }
     }
-    $portSample = ($FailureCatalog | Where-Object { $_.Id -eq 'port-in-use' }).Samples[0]
+    $portSample = ($catalog | Where-Object { $_.Id -eq 'port-in-use' }).Samples[0]
     $port = (Find-Failure 'compose-up' $portSample).Port
     $checked++
     if ($port -ne 80) { $failures++; Write-Host "FAIL  port extraction gave $port, expected 80" -ForegroundColor Red }
-    Write-Host "Failure catalog self-test: $($FailureCatalog.Count) entries, $checked checks, $failures failures."
+    Write-Host "Failure catalog self-test: $($catalog.Count) entries from $(Get-FailureCatalogDir), $checked checks, $failures failures."
     $failures
 }
 
