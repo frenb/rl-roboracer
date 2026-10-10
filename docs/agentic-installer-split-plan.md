@@ -1,8 +1,10 @@
 # InstallZero: splitting the installer into a standalone agentic installer
 
 Status: plan, not started. Written 2026-10-08; decisions recorded the same
-day (see "Decisions"). Follows `docs/install-doctor-plan.md` (the doctor) and
-`scripts/install/Install.ps1`.
+day (see "Decisions"). Command line, extensibility and failure storage and
+routing added 2026-10-10, modelled on the `npx skills` CLI
+([vercel-labs/skills](https://github.com/vercel-labs/skills)). Follows
+`docs/install-doctor-plan.md` (the doctor) and `scripts/install/Install.ps1`.
 
 ## Goal
 
@@ -142,6 +144,79 @@ classifier (`Test-ReadOnlyCommand` today) and are always confirmed unless
 read-only. Catalog entries can only reference named actions, so a malicious
 or mistaken catalog entry cannot run arbitrary code.
 
+## Command line
+
+One verb, one source, a few common flags, as in `npx skills add owner/repo -y`.
+A source is `owner/repo`, a git URL, a path inside a repo, a local folder or
+an archive URL; private repos use the git credentials, GitHub CLI login or
+SSH key already configured, and InstallZero never reads or stores the token.
+
+```text
+installzero add frenb/rl-roboracer          install a project
+installzero add frenb/rl-roboracer --list   show the phases and what each would do; install nothing
+installzero check frenb/rl-roboracer        run only the detect steps; report present / missing
+installzero list                            installed projects and the state of each phase
+installzero update [project]                re-run against the newer manifest; finished phases are skipped
+installzero remove <project> [--data]       uninstall from the lock file; data folders only with --data
+installzero doctor [project | <record>]     diagnose the last (or a given) failure with the chosen model
+installzero doctor --prompt | claude        print the evidence and instructions for any coding agent
+installzero find "<error text>"             search the catalog for a pasted error
+installzero init                            write a starter install.json for a new project
+```
+
+Common flags: `-y` (no prompts), `--phase <id>` (one phase only),
+`--doctor <model>`, and `-g` for machine scope. **Machine scope** is the
+prerequisites several projects share (WSL, Docker Desktop, drivers);
+**project scope** is the repo, images, assets and data. `remove` only touches
+project scope unless `-g` is given and no other installed project needs the
+machine-scope item.
+
+`check` is the "look without committing" command (`skills use` in the
+skills CLI): every phase already has a detect step, so it costs nothing to
+offer. `doctor --prompt` lets the user's own coding agent (Cursor, Claude
+Code, Codex) do the reasoning on the same redacted evidence the built-in
+doctor gets, with no model download and no API key.
+
+**Lock file.** `add` and `update` write `lock.json` in the InstallZero state
+folder: the manifest source and commit, every extension pin (source, commit,
+sha256), every downloaded asset with its sha256, the images built, and the
+shortcuts, services and folders created, each tagged with its scope.
+`remove`, `update` and test-account resets act on that list instead of
+inferring what was installed (today's `Uninstall.ps1` infers it from the
+compose project's working folder).
+
+## Extensibility
+
+An extension is a folder with one small header file, published in any git
+repo, found by looking in a few standard places, with no registration step.
+That is how skills work (a folder with `SKILL.md`); a search site
+(`installzero.dev`, like skills.sh) is an index over what exists, not a
+gate.
+
+| Extension | Header | Found at | Used by |
+|---|---|---|---|
+| Project | `install.json` | repo root or `.installzero/` | `installzero add owner/repo` |
+| Phase type | `phase.json` (name, description, OS, parameters, `owner`) plus detect and install scripts | `phases/<name>/` | a manifest phase `"type": "acme/installzero-phases@v1#cuda-toolkit"` |
+| Catalog pack | one JSON file per entry | `catalog/<id>.json` | the manifest's `catalog`, or `installzero add-catalog owner/repo` |
+| Doctor adapter | `adapter.json` | `adapters/<name>/` | `--doctor <name>` |
+
+- **Built-ins are written the same way.** `wsl`, `docker-desktop`,
+  `winget-package`, `compose-build` and `release-assets` ship as the first
+  phase pack, so third-party packs have a working model to copy.
+- **Doctor adapters** cover local llama.cpp models, the hosted providers
+  (`anthropic`, `openai`, `xai`, `google`), and "agent" adapters that hand
+  the prompt to an installed coding agent.
+- **Catalog order**: the project's pack, then packs the user added, then the
+  shared catalog. First match wins.
+- **Pinning**: anything outside the project's own repo is pinned to a commit
+  and sha256 in `lock.json`; nothing installs from an unpinned branch.
+  Catalog packs still reference only named fix actions, so only phase packs
+  carry scripts, and those are covered by the pin and by the policy tiers
+  above.
+- **Unreviewed content** (for example doctor-proposed catalog entries) is
+  marked `"internal": true` and is only loaded when
+  `INSTALLZERO_INTERNAL=1` is set, for testers.
+
 ## Failure records (field data)
 
 Written locally for every failed phase, every catalogued fix and every
@@ -153,6 +228,8 @@ material for the corpus.
   "record": "1",
   "id": "<random uuid per record>",
   "installer": "0.4.0", "catalog": "2026.10.08", "manifest": "rl-roboracer@<commit>",
+  "lock": { "phasePack": "installzero/phases@<commit>", "sha256": "<pack sha256>", "catalogPacks": ["frenb/rl-roboracer@<commit>"] },
+  "owner": "github:frenb/rl-roboracer",
   "phase": { "id": "images", "type": "compose-build", "step": "build sim-controller" },
   "fingerprint": {
     "os": "windows 10.0.26200", "arch": "x64", "locale": "en-US",
@@ -179,6 +256,52 @@ material for the corpus.
 - **Verified fix**: `outcome.phaseRerun = passed` after `fix` is what turns a
   suggestion into evidence. Success rate per (signature, fix, fingerprint
   bucket) is the main metric of the corpus.
+- **Lock**: the exact pins (from `lock.json`) of the manifest, phase pack and
+  catalog packs that were running, so a failure is tied to a version of the
+  extension that produced it.
+- **Owner**: who should hear about this failure, copied from the header of
+  the piece that failed (see "Destinations and routing").
+
+### Storage
+
+A record is a folder, like an extension: one header file that is the only
+thing ever sent, and supporting files that never leave the machine.
+
+```text
+%LOCALAPPDATA%\installzero\          (~/.local/state/installzero on Linux and macOS)
+  lock.json
+  records\
+    2026-10-10T0812Z-images-3f9c\
+      record.json     redacted, structured; the only file any destination reads
+      raw.log         full phase output
+      doctor.md       doctor transcript
+      context.json    installer state at failure time (phase states, versions)
+```
+
+Folder names sort by time and carry the phase and the start of the
+signature hash. "Raw logs and transcripts are never submitted" (rule 4
+under "Redaction") is then a property of the layout: the sender only ever
+opens `record.json`.
+
+### Failure commands
+
+```text
+installzero failures                        local records, newest first: phase, signature, matched or not
+installzero failures show <id>              the record exactly as it would be sent
+installzero share <id> | --all              preview the final JSON, confirm, send to the configured destinations
+installzero find <id> | sig:<hash>          look a record or signature up in the catalog
+installzero doctor <id> [--prompt | claude] diagnose one record
+installzero capture -- <command>            run any command and record its failure, even outside an InstallZero install
+installzero find --log build.txt            diagnose a pasted or attached log
+installzero catalog propose <id>            start a catalog entry folder from a record, with its redacted sample
+installzero failures prune --older 90d      local retention
+```
+
+`capture` and `find --log` widen what the corpus can learn from: a failed
+`docker compose build`, `pip install` or driver installer can be recorded
+by someone who never installed through InstallZero. `catalog propose` turns
+step 4 of the loop into editing a draft file rather than starting from
+nothing.
 
 ## Redaction
 
@@ -249,6 +372,47 @@ installzero (user machine) --HTTPS--> intake service --> MongoDB (private)
 - "Currently private" stays an option: publishing aggregate statistics later
   only needs a read-only export of `signatures` and `installs` counts.
 
+### Destinations and routing
+
+The intake is one destination among several, chosen from a table of
+adapters (as the skills CLI has one for agents). Every destination receives
+the same redacted `record.json`, never more.
+
+| Destination | Where it goes |
+|---|---|
+| `local` | Always, and the default; nothing leaves the machine. |
+| `installzero` | The shared intake service above (corpus, one public issue per signature). |
+| `owner` | Wherever the failing piece's header says: `github:<owner>/<repo>` (an issue per signature on that repo, through the intake, which holds the GitHub credentials) or `https://...` (the owner's own intake, same record format). |
+| `file` | A zip of the selected `record.json` files, to attach to a support ticket. |
+
+Each extension names its owner in its header:
+
+```json
+// install.json (a project)
+{ "name": "rl-roboracer", "failures": { "owner": "github:frenb/rl-roboracer", "share": ["installzero", "owner"] } }
+
+// phase.json (a third-party phase pack)
+{ "name": "cuda-toolkit", "owner": "github:acme/installzero-phases" }
+```
+
+**The owner follows the code that failed.** A failure inside a pinned
+third-party phase (`acme/installzero-phases@<sha>#cuda-toolkit`) is routed to
+that pack's owner; a failure in a project script to the project; a failure
+in a built-in phase to InstallZero. The shared corpus gets every shared
+record regardless. This is what lets extension authors find and fix their
+own breakages without InstallZero maintainers in the middle.
+
+- **Consent is per destination.** The user approves each record, or opts in
+  once per destination (`-ShareFailures installzero,owner`).
+  `DO_NOT_TRACK=1` or `DISABLE_TELEMETRY=1` forces `local` only, whatever the
+  manifest asks for.
+- **Every receiving service redacts again.** An `https` owner endpoint is
+  outside our control, so it gets only what the user previewed.
+- **Signatures are the shared key.** `sig:<hash>` is the same on every
+  machine and names the signature's public page (`installzero.dev/s/<hash>`):
+  aggregate counts, the linked catalog entry and GitHub issue, nothing
+  per-machine.
+
 ## The loop
 
 1. **Collect**: records written locally; opt-in submission to the intake
@@ -257,7 +421,9 @@ installzero (user machine) --HTTPS--> intake service --> MongoDB (private)
 2. **Cluster**: group by signature hash; sort by count and by how many
    distinct projects and fingerprints hit it.
 3. **Propose**: for a cluster with no catalog entry, the doctor's
-   `proposedEntry` from those runs is the starting draft.
+   `proposedEntry` from those runs is the starting draft;
+   `installzero catalog propose <record>` writes it out as an entry folder
+   marked `"internal": true` until reviewed.
 4. **Review**: a maintainer turns it into a catalog entry with a redacted
    sample, the self-test passes, and an eval scenario is added when the
    failure can be reproduced.
@@ -297,7 +463,11 @@ and trust will decide adoption more than model quality.
   about 10-20 MB, catalog and kb embedded. One bootstrap line per project
   (`irm <url>/install.ps1 | iex` on Windows, `curl -fsSL <url>/install.sh | sh`
   elsewhere) downloads the pinned release, verifies sha256 and runs it with
-  the project's manifest.
+  the project's manifest. The generic bootstrap passes its arguments through
+  to the binary, so any verb works from one line with no runtime installed:
+  `iex "& { $(irm https://installzero.dev/install.ps1) } add frenb/rl-roboracer"`.
+  A project's own one-liner (rl-roboracer's `install.ps1`, `uninstall.ps1`)
+  is a short form of `add <project>` / `remove <project>`.
 - **Code signing**: deferred (Decision 6). Until then, installs go through
   the bootstrap one-liners, which download without the internet-download
   mark, so SmartScreen and Gatekeeper do not prompt. A binary downloaded in
@@ -346,14 +516,18 @@ rl-roboracer's installer keeps working at every step; the Tier A test
 1. **Catalog as data, in this repo.** Move `$FailureCatalog` into
    `scripts/install/catalog/*.json` with the fields above; `Find-Failure` and
    `-SelfTest` read the files. No behaviour change.
-2. **Failure records, local only.** Write records and redaction with its
-   self-test; attach them to `install-report.json`. No submission yet. The
+2. **Failure records and lock file, local only.** Write records (one folder
+   each, as under "Storage") and redaction with its self-test; attach them
+   to `install-report.json`. Write `lock.json` from what the phases did and
+   make `Uninstall.ps1` read it. No submission yet. The
    catalog, record and manifest formats defined in steps 1-2 are the
    contract the Go engine implements, so nothing written here is thrown away.
 3. **InstallZero repository, Go engine.** New `installzero` repo (Apache 2.0). Port
    the phase runner, state and resume, report, built-in phases, fix actions,
    policy classifier, redaction and catalog matcher to Go, with the JSON
-   catalog and the redaction corpus as shared test fixtures. Windows first,
+   catalog and the redaction corpus as shared test fixtures. The binary
+   exposes the verbs under "Command line" from the start; the built-in
+   phases ship as the first phase pack. Windows first,
    with parity checked by running the rl-roboracer Tier A test against both
    engines.
 4. **rl-roboracer on InstallZero.** rl-roboracer gets a manifest plus its
@@ -365,7 +539,8 @@ rl-roboracer's installer keeps working at every step; the Tier A test
    suite.
 6. **Intake.** The HTTPS intake service, MongoDB collections, per-signature
    GitHub issues, consent prompts, clustering and review workflow, signed
-   catalog releases.
+   catalog releases, and owner routing (the `owner` and `file`
+   destinations).
 7. **A second project.** Write a manifest for a different project with a
    GPU/ML install (ideally one with an active user base and its own install
    issues) to prove the engine is general and find what the manifest format
@@ -378,7 +553,10 @@ rl-roboracer's installer keeps working at every step; the Tier A test
 
 1. **Name: InstallZero** (2026-10-09; first chosen as ZeroRig). The
    rl-roboracer installer already carries the name; its file names and
-   paths change when the engine moves to its own repo.
+   paths change when the engine moves to its own repo. The repo exists
+   (2026-10-10) at [InstallZero/installzero](https://github.com/InstallZero/installzero),
+   owned by the `InstallZero` GitHub organization, holding the licences,
+   README and contributor terms; schemas and the Go engine follow steps 1-3.
 2. **Licences: code Apache 2.0, catalog CC BY 4.0**; kb folder CC BY-SA 4.0
    (or rewrite the one CC BY-SA article and use CC BY 4.0 there too).
 3. **Shared failure reports: GitHub issues (public, one per signature) and
@@ -414,3 +592,5 @@ rl-roboracer's installer keeps working at every step; the Tier A test
    the retention period.
 3. **Code signing** (deferred, Decision 6): individual or organization
    identity, Azure Artifact Signing and an Apple Developer account.
+4. **Domain.** `installzero.dev` is a placeholder for the bootstrap, the
+   search index and the per-signature pages.
