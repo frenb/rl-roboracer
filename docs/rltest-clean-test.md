@@ -35,8 +35,12 @@ This writes `C:\Users\Public\rl-roboracer-test\rl-roboracer.bundle`, a git
 bundle whose branch `rltest` is the working tree as it is now, including
 uncommitted and untracked files but not `.gitignore`d ones such as `.env`. It
 does not commit to or change your branch. It also copies the installer, the
-reset script, a copy of the doctor and this file (as `RUN-TEST.md`), and stages
-llama.cpp plus the local models in `C:\Users\Public\doctor-assets`.
+reset script, `installzero.json` and this file (as `RUN-TEST.md`), copies the
+probe and doctor from your InstallZero checkout (`..\installzero`) into
+`installzero\` for step 3, and stages llama.cpp plus the local models in
+`C:\Users\Public\doctor-assets`. The installer downloads the InstallZero
+engine pinned in `installzero.json` itself; add `-LocalEngine` to stage your
+checkout's engine instead.
 
 Options:
 
