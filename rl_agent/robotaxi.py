@@ -4638,6 +4638,12 @@ def do_job(job, num_envs=1):
         print(f"do_job: set_observation_size failed (non-fatal): {_e}",
               flush=True)
     print(f"do_job: course_type={_job_course_type}", flush=True)
+    # fly-brain holds one brain: a second env would interleave on the same
+    # voltages with no error raised, so fly courses always run single-env.
+    if num_envs > 1 and str(_job_course_type).startswith("fly_"):
+        print(f"do_job: {_job_course_type} runs with 1 env, not the trainer's "
+              f"{num_envs} (fly-brain holds one brain)", flush=True)
+        num_envs = 1
     # TRAIN/EVAL are allowed on every course. DEMO/BC are not: the camera
     # courses need a dict TFRecord layout that does not exist yet (Phase 7),
     # and fly_donut's observation is the brain's own history and so cannot be

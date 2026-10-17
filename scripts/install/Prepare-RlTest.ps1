@@ -13,11 +13,18 @@
                                        env file), as branch "rltest". Made with a
                                        temporary git index: your branch,
                                        index and working tree are untouched.
-      <StageDir>\Install.ps1, Reset-TestAccount.ps1, catalog\, doctor\
-                                       the installer, the reset script, and
-                                       copies of the failure catalog and the
-                                       doctor for failures that happen before
-                                       the repo is cloned
+      <StageDir>\Install.ps1, requirements.json, installzero.json,
+      Reset-TestAccount.ps1, catalog\  the installer, its GPU requirements,
+                                       the pinned InstallZero engine (the
+                                       installer downloads it), the reset
+                                       script and the project's own failure
+                                       catalog entries
+      <StageDir>\installzero\          agent\ and doctor\ from the InstallZero
+                                       checkout, for the probe (step 3)
+      <StageDir>\installzero-engine\   with -LocalEngine only: the checkout's
+                                       doctor, catalog and schemas, used by
+                                       the installer instead of the pinned
+                                       release
       <StageDir>\RUN-TEST.md           docs/rltest-clean-test.md
       <DoctorAssetsDir>                llama.cpp builds (unpacked) and the
                                        chosen local models
@@ -35,6 +42,13 @@
     Account given modify rights on the staged folders (it unpacks llama.cpp
     logs there and saves its results). Default rltest.
 
+.PARAMETER InstallZeroDir
+    The InstallZero checkout. Default: installzero beside this repo.
+
+.PARAMETER LocalEngine
+    Test the checkout's doctor and catalog instead of the released engine
+    pinned in installzero.json.
+
 .EXAMPLE
     .\Prepare-RlTest.ps1
     Stages the code with the gemma and gpt-oss local models.
@@ -49,12 +63,17 @@ param(
     [string]$DoctorAssetsDir = 'C:\Users\Public\doctor-assets',
     [string[]]$LocalModels = @('gemma', 'gpt-oss'),
     [string]$SourceAssets = '',
-    [string]$TestAccount = 'rltest'
+    [string]$TestAccount = 'rltest',
+    [string]$InstallZeroDir = '',
+    [switch]$LocalEngine
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 if (-not $SourceAssets) { $SourceAssets = Join-Path (Split-Path $repo -Parent) 'doctor-assets' }
+if (-not $InstallZeroDir) { $InstallZeroDir = Join-Path (Split-Path $repo -Parent) 'installzero' }
+if (-not (Test-Path (Join-Path $InstallZeroDir 'doctor\Llm.ps1'))) { throw "No InstallZero checkout at $InstallZeroDir (it needs doctor\ and agent\); pass -InstallZeroDir." }
+$InstallZeroDir = (Resolve-Path $InstallZeroDir).Path
 $LocalModels = @($LocalModels | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
 $modelFiles = [ordered]@{ 'gpt-oss' = 'gpt-oss-20b-MXFP4.gguf'; gemma = 'gemma-4-E4B-it-Q4_K_M.gguf'; qwen = 'Qwen3.5-9B-Q4_K_M.gguf'; granite = 'granite-4.1-8b-Q4_K_M.gguf' }
 if ($LocalModels -contains 'all') { $LocalModels = @($modelFiles.Keys) }
@@ -102,13 +121,32 @@ try {
     Remove-Item $bare -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# 2. Installer, reset script, catalog and doctor copies, instructions.
-Write-Host 'Copying the installer, reset script, failure catalog, doctor and instructions ...' -ForegroundColor Cyan
-Copy-Item (Join-Path $PSScriptRoot 'Install.ps1'), (Join-Path $PSScriptRoot 'Reset-TestAccount.ps1') $StageDir -Force
-$doctorStage = Join-Path $StageDir 'doctor'
-if (Test-Path $doctorStage) { Remove-Item $doctorStage -Recurse -Force }
-New-Item -ItemType Directory -Force $doctorStage | Out-Null
-Get-ChildItem (Join-Path $PSScriptRoot 'doctor') -Exclude 'assets' | Copy-Item -Destination $doctorStage -Recurse -Force
+# 2. Installer, reset script, project catalog, InstallZero, instructions.
+Write-Host 'Copying the installer, reset script, failure catalog, InstallZero and instructions ...' -ForegroundColor Cyan
+Copy-Item (Join-Path $PSScriptRoot 'Install.ps1'), (Join-Path $PSScriptRoot 'requirements.json'), (Join-Path $PSScriptRoot 'installzero.json'), (Join-Path $PSScriptRoot 'Reset-TestAccount.ps1') $StageDir -Force
+Get-ChildItem (Join-Path $PSScriptRoot 'rltest') -File | Where-Object Name -match '^[2-9]-.*\.ps1$' | Copy-Item -Destination $StageDir -Force
+Remove-Item (Join-Path $StageDir 'doctor') -Recurse -Force -ErrorAction SilentlyContinue
+function Copy-Folder([string]$From, [string]$To, [string[]]$Exclude = @()) {
+    if (Test-Path $To) { Remove-Item $To -Recurse -Force }
+    New-Item -ItemType Directory -Force $To | Out-Null
+    Get-ChildItem $From -Exclude $Exclude | Copy-Item -Destination $To -Recurse -Force
+}
+$izStage = Join-Path $StageDir 'installzero'
+Copy-Folder (Join-Path $InstallZeroDir 'agent') (Join-Path $izStage 'agent')
+Copy-Folder (Join-Path $InstallZeroDir 'doctor') (Join-Path $izStage 'doctor') @('assets')
+$izHead = "$(& git -C $InstallZeroDir rev-parse --short HEAD 2>$null)".Trim()
+Write-Host "  $izStage : the probe from $InstallZeroDir@$izHead"
+$engineStage = Join-Path $StageDir 'installzero-engine'
+Remove-Item $engineStage -Recurse -Force -ErrorAction SilentlyContinue
+if ($LocalEngine) {
+    Copy-Folder (Join-Path $InstallZeroDir 'doctor') (Join-Path $engineStage 'doctor') @('assets', 'eval')
+    Copy-Folder (Join-Path $InstallZeroDir 'catalog') (Join-Path $engineStage 'catalog')
+    Copy-Folder (Join-Path $InstallZeroDir 'schemas') (Join-Path $engineStage 'schemas')
+    "local`n$izHead" | Set-Content (Join-Path $engineStage 'VERSION') -Encoding ASCII
+    Write-Host "  $engineStage : the engine from the checkout, instead of the pinned release"
+} else {
+    Write-Host "  engine: $((Get-Content (Join-Path $PSScriptRoot 'installzero.json') -Raw | ConvertFrom-Json).version) from installzero.json (the installer downloads it)"
+}
 $catalogStage = Join-Path $StageDir 'catalog'
 if (Test-Path $catalogStage) { Remove-Item $catalogStage -Recurse -Force }
 New-Item -ItemType Directory -Force $catalogStage | Out-Null
@@ -134,7 +172,7 @@ foreach ($f in $wanted) {
     Write-Host "  copying $($f.Name) ($([math]::Round($f.Length / 1GB, 2)) GB)"
     Copy-Item $f.FullName $dest -Force
 }
-. (Join-Path $PSScriptRoot 'doctor\Llm.ps1')
+. (Join-Path $InstallZeroDir 'doctor\Llm.ps1')
 foreach ($b in 'cuda', 'vulkan', 'cpu') {
     try { [void](Install-LlamaBackend $DoctorAssetsDir $b); Write-Host "  llama.cpp $b build ready" } catch { Write-Host "  llama.cpp $b build not staged: $_" -ForegroundColor Yellow }
 }
@@ -149,6 +187,8 @@ foreach ($d in $StageDir, $DoctorAssetsDir) {
 }
 
 Write-Host ''
-Write-Host 'Staged. Signed in as rltest, follow C:\Users\Public\rl-roboracer-test\RUN-TEST.md; the install command is:' -ForegroundColor Green
-Write-Host "  powershell -ExecutionPolicy Bypass -File $StageDir\Install.ps1"
+Write-Host 'Staged. Signed in as rltest, follow C:\Users\Public\rl-roboracer-test\RUN-TEST.md, or run the steps:' -ForegroundColor Green
+Write-Host "  powershell -ExecutionPolicy Bypass -File $StageDir\2-Update.ps1    (install or update, -Clients 2)"
+Write-Host "  powershell -ExecutionPolicy Bypass -File $StageDir\3-Probe.ps1     (probe; -Set compare|local|hosted|all, -Runs 2)"
+Write-Host "  powershell -ExecutionPolicy Bypass -File $StageDir\4-Results.ps1   (summary; -Facts for recall per fact)"
 if ((Split-Path $DoctorAssetsDir -Parent) -ne (Split-Path $StageDir -Parent)) { Write-Host "  (add -DoctorAssets ${DoctorAssetsDir}: it is not beside $StageDir, so the installer will not find it by itself)" }

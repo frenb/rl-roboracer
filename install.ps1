@@ -6,7 +6,8 @@
 #
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/install.ps1))) -Doctor xai
 #
-# Downloads scripts/install/Install.ps1, its failure catalog and the install doctor into
+# Downloads scripts/install/Install.ps1, its requirements, the project's failure catalog entries and
+# installzero.json (the pinned InstallZero engine, which Install.ps1 downloads and verifies) into
 # %LOCALAPPDATA%\rl-roboracer-install and runs it in Windows PowerShell,
 # passing the options through. RL_INSTALL_BRANCH picks another branch.
 
@@ -23,6 +24,8 @@
     Write-Host "InstallZero: downloading the rl-roboracer installer ($branch) to $dir ..."
     New-Item -ItemType Directory -Force $dir | Out-Null
     Invoke-WebRequest -UseBasicParsing "$raw/scripts/install/Install.ps1" -OutFile (Join-Path $dir 'Install.ps1')
+    Invoke-WebRequest -UseBasicParsing "$raw/scripts/install/requirements.json" -OutFile (Join-Path $dir 'requirements.json')
+    Invoke-WebRequest -UseBasicParsing "$raw/scripts/install/installzero.json" -OutFile (Join-Path $dir 'installzero.json')
 
     function Get-RepoFiles([string]$Path) {
         # Assigned first: Windows PowerShell 5.1 emits the JSON array as one object.
@@ -42,12 +45,11 @@
         }
     }
 
-    # The failure catalog and the doctor diagnose failures, including ones
-    # before the repo is cloned. Without them the install still runs.
+    # The project's own failure catalog entries, for failures before the repo
+    # is cloned. Without them the install still runs.
     try { Save-RepoFolder 'scripts/install/catalog' (Join-Path $dir 'catalog') }
-    catch { Write-Host "The failure catalog could not be downloaded ($($_.Exception.Message)); known failures are recognised once the repo is cloned." -ForegroundColor Yellow }
-    try { Save-RepoFolder 'scripts/install/doctor' (Join-Path $dir 'doctor') }
-    catch { Write-Host "The InstallZero doctor could not be downloaded ($($_.Exception.Message)); continuing without it." -ForegroundColor Yellow }
+    catch { Write-Host "The project's failure catalog could not be downloaded ($($_.Exception.Message)); its entries are recognised once the repo is cloned." -ForegroundColor Yellow }
+    Remove-Item (Join-Path $dir 'doctor') -Recurse -Force -ErrorAction SilentlyContinue
 
     $pass = @($args)
     if (-not ($pass | Where-Object { $_ -match '^-Branch(:|$)' })) { $pass += @('-Branch', $branch) }

@@ -4,7 +4,7 @@
     GPU, from nothing to a first TRAIN job producing training steps.
 
 .DESCRIPTION
-    Runs ten phases in order. Each phase first checks whether its work is
+    Runs its phases in order. Each phase first checks whether its work is
     already done, so the script can be re-run at any time and resumes where
     it stopped (including after the reboot WSL needs).
 
@@ -18,17 +18,22 @@
       6 unity       The starter gyms unpacked into <InstallDir>\UnityBinary\,
                     the default one (v13) also into unity\Builds\latest\
         demos       Expert-demo recording the donut TRAIN jobs start from
-      7 start       Stack up, one Unity client connected to ros-server
+      7 start       Stack up (containers, TensorBoard, fly-brain, dashboard)
         seed        Starter gyms, reward design and experiment designs in
                     MongoDB (seed\seed.json). Each gym names its reference
                     course, reward design and experiment design; existing
                     documents only gain the fields they are missing
+        clients     -Clients Unity clients (default 1), each connected to its
+                    ros-server; more than one also starts ros-server-1..N-1
         autostart   Startup-folder shortcut that restarts the Unity client
                     supervisor at each sign-in (Start-ClientAtLogon.ps1)
       8 firstjob    A short TRAIN job on the default gym with that gym's
                     reference course and designs (no first eval; BC
                     pretrain only if the design sets it), producing
                     training steps and TensorBoard scalars
+        optimize    Optional doctor review of PC settings (-Optimize, or
+                    y/N with a 10-second default of no) while that job
+                    trains, so GPU load under training is part of it
 
     Every phase records what it found and what it did in
     install-report.json, with outcome installed / already-present /
@@ -63,8 +68,9 @@
     Default: the folder this script is in, when the gym zips are there;
     otherwise they are downloaded from the GitHub Release -UnityReleaseTag.
     Likewise a rl-roboracer.bundle next to the script is cloned (branch
-    rltest) instead of -RepoUrl, and a doctor-assets folder beside the
-    script's folder is used as -DoctorAssets.
+    rltest) instead of -RepoUrl, an installzero-engine folder next to it is
+    used as -EngineDir, and a doctor-assets folder beside the script's
+    folder is used as -DoctorAssets.
 
 .PARAMETER ProjectName
     Compose project name written to .env (COMPOSE_PROJECT_NAME). Only needed
@@ -116,12 +122,14 @@
     ask.
 
 .PARAMETER SelfTest
-    Check the failure catalog (catalog\*.json beside this script, else the
-    repo's scripts\install\catalog) against its own sample log lines, then
-    exit. Also fails on entries that cannot be loaded. Changes nothing.
+    Check the failure catalog (the project's entries in catalog\*.json beside
+    this script, else the repo's scripts\install\catalog, plus the InstallZero
+    engine's) against its own sample log lines, then exit. Also fails on
+    entries that cannot be loaded. Changes nothing, apart from downloading
+    the engine if it is not cached yet.
 
 .PARAMETER Doctor
-    Which model diagnoses a failed install (scripts\install\doctor). The
+    Which model diagnoses a failed install (the InstallZero engine's doctor). The
     doctor only investigates and reports a root cause and fix; it changes
     nothing. Without -Doctor the installer asks once (the answer is kept for
     resumed runs); a non-interactive run uses none.
@@ -139,6 +147,26 @@
 .PARAMETER DoctorAssets
     Folder with the llama.cpp builds and .gguf models for local doctor
     models. Default: RL_DOCTOR_ASSETS, else the doctor's own assets folder.
+
+.PARAMETER EngineDir
+    An InstallZero engine or checkout (a folder with doctor\ and catalog\) to
+    use instead of the version pinned in installzero.json, which is
+    downloaded once into %LOCALAPPDATA%\installzero\engine\<version> and
+    checked against its sha256.
+
+.PARAMETER Optimize
+    Have the doctor review a few PC settings that affect training (WSL memory
+    and processors, power plan, sleep, GPU driver against the latest on
+    nvidia.com, disk space, Unity's GPU on hybrid laptops, GPU load while
+    training) without asking first. The review runs while the first
+    training job trains; GPU load is measured before a local doctor model
+    loads, and the model then shares the GPU with training. Without -Optimize an
+    interactive run asks y/N and continues with no after 10 seconds; a
+    non-interactive run skips the review. Each recommended change says what
+    it improves. Power mode, sleep and Unity's GPU choice can be applied by
+    the doctor: it checks the change is still needed, asks Y/N for each (no
+    answer in 60 s skips it) and measures again. Driver, memory and disk
+    changes are only recommended. Needs a doctor (-Doctor).
 
 .EXAMPLE
     .\Install.ps1
@@ -181,7 +209,9 @@ param(
     [switch]$AutoFix,
     [switch]$SelfTest,
     [string]$Doctor = '',
-    [string]$DoctorAssets = ''
+    [string]$DoctorAssets = '',
+    [string]$EngineDir = '',
+    [switch]$Optimize
 )
 
 Set-StrictMode -Version 2.0
@@ -211,6 +241,10 @@ if ($PSScriptRoot) {
         $RepoUrl = $stagedBundle; $ScriptParams['RepoUrl'] = $RepoUrl
         if (-not $ScriptParams.ContainsKey('Branch')) { $Branch = 'rltest'; $ScriptParams['Branch'] = $Branch }
     }
+    $stagedEngine = Join-Path $PSScriptRoot 'installzero-engine'
+    if (-not $EngineDir -and (Test-Path (Join-Path $stagedEngine 'doctor\Doctor.ps1'))) {
+        $EngineDir = $stagedEngine; $ScriptParams['EngineDir'] = $EngineDir
+    }
     $stagedDoctorAssets = Join-Path (Split-Path $PSScriptRoot -Parent) 'doctor-assets'
     if (-not $DoctorAssets -and -not $env:RL_DOCTOR_ASSETS -and (Test-Path $stagedDoctorAssets)) {
         $DoctorAssets = $stagedDoctorAssets; $ScriptParams['DoctorAssets'] = $DoctorAssets
@@ -220,7 +254,6 @@ $GymExeName     = 'robotaxi gym level 1.exe'
 # Must match COURSE_DEFAULT_DEMO_JOB_IDS['donut'] in rl_agent/robotaxi.py.
 $DemoJobId      = '64168c1b58d4d8ccdb76e721'
 $MinBuild       = 19045
-$MinDriverMajor = 495
 $CudaTestImage  = 'nvidia/cuda:11.0.3-base-ubuntu20.04'
 $BuildServices  = @('ros-server', 'sim-controller', 'fly-brain')
 $StartServices  = @('ros-server', 'mongo', 'mongo-express', 'sim-controller', 'dashboard', 'fly-brain')
@@ -238,6 +271,7 @@ $RunOnceName = 'rl-roboracer-install'
 
 $script:Report = New-Object System.Collections.ArrayList
 $script:Diagnoses = New-Object System.Collections.ArrayList
+$script:Optimizations = $null
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -309,7 +343,7 @@ function Test-TcpPort([int]$Port) {
 }
 
 function Save-Report {
-    $json = [pscustomobject]@{ results = @($script:Report); diagnoses = @($script:Diagnoses) } | ConvertTo-Json -Depth 5
+    $json = [pscustomobject]@{ results = @($script:Report); diagnoses = @($script:Diagnoses); optimizations = $script:Optimizations } | ConvertTo-Json -Depth 5
     Set-Content -Path $ReportPath -Value $json -Encoding UTF8
     Set-Content -Path $RunReportPath -Value $json -Encoding UTF8
 }
@@ -358,11 +392,31 @@ function Invoke-Phase {
     }
 }
 
+function Get-RequirementsFile {
+    @((Join-Path $PSScriptRoot 'requirements.json'), (Join-Path $RepoDir 'scripts\install\requirements.json')) |
+        Where-Object { Test-Path $_ } | Select-Object -First 1
+}
+
+# The NVIDIA driver minimum is the highest driverMin of the GPU components in
+# requirements.json; By names the component that sets it.
+function Get-GpuRequirements {
+    $file = Get-RequirementsFile
+    if (-not $file) { return $null }
+    $components = @((Get-Content $file -Raw | ConvertFrom-Json).gpu.components)
+    $top = $components | Sort-Object { [version]$_.driverMin } -Descending | Select-Object -First 1
+    [pscustomobject]@{ File = $file; Components = $components; Min = [version]$top.driverMin
+        By = "$($top.name)$(if ($top.PSObject.Properties.Name -contains 'cuda') { " (CUDA $($top.cuda))" })" }
+}
+
 function Register-Resume {
     $self = Join-Path $StateDir 'Install.ps1'
     if ($PSCommandPath -and ($PSCommandPath -ne $self)) {
         Copy-Item -LiteralPath $PSCommandPath -Destination $self -Force
-        $catalog = Get-FailureCatalogDir
+        $req = Get-RequirementsFile
+        if ($req -and ($req -ne (Join-Path $StateDir 'requirements.json'))) { Copy-Item -LiteralPath $req -Destination $StateDir -Force }
+        $pin = Get-EnginePinFile
+        if ($pin -and ($pin -ne (Join-Path $StateDir 'installzero.json'))) { Copy-Item -LiteralPath $pin -Destination $StateDir -Force }
+        $catalog = Get-ProjectCatalogDir
         $selfCatalog = Join-Path $StateDir 'catalog'
         if ($catalog -and ($catalog -ne $selfCatalog)) {
             if (Test-Path $selfCatalog) { Remove-Item $selfCatalog -Recurse -Force }
@@ -441,12 +495,80 @@ function Stop-UnityClients {
 }
 
 # ---------------------------------------------------------------------------
+# InstallZero engine
+#
+# The generic failure catalog and the doctor come from a published InstallZero
+# engine, pinned by version, URL and sha256 in installzero.json beside this
+# script (or in the clone's scripts\install). It is downloaded once into
+# %LOCALAPPDATA%\installzero\engine\<version>. -EngineDir, or an
+# installzero-engine folder staged next to the script, is used instead.
+# Without an engine the install still runs, with only the project's own
+# catalog entries and no doctor.
+# ---------------------------------------------------------------------------
+
+$script:EngineRoot = $null
+$script:EngineTried = $false
+
+function Get-EnginePinFile {
+    @((Join-Path $PSScriptRoot 'installzero.json'), (Join-Path $RepoDir 'scripts\install\installzero.json')) |
+        Where-Object { Test-Path $_ } | Select-Object -First 1
+}
+
+function Get-InstallZeroEngine {
+    if ($script:EngineTried) { return $script:EngineRoot }
+    $script:EngineTried = $true
+    if ($EngineDir) {
+        if (Test-Path (Join-Path $EngineDir 'doctor\Doctor.ps1')) { $script:EngineRoot = (Resolve-Path $EngineDir).Path }
+        else { Write-Warn "-EngineDir $EngineDir has no doctor\Doctor.ps1; continuing without the InstallZero engine." }
+        return $script:EngineRoot
+    }
+    $pinFile = Get-EnginePinFile
+    if (-not $pinFile) { Write-Warn 'No installzero.json found; continuing without the InstallZero engine (generic failure diagnoses and the doctor).'; return $null }
+    try {
+        $pin = [IO.File]::ReadAllText($pinFile) | ConvertFrom-Json
+        $has = @($pin.PSObject.Properties.Name)
+        if (@('version', 'url', 'sha256' | Where-Object { $has -notcontains $_ }) -or $pin.version -notmatch '^[\w.-]+$' -or
+            $pin.url -notmatch '^https://' -or $pin.sha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "$pinFile needs a version, an https url and a sha256" }
+        $want = $pin.sha256.ToLowerInvariant()
+        $dest = Join-Path $env:LOCALAPPDATA "installzero\engine\$($pin.version)"
+        $marker = Join-Path $dest '.sha256'
+        if ((Test-Path (Join-Path $dest 'doctor\Doctor.ps1')) -and (Test-Path $marker) -and ((Get-Content $marker -Raw).Trim() -eq $want)) {
+            $script:EngineRoot = $dest
+            return $dest
+        }
+        Write-Info "Downloading the InstallZero engine $($pin.version) ..."
+        # Unpacked beside its destination so the final move stays on one volume.
+        $tmp = Join-Path (Split-Path $dest) ".download-$PID"
+        if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+        New-Item -ItemType Directory -Force $tmp | Out-Null
+        try {
+            $zip = Join-Path $tmp 'engine.zip'
+            Invoke-WebRequest -UseBasicParsing -Uri $pin.url -OutFile $zip -TimeoutSec 120
+            $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($hash -ne $want) { throw "the download's sha256 is $hash, not the pinned $want" }
+            Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $tmp 'x') -Force
+            $top = @(Get-ChildItem -LiteralPath (Join-Path $tmp 'x') -Directory)
+            if ($top.Count -ne 1 -or -not (Test-Path (Join-Path $top[0].FullName 'doctor\Doctor.ps1'))) { throw 'the archive does not hold one engine folder with doctor\Doctor.ps1' }
+            if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+            Move-Item -LiteralPath $top[0].FullName -Destination $dest
+            Set-Content -Path $marker -Value $hash -Encoding ASCII
+        } finally { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+        $script:EngineRoot = $dest
+    } catch {
+        Write-Warn "The InstallZero engine could not be set up ($($_.Exception.Message)); continuing with the project's own failure diagnoses and no doctor."
+    }
+    $script:EngineRoot
+}
+
+# ---------------------------------------------------------------------------
 # Failure catalog
 #
-# Known failures, one JSON file each in catalog\ beside this script (or the
-# cloned repo's scripts\install\catalog): where they show up (phases), how to
-# recognise them (pattern, plus an optional "seen" regex for the line to
-# show), what they mean, what the user should do, and which named fix the
+# Known failures, one JSON file each: the project's own entries in catalog\
+# beside this script (or the cloned repo's scripts\install\catalog), then
+# the InstallZero engine's generic ones; a project entry replaces an engine
+# entry with the same id. Each says where the failure shows up (phases), how
+# to recognise it (pattern, plus an optional "seen" regex for the line to
+# show), what it means, what the user should do, and which named fix the
 # installer may apply. Samples are real log lines; -SelfTest checks every
 # sample is recognised as its own entry. Entries are tried in ascending
 # "order" and the first match wins.
@@ -460,19 +582,30 @@ $FixActions = @('retry', 'restart-docker', 'rebuild-clean', 'wsl-update', 'port-
 $script:FailureCatalog = $null
 $script:FailureCatalogSkipped = @()
 
-function Get-FailureCatalogDir {
+function Get-ProjectCatalogDir {
     @((Join-Path $PSScriptRoot 'catalog'), (Join-Path $RepoDir 'scripts\install\catalog')) |
         Where-Object { Test-Path (Join-Path $_ '*.json') } | Select-Object -First 1
 }
 
-# Loaded on first use. Before the repo is cloned, a run without a catalog
-# folder beside the script has no catalog and leaves failures undiagnosed.
+function Get-FailureCatalogDirs {
+    $engine = Get-InstallZeroEngine
+    @((Get-ProjectCatalogDir), $(if ($engine) { Join-Path $engine 'catalog' })) | Where-Object { $_ -and (Test-Path (Join-Path $_ '*.json')) }
+}
+
+# Loaded on first use. Without the engine and before the repo is cloned, a
+# run without a catalog folder beside the script leaves failures undiagnosed.
 function Get-FailureCatalog {
     if ($null -ne $script:FailureCatalog) { return $script:FailureCatalog }
-    $dir = Get-FailureCatalogDir
-    if (-not $dir) { return @() }
+    $dirs = @(Get-FailureCatalogDirs)
+    if (-not $dirs) { return @() }
     $script:FailureCatalogSkipped = @()
-    $entries = foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.json' | Sort-Object Name) {
+    $ids = @{}
+    $files = foreach ($dir in $dirs) {
+        foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.json' | Sort-Object Name) {
+            if (-not $ids.ContainsKey($f.BaseName)) { $ids[$f.BaseName] = $true; $f }
+        }
+    }
+    $entries = foreach ($f in $files) {
         $j = $null
         try { $j = [IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { }
         $has = if ($j) { @($j.PSObject.Properties.Name) } else { @() }
@@ -619,7 +752,7 @@ function Invoke-SelfTest {
     $failures = 0; $checked = 0
     $catalog = @(Get-FailureCatalog)
     $checked++
-    if (-not $catalog.Count) { $failures++; Write-Host "FAIL  no failure catalog found (looked in $(Join-Path $PSScriptRoot 'catalog') and $(Join-Path $RepoDir 'scripts\install\catalog'))" -ForegroundColor Red }
+    if (-not $catalog.Count) { $failures++; Write-Host "FAIL  no failure catalog found (looked in $(Join-Path $PSScriptRoot 'catalog'), $(Join-Path $RepoDir 'scripts\install\catalog') and the InstallZero engine)" -ForegroundColor Red }
     foreach ($s in $script:FailureCatalogSkipped) { $checked++; $failures++; Write-Host "FAIL  catalog entry skipped: $s" -ForegroundColor Red }
     foreach ($dup in @($catalog | Group-Object { $_.Order } | Where-Object { $_.Count -gt 1 })) {
         $checked++; $failures++; Write-Host "FAIL  catalog entries share order $($dup.Name): $(($dup.Group | ForEach-Object { $_.Id }) -join ', ')" -ForegroundColor Red
@@ -642,11 +775,31 @@ function Invoke-SelfTest {
             if ($hit) { $failures++; Write-Host "FAIL  healthy line matched $($hit.Id) in phase '$ph': $clean" -ForegroundColor Red }
         }
     }
-    $portSample = ($catalog | Where-Object { $_.Id -eq 'port-in-use' }).Samples[0]
-    $port = (Find-Failure 'compose-up' $portSample).Port
+    $portEntry = $catalog | Where-Object { $_.Id -eq 'port-in-use' } | Select-Object -First 1
     $checked++
-    if ($port -ne 80) { $failures++; Write-Host "FAIL  port extraction gave $port, expected 80" -ForegroundColor Red }
-    Write-Host "Failure catalog self-test: $($catalog.Count) entries from $(Get-FailureCatalogDir), $checked checks, $failures failures."
+    if (-not $portEntry) { $failures++; Write-Host 'FAIL  no port-in-use entry (it comes with the InstallZero engine)' -ForegroundColor Red }
+    else {
+        $port = (Find-Failure 'compose-up' $portEntry.Samples[0]).Port
+        if ($port -ne 80) { $failures++; Write-Host "FAIL  port extraction gave $port, expected 80" -ForegroundColor Red }
+    }
+    Write-Host "Failure catalog self-test: $($catalog.Count) entries from $(@(Get-FailureCatalogDirs) -join ' and '), $checked checks, $failures failures."
+
+    $reqChecked = 0; $reqFailures = 0
+    try { $req = Get-GpuRequirements } catch { $req = $null; Write-Host "FAIL  requirements.json does not load: $_" -ForegroundColor Red; $reqFailures++ }
+    if (-not $req -and -not $reqFailures) { Write-Host 'FAIL  no requirements.json next to the installer or in the repo' -ForegroundColor Red; $reqFailures++ }
+    $repoRoot = @((Resolve-Path (Join-Path $PSScriptRoot '..\..') -ErrorAction SilentlyContinue).Path, $RepoDir) | Where-Object { $_ -and (Test-Path (Join-Path $_ 'docker-compose.yml')) } | Select-Object -First 1
+    foreach ($c in @(if ($req) { $req.Components | Where-Object { $_.PSObject.Properties.Name -contains 'dockerfile' } })) {
+        $reqChecked++
+        $df = if ($repoRoot) { Join-Path $repoRoot $c.dockerfile } else { $null }
+        if (-not $df -or -not (Test-Path $df)) { Write-Host "SKIP  $($c.name): $($c.dockerfile) not found (no repo next to the installer)"; continue }
+        if (-not (Select-String -LiteralPath $df -Pattern "^FROM\s+$([regex]::Escape($c.image))(\s|$)" -Quiet)) {
+            $reqFailures++
+            $actual = (Select-String -LiteralPath $df -Pattern '^FROM\s+(\S+)' | Select-Object -First 1).Matches.Groups[1].Value
+            Write-Host "FAIL  $($c.name): requirements.json says $($c.image) but $($c.dockerfile) uses $actual; update image, cuda and driverMin together" -ForegroundColor Red
+        }
+    }
+    if ($req) { Write-Host "Requirements self-test: NVIDIA driver minimum $($req.Min) (set by $($req.By)), $reqChecked Dockerfile checks, $reqFailures failures." }
+    $failures += $reqFailures
     $failures
 }
 
@@ -688,8 +841,11 @@ function Invoke-Preflight {
     } else {
         $gpu = ($smi.Out -split "`n")[0]
         $driver = ($gpu -split ',')[-1].Trim()
-        if ([int]($driver -split '\.')[0] -lt $MinDriverMajor) {
-            $problems += "NVIDIA driver $driver is too old for WSL 2 GPU support; need R$MinDriverMajor or newer from https://www.nvidia.com/Download/index.aspx."
+        $req = Get-GpuRequirements
+        if (-not $req) {
+            Write-Warn 'requirements.json is missing next to the installer; the NVIDIA driver version is not checked.'
+        } elseif ([version]$driver -lt $req.Min) {
+            $problems += "NVIDIA driver $driver is too old: $($req.By) needs $($req.Min) or newer. Install the latest Game Ready or Studio driver from https://www.nvidia.com/Download/index.aspx and re-run."
         }
         $notes += "GPU $gpu"
     }
@@ -859,18 +1015,40 @@ function New-RandomSecret([int]$Length = 32) {
     -join ($bytes | ForEach-Object { $chars[$_ % $chars.Length] })
 }
 
+# A test install clones a staged bundle; when a later staging brings newer
+# code and the clone has no edits, it is brought up to date. Returns
+# 'behind', 'current', 'edited' or $null (not a bundle install).
+function Get-StaleBundleClone {
+    if ($RepoUrl -notmatch '\.bundle$' -or -not (Test-Path (Join-Path $RepoDir '.git\HEAD'))) { return $null }
+    $want = @((Invoke-Native 'git' @('bundle', 'list-heads', $RepoUrl, "refs/heads/$Branch") -Quiet).Out -split '\s+')[0]
+    $have = (Invoke-Native 'git' @('-C', $RepoDir, 'rev-parse', 'HEAD') -Quiet).Out.Trim()
+    if (-not $want -or $want -eq $have) { return 'current' }
+    # The dashboard's npm install rewrites its lock file; that is not an edit.
+    $edits = @((Invoke-Native 'git' @('-C', $RepoDir, 'status', '--porcelain', '--untracked-files=no') -Quiet).Out -split "`r?`n" |
+        Where-Object { $_.Trim() -and $_ -notmatch '(^|/)package-lock\.json$' })
+    if ($edits) { Write-Warn "The repo has local edits, so it is not updated to the staged $($Branch): $(($edits | ForEach-Object { $_.Trim() }) -join ', ')"; return 'edited' }
+    'behind'
+}
+
 function Invoke-WorkspacePhase {
     Invoke-Phase 'workspace' "Repo and data folders in $InstallDir" -Detect {
         $haveRepo = Test-Path (Join-Path $RepoDir '.git\HEAD')
         $haveEnv  = Test-Path (Join-Path $RepoDir '.env')
         $haveData = @('saved_models', 'mongodb', 'tfrecords' | Where-Object { -not (Test-Path (Join-Path $InstallDir $_)) }).Count -eq 0
         if ($haveRepo -and $haveEnv -and $haveData) {
+            if ((Get-StaleBundleClone) -eq 'behind') { Write-Info "the repo is older than the staged $RepoUrl"; return $null }
             $sha = (Invoke-Native 'git' @('-C', $RepoDir, 'rev-parse', '--short', 'HEAD') -Quiet).Out.Trim()
             $br  = (Invoke-Native 'git' @('-C', $RepoDir, 'rev-parse', '--abbrev-ref', 'HEAD') -Quiet).Out.Trim()
             return "repo at $RepoDir ($br@$sha), .env and data folders exist"
         }
     } -Install {
         $did = @()
+        if ((Get-StaleBundleClone) -eq 'behind') {
+            $r = Invoke-Native 'git' @('-C', $RepoDir, 'fetch', $RepoUrl, $Branch)
+            if ($r.Code -eq 0) { $r = Invoke-Native 'git' @('-C', $RepoDir, 'reset', '--hard', 'FETCH_HEAD') }
+            if ($r.Code -ne 0) { Stop-WithDiagnosis 'git' $r.Out "updating $RepoDir from $RepoUrl failed" }
+            $did += "updated the repo to the staged $Branch@$((Invoke-Native 'git' @('-C', $RepoDir, 'rev-parse', '--short', 'HEAD') -Quiet).Out.Trim())"
+        }
         if (-not (Test-Path (Join-Path $RepoDir '.git\HEAD'))) {
             # Docker recreates missing bind-mount sources as empty folders when
             # containers outlive a deleted install, and the trainer then writes
@@ -1214,14 +1392,39 @@ function Assert-NoCrashLoop {
     Stop-WithDiagnosis 'container' $logs "these services keep crashing: $($failing -join ', ')"
 }
 
+# Sets NAME=value in the repo's .env; $true when the file changed.
+function Set-EnvSetting([string]$Name, [string]$Value) {
+    $envFile = Join-Path $RepoDir '.env'
+    $lines = @(if (Test-Path $envFile) { Get-Content $envFile })
+    $want = "$Name=$Value"
+    if ($lines -contains $want) { return $false }
+    $i = [array]::FindIndex([string[]]$lines, [Predicate[string]]{ param($l) $l -match "^\s*$Name\s*=" })
+    if ($i -ge 0) { $lines[$i] = $want } else { $lines += $want }
+    [IO.File]::WriteAllLines($envFile, [string[]]$lines)
+    $true
+}
+
+# The trainer's --num-envs (1 when it runs without the flag), or $null when
+# it is not running.
+function Get-TrainerNumEnvs {
+    $ps = (Invoke-Compose @('exec', '-T', 'sim-controller', 'ps', '-eo', 'args') -Quiet).Out
+    $line = @($ps -split "`n" | Where-Object { $_ -match '^python.*robotaxi\.py' }) | Select-Object -First 1
+    if (-not $line) { return $null }
+    if ($line -match '--num-envs\s+(\d+)') { [int]$Matches[1] } else { 1 }
+}
+
 function Invoke-StartPhase {
-    Invoke-Phase 'start' 'Start the stack and one Unity client' -NoExpectClean -Detect {
+    Invoke-Phase 'start' 'Start the stack' -NoExpectClean -Detect {
         if (-not (Test-Path $RepoDir)) { return $null }
         $running = @((Invoke-Compose @('ps', '--status', 'running', '--services') -Quiet).Out -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
         $missing = @($StartServices | Where-Object { $running -notcontains $_ })
-        $conn = Get-UnityRosConnection
-        if ($missing.Count -eq 0 -and $conn) { return "services running: $($StartServices -join ', '); $conn" }
+        if ($missing.Count -eq 0 -and (Test-TcpPort 10000) -and (Test-TcpPort 6006)) {
+            $envs = Get-TrainerNumEnvs
+            if ($null -ne $envs -and $envs -ne $Clients) { Write-Info "the trainer runs with --num-envs $envs, $Clients wanted"; return $null }
+            return "services running: $($StartServices -join ', '); trainer --num-envs $Clients"
+        }
     } -Install {
+        if (Set-EnvSetting 'NUM_ENVS' $Clients) { Write-Info "NUM_ENVS=$Clients in .env; restarting the trainer with --num-envs $Clients interrupts a job it is running" }
         $mongoDir = Join-Path $InstallDir 'mongodb'
         if (-not (Get-ChildItem $mongoDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
             if (Set-MongoDataOwner) { Write-Info 'gave the empty mongodb folder to the Mongo user (uid 1001)' }
@@ -1246,6 +1449,50 @@ function Invoke-StartPhase {
         if (-not (Wait-Until $flyUp -TimeoutSec 900 -IntervalSec 10 -What 'fly-brain on port 50061 (first start downloads the connectome)')) {
             Stop-WithDiagnosis 'container' (Get-ServiceLogs @('fly-brain')) 'fly-brain did not open port 50061 within 15 minutes'
         }
+        $dash = if (Wait-Until { Test-TcpPort 80 } -TimeoutSec 300 -IntervalSec 10 -What 'the dashboard (first start runs npm install)') { 'dashboard up' } else { 'dashboard still starting' }
+        "services started: $($StartServices -join ', '); $dash"
+    }
+}
+
+# Client k talks to ros-server (k = 0) or ros-server-k from compose/scale.yml.
+# A connected client leaves a ROS handshake in its ros-server's log.
+function Get-UnityRosHandshakes([datetime]$Since) {
+    $sinceText = $Since.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    @(0..($Clients - 1) | Where-Object {
+        $svc = if ($_ -eq 0) { 'ros-server' } else { "ros-server-$_" }
+        $logs = (Invoke-Compose @('-f', 'docker-compose.yml', '-f', 'compose/scale.yml', 'logs', '--no-color', '--since', $sinceText, $svc) -Quiet).Out
+        $logs -match 'ROS-Unity Handshake received'
+    })
+}
+
+# More than one client: the sign-in launcher starts ros-server-1..N-1 and
+# hands off to Start-Clients.ps1, which runs N supervisors.
+function Start-MultipleClients {
+    [void](Stop-UnityClients)
+    $launched = Get-Date
+    Start-Process -FilePath 'powershell.exe' -WindowStyle Minimized -ArgumentList (Get-ClientLauncherArguments)
+    $ok = Wait-Until { @(Get-UnityClientProcess).Count -ge $Clients -and (Get-UnityRosHandshakes $launched).Count -ge $Clients } -TimeoutSec (180 + 60 * $Clients) -IntervalSec 10 -What "$Clients Unity clients to connect to their ros-servers"
+    $connected = @(Get-UnityRosHandshakes $launched)
+    if (-not $ok) {
+        Stop-Phase "$($connected.Count) of $Clients Unity clients connected (clients $($connected -join ', ')); see the client windows and unity\Builds\instances\N\Player.log"
+    }
+    "$Clients Unity clients running, each connected to its ros-server (ports 10000-$(10000 + $Clients - 1)); run training with --num-envs $Clients to use them all"
+}
+
+function Invoke-ClientsPhase {
+    Invoke-Phase 'clients' "Start $Clients Unity client(s)" -NoExpectClean -Detect {
+        if (-not (Test-Path $RepoDir)) { return $null }
+        $running = @(Get-UnityClientProcess)
+        if ($running.Count -ne $Clients) {
+            if ($running) { Write-Info "$($running.Count) Unity client(s) running, $Clients wanted" }
+            return $null
+        }
+        if ($Clients -eq 1) { return Get-UnityRosConnection }
+        $since = ($running | Where-Object StartTime | Sort-Object StartTime | Select-Object -First 1).StartTime
+        if ($since -and (Get-UnityRosHandshakes $since.AddSeconds(-5)).Count -ge $Clients) { return "$Clients Unity clients running and connected" }
+    } -Install {
+        if ($Clients -gt 1) { return Start-MultipleClients }
+        if (@(Get-UnityClientProcess).Count -gt 1) { Write-Info 'stopping the extra Unity clients'; [void](Stop-UnityClients) }
         Start-Sleep -Seconds 8
         # Unity sends its ROS handshake only at startup, so a client that
         # outlived a ros-server restart never connects to the new one.
@@ -1272,8 +1519,7 @@ function Invoke-StartPhase {
             }
             Stop-WithDiagnosis 'unity-client' $text "the Unity client did not connect to ros-server within 3 minutes (log: $playerLog)"
         }
-        $dash = if (Wait-Until { Test-TcpPort 80 } -TimeoutSec 300 -IntervalSec 10 -What 'the dashboard (first start runs npm install)') { 'dashboard up' } else { 'dashboard still starting' }
-        "services started; $(Get-UnityRosConnection); $dash"
+        Get-UnityRosConnection
     }
 }
 
@@ -1528,7 +1774,8 @@ function Initialize-Doctor {
     Set-Content -Path $DoctorChoiceFile -Value $spec.Key -Encoding UTF8
 
     if ($spec.Kind -eq 'local') {
-        $assets = @($DoctorAssets, $env:RL_DOCTOR_ASSETS, (Join-Path $PSScriptRoot 'doctor\assets')) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+        $engine = Get-InstallZeroEngine
+        $assets = @($DoctorAssets, $env:RL_DOCTOR_ASSETS, $(if ($engine) { Join-Path $engine 'doctor\assets' })) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
         $gguf = if ($assets) { @(Get-ChildItem $assets -Filter *.gguf -ErrorAction SilentlyContinue) } else { @() }
         if (-not $gguf -or ($spec.Model -and -not ($gguf.Name -contains $spec.Model))) {
             Write-Warn "Doctor model $(if ($spec.Model) { $spec.Model } else { '(any .gguf)' }) not found in $(if ($assets) { $assets } else { '-DoctorAssets / RL_DOCTOR_ASSETS' }); continuing without the doctor."
@@ -1566,8 +1813,94 @@ function Initialize-Doctor {
 }
 
 function Find-DoctorScript {
-    @((Join-Path $RepoDir 'scripts\install\doctor\Doctor.ps1'), (Join-Path $PSScriptRoot 'doctor\Doctor.ps1')) |
-        Where-Object { Test-Path $_ } | Select-Object -First 1
+    $engine = Get-InstallZeroEngine
+    if ($engine -and (Test-Path (Join-Path $engine 'doctor\Doctor.ps1'))) { Join-Path $engine 'doctor\Doctor.ps1' }
+}
+
+function Get-DoctorArgs([string]$DoctorScript, [string]$ResultFile) {
+    # The doctor reads the GPU components from here, also before the clone.
+    $req = Get-RequirementsFile
+    if ($req) { $env:INSTALLZERO_REQUIREMENTS = (Resolve-Path $req).Path }
+    $doctorRepo = @($RepoDir, $InstallDir, $env:USERPROFILE) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $DoctorScript, '-ResultFile', $ResultFile, '-RepoDir', $doctorRepo)
+    if ($script:DoctorSpec.Kind -eq 'remote') { $a += @('-Remote', $script:DoctorSpec.Remote) }
+    elseif ($script:DoctorSpec.Model) { $a += @('-Model', $script:DoctorSpec.Model) }
+    $a
+}
+
+# One keypress: Y is yes; N, Enter or no key within $Seconds is no. Keys
+# typed earlier during the install are discarded first so they cannot answer.
+function Read-TimedYesNo([string]$Question, [int]$Seconds = 10) {
+    try { while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true) } } catch { return $false }
+    Write-Host $Question -ForegroundColor White
+    for ($left = $Seconds; $left -gt 0; $left--) {
+        Write-Host -NoNewline "`r  Press Y for yes, N or Enter for no. Continuing with no in $left s ... "
+        $until = (Get-Date).AddSeconds(1)
+        while ((Get-Date) -lt $until) {
+            if ([Console]::KeyAvailable) {
+                $k = [Console]::ReadKey($true)
+                if ($k.KeyChar -in 'y', 'Y') { Write-Host "`r  Yes.$(' ' * 70)"; return $true }
+                if ($k.KeyChar -in 'n', 'N' -or $k.Key -eq 'Enter') { Write-Host "`r  No.$(' ' * 70)"; return $false }
+            }
+            Start-Sleep -Milliseconds 50
+        }
+    }
+    Write-Host "`r  No answer; continuing without it.$(' ' * 50)"
+    $false
+}
+
+# Offers the doctor's read-only review of PC settings that affect training
+# (Doctor.ps1 -Mode optimize). Runs while the first training job is running,
+# so the doctor measures GPU load under training (before its own model loads)
+# and its in-container GPU probes find the services up. Defaults to no. With
+# a console the doctor may apply power mode, sleep and Unity GPU changes,
+# each only after the user presses Y for it. Never throws.
+function Invoke-OptimizeCheck {
+    if (-not $script:DoctorSpec -or $script:DoctorSpec.Kind -eq 'none' -or $DryRun) { return }
+    $interactive = [Environment]::UserInteractive -and $Host.Name -eq 'ConsoleHost'
+    if (-not $Optimize) {
+        if (-not $interactive) { return }
+        Write-Host ''
+        if (-not (Read-TimedYesNo 'Have the doctor check this PC for settings that make training faster or more reliable (memory, power, sleep, GPU driver updates and load during training, disk)? Nothing is changed unless you press Y for that change.')) {
+            Add-Result 'optimize' 'skipped' 'settings review declined' 0
+            return
+        }
+    }
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $doctorScript = Find-DoctorScript
+        if (-not $doctorScript) { Write-Warn 'The doctor is not available.'; return }
+        $resultFile = Join-Path $StateDir "doctor-optimize-$RunStamp.json"
+        Write-Host "Asking the doctor ($($script:DoctorSpec.Label)) to review this PC's settings; this takes a few minutes ..." -ForegroundColor Cyan
+        $doctorArgs = (Get-DoctorArgs $doctorScript $resultFile) + @('-Mode', 'optimize')
+        if ($interactive) { $doctorArgs += '-AllowApply' }
+        & (Join-Path $PSHOME 'powershell.exe') @doctorArgs 2>&1 | ForEach-Object { Write-Host "    $_" }
+        if (-not (Test-Path $resultFile)) { Write-Warn 'The doctor produced no result.'; Add-Result 'optimize' 'failed' 'no result' $sw.Elapsed.TotalSeconds; return }
+        $script:Optimizations = Get-Content $resultFile -Raw | ConvertFrom-Json
+        $changes = @("$($script:Optimizations.root_cause)" -split "`r?`n" | Where-Object { $_ -match 'CHANGE' }).Count
+        $applied = @($script:Optimizations.applied).Count
+        Add-Result 'optimize' 'done' "$applied change(s) applied, $changes still recommended" $sw.Elapsed.TotalSeconds
+    } catch {
+        Write-Warn "The settings review failed: $_"
+        Add-Result 'optimize' 'failed' "$_" $sw.Elapsed.TotalSeconds
+    }
+}
+
+# The review prints mid-install; repeat its recommendations after the summary
+# so they are not lost above the remaining phases' output.
+function Show-OptimizeSummary {
+    $o = $script:Optimizations
+    if (-not $o) { return }
+    $applied = @($o.applied | Where-Object { $_ })
+    if ($applied) {
+        Write-Host ''
+        Write-Host 'Settings the doctor changed (you confirmed each):' -ForegroundColor Cyan
+        $applied | ForEach-Object { Write-Host "  $_" }
+    }
+    if (-not "$($o.fix)".Trim()) { return }
+    Write-Host ''
+    Write-Host "The doctor's recommended settings changes (not applied; full review in $(Join-Path $StateDir "doctor-optimize-$RunStamp.json")):" -ForegroundColor Cyan
+    Write-Host "$($o.fix)".Trim()
 }
 
 # Runs the doctor on the failure that stopped the install and adds its
@@ -1577,7 +1910,7 @@ function Invoke-InstallDoctor([string]$Message) {
     if (-not $script:DoctorSpec -or $script:DoctorSpec.Kind -eq 'none' -or $DryRun) { return }
     try {
         $doctorScript = Find-DoctorScript
-        if (-not $doctorScript) { Write-Warn 'The doctor is not available yet (the repo is not cloned and no doctor folder sits next to this script).'; return }
+        if (-not $doctorScript) { Write-Warn 'The doctor is not available (the InstallZero engine could not be set up).'; return }
         $ctx = $script:FailureContext
         $failed = @($script:Report | Where-Object { $_.outcome -eq 'failed' }) | Select-Object -Last 1
         $phase = if ($failed) { $failed.phase } elseif ($ctx) { $ctx.Phase } else { 'unknown' }
@@ -1592,12 +1925,9 @@ function Invoke-InstallDoctor([string]$Message) {
         $problemFile = Join-Path $StateDir "doctor-problem-$RunStamp.txt"
         $resultFile = Join-Path $StateDir "doctor-result-$RunStamp.json"
         Set-Content -Path $problemFile -Value $problem -Encoding UTF8
-        $doctorRepo = @($RepoDir, $InstallDir, $env:USERPROFILE) | Where-Object { Test-Path $_ } | Select-Object -First 1
-        $doctorArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $doctorScript, '-ProblemFile', $problemFile, '-ResultFile', $resultFile, '-RepoDir', $doctorRepo)
-        if ($script:DoctorSpec.Kind -eq 'remote') { $doctorArgs += @('-Remote', $script:DoctorSpec.Remote) }
-        elseif ($script:DoctorSpec.Model) { $doctorArgs += @('-Model', $script:DoctorSpec.Model) }
         Write-Host ''
         Write-Host "Asking the doctor ($($script:DoctorSpec.Label)) to investigate; this takes a few minutes ..." -ForegroundColor Cyan
+        $doctorArgs = (Get-DoctorArgs $doctorScript $resultFile) + @('-ProblemFile', $problemFile)
         & (Join-Path $PSHOME 'powershell.exe') @doctorArgs 2>&1 | ForEach-Object { Write-Host "    $_" }
         if (-not (Test-Path $resultFile)) { Write-Warn 'The doctor produced no result.'; return }
         $r = Get-Content $resultFile -Raw | ConvertFrom-Json
@@ -1636,7 +1966,11 @@ Write-Host "Code: $RepoUrl ($Branch)"
 Write-Host "Gyms and demos: $(if ($AssetDir) { $AssetDir } else { "https://github.com/$GithubRepo/releases/tag/$UnityReleaseTag" })"
 if ($DryRun) { Write-Host 'Dry run: nothing will be changed.' -ForegroundColor Yellow }
 Remove-ItemProperty -Path $RunOnceKey -Name $RunOnceName -ErrorAction SilentlyContinue
-if (-not $DryRun) { Initialize-Doctor }
+if (-not $DryRun) {
+    $engine = Get-InstallZeroEngine
+    if ($engine) { Write-Host "InstallZero engine: $engine" }
+    Initialize-Doctor
+}
 
 try {
     Invoke-Preflight
@@ -1668,8 +2002,10 @@ try {
         if (-not $DryRun) {
             Invoke-StartPhase
             Invoke-SeedPhase
+            Invoke-ClientsPhase
             Invoke-AutostartPhase
             if (-not $NoFirstJob) { Invoke-FirstJobPhase }
+            Invoke-OptimizeCheck
         }
     }
 } catch [PhaseFailure] {
@@ -1704,6 +2040,7 @@ try {
         Write-Host '  TensorBoard    http://localhost:6006'
         Write-Host '  Mongo Express  http://127.0.0.1:8081'
         Write-Host "  Trainer log    $RepoDir\rl_agent\robotaxi.out"
+        Show-OptimizeSummary
     }
     Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
 }
