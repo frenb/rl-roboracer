@@ -44,6 +44,13 @@
 .PARAMETER ResetDocker
     Also delete this account's Docker Desktop data and settings.
 
+.PARAMETER KeepImages
+    Keep the Docker images, so the next install verifies them instead of
+    downloading base images and building again. The build cache (which
+    holds the base images) is kept too; containers, volumes and networks
+    are still removed. Cannot be combined with
+    -ResetDocker, which deletes the disk the images are on.
+
 .PARAMETER WhatIf
     Show what would be removed; remove nothing.
 
@@ -54,6 +61,10 @@
 .EXAMPLE
     .\Reset-TestAccount.ps1 -ResetDocker
     Full reset, including this account's Docker Desktop data and settings.
+
+.EXAMPLE
+    .\Reset-TestAccount.ps1 -KeepImages
+    Reset everything but the Docker images, for a faster next install.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -61,11 +72,13 @@ param(
     [string]$InstallDir = (Join-Path $env:USERPROFILE 'rl-roboracer'),
     [string]$SaveResultsTo = ("C:\Users\Public\rl-roboracer-test\results\" + (Get-Date -Format 'yyyyMMdd-HHmmss')),
     [switch]$NoSaveResults,
-    [switch]$ResetDocker
+    [switch]$ResetDocker,
+    [switch]$KeepImages
 )
 
 $ErrorActionPreference = 'Stop'
 $whatIf = $WhatIfPreference; $WhatIfPreference = $false; Import-Module CimCmdlets; $WhatIfPreference = $whatIf
+if ($ResetDocker -and $KeepImages) { throw '-ResetDocker deletes the Docker disk the images are on, so it cannot keep them. Use -KeepImages alone (Docker Desktop settings are kept too), or -ResetDocker alone.' }
 if ($env:USERNAME -ne $Account) { throw "This removes the whole test install of account '$Account', but you are signed in as '$env:USERNAME'. Sign in as $Account, or pass -Account $env:USERNAME if this really is a test account." }
 
 $repo     = Join-Path $InstallDir 'rl-roboracer'
@@ -128,12 +141,20 @@ if (Test-Path $dockerExe) {
             [void](Invoke-Quiet { docker compose @files down --volumes --remove-orphans })
             Pop-Location
         }
-        if ($PSCmdlet.ShouldProcess("this account's Docker engine", 'remove all containers, images, volumes and build cache')) {
+        $what = if ($KeepImages) { 'remove all containers, volumes and networks (images and build cache kept)' } else { 'remove all containers, images, volumes and build cache' }
+        if ($PSCmdlet.ShouldProcess("this account's Docker engine", $what)) {
             $ids = @(Invoke-Quiet { docker ps -aq } | Where-Object { $_ -match '^[0-9a-f]+$' })
             if ($ids) { Step "removing $($ids.Count) remaining containers"; [void](Invoke-Quiet { docker rm -f @ids }) }
-            Step 'docker system prune --all --volumes (images, volumes, networks, build cache)'
-            Invoke-Quiet { docker system prune --all --volumes --force } | Select-Object -Last 1 | ForEach-Object { Step "  $_" }
-            [void](Invoke-Quiet { docker builder prune --all --force })
+            if ($KeepImages) {
+                Step 'removing volumes and networks; keeping images and build cache'
+                [void](Invoke-Quiet { docker volume prune --all --force })
+                [void](Invoke-Quiet { docker network prune --force })
+                Invoke-Quiet { docker images --format '{{.Repository}}:{{.Tag}}' } | Where-Object { $_ -notmatch '<none>' } | ForEach-Object { Step "  kept $_" }
+            } else {
+                Step 'docker system prune --all --volumes (images, volumes, networks, build cache)'
+                Invoke-Quiet { docker system prune --all --volumes --force } | Select-Object -Last 1 | ForEach-Object { Step "  $_" }
+                [void](Invoke-Quiet { docker builder prune --all --force })
+            }
         }
     }
 }
@@ -170,5 +191,6 @@ if ($left -and -not $WhatIfPreference) {
     exit 1
 }
 if ($WhatIfPreference) { Write-Host 'Preview only (-WhatIf): nothing was removed.'; exit 0 }
-Write-Host 'Done. Next install in this account starts from nothing.' -ForegroundColor Green
+if ($KeepImages) { Write-Host 'Done. Next install in this account starts from nothing but the Docker images, which it verifies instead of building.' -ForegroundColor Green }
+else { Write-Host 'Done. Next install in this account starts from nothing.' -ForegroundColor Green }
 if (-not $ResetDocker) { Write-Host '(Docker Desktop settings and its first-run state were kept; add -ResetDocker to reset those too.)' }

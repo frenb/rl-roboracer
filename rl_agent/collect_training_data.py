@@ -78,7 +78,8 @@ COURSE_OBSERVATION_SIZES = {
 # demo corpus is read at that width via set_trace_observation_size.
 # Vector courses use COURSE_OBSERVATION_SIZES (an int). donut_camera is a
 # dict {vector: 31, image: 84x84x3} — do not call set_observation_size for
-# it (that helper only knows a flat width). Networks / BC are Phase 6–7.
+# it (that helper only knows a flat width). A camera TRAIN streams the
+# dict through camera_train_datasets.
 COURSE_OBS_KIND = {
     "donut": "vector",
     "donut_no_hint": "vector",
@@ -96,14 +97,26 @@ COURSE_OBS_KIND = {
 # are fine; TRAIN runs from scratch unless the course is also in
 # TRACE_DEMO_COURSES and the job names a demo source.
 #
-# The camera courses are listed because their demos need a dict TFRecord
-# layout that does not exist yet (Phase 7). fly_donut is listed because its
-# observation is the brain's own decaying state: recording it directly would
-# freeze one brain run into the corpus. Keyed on the course rather than on
+# fly_donut is listed because its observation is the brain's own decaying
+# state: recording it directly would freeze one brain run into the corpus.
+# The camera courses are not in this set: a DEMO job records their dict
+# rows (Phase 4). BC_TRAINING_ONLY stays refused for them because
+# train_agent builds a flat MLP. Keyed on the course rather than on
 # COURSE_OBS_KIND for that reason.
+# Policy-vector width stored in a camera TFRecord. Must match the live
+# observation spec: 31 keeps the rays, 2 is the no-rays ablation.
+CAMERA_VECTOR_WIDTHS = {
+    "donut_camera": 31,
+    "donut_camera_no_rays": 2,
+}
+# First camera corpus. Reverb holds float32 images, so a 50,000-step
+# prefill is about 4 GB on top of the online buffer. Keep a smaller
+# experiment-design cap; never exceed this until one BC+AWAC run has
+# finished without swapping.
+CAMERA_PREFILL_CAP = 10000
+# Bounded shuffle so the stream mixes rows without stacking every image.
+CAMERA_SHUFFLE_BUFFER = 10000
 COURSES_WITHOUT_DEMOS = frozenset({
-    "donut_camera",
-    "donut_camera_no_rays",
     "fly_donut",
     "fly_donut_flow",
 })
@@ -129,13 +142,46 @@ def apply_course_observation_size(course_type):
     set_observation_size builds its spec from hardcoded 32-element bounds, so
     asking it for fly_donut's 1314 raises before it can do anything useful.
     """
-    if course_type in COURSES_WITHOUT_DEMOS:
+    if course_type in COURSES_WITHOUT_DEMOS or course_type in CAMERA_VECTOR_WIDTHS:
+        # Camera width lives in CAMERA_VECTOR_WIDTHS and the dict reader.
+        # set_observation_size only knows a flat vector and would claim 32.
         print(
             f"collect_training_data: skip set_observation_size "
-            f"(course={course_type} has no demo corpus)",
+            f"(course={course_type} is not a flat demo corpus)",
             flush=True)
         return
     set_observation_size(COURSE_OBSERVATION_SIZES.get(course_type, 32))
+
+
+def recording_job_refusal(course_type, job_type):
+    """Error string when this job type cannot run, else None.
+
+    Fly courses cannot record. Camera courses can record a DEMO, and
+    refuse BC_TRAINING_ONLY because that path trains a flat MLP.
+    """
+    if (course_type in COURSES_WITHOUT_DEMOS
+            and job_type in ("DEMO", "BC", "BC_TRAINING_ONLY")):
+        return (
+            f"course '{course_type}' has no demo corpus - "
+            "DEMO / BC_TRAINING_ONLY are unsupported. Use TRAIN from scratch."
+        )
+    if (course_type in CAMERA_VECTOR_WIDTHS
+            and job_type in ("BC", "BC_TRAINING_ONLY")):
+        return (
+            f"course '{course_type}' stores a camera image in its TFRecords. "
+            "BC_TRAINING_ONLY trains a flat MLP and cannot read them. "
+            "Use a DEMO job to record, then a TRAIN job for the Conv actor."
+        )
+    return None
+
+
+def demo_runs_mlp_bc(course_type):
+    """Whether a finished DEMO job should call the flat ``train_agent``.
+
+    Camera courses skip it. Their BC is the Conv actor inside a TRAIN job.
+    """
+    return course_type not in CAMERA_VECTOR_WIDTHS
+
 
 class robotaxi():
     def __init__(self):
@@ -473,8 +519,275 @@ def get_parsed_dataset(file):
     parsed_dataset = raw_dataset.map(_parse_function)
     return parsed_dataset
 
+def _peek_example(path):
+    """First tf.train.Example in a TFRecord file, or None when it is empty."""
+    for raw in tf.data.TFRecordDataset(path).take(1):
+        return tf.train.Example.FromString(bytes(raw.numpy()))
+    return None
+
+
+def _float_len(example, name):
+    feat = example.features.feature.get(name)
+    if feat is None:
+        return None
+    return len(feat.float_list.value)
+
+
+def _image_byte_len(example):
+    feat = example.features.feature.get("image")
+    if feat is None or len(feat.bytes_list.value) == 0:
+        return None
+    return len(feat.bytes_list.value[0])
+
+
+def validate_demo_record(path, course_type):
+    """Refuse a file whose layout is not the one ``course_type`` reads.
+
+    Camera courses require an ``image`` feature and a policy vector of
+    CAMERA_VECTOR_WIDTHS[course]. Every other course refuses a file that
+    has an ``image`` feature. The schema is chosen by the caller, not by
+    inspecting the file and guessing.
+    """
+    from vision.camera_record import IMAGE_BYTES
+
+    example = _peek_example(path)
+    if example is None:
+        return
+    obs_len = _float_len(example, "observation")
+    image_len = _image_byte_len(example)
+    if course_type in CAMERA_VECTOR_WIDTHS:
+        want = CAMERA_VECTOR_WIDTHS[course_type]
+        if image_len is None:
+            raise ValueError(
+                f"{path} has no image feature. {course_type} requires a "
+                f"camera TFRecord (vector length {want}, image {IMAGE_BYTES} "
+                f"bytes). observation length is {obs_len}.")
+        if obs_len != want:
+            raise ValueError(
+                f"{path} observation length is {obs_len}; {course_type} "
+                f"requires {want}.")
+        if image_len != IMAGE_BYTES:
+            raise ValueError(
+                f"{path} image is {image_len} bytes; expected {IMAGE_BYTES}.")
+        return
+    if image_len is not None:
+        raise ValueError(
+            f"{path} is a camera TFRecord (observation length {obs_len}, "
+            f"image {image_len} bytes) and cannot be read as flat course "
+            f"{course_type!r}.")
+
+
+def camera_feature_description(vector_width):
+    """Parse schema for a camera row. ``vector_width`` is 31 or 2."""
+    return {
+        "action": tf.io.FixedLenFeature((action_size,), tf.float32),
+        "observation": tf.io.FixedLenFeature((int(vector_width),), tf.float32),
+        "image": tf.io.FixedLenFeature((), tf.string),
+        "reward": tf.io.FixedLenFeature((1,), tf.float32),
+        "discount": tf.io.FixedLenFeature((1,), tf.float32),
+        "next_step_type": tf.io.FixedLenFeature((1,), tf.int64),
+    }
+
+
+def _parse_camera_example(example_proto, vector_width):
+    """One streamed row. Image bytes become float32 [84, 84, 3] in [0, 1]."""
+    from vision.camera_record import IMAGE_BYTES, IMAGE_HW
+
+    parsed = tf.io.parse_single_example(
+        example_proto, camera_feature_description(vector_width))
+    raw = tf.io.decode_raw(parsed["image"], tf.uint8)
+    raw = tf.ensure_shape(raw, (IMAGE_BYTES,))
+    image = tf.reshape(raw, IMAGE_HW)
+    image = tf.clip_by_value(tf.cast(image, tf.float32) / 255.0, 0.0, 1.0)
+    return {
+        "observation": {
+            "vector": parsed["observation"],
+            "image": image,
+        },
+        "action": parsed["action"],
+        "reward": tf.reshape(parsed["reward"], []),
+        "discount": tf.reshape(parsed["discount"], []),
+        "next_step_type": tf.cast(
+            tf.reshape(parsed["next_step_type"], []), tf.int32),
+    }
+
+
+def camera_demo_dataset(directory, course_type, min_accel=0.05):
+    """Stream camera demo rows for ``course_type``. Does not stack images.
+
+    Each element is a dict with ``observation`` = ``{vector, image}`` plus
+    the action, reward, discount, and next_step_type stored in the file.
+    ``min_accel`` drops rows whose commanded acceleration is below the
+    policy floor (the same 0.05 cut the vector loader applies). Pass
+    None to keep every row.
+
+    Raises ValueError when a file is a flat corpus, or its vector length
+    is not CAMERA_VECTOR_WIDTHS[course_type].
+    """
+    if course_type not in CAMERA_VECTOR_WIDTHS:
+        raise ValueError(
+            f"camera_demo_dataset is for {sorted(CAMERA_VECTOR_WIDTHS)}, "
+            f"got {course_type!r}")
+    width = CAMERA_VECTOR_WIDTHS[course_type]
+    files = [f for f in get_files_from_directory(directory) if os.path.isfile(f)]
+    if not files:
+        raise ValueError(f"no demo files in {directory}")
+    for path in files:
+        validate_demo_record(path, course_type)
+    dataset = None
+    for path in files:
+        piece = tf.data.TFRecordDataset(path).map(
+            lambda proto, w=width: _parse_camera_example(proto, w),
+            num_parallel_calls=tf.data.AUTOTUNE)
+        dataset = piece if dataset is None else dataset.concatenate(piece)
+    if min_accel is not None:
+        floor = float(min_accel)
+        dataset = dataset.filter(lambda row: row["action"][0] >= floor)
+    return dataset
+
+
+def camera_prefill_count(requested):
+    """Prefill steps for a camera corpus. 0 stays 0. Otherwise the cap."""
+    requested = int(requested)
+    if requested <= 0:
+        return 0
+    return min(requested, CAMERA_PREFILL_CAP)
+
+
+def camera_train_settings(course_type, record_dirs, bc_pretrain_steps,
+                          demo_prefill_count, demo_sample_ratio, awac_lambda):
+    """BC/AWAC numbers a camera TRAIN should use.
+
+    No demo directories: start from scratch. Directories present: keep
+    the experiment design, with the prefill count capped.
+    """
+    if course_type not in CAMERA_VECTOR_WIDTHS:
+        raise ValueError(
+            f"camera_train_settings is for {sorted(CAMERA_VECTOR_WIDTHS)}, "
+            f"got {course_type!r}")
+    dirs = [d for d in (record_dirs or []) if d]
+    if not dirs:
+        return {
+            "uses_demos": False,
+            "bc_pretrain_steps": 0,
+            "demo_prefill_count": 0,
+            "demo_sample_ratio": 0.0,
+            "awac_lambda": 0.0,
+        }
+    return {
+        "uses_demos": True,
+        "bc_pretrain_steps": int(bc_pretrain_steps),
+        "demo_prefill_count": camera_prefill_count(demo_prefill_count),
+        "demo_sample_ratio": float(demo_sample_ratio),
+        "awac_lambda": float(awac_lambda),
+    }
+
+
+def validate_camera_demo_dirs(directories, course_type):
+    """Refuse a camera TRAIN corpus that is flat or the wrong vector width.
+
+    Raises ValueError naming the path and the widths. Does not slice,
+    pad, or drop columns. An empty directory is an error.
+    """
+    if course_type not in CAMERA_VECTOR_WIDTHS:
+        raise ValueError(
+            f"validate_camera_demo_dirs is for {sorted(CAMERA_VECTOR_WIDTHS)}, "
+            f"got {course_type!r}")
+    dirs = [d for d in (directories or []) if d]
+    if not dirs:
+        raise ValueError(f"{course_type} TRAIN has no demo directory")
+    for directory in dirs:
+        files = [f for f in get_files_from_directory(directory)
+                 if os.path.isfile(f)]
+        if not files:
+            raise ValueError(f"no demo files in {directory}")
+        for path in files:
+            validate_demo_record(path, course_type)
+
+
+def _camera_rows_to_trajectories(dataset):
+    """Stream rows into unbatched Trajectories. Does not stack images.
+
+    ``step_type`` is the previous row's ``next_step_type``, and FIRST
+    after a LAST, so a Reverb sequence does not cross an episode end.
+    Reward and discount are the values stored in the file.
+    """
+    from tf_agents.trajectories import time_step as ts
+    from tf_agents.trajectories import trajectory as trajectory_lib
+
+    first = tf.constant(int(ts.StepType.FIRST), tf.int32)
+    last = tf.constant(int(ts.StepType.LAST), tf.int32)
+
+    def scan_fn(prev_next, row):
+        step_type = tf.where(tf.equal(prev_next, last), first, prev_next)
+        return row["next_step_type"], (row, step_type)
+
+    scanned = dataset.scan(first, scan_fn)
+
+    def to_traj(row, step_type):
+        return trajectory_lib.Trajectory(
+            step_type=tf.cast(step_type, tf.int32),
+            observation=row["observation"],
+            action=row["action"],
+            policy_info=(),
+            next_step_type=tf.cast(row["next_step_type"], tf.int32),
+            reward=tf.cast(row["reward"], tf.float32),
+            discount=tf.cast(row["discount"], tf.float32),
+        )
+
+    return scanned.map(to_traj, num_parallel_calls=tf.data.AUTOTUNE)
+
+
+def camera_train_datasets(directories, course_type, source_counts=None,
+                          min_accel=0.05):
+    """Stream camera demos for BC and Reverb prefill.
+
+    Returns ``(trajectory_dataset, dataset_with_source)``. The first is
+    unbatched ``Trajectory`` elements whose observation is
+    ``{vector, image}``. The second is ``(trajectory, source_index)``
+    in the same order, for the prefill breakdown. Images stay in the
+    stream; they are not concatenated.
+
+    ``source_counts``, when set, is one target length per directory.
+    A short directory is cycled. A long one is shuffled and cut.
+    """
+    validate_camera_demo_dirs(directories, course_type)
+    dirs = [d for d in directories if d]
+    if source_counts is not None and len(source_counts) != len(dirs):
+        raise ValueError(
+            f"demo_source_counts has {len(source_counts)} entries but "
+            f"there are {len(dirs)} camera demo directories: {dirs}")
+    pieces = []
+    for index, directory in enumerate(dirs):
+        rows = camera_demo_dataset(directory, course_type, min_accel=min_accel)
+        if source_counts is not None:
+            target = int(source_counts[index])
+            rows = rows.shuffle(
+                CAMERA_SHUFFLE_BUFFER, seed=42,
+                reshuffle_each_iteration=False).repeat().take(target)
+        trajs = _camera_rows_to_trajectories(rows)
+        source_id = tf.constant(index, tf.int32)
+
+        def _tag(traj, sid=source_id):
+            return traj, sid
+
+        pieces.append(trajs.map(_tag))
+    if len(pieces) == 1:
+        zipped = pieces[0]
+    else:
+        zipped = tf.data.Dataset.sample_from_datasets(
+            pieces, seed=42, stop_on_empty_dataset=False)
+    zipped = zipped.shuffle(
+        CAMERA_SHUFFLE_BUFFER, seed=42, reshuffle_each_iteration=False)
+    trajectory_dataset = zipped.map(lambda traj, _sid: traj)
+    return trajectory_dataset, zipped
+
+
 def read_data_from_file(file, sampling_fraction=1.0, shuffle=False, parsed_dataset=None):
     """Read the data from a TFRecord file."""
+    # Flat schema. A camera file (it has an image feature) is refused
+    # rather than parsed as a 32-wide vector.
+    validate_demo_record(file, "donut")
     if(parsed_dataset is None):
         parsed_dataset = get_parsed_dataset(file)
     num_records = get_number_of_records(file)
@@ -576,7 +889,7 @@ def train_agent(root_dir, training_steps=10000):
 def bc_pretrain_actor_net(
         actor_net, time_step_spec, action_spec, strategy,
         trajectory_dataset, training_steps=1000, batch_size=256,
-        learning_rate=3e-5):
+        learning_rate=3e-5, critic_train_fn=None, critic_steps=0):
     """BC-supervise ``actor_net``'s weights on expert demonstrations.
 
     Pure SAC's actor loss is ``-E_s[Q(s, pi(s)) + alpha * H(pi)]`` where
@@ -627,41 +940,57 @@ def bc_pretrain_actor_net(
       learning_rate: Adam LR for the BC optimizer. The BC optimizer is
         separate from SAC's actor optimizer - we only share the
         underlying network weights, not optimizer slots.
+      critic_train_fn: optional zero-arg callable running one critic-only
+        update and returning its loss. Called in the same loop as the BC
+        steps (one critic step per BC step), so the critic tracks the actor
+        as it is cloned.
+      critic_steps: number of critic_train_fn calls. If it differs from
+        training_steps, the shorter of the two simply stops early.
     """
+    if critic_train_fn is None:
+        critic_steps = 0
+    total_steps = max(training_steps, critic_steps)
     print(f"BC pretraining actor_net for {training_steps} steps "
-          f"(batch_size={batch_size}, lr={learning_rate})...", flush=True)
+          f"(batch_size={batch_size}, lr={learning_rate}), critic warm-up "
+          f"{critic_steps} steps in the same loop...", flush=True)
 
-    with strategy.scope():
-        bc_optimizer = tf.compat.v1.train.AdamOptimizer(
-            learning_rate=learning_rate)
-        bc_agent = behavioral_cloning_agent.BehavioralCloningAgent(
-            time_step_spec=time_step_spec,
-            action_spec=action_spec,
-            cloning_network=actor_net,
-            optimizer=bc_optimizer,
-            num_outer_dims=1)
-        bc_agent.initialize()
+    bc_loss = critic_loss = None
+    if training_steps > 0:
+        with strategy.scope():
+            bc_optimizer = tf.compat.v1.train.AdamOptimizer(
+                learning_rate=learning_rate)
+            bc_agent = behavioral_cloning_agent.BehavioralCloningAgent(
+                time_step_spec=time_step_spec,
+                action_spec=action_spec,
+                cloning_network=actor_net,
+                optimizer=bc_optimizer,
+                num_outer_dims=1)
+            bc_agent.initialize()
 
-    # shuffle().batch().repeat(): each BC step sees a fresh batch
-    # sampled (with replacement across epochs) from the expert demos.
-    # buffer_size=10000 is large enough for good shuffling on the 50k
-    # expert items we typically load while keeping memory bounded.
-    bc_dataset = (trajectory_dataset
-                  .shuffle(buffer_size=10000)
-                  .batch(batch_size)
-                  .prefetch(10)
-                  .repeat())
-    bc_iter = iter(bc_dataset)
+        # shuffle().batch().repeat(): each BC step sees a fresh batch
+        # sampled (with replacement across epochs) from the expert demos.
+        # buffer_size=10000 is large enough for good shuffling on the 50k
+        # expert items we typically load while keeping memory bounded.
+        bc_dataset = (trajectory_dataset
+                      .shuffle(buffer_size=10000)
+                      .batch(batch_size)
+                      .prefetch(10)
+                      .repeat())
+        bc_iter = iter(bc_dataset)
 
-    for bc_step in range(training_steps):
-        batch = next(bc_iter)
-        loss_info = bc_agent.train(batch)
-        if bc_step % 100 == 0:
-            print(f"  BC step {bc_step}/{training_steps}: "
-                  f"loss={loss_info.loss.numpy():.4f}", flush=True)
+    for step in range(total_steps):
+        if step < training_steps:
+            bc_loss = bc_agent.train(next(bc_iter)).loss.numpy()
+        if step < critic_steps:
+            critic_loss = critic_train_fn()
+        if step % 100 == 0:
+            print(f"  warm-up step {step}/{total_steps}: "
+                  f"bc_loss={bc_loss if bc_loss is None else round(float(bc_loss), 4)} "
+                  f"critic_loss={critic_loss if critic_loss is None else round(critic_loss, 4)}",
+                  flush=True)
 
-    print(f"BC pretraining done (final loss={loss_info.loss.numpy():.4f}).",
-          flush=True)
+    print(f"BC pretraining done (final bc_loss={bc_loss}, "
+          f"critic_loss={critic_loss}).", flush=True)
 
 
 def train_agent_sampling(

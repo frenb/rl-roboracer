@@ -151,6 +151,16 @@ SCHEMA = {
         "paper_ref": None,
         "kwarg": "bc_pretrain_steps_val",
     },
+    "critic_warmup_steps": {
+        "type": "int",
+        "default": 0,
+        "min": 0, "max": 1_000_000,
+        "doc": ("Critic-only SAC updates (actor frozen) on the expert demo transitions before SAC starts, "
+                "interleaved step for step with the BC pretrain, so the critic values the BC policy instead "
+                "of steering it with random Q-values when SAC begins. 0 = off. Skipped on resume."),
+        "paper_ref": None,
+        "kwarg": "critic_warmup_steps_val",
+    },
 
     "_section_replay": "Replay buffer",
     "replay_buffer_capacity": {
@@ -222,6 +232,15 @@ SCHEMA = {
         "doc": "Adam learning rate for the temperature parameter (entropy coefficient).",
         "paper_ref": None,
         "kwarg": "alpha_learning_rate_val",
+    },
+    "initial_alpha": {
+        "type": "float",
+        "default": 1.0,
+        "min": 1e-6, "max": 100.0,
+        "doc": ("Starting SAC entropy coefficient alpha (tf-agents initial_log_alpha = ln(initial_alpha)). "
+                "Lower = less random exploration at the start; alpha is still auto-tuned afterwards."),
+        "paper_ref": None,
+        "kwarg": "initial_alpha_val",
     },
     "target_update_tau": {
         "type": "float",

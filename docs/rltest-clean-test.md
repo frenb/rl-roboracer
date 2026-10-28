@@ -35,8 +35,12 @@ This writes `C:\Users\Public\rl-roboracer-test\rl-roboracer.bundle`, a git
 bundle whose branch `rltest` is the working tree as it is now, including
 uncommitted and untracked files but not `.gitignore`d ones such as `.env`. It
 does not commit to or change your branch. It also copies the installer, the
-reset script, a copy of the doctor and this file (as `RUN-TEST.md`), and stages
-llama.cpp plus the local models in `C:\Users\Public\doctor-assets`.
+reset script, `installzero.json` and this file (as `RUN-TEST.md`), copies the
+probe and doctor from your InstallZero checkout (`..\installzero`) into
+`installzero\` for step 3, and stages llama.cpp plus the local models in
+`C:\Users\Public\doctor-assets`. The installer downloads the InstallZero
+engine pinned in `installzero.json` itself; add `-LocalEngine` to stage your
+checkout's engine instead.
 
 Options:
 
@@ -70,6 +74,10 @@ Add `-WhatIf` first to see what it would remove. In `rltest` it removes:
   `docker-desktop` WSL distro, `%APPDATA%\Docker`, `%LOCALAPPDATA%\Docker`,
   `~\.docker`). Docker Desktop then starts as on first use: licence, sign-in
   and survey screens again. Without `-ResetDocker` those settings are kept.
+- with `-KeepImages` instead of `-ResetDocker`, everything above except the
+  Docker images and build cache, so the next install verifies the images
+  rather than downloading base images and building them again.
+  Use it when the test is not about the images phase.
 - the Startup shortcut and any pending RunOnce resume entry
 - `%USERPROFILE%\rl-roboracer`: code, `.env`, database, models, gyms
 - `%LOCALAPPDATA%\rl-roboracer-install`: installer state, logs, report and
@@ -195,8 +203,11 @@ diagnose real failures on the installed stack, use the fault scenarios. Each
 one breaks something on purpose, runs the doctor, grades its answer and
 restores:
 
+The doctor and its scenarios are InstallZero's; step 1 stages a copy in
+`C:\Users\Public\rl-roboracer-test\installzero`.
+
 ```powershell
-cd $env:USERPROFILE\rl-roboracer\rl-roboracer\scripts\install\doctor\eval
+cd C:\Users\Public\rl-roboracer-test\installzero\doctor\eval
 $env:RL_DOCTOR_ASSETS = 'C:\Users\Public\doctor-assets'
 .\Invoke-DoctorEval.ps1 -Action List
 .\Invoke-DoctorEval.ps1 -Action Run -Models xai:grok-4.7
@@ -206,9 +217,10 @@ $env:RL_DOCTOR_ASSETS = 'C:\Users\Public\doctor-assets'
 To ask the doctor about something directly:
 
 ```powershell
-cd $env:USERPROFILE\rl-roboracer\rl-roboracer\scripts\install\doctor
-.\Doctor.ps1 -Problem 'The dashboard at http://localhost shows no gyms' -Remote xai:grok-4.7
-.\Doctor.ps1 -Problem '...' -Model gemma-4-E4B-it-Q4_K_M.gguf
+cd $env:USERPROFILE\rl-roboracer\rl-roboracer
+$doctor = 'C:\Users\Public\rl-roboracer-test\installzero\doctor\Doctor.ps1'
+& $doctor -Problem 'The dashboard at http://localhost shows no gyms' -Remote xai:grok-4.7
+& $doctor -Problem '...' -Model gemma-4-E4B-it-Q4_K_M.gguf
 ```
 
 ## 5. Back to your account

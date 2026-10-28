@@ -29,6 +29,12 @@ try:
 except ImportError:
     pass
 
+# `kill -USR1 <pid>` writes every thread's Python stack to stderr
+# (the trainer log). The container has no ptrace, so py-spy can't attach.
+import faulthandler
+import signal as _faulthandler_signal
+faulthandler.register(_faulthandler_signal.SIGUSR1, all_threads=True)
+
 # Verify uvloop actually took over the asyncio event-loop policy.
 # Inspects the policy class rather than calling get_event_loop()
 # because modern uvloop's get_event_loop() raises RuntimeError when
@@ -156,6 +162,7 @@ from environments.courses import donut_course,simple_course
 from envs import make_env
 from replay import make_local_replay
 import collect_training_data
+import demos_registry
 from rollout_viz import get_viz
 import logging
 import signal
@@ -734,7 +741,10 @@ def build_train_env(num_envs, course_type='donut'):
     if num_envs <= 1:
         return _register_train_env(
             make_env('ros-server-0:50051', course_type=course_type))
+    return _make_parallel_train_env(num_envs, course_type)
 
+
+def _make_parallel_train_env(num_envs, course_type):
     from tf_agents.environments import parallel_py_environment
     # Quiesce the rollout-viz background sampler around the multiprocessing
     # spawn below. A concurrent TF/GPU inference in that thread races the
@@ -757,6 +767,83 @@ def build_train_env(num_envs, course_type='donut'):
                  for i in range(num_envs)]))
     finally:
         resume_viz()
+
+
+FIRST_RESET_TIMEOUT_S = 120
+FIRST_RESET_ATTEMPTS = 3
+
+
+def _reset_within(env, timeout_s):
+    """env.reset() on a helper thread. False if it hasn't returned in time."""
+    outcome = {}
+
+    def _run():
+        try:
+            env.reset()
+        except BaseException as e:  # noqa: BLE001 - reported to the caller
+            outcome["error"] = e
+
+    t = threading.Thread(target=_run, name="first-reset", daemon=True)
+    t.start()
+    t.join(timeout_s)
+    if t.is_alive():
+        return False
+    if "error" in outcome:
+        raise outcome["error"]
+    return True
+
+
+def _kill_hung_parallel_env(env):
+    """Dump stacks, then terminate the workers of a hung ParallelPyEnvironment.
+
+    close() can't be used: it messages and joins workers whose main
+    thread is stuck in the reset.
+    """
+    global _ACTIVE_TRAIN_ENVS
+    faulthandler.dump_traceback(all_threads=True)
+    procs = [pe._process for pe in getattr(env, "_envs", [])]
+    for p in procs:
+        if p.is_alive():
+            os.kill(p.pid, _faulthandler_signal.SIGUSR1)
+    time.sleep(2)
+    for p in procs:
+        if p.is_alive():
+            p.terminate()
+            p.join(5)
+        if p.is_alive():
+            p.kill()
+            p.join(5)
+    _ACTIVE_TRAIN_ENVS = [e for e in _ACTIVE_TRAIN_ENVS if e is not env]
+
+
+def ensure_first_reset(env, rebuild, timeout_s=FIRST_RESET_TIMEOUT_S,
+                       attempts=FIRST_RESET_ATTEMPTS):
+    """Return an env whose first reset completed, rebuilding it if needed.
+
+    The first reset of a ParallelPyEnvironment after a long BC pretrain
+    has hung with no reset command reaching ros-server (twice on
+    donut_camera). A single in-process env can't be killed, so it is
+    returned untouched.
+    """
+    from tf_agents.environments import parallel_py_environment
+    if not isinstance(env, parallel_py_environment.ParallelPyEnvironment):
+        return env
+    for attempt in range(1, attempts + 1):
+        if _reset_within(env, timeout_s):
+            if attempt > 1:
+                print(f"main: first reset succeeded on attempt {attempt}",
+                      flush=True)
+            return env
+        print(f"main: first reset hung for {timeout_s:.0f}s (attempt "
+              f"{attempt}/{attempts}); dumping stacks and rebuilding the "
+              f"env workers", flush=True)
+        _kill_hung_parallel_env(env)
+        if attempt == attempts:
+            break
+        env = rebuild()
+    raise RuntimeError(
+        f"first env reset hung {attempts} times ({timeout_s:.0f}s each); "
+        "stacks are in the trainer log")
 
 
 def configure_env(env, job_id="", pass_through_actions=False,
@@ -898,6 +985,37 @@ def install_reward_design_on_env(env, name, code):
         return {"installed": [], "penalty_reward": None, "actors": 1}
 
 
+def _load_job_reward_design(job):
+    """The job's reward_designs document, or None for course defaults.
+
+    reward_design_id is either an ObjectId (dashboard-created designs) or
+    the string id of the seeded passthrough design, so look up by
+    ObjectId first and fall back to the string.
+    """
+    rd_id_raw = job.get("reward_design_id")
+    if not rd_id_raw:
+        return None
+    from bson import ObjectId
+    try:
+        doc = db.reward_designs.find_one({"_id": ObjectId(str(rd_id_raw))})
+    except Exception:
+        doc = None
+    if doc is None:
+        doc = db.reward_designs.find_one({"_id": str(rd_id_raw)})
+    if doc and doc.get("archived"):
+        print(
+            f"do_job: reward design {rd_id_raw} is archived; "
+            "using it for this job anyway. Unarchive on the "
+            "Reward design tab if you want it visible in the "
+            "new-job dropdown.", flush=True)
+    if doc is None:
+        print(
+            f"do_job: reward_design_id {rd_id_raw!r} not found in "
+            "reward_designs collection; falling back to course "
+            "defaults.", flush=True)
+    return doc
+
+
 def _measure_demo_batch_fraction(demo_rb, online_rb, ratio, batch_size,
                                  sequence_length=2, n_batches=300):
     """Empirically measure the realized demo fraction of the mixed sampler.
@@ -940,6 +1058,43 @@ def _measure_demo_batch_fraction(demo_rb, online_rb, ratio, batch_size,
         total_rows += int(f.size)
     realized = (demo_rows / total_rows) if total_rows else float('nan')
     return realized, demo_rows, total_rows
+
+
+def _make_critic_warmup_fn(agent, strategy, dataset):
+    """Return a callable that runs one critic-only SAC update and returns its loss.
+
+    Same critic update as ``SacAgent._train`` (its critic_loss, critic
+    optimizer and target-network update), with the actor and alpha left
+    untouched, so the critic learns Q for whatever the actor currently does.
+    ``dataset`` must yield (Trajectory, info) batches of 2-step sequences,
+    like the Learner's experience dataset.
+    """
+    it = iter(dataset)
+    critic_vars = (agent._critic_network_1.trainable_variables
+                   + agent._critic_network_2.trainable_variables)
+
+    @tf.function
+    def _step(experience):
+        time_steps, policy_steps, next_time_steps = agent._as_transition(experience)
+        with tf.GradientTape(watch_accessed_variables=False) as tape:
+            tape.watch(critic_vars)
+            loss = agent.critic_loss(
+                time_steps, policy_steps.action, next_time_steps,
+                td_errors_loss_fn=agent._td_errors_loss_fn,
+                gamma=agent._gamma,
+                reward_scale_factor=agent._reward_scale_factor,
+                training=True)
+        grads = tape.gradient(loss, critic_vars)
+        agent._apply_gradients(grads, critic_vars, agent._critic_optimizer)
+        agent._update_target()
+        return loss
+
+    def run():
+        experience, _ = next(it)
+        per_replica = strategy.run(_step, args=(experience,))
+        return float(strategy.reduce(tf.distribute.ReduceOp.MEAN, per_replica, axis=None))
+
+    return run
 
 
 def _append_eval_curve(job_id, step, avg_return, avg_ep_len):
@@ -1103,8 +1258,8 @@ class CurriculumScheduler:
 COURSE_DEFAULT_DEMO_JOB_IDS = {
     "donut": "64168c1b58d4d8ccdb76e721",
     "donut_no_hint": "64168c1b58d4d8ccdb76e721",
-    # No vector TFRecords for dict obs. TRAIN is SAC from scratch (Phase 6).
-    # Both MUST stay mapped to None: an unmapped course falls back to the donut
+    # No baked camera corpus. A TRAIN names its own DEMO (Phase 5). Both
+    # MUST stay mapped to None: an unmapped course falls back to the donut
     # default below, which would hand a dict-obs job the 32-wide vector corpus.
     "donut_camera": None,
     "donut_camera_no_rays": None,
@@ -1197,10 +1352,17 @@ def main(
     # epochs - typically not enough to fully BC-fit a 512x512 actor.
     # Set to 0 to skip and run pure SAC.
     bc_pretrain_steps_val=5000,
+    # Critic-only SAC updates on the demo transitions, run in the same loop
+    # as the BC pretrain (see _make_critic_warmup_fn). Without it SAC starts
+    # with a BC-fitted actor and a random critic whose Q-gradients pull the
+    # actor off the clone before the critic has learned anything. 0 = off.
+    critic_warmup_steps_val=0,
     batch_size_val=256,
     critic_learning_rate_val=3e-5,
     actor_learning_rate_val=3e-5,
     alpha_learning_rate_val=3e-5,
+    # Starting entropy coefficient; tf-agents' own default is 1.0.
+    initial_alpha_val=1.0,
     target_update_tau_val=0.005,
     target_update_period_val=1,
     gamma_val=0.99,
@@ -1463,12 +1625,12 @@ def main(
     print(f"[env_spawn] course_type={_course_type}", flush=True)
     _dict_obs_course = (
         collect_training_data.COURSE_OBS_KIND.get(_course_type) == "dict")
-    # Separate from _dict_obs_course, which selects the CNN towers below. What
-    # matters here is whether an expert corpus exists at this observation
-    # width: the camera courses are dict and have none yet (Phase 7), and the
-    # fly courses have one only when do_job built a brain replay for them
-    # (fly_brain/demo_corpus.py). Keying the skip on the obs kind would let
-    # fly_donut load 31-D scene TFRecords against a 1314-D spec.
+    # Separate from _dict_obs_course, which selects the CNN towers below. A
+    # camera course keeps BC/AWAC only when the job names a demo directory
+    # (Phase 5). The fly courses have a corpus only when do_job built a
+    # brain replay for them (fly_brain/demo_corpus.py). Keying the skip on
+    # the obs kind would let fly_donut load 31-D scene TFRecords against a
+    # 1314-D spec.
     _trace_demo = False
     if (_course_type in collect_training_data.TRACE_DEMO_COURSES
             and demo_record_dirs_val):
@@ -1489,8 +1651,47 @@ def main(
             f"{demo_record_dirs_val} (BC pretrain {bc_pretrain_steps_val} steps, "
             f"awac_lambda={awac_lambda_val})",
             flush=True)
+    # Camera TRAIN with a demo directory keeps the experiment design.
+    # With none, it starts from scratch. A mismatched file raises here,
+    # before the Unity handshake.
+    _camera_course = (
+        _course_type in collect_training_data.CAMERA_VECTOR_WIDTHS)
+    _camera_demo_dirs = [
+        d for d in (demo_record_dirs_val or []) if d
+    ] if _camera_course else []
+    if _camera_course and _camera_demo_dirs:
+        _cam = collect_training_data.camera_train_settings(
+            _course_type, _camera_demo_dirs,
+            bc_pretrain_steps_val, demo_prefill_count,
+            demo_sample_ratio, awac_lambda_val)
+        collect_training_data.validate_camera_demo_dirs(
+            _camera_demo_dirs, _course_type)
+        if (demo_source_counts_val is not None
+                and len(demo_source_counts_val) != len(_camera_demo_dirs)):
+            raise ValueError(
+                f"demo_source_counts_val has {len(demo_source_counts_val)} "
+                f"entries but there are {len(_camera_demo_dirs)} camera "
+                f"demo directories: {_camera_demo_dirs}")
+        if _cam["demo_prefill_count"] != demo_prefill_count:
+            print(
+                f"main: {_course_type} camera prefill "
+                f"{demo_prefill_count} -> {_cam['demo_prefill_count']} "
+                f"(cap {collect_training_data.CAMERA_PREFILL_CAP})",
+                flush=True)
+        bc_pretrain_steps_val = _cam["bc_pretrain_steps"]
+        demo_prefill_count = _cam["demo_prefill_count"]
+        demo_sample_ratio = _cam["demo_sample_ratio"]
+        awac_lambda_val = _cam["awac_lambda"]
+        print(
+            f"main: {_course_type} TRAIN with camera demos "
+            f"{_camera_demo_dirs} (BC pretrain {bc_pretrain_steps_val} "
+            f"steps, prefill={demo_prefill_count}, "
+            f"demo_sample_ratio={demo_sample_ratio}, "
+            f"awac_lambda={awac_lambda_val})",
+            flush=True)
     _no_demo_course = (
-        _course_type in collect_training_data.COURSES_WITHOUT_DEMOS
+        (_course_type in collect_training_data.COURSES_WITHOUT_DEMOS
+         or (_camera_course and not _camera_demo_dirs))
         and not _trace_demo)
     if _no_demo_course:
         print(
@@ -1801,7 +2002,8 @@ def main(
                     tanh_normal_projection_network.TanhNormalProjectionNetwork))
 
     trajectory_dataset = None
-    if _dict_obs_course or _no_demo_course:
+    _dataset_with_source = None
+    if (_dict_obs_course or _no_demo_course) and not _camera_demo_dirs:
         demo_record_dirs_val = []
     _phase("expert_tfrecord_load (500k records)")
     # demo_record_dirs_val lets a job combine MULTIPLE DEMO collections into
@@ -1836,7 +2038,7 @@ def main(
                 f"course (via the job's demo_job_ids / default_demo_job_id, the "
                 f"ROBOTAXI_DEFAULT_DEMO_JOB_ID env var, or "
                 f"COURSE_DEFAULT_DEMO_JOB_IDS).")
-    if record_dirs:
+    if record_dirs and not _camera_demo_dirs:
         # 1. Load each directory's demos separately, then concatenate into ONE
         # Trajectory object. Only `observation`/`action` actually vary by
         # source - `step_type`/`next_step_type`/`reward`/`discount` are the
@@ -2056,6 +2258,17 @@ def main(
         #     sampling_fraction=0.1,
         #     parsed_dataset=parsed_dataset)
 
+    if _camera_demo_dirs:
+        # Stream. The vector block above concatenates observations into
+        # one array; camera images stay in the TFRecordDataset.
+        trajectory_dataset, _dataset_with_source = (
+            collect_training_data.camera_train_datasets(
+                _camera_demo_dirs, _course_type,
+                source_counts=demo_source_counts_val))
+        print(
+            f"main: streaming camera demos for BC and Reverb prefill "
+            f"from {_camera_demo_dirs}",
+            flush=True)
 
     _phase("agent_build (SAC)")
     # Agent.
@@ -2078,6 +2291,7 @@ def main(
                 learning_rate=critic_learning_rate),
             alpha_optimizer=tf.compat.v1.train.AdamOptimizer(
                 learning_rate=alpha_learning_rate),
+            initial_log_alpha=math.log(float(initial_alpha_val)),
             target_update_tau=target_update_tau,
             target_update_period=target_update_period,
             td_errors_loss_fn=tf.math.squared_difference,
@@ -2333,16 +2547,31 @@ def main(
     # pretraining on top would overwrite that with another round of
     # imitation, wasting the saved policy progress.
     _phase("bc_pretrain")
-    if (bc_pretrain_steps_val > 0 and not is_resume_val
+    _bc_steps = (bc_pretrain_steps_val
+                 if trajectory_dataset is not None else 0)
+    _critic_warmup_steps = int(critic_warmup_steps_val or 0)
+    _critic_warmup_fn = None
+    if (_critic_warmup_steps > 0 and not is_resume_val
             and trajectory_dataset is not None):
+        # Needs demos in Reverb: sampling an empty table blocks forever.
+        # Two-table mode: the online table is still empty here (initial
+        # collect hasn't run), so warm up on the protected demo table alone.
+        # Single-table mode prefilled the demos into the online table.
+        _warmup_ds = (demo_replay.as_dataset(
+                          sample_batch_size=batch_size, num_steps=2).prefetch(5)
+                      if demo_replay is not None else dataset)
+        _critic_warmup_fn = _make_critic_warmup_fn(tf_agent, strategy, _warmup_ds)
+    if (_bc_steps > 0 or _critic_warmup_fn is not None) and not is_resume_val:
         collect_training_data.bc_pretrain_actor_net(
             actor_net=actor_net,
             time_step_spec=time_step_spec,
             action_spec=action_spec,
             strategy=strategy,
             trajectory_dataset=trajectory_dataset,
-            training_steps=bc_pretrain_steps_val,
-            batch_size=batch_size)
+            training_steps=_bc_steps,
+            batch_size=batch_size,
+            critic_train_fn=_critic_warmup_fn,
+            critic_steps=_critic_warmup_steps if _critic_warmup_fn else 0)
     elif is_resume_val:
         # NOTE: we deliberately don't print int(train_step.numpy()) here:
         # the Learner that restores train_step from the checkpoint isn't
@@ -2426,6 +2655,23 @@ def main(
                 f"main: RESUME - Reverb restore check failed ({_e}); "
                 "falling back to initial_collect.",
                 flush=True)
+
+    def _rebuild_collect_env():
+        new_env = _make_parallel_train_env(num_envs, _course_type)
+        configure_env(new_env, job_id=job_id, pass_through_actions=False,
+                      corner_radius=_init_cr,
+                      curvature_difficulty=_init_cd,
+                      chicanes_north=_init_ch_n, chicanes_east=_init_ch_e,
+                      chicanes_south=_init_ch_s, chicanes_west=_init_ch_w,
+                      env_discount=env_discount_val)
+        if reward_design and reward_design.get("code"):
+            install_reward_design_on_env(
+                new_env, reward_design.get("name", "<unnamed>"),
+                reward_design["code"])
+        return new_env
+
+    _phase("first_reset")
+    env = ensure_first_reset(env, _rebuild_collect_env)
 
     _phase("initial_collect")
     if _reverb_restored:
@@ -3171,6 +3417,9 @@ def main(
                               data=_eval_mean_metric, step=step)
             tf.summary.scalar('eval/goals_per_episode_top3_this_eval',
                               data=_eval_topk_metric, step=step)
+            tf.summary.scalar('eval/max_goals_per_episode_this_eval',
+                              data=max(_eval_ep_goals) if _eval_ep_goals else 0.0,
+                              step=step)
             print(f"EVAL goals/ep (this eval only): "
                   f"top{_EVAL_TOPK}-mean={_eval_topk_metric:.2f} "
                   f"(top={[round(g, 1) for g in _eval_topk_goals]}), "
@@ -4638,18 +4887,21 @@ def do_job(job, num_envs=1):
         print(f"do_job: set_observation_size failed (non-fatal): {_e}",
               flush=True)
     print(f"do_job: course_type={_job_course_type}", flush=True)
-    # TRAIN/EVAL are allowed on every course. DEMO/BC are not: the camera
-    # courses need a dict TFRecord layout that does not exist yet (Phase 7),
-    # and fly_donut's observation is the brain's own history and so cannot be
-    # recorded at all. See COURSES_WITHOUT_DEMOS for the distinction.
-    if (_job_course_type in collect_training_data.COURSES_WITHOUT_DEMOS
-            and job.get("job_type") in ("DEMO", "BC", "BC_TRAINING_ONLY")):
-        err = (
-            f"course '{_job_course_type}' has no demo corpus - "
-            "DEMO / BC_TRAINING_ONLY are unsupported. Use TRAIN from scratch."
-        )
-        print(f"do_job: refusing {job.get('job_type')}: {err}", flush=True)
-        update_job(job["_id"], err, "eval_error")
+    # fly-brain holds one brain: a second env would interleave on the same
+    # voltages with no error raised, so fly courses always run single-env.
+    if num_envs > 1 and str(_job_course_type).startswith("fly_"):
+        print(f"do_job: {_job_course_type} runs with 1 env, not the trainer's "
+              f"{num_envs} (fly-brain holds one brain)", flush=True)
+        num_envs = 1
+    # Fly courses cannot record. Camera courses can DEMO; BC_TRAINING_ONLY
+    # stays refused because train_agent is a flat MLP. See
+    # collect_training_data.recording_job_refusal.
+    _recording_refusal = collect_training_data.recording_job_refusal(
+        _job_course_type, job.get("job_type"))
+    if _recording_refusal:
+        print(f"do_job: refusing {job.get('job_type')}: {_recording_refusal}",
+              flush=True)
+        update_job(job["_id"], _recording_refusal, "eval_error")
         update_job(job["_id"], "FAILED")
         return
     # Decide resume-vs-fresh BEFORE flipping status to IN_PROGRESS, so
@@ -4799,31 +5051,66 @@ def do_job(job, num_envs=1):
             print(f"do_job: DEMO collecting across {demo_num_gyms} parallel "
                   f"Unity gyms (ros-server-0..{demo_num_gyms - 1})",
                   flush=True)
+        # The stored reward is what AWAC's critic trains on, so it has to
+        # come from the same design the TRAIN job installs.
+        _demo_rd = _load_job_reward_design(job)
+        if _demo_rd and _demo_rd.get("code"):
+            for _gym_env in _demo_envs:
+                _rd_result = install_reward_design_on_env(
+                    _gym_env, _demo_rd.get("name", "<unnamed>"),
+                    _demo_rd["code"])
+            print(f"do_job: DEMO installed reward design "
+                  f"{_demo_rd.get('name')!r} on {len(_demo_envs)} gym(s): "
+                  f"{_rd_result.get('installed')}", flush=True)
+        else:
+            print("do_job: DEMO records the course default reward "
+                  "(no reward_design_id)", flush=True)
 
         def _collect_on_all_gyms(num_episodes, batch_number, stage=None,
-                                  num_stages=None, goal_budget=None):
+                                  num_stages=None, goal_budget=None,
+                                  step_budget=None, progress_base=0.0,
+                                  progress_span=1.0):
             """Run collect_expert_demos on every gym env concurrently.
 
             Each gym independently targets the FULL goal_budget/num_episodes
             (not a split share), so demo_num_gyms>1 multiplies total demo
             volume collected per stage in roughly the SAME wall-clock time
             as a single gym, rather than trading volume for speed.
+
+            The Jobs-tab percent_complete covers progress_base ..
+            progress_base + progress_span of the whole job (both fractions)
+            for this call, averaged over the gyms.
+
+            Returns True if any gym stopped because the job was cancelled.
             """
+            _gym_frac = [0.0] * len(_demo_envs)
+
+            def _on_progress(_gi, _frac):
+                _gym_frac[_gi] = _frac
+                _pct = 100.0 * (progress_base + progress_span
+                                * sum(_gym_frac) / len(_gym_frac))
+                update_job(job["_id"], round(_pct, 2), "percent_complete")
+
             if len(_demo_envs) == 1:
-                collect_expert_demos(
+                return collect_expert_demos(
                     _demo_envs[0], num_episodes, job["_id"],
                     batch_number=batch_number, stage=stage,
                     num_stages=num_stages, goal_budget=goal_budget,
-                    gym_index=0)
-                return
+                    gym_index=0, step_budget=step_budget,
+                    on_progress=_on_progress)
+            _cancelled = [False] * len(_demo_envs)
+
+            def _run(_gi, _gym_env):
+                _cancelled[_gi] = collect_expert_demos(
+                    _gym_env, num_episodes, job["_id"],
+                    batch_number=batch_number, stage=stage,
+                    num_stages=num_stages, goal_budget=goal_budget,
+                    gym_index=_gi, step_budget=step_budget,
+                    on_progress=_on_progress)
+
             _threads = [
                 threading.Thread(
-                    target=collect_expert_demos,
-                    args=(_gym_env, num_episodes, job["_id"]),
-                    kwargs=dict(
-                        batch_number=batch_number, stage=stage,
-                        num_stages=num_stages, goal_budget=goal_budget,
-                        gym_index=_gi),
+                    target=_run, args=(_gi, _gym_env),
                     name=f"demo-gym-{_gi}",
                     daemon=True)
                 for _gi, _gym_env in enumerate(_demo_envs)]
@@ -4831,6 +5118,7 @@ def do_job(job, num_envs=1):
                 _t.start()
             for _t in _threads:
                 _t.join()
+            return any(_cancelled)
 
         # Optional curriculum-spread collection: if the job references an
         # experiment_design with curriculum_stages (the same field TRAIN jobs
@@ -4855,6 +5143,7 @@ def do_job(job, num_envs=1):
             if _demo_ed_doc and _demo_ed_doc.get("curriculum_stages"):
                 _demo_curriculum_stages = _demo_ed_doc["curriculum_stages"]
 
+        _demo_cancelled = False
         if _demo_curriculum_stages:
             n_stages = len(_demo_curriculum_stages)
             _start_stage = min(max(demo_start_stage, 0), n_stages - 1)
@@ -4912,9 +5201,13 @@ def do_job(job, num_envs=1):
                     f"corner_radius={_cr}, curvature_difficulty={_cd}, "
                     f"chicanes(N/E/S/W)={_ch_n}/{_ch_e}/{_ch_s}/{_ch_w}, "
                     f"goal_budget={_n_goals}/gym x {demo_num_gyms} gym(s)", flush=True)
-                _collect_on_all_gyms(
+                _demo_cancelled = _collect_on_all_gyms(
                     _episode_safety_cap, batch_number=_stage_idx,
-                    stage=_stage_idx, num_stages=n_stages, goal_budget=_n_goals)
+                    stage=_stage_idx, num_stages=n_stages, goal_budget=_n_goals,
+                    progress_base=(_stage_idx - _start_stage) / _stages_to_run,
+                    progress_span=1.0 / _stages_to_run)
+                if _demo_cancelled:
+                    break
         else:
             # No curriculum on the referenced experiment design (or none
             # referenced at all) - fall back to a single fixed geometry from
@@ -4943,14 +5236,44 @@ def do_job(job, num_envs=1):
             if _demo_goal_budget:
                 print(f"do_job: DEMO goal_budget={_demo_goal_budget}/gym",
                       flush=True)
-            _collect_on_all_gyms(num_iterations, batch_number=0,
-                                 goal_budget=_demo_goal_budget)
+            _demo_step_budget = _demo_int_field("demo_step_budget", 0) or None
+            if _demo_step_budget:
+                print(f"do_job: DEMO step_budget={_demo_step_budget}/gym",
+                      flush=True)
+            _demo_cancelled = _collect_on_all_gyms(
+                num_iterations, batch_number=0, goal_budget=_demo_goal_budget,
+                step_budget=_demo_step_budget)
 
         root_dir = "/tfrecords/job_" + str(job["_id"])
-        collect_training_data.train_agent(root_dir, demo_training_steps)
-        print("after collect_expert_demos")
+        if _demo_cancelled:
+            print(f"do_job: DEMO {job['_id']} cancelled - not registering "
+                  f"{root_dir} on the Demos tab and skipping BC training",
+                  flush=True)
+        else:
+            update_job(job["_id"], 100.0, "percent_complete")
+            # Registered before BC so the collected demos show up on the Demos
+            # tab even if BC training afterwards fails.
+            try:
+                _demo_doc = demos_registry.register_demo_job(
+                    db, job, course=_demo_course, path=root_dir)
+                print(f"do_job: DEMO registered {_demo_doc.get('num_demos')} demos / "
+                      f"{_demo_doc.get('num_steps')} steps at {root_dir}", flush=True)
+            except Exception as _e:  # noqa: BLE001 - registry must never fail the job
+                print(f"do_job: DEMO registry write failed (non-fatal): {_e}",
+                      flush=True)
+            if collect_training_data.demo_runs_mlp_bc(_demo_course):
+                collect_training_data.train_agent(root_dir, demo_training_steps)
+                print("after collect_expert_demos")
+            else:
+                print(
+                    f"do_job: DEMO {_demo_course} corpus at {root_dir}; "
+                    "skipping flat MLP train_agent "
+                    "(BC is the Conv actor inside a later TRAIN job)",
+                    flush=True)
     elif job_type == "BC_TRAINING_ONLY":
-        root_dir = "/tfrecords/job_" + str(job["demo_job_id"])
+        _picked_demo_paths = [p for p in (job.get("demo_tfrecords_paths") or []) if p]
+        root_dir = (_picked_demo_paths[0] if _picked_demo_paths
+                    else "/tfrecords/job_" + str(job["demo_job_id"]))
         collect_training_data.train_agent(root_dir, int(job["training_steps"]))
         print("after collect_expert_demos")
     elif job_type == "TRAIN":
@@ -5038,45 +5361,12 @@ def do_job(job, num_envs=1):
         critic_joint_fc_layer_params_x = _nn_size_x
         critic_joint_fc_layer_params_y = _nn_size_y
         # Resolve the optional reward design and seed from the job
-        # document. reward_design_id can be either an ObjectID (sent
-        # by the future dashboard Reward-design tab) or the special
-        # string id used for the seeded passthrough design - look up
-        # by _id first, fall back to a stable string id match. None
-        # means "use course defaults" and we pass None down to main()
-        # which short-circuits the install. RewardDesignError raised
-        # inside main() is allowed to propagate; the standard
-        # eval_error capture at the bottom of this branch catches it.
-        reward_design_doc = None
-        rd_id_raw = job.get("reward_design_id")
-        if rd_id_raw:
-            from bson import ObjectId
-            try:
-                # Try ObjectId first - that's the common case for
-                # designs created via the dashboard.
-                reward_design_doc = db.reward_designs.find_one(
-                    {"_id": ObjectId(str(rd_id_raw))})
-            except Exception:
-                reward_design_doc = None
-            if reward_design_doc is None:
-                # Fall back to string match for the seeded passthrough
-                # design (whose _id is the string PASSTHROUGH_DESIGN_ID).
-                reward_design_doc = db.reward_designs.find_one(
-                    {"_id": str(rd_id_raw)})
-            if reward_design_doc and reward_design_doc.get("archived"):
-                # Archived designs still work for backward-compat with
-                # in-flight jobs, but log the fact so a user wondering
-                # "why is my training still using that design?" can
-                # find the answer in the trainer log.
-                print(
-                    f"do_job: reward design {rd_id_raw} is archived; "
-                    "using it for this job anyway. Unarchive on the "
-                    "Reward design tab if you want it visible in the "
-                    "new-job dropdown.", flush=True)
-            if reward_design_doc is None:
-                print(
-                    f"do_job: reward_design_id {rd_id_raw!r} not found in "
-                    "reward_designs collection; falling back to course "
-                    "defaults.", flush=True)
+        # document. None means "use course defaults" and we pass None
+        # down to main() which short-circuits the install.
+        # RewardDesignError raised inside main() is allowed to
+        # propagate; the standard eval_error capture at the bottom of
+        # this branch catches it.
+        reward_design_doc = _load_job_reward_design(job)
         seed = job.get("seed")
         try:
             seed = int(seed) if seed not in (None, "") else None
@@ -5208,7 +5498,14 @@ def do_job(job, num_envs=1):
         _demo_job_ids = _base_demo_ids + [
             j for j in _extra_demo_job_ids
             if j and j != _DEFAULT_DEMO_JOB_ID]
-        if not _demo_job_ids:
+        # demo_tfrecords_paths (optional, job-doc field): directories picked
+        # from the Demos tab on the New-job form. They REPLACE the job-id
+        # derived dirs below, so a path edited on the Demos tab is honoured
+        # and a hand-registered dir with no DEMO job behind it still works.
+        # The form also sets skip_default_demo + demo_job_ids to the demo's
+        # source job, which the brain-replay courses still key on.
+        _picked_demo_paths = [p for p in (job.get("demo_tfrecords_paths") or []) if p]
+        if not _demo_job_ids and not _picked_demo_paths:
             if (collect_training_data.COURSE_OBS_KIND.get(_job_course_type) == "dict"
                     or _job_course_type in collect_training_data.COURSES_WITHOUT_DEMOS):
                 print(
@@ -5241,6 +5538,10 @@ def do_job(job, num_envs=1):
             demo_record_dirs_val = [
                 demo_corpus.ensure(_jid, _job_course_type)
                 for _jid in _demo_job_ids]
+        elif _picked_demo_paths:
+            demo_record_dirs_val = _picked_demo_paths
+            print(f"do_job: TRAIN using expert demos picked on the Demos tab: "
+                  f"{demo_record_dirs_val}", flush=True)
         if len(_demo_job_ids) > 1:
             print(f"do_job: TRAIN combining {len(_demo_job_ids)} expert-demo "
                   f"sources for course={_job_course_type}: {_demo_job_ids}",
@@ -6315,7 +6616,8 @@ def create_traj(
 
 def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
                          stage=None, num_stages=None, goal_budget=None,
-                         flush_every_n_steps=5000, gym_index=0):
+                         flush_every_n_steps=5000, gym_index=0,
+                         step_budget=None, on_progress=None):
     """Collects expert demonstrations and returns a dataset of trajectories.
 
     ``batch_number`` picks the output filename prefix
@@ -6542,6 +6844,7 @@ def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
     # control can't see coming. Final target_speed is whichever constraint (this
     # one, or the existing curvature-based one) is more restrictive right now.
     GOAL_BRAKE_ZONE_DIST = 12.0  # meters - distance-to-goal at which proximity braking starts kicking in
+    DEMO_CANCEL_CHECK_EVERY_N_STEPS = 100  # ~7s of driving between job-status lookups
     # SECOND units-confusion bug found alongside the reset_every_n_episodes
     # one below (2026-07-19): this loop used to ALSO break out of both the
     # inner while AND this outer for loop once `num_trajectories` (a per-STEP
@@ -6570,7 +6873,26 @@ def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
     _course = getattr(environment, 'course', None)
     _goals_at_call_start = getattr(_course, 'goals_per_episode_total', 0)
     episode_idx = 0
-    while episode_idx < num_episodes:
+    # Episodes can run thousands of steps, so the dashboard's DONE/cancel is
+    # polled mid-episode. A pause has no resume path for DEMO, so it stops too.
+    cancelled = False
+
+    def _report_progress():
+        # Fraction of whichever stop condition is closest to firing.
+        if on_progress is None:
+            return
+        fracs = [episode_idx / num_episodes if num_episodes else 0.0]
+        if step_budget:
+            fracs.append(num_trajectories / step_budget)
+        if goal_budget:
+            fracs.append((getattr(_course, 'goals_per_episode_total', 0)
+                          - _goals_at_call_start) / goal_budget)
+        try:
+            on_progress(gym_index, min(1.0, max(fracs)))
+        except Exception as _e:  # noqa: BLE001 - progress must never break collection
+            print(f"t={_ts()} demo progress update failed: {_e}", flush=True)
+
+    while episode_idx < num_episodes and not cancelled:
         if goal_budget is not None:
             _goals_so_far = (
                 getattr(_course, 'goals_per_episode_total', 0)
@@ -6581,6 +6903,12 @@ def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
                     f"({_goals_so_far} goals since stage start) - "
                     f"advancing", flush=True)
                 break
+        # Checked between episodes only, so the last episode is kept whole
+        # and the total overshoots step_budget by at most one episode.
+        if step_budget is not None and num_trajectories >= step_budget:
+            print(f"t={_ts()} step_budget {step_budget} reached "
+                  f"({num_trajectories} steps) - stopping", flush=True)
+            break
         episode_idx += 1
         environment.reset()
         action_apply_force = 0.2
@@ -6602,6 +6930,11 @@ def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
             # that long. Removed - episodes now end only via the natural
             # environment._episode_ended signal (crash, see donut_course.py
             # has_failed()).
+            if num_trajectories % DEMO_CANCEL_CHECK_EVERY_N_STEPS == 0:
+                if _get_job_lifecycle_state(job_id) != 'continue':
+                    cancelled = True
+                    break
+                _report_progress()
             numpy_action = np.array([action_apply_force, action_steering_angle])
             action = tf.constant(numpy_action)
             next_time_step=environment._step(action)
@@ -6764,9 +7097,20 @@ def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
         # while loop above just exited via environment._episode_ended, or
         # this is the very start before any episode has run), never
         # mid-episode.
+        if cancelled:
+            break
         if flush_every_n_steps and len(trajectories) >= flush_every_n_steps:
             _flush_trajectories_to_disk()
+    if cancelled:
+        # The buffer ends mid-episode (no LAST step), so it is dropped rather
+        # than written; files flushed at earlier episode boundaries stay.
+        print(f"t={_ts()} job {job_id} is no longer IN_PROGRESS - stopping demo "
+              f"collection, discarding {len(trajectories)} unflushed steps",
+              flush=True)
+        trajectories = []
+        return True
     _flush_trajectories_to_disk()  # final remainder, no-op if already empty
+    return False
 
 def zero_pad_integer(integer, length):
     """Pads an integer with zeros to a given length."""
@@ -6785,30 +7129,52 @@ def create_folder(folder_name):
     os.makedirs(folder_name, exist_ok=True)
  
 def write_trajectories_to_file(trajectories, output_file):
-    """Writes a list of trajectories to a TFRecord file."""
+    """Writes a list of trajectories to a TFRecord file.
+
+    A flat observation (donut, donut_no_hint) keeps the original feature
+    set. A camera-course dict ``{vector, image}`` writes the policy vector
+    into ``observation`` and the CSI frame into ``image`` as uint8 bytes.
+    See vision.camera_record and docs/camera-demo-tfrecord-plan.md.
+    """
+    from vision.camera_record import (
+        is_camera_observation, serialize_camera_example)
+
     writer = tf.io.TFRecordWriter(output_file)
-    for traj in trajectories:
-        print("writing trajectory")
-        print(traj)
-        observation = traj.observation
-        action = traj.action
-        reward = traj.reward
-        discount = traj.discount
-        print(f"reward: {reward}")
-        print(f"discount: {discount}")
-        feature_dict = {
-            'action': tf.train.Feature(float_list=tf.train.FloatList(value=action.numpy().ravel())),
-            'observation': tf.train.Feature(float_list=tf.train.FloatList(value=observation.numpy().ravel())),
-            'reward': tf.train.Feature(float_list=tf.train.FloatList(value=reward.numpy().ravel())),
-            'discount': tf.train.Feature(float_list=tf.train.FloatList(value=discount.numpy().ravel())),
-            # LAST on an episode's final record. fly_brain/demo_corpus.py
-            # needs it to reset the brain between replayed episodes.
-            'next_step_type': tf.train.Feature(int64_list=tf.train.Int64List(
-                value=np.asarray(traj.next_step_type).ravel().astype(np.int64))),
-        }
-        example = tf.train.Example(features=tf.train.Features(feature=feature_dict))
-        writer.write(example.SerializeToString())
-    writer.close()   
+    try:
+        for traj in trajectories:
+            observation = traj.observation
+            action = traj.action
+            reward = traj.reward
+            discount = traj.discount
+            camera = is_camera_observation(observation)
+            if camera:
+                payload, encoded = serialize_camera_example(
+                    observation, action, reward, discount, traj.next_step_type)
+                print(
+                    f"writing camera trajectory vector={encoded['vector_len']} "
+                    f"image_bytes={encoded['image_len']}",
+                    flush=True)
+                writer.write(payload)
+                continue
+            print("writing trajectory")
+            print(traj)
+            print(f"reward: {reward}")
+            print(f"discount: {discount}")
+            feature_dict = {
+                'action': tf.train.Feature(float_list=tf.train.FloatList(value=action.numpy().ravel())),
+                'observation': tf.train.Feature(
+                    float_list=tf.train.FloatList(value=observation.numpy().ravel())),
+                'reward': tf.train.Feature(float_list=tf.train.FloatList(value=reward.numpy().ravel())),
+                'discount': tf.train.Feature(float_list=tf.train.FloatList(value=discount.numpy().ravel())),
+                # LAST on an episode's final record. fly_brain/demo_corpus.py
+                # needs it to reset the brain between replayed episodes.
+                'next_step_type': tf.train.Feature(int64_list=tf.train.Int64List(
+                    value=np.asarray(traj.next_step_type).ravel().astype(np.int64))),
+            }
+            example = tf.train.Example(features=tf.train.Features(feature=feature_dict))
+            writer.write(example.SerializeToString())
+    finally:
+        writer.close()   
 
 # def create_traj(
 #     observation, action,

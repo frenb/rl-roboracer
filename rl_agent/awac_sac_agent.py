@@ -104,7 +104,8 @@ class AwacSacAgent(sac_agent.SacAgent):
         # demo dataset is as_dataset(sample_batch_size, num_steps=2) ->
         # (Trajectory, SampleInfo). Use the first transition's (s, a).
         demo, _info = next(demo_iter)
-        s = demo.observation[:, 0]
+        # Camera courses observe a {vector, image} dict.
+        s = tf.nest.map_structure(lambda t: t[:, 0], demo.observation)
         a_demo = demo.action[:, 0]
         st = demo.step_type[:, 0]
 

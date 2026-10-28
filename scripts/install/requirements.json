@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "description": "What this project needs from the PC's GPU. The installer's preflight and the doctor both read it; Install.ps1 -SelfTest checks that each image matches its Dockerfile. The NVIDIA driver minimum is the highest driverMin below.",
+  "gpu": {
+    "vendor": "nvidia",
+    "components": [
+      {
+        "name": "docker-desktop",
+        "what": "GPU passthrough to Docker Desktop's WSL 2 engine",
+        "driverMin": "495.0"
+      },
+      {
+        "name": "sim-controller",
+        "what": "trainer (TensorFlow)",
+        "dockerfile": "docker/sim_controller/Dockerfile",
+        "image": "nvidia/cuda:11.0.3-runtime-ubuntu20.04",
+        "cuda": "11.0",
+        "driverMin": "451.82",
+        "probe": "python3 -c \"import tensorflow as tf; print('tensorflow sees', len(tf.config.list_physical_devices('GPU')), 'GPU(s)')\""
+      },
+      {
+        "name": "fly-brain",
+        "what": "fly connectome simulator (CuPy)",
+        "dockerfile": "docker/fly_brain/Dockerfile",
+        "image": "nvidia/cuda:12.4.1-runtime-ubuntu22.04",
+        "cuda": "12.4",
+        "driverMin": "551.61",
+        "probe": "python -c \"import cupy; print('cupy sees', cupy.cuda.runtime.getDeviceCount(), 'GPU(s)')\""
+      }
+    ]
+  }
+}

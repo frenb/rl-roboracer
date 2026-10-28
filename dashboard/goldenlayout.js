@@ -244,6 +244,15 @@ var config = {
                       // ?v= busts the browser cache whenever this number
                       // is incremented after a gyms.html update.
                       componentState: { src: "http://localhost/gyms.html?v=ws1", id: 'gyms' }
+                    },
+                    {
+                      type: 'component',
+                      title: 'Demos',
+                      componentName: 'iframeComponent',
+                      // Expert-demonstration TFRecords sets. DEMO jobs
+                      // register here on completion; the New Job dialog's
+                      // "Expert demos" dropdown picks from this list.
+                      componentState: { src: "http://localhost/demos.html?v=2", id: 'demos' }
                     }
                   ]
                 }

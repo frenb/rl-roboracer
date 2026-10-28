@@ -198,7 +198,9 @@ services:
     # The output also goes to /tmp/trainer.log: that is the file the
     # dashboard's log viewer tails (see dashboard/src/server.ts), and the
     # same file manual trainer restarts write to.
-    command: sh -c "(tensorboard --bind_all --logdir_spec=current:/tmp/active,compare:/tmp/tb_compare --reload_multifile true --reload_interval 5 &1> /tmp/tb.log) && cd /python_ws/src && python -u robotaxi.py 2>&1 | tee robotaxi.out /tmp/trainer.log"
+    # NUM_ENVS (.env) must equal the number of Unity clients: each env drives
+    # one client through its own ros-server (compose/scale.yml for 2-4).
+    command: sh -c "(tensorboard --bind_all --logdir_spec=current:/tmp/active,compare:/tmp/tb_compare --reload_multifile true --reload_interval 5 &1> /tmp/tb.log) && cd /python_ws/src && python -u robotaxi.py --num-envs ${NUM_ENVS:-1} 2>&1 | tee robotaxi.out /tmp/trainer.log"
     # No `links:` block. Compose's legacy links: ["ros-server"] would
     # also auto-add per-link aliases of the form
     #   <linked-container>:<service>-<replica-index>
