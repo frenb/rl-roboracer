@@ -28,9 +28,10 @@
  *                                            (statuses, job/model/robot types,
  *                                            courses, trial presets)
  *   fetchJobList(kind, {force})           -> cached /get_gyms | /get_reward_designs
- *                                            | /get_experiment_designs
+ *                                            | /get_experiment_designs | /get_demos
  *   loadJobListIntoSelect(kind, sel)      -> repopulate a picker from that list
  *   selectedName(sel) / selectedGym(sel)  -> read a picker back for a payload
+ *   selectedDemo(sel) / demoLabel(row)    -> same, for the Expert demos picker
  *   clampTrialCount(v)                    -> 1..100
  *   evalCostEstimate(trials, epsPerTrial) -> {totalEpisodes, eta} footer line
  *   fillStageSelects(start, end, stages)  -> curriculum Start/End pickers
@@ -1637,6 +1638,7 @@
 
   const JOB_LIST_SOURCES = {
     gyms: { url: '/get_gyms' },
+    demos: { url: '/get_demos' },
     reward_designs: { url: '/get_reward_designs', pinned: 'passthrough-course-default' },
     experiment_designs: { url: '/get_experiment_designs', pinned: 'experiment-default' },
   };
@@ -1695,6 +1697,8 @@
     const visible = rows
       .filter((r) => !r.archived)
       .sort((a, b) => {
+        // Demos have no name; newest first is the useful order.
+        if (kind === 'demos') return demoTime(b).localeCompare(demoTime(a));
         const aCan = src.pinned && String(a._id || '') === src.pinned;
         const bCan = src.pinned && String(b._id || '') === src.pinned;
         if (aCan && !bCan) return -1;
@@ -1704,6 +1708,14 @@
     for (const r of visible) {
       const opt = document.createElement('option');
       opt.value = String(r._id);
+      if (kind === 'demos') {
+        opt.textContent = demoLabel(r);
+        // Read back by selectedDemo, same trick as the gym path below.
+        opt.title = String(r.tfrecords_path || '');
+        opt.dataset.sourceJobId = String(r.source_job_id || '');
+        sel.appendChild(opt);
+        continue;
+      }
       const ver = r.version ? ` (v${r.version})` : '';
       opt.textContent = (r.name || '(unnamed)') + ver;
       // Gyms stash their build path here so a submit can stamp
@@ -1712,6 +1724,31 @@
       if (kind === 'gyms') opt.title = String(r.file_path || '');
       sel.appendChild(opt);
     }
+  }
+
+  /** Sort key for a demos row: collection time, else registration time. */
+  function demoTime(r) {
+    return String(r.collected_at || r.created_at || '');
+  }
+
+  /** "<description> — N demos, <course>" for a demos row. */
+  function demoLabel(r) {
+    const desc = r.description || r.tfrecords_path || '(no description)';
+    const n = r.num_demos == null ? '?' : r.num_demos;
+    return `${desc} \u2014 ${n} demos${r.course ? ', ' + r.course : ''}`;
+  }
+
+  /** The picked demo as the keys a job document carries. */
+  function selectedDemo(sel) {
+    const id = sel ? String(sel.value || '') : '';
+    if (!id) return null;
+    const opt = sel.options[sel.selectedIndex];
+    return {
+      id,
+      label: (opt && opt.textContent) || '',
+      tfrecords_path: (opt && opt.title) || '',
+      source_job_id: (opt && opt.dataset.sourceJobId) || '',
+    };
   }
 
   /** The picked option's text, with the " (vN)" suffix hydrate added removed. */
@@ -1847,6 +1884,7 @@
     const numbers = {
       num_iterations: optionalNumber(o.num_iterations),
       training_steps: optionalNumber(o.training_steps),
+      demo_step_budget: optionalNumber(o.demo_step_budget),
       num_trials: optionalNumber(o.num_trials),
       num_eval_episodes: optionalNumber(o.num_eval_episodes),
       corner_radius_val: optionalNumber(o.corner_radius_val),
@@ -1869,6 +1907,22 @@
       payload.gym_id = o.gym.id;
       payload.gym_name = o.gym.name || '';
       payload.gym_file_path = o.gym.file_path || '';
+    }
+
+    // A demo picked from the Demos tab REPLACES the course-default expert
+    // demos: do_job reads demo_tfrecords_paths for TRAIN and
+    // BC_TRAINING_ONLY. demo_job_ids still names the source job because
+    // the brain-replay courses build their corpus from it.
+    if (o.demo && o.demo.id && o.demo.tfrecords_path
+        && (jobType === 'TRAIN' || jobType === 'BC_TRAINING_ONLY')) {
+      payload.demo_id = o.demo.id;
+      payload.demo_label = o.demo.label || '';
+      payload.demo_tfrecords_paths = [o.demo.tfrecords_path];
+      payload.skip_default_demo = true;
+      if (o.demo.source_job_id) {
+        payload.demo_job_ids = [o.demo.source_job_id];
+        if (!payload.demo_job_id) payload.demo_job_id = o.demo.source_job_id;
+      }
     }
 
     // Both designs are stamped on every job_type when picked, not just
@@ -1917,6 +1971,9 @@
     loadJobListIntoSelect,
     selectedName,
     selectedGym,
+    selectedDemo,
+    demoLabel,
+    demoTime,
     clampTrialCount,
     evalCostEstimate,
     fillStageSelects,

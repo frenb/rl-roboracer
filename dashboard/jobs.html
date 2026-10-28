@@ -115,7 +115,7 @@
           </select>
 
           <label for="f-job-type" class="text-xs font-medium text-slate-600 dark:text-slate-300"
-                 title="TRAIN: SAC (donut / donut_no_hint reuse expert demos + optional BC; donut_camera is Conv-SAC from scratch, no demos). DEMO: collect expert TFRecords. EVAL: run a SavedModel. BC_TRAINING_ONLY: BC on existing demos (not donut_camera).">Job type</label>
+                 title="TRAIN: SAC (donut / donut_no_hint reuse expert demos + optional BC; donut_camera is Conv-SAC, and uses a camera DEMO for BC and AWAC when Expert demos is set). DEMO: collect expert TFRecords, including camera frames on donut_camera. EVAL: run a SavedModel. BC_TRAINING_ONLY: flat MLP BC on vector demos (refused for donut_camera).">Job type</label>
           <select id="f-job-type" name="job_type" class="w-full input-base appearance-none select-chevron pr-8">
             <option value="TRAIN" selected>TRAIN</option>
             <option value="DEMO">DEMO</option>
@@ -155,6 +155,12 @@
                  title="DEMO/BC_TRAINING_ONLY: BC training steps run on the collected/referenced demo data AFTER collection finishes. Left blank -&gt; do_job defaults to 20000.">Training steps</label>
           <input id="f-training-steps" name="training_steps" type="number" min="0" placeholder="20000"
                  class="w-full input-base">
+
+          <label id="f-demo-step-budget-label" for="f-demo-step-budget"
+                 class="hidden text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="DEMO only. Stop collecting at the first episode end after this many transitions (steps) per gym, so the total lands slightly above it. Num iterations still caps the episode count. Blank -&gt; no transition limit.">Demo transitions</label>
+          <input id="f-demo-step-budget" name="demo_step_budget" type="number" min="0"
+                 placeholder="no limit" class="hidden w-full input-base">
 
           <!-- EVAL-only block. Same controls as the Models tab's "Eval
                selected" dialog, so an EVAL queued from either place can
@@ -220,6 +226,17 @@
             </div>
             <p id="f-stage-hint" class="hidden m-0 text-[11px] text-slate-500 dark:text-slate-400"></p>
           </div>
+
+          <!-- Expert demos picker. Populated from /get_demos (the Demos
+               tab) on modal open. A pick replaces the course-default demo
+               set; see buildJobPayload in components.js. -->
+          <label id="f-demo-label" for="f-demo"
+                 class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="TRAIN / BC_TRAINING_ONLY. Expert-demo TFRecords from the Demos tab used for demo prefill + BC. Replaces the course-default demo set.">Expert demos</label>
+          <select id="f-demo" name="demo_id"
+                  class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="">Course default demos</option>
+          </select>
 
           <label for="f-demo-job-id" class="text-xs font-medium text-slate-600 dark:text-slate-300">Demo job ID</label>
           <input id="f-demo-job-id" name="demo_job_id" type="text" placeholder="(only for BC_TRAINING_ONLY)"
@@ -453,7 +470,7 @@
        (Ctrl+Shift+R on the parent doesn't always force iframe
        subresources to re-fetch). Bump the version string whenever you
        change components.js. -->
-  <script src="/components.js?v=20260920-job-dialogs"></script>
+  <script src="/components.js?v=20261018-demos2"></script>
   <script>
     (function () {
       const { TableView, formatters, showToast, confirmDialog } = window.RoboracerUI;
@@ -927,13 +944,16 @@
                 + 'Use TRAIN from scratch.');
         } else if (jt === 'TRAIN' && camera) {
           hint.textContent =
-            'TRAIN on ' + course + ' is SAC from scratch: a CNN on the 84×84 CSI ' +
+            'TRAIN on ' + course + ' is Conv-SAC: a CNN on the 84×84 CSI ' +
             'image plus the ' + (noRays ? '2-D vector (speed, sideslip only — the ' +
             '29 raycasts are ablated away)' : '31-D no-hint vector') + '. ' +
-            'No expert demos, BC pretrain, ' +
-            'or AWAC (those need dict TFRecords, Phase 7). Unity must publish ' +
+            'With Expert demos from a DEMO on this same course, BC pretrain, ' +
+            'prefill, the demo sample ratio, and AWAC stay at the experiment ' +
+            'design. Prefill is capped at 10000 steps. With no demo source ' +
+            'this TRAIN starts from scratch. A file from the other camera ' +
+            'course, or a flat donut file, fails at load. Unity must publish ' +
             'camera/front (Editor Play or a promoted gym). Do not load a 31-D / ' +
-            '32-D checkpoint. DEMO and BC_TRAINING_ONLY on this course are refused. ' +
+            '32-D checkpoint. BC_TRAINING_ONLY on this course is refused. ' +
             'Check Skip first eval to go straight to TRAIN — the two 10-episode ' +
             'startup evals take hours on a random Conv-SAC.' +
             (noRays ? ' To compare against donut_camera, match that run’s reward ' +
@@ -942,20 +962,31 @@
           hint.textContent =
             'TRAIN runs SAC on the selected course. donut is 32-D (includes ' +
             'angle-to-goal). donut_no_hint is 31-D for sim2real. Both reuse the ' +
-            'classic expert demo set for BC pretrain unless you override Demo job ID.';
+            'classic expert demo set for BC pretrain unless you pick Expert demos.';
         } else if (jt === 'EVAL' && camera) {
           hint.textContent =
             'EVAL a ' + course + ' SavedModel only. Any other observation spec — ' +
             'including the other camera course, whose vector is ' +
             (noRays ? '31-D' : '2-D') + ' — fails Compat / EvalSpecMismatchError.';
-        } else if ((jt === 'DEMO' || jt === 'BC_TRAINING_ONLY') && camera) {
+        } else if (jt === 'DEMO' && camera) {
           hint.textContent =
-            'DEMO and BC_TRAINING_ONLY are not supported on ' + course + ' yet ' +
-            '(Phase 7: dict TFRecords). Use TRAIN from scratch.';
+            'DEMO on ' + course + ' records the policy vector (' +
+            (noRays ? '2' : '31') + '-D) and the 84×84 CSI frame into the ' +
+            'TFRecord. The flat MLP step that usually follows a DEMO is ' +
+            'skipped. Use a gym that publishes camera/front. ' +
+            'BC_TRAINING_ONLY is still refused; BC runs later inside a ' +
+            'TRAIN job on this same course.';
+        } else if (jt === 'BC_TRAINING_ONLY' && camera) {
+          hint.textContent =
+            'BC_TRAINING_ONLY is refused on ' + course + '. That path trains ' +
+            'a flat MLP and cannot read the camera image. Record with DEMO, ' +
+            'then BC inside a TRAIN job on this course.';
         } else {
           hint.textContent = '';
         }
         showRow(jt === 'TRAIN', 'f-skip-first-eval-label', 'f-skip-first-eval-wrap');
+        showRow(jt === 'TRAIN' || jt === 'BC_TRAINING_ONLY', 'f-demo-label', 'f-demo');
+        showRow(jt === 'DEMO', 'f-demo-step-budget-label', 'f-demo-step-budget');
         // The trial / episode / sweep controls only mean anything to
         // do_job's EVAL branch, so they follow the job type the same
         // way Skip first eval follows TRAIN.
@@ -1096,6 +1127,8 @@
         loadGymsIntoDropdown().catch((err) => {
           console.warn('gyms hydrate failed:', err);
         });
+        RoboracerUI.loadJobListIntoSelect('demos', document.getElementById('f-demo'))
+          .catch((err) => console.warn('demos hydrate failed:', err));
       }
 
       // Rendered rather than written out in the markup so a course added to
@@ -1194,6 +1227,7 @@
           robot_type: fd.get('robot_type'),
           num_iterations: fd.get('num_iterations'),
           training_steps: fd.get('training_steps'),
+          demo_step_budget: jobType === 'DEMO' ? fd.get('demo_step_budget') : '',
           num_trials: isEval ? fd.get('num_trials') : '',
           num_eval_episodes: isEval ? fd.get('num_eval_episodes') : '',
           location: isEval ? fd.get('location') : '',
@@ -1203,6 +1237,7 @@
           curvature_difficulty_val: fd.get('curvature_difficulty_val'),
           course_type: fd.get('course_type'),
           gym: RoboracerUI.selectedGym(document.getElementById('f-gym')),
+          demo: RoboracerUI.selectedDemo(document.getElementById('f-demo')),
           reward_design: { id: String(rdSel.value || ''),
                            name: RoboracerUI.selectedName(rdSel) },
           experiment_design: { id: String(edSel.value || ''),

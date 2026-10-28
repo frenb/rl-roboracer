@@ -236,6 +236,10 @@ export const createServer = (config): express.Application => {
   // configurations (name + full file path). Selected per-job via the
   // New-Job and Eval dialogs' "Gym" dropdowns.
   var gymsChanged = true;
+  // The demos collection registers expert-demonstration TFRecords
+  // directories (see rl_agent/demos_registry.py). Selected per-job via
+  // the New-Job dialog's "Expert demos" dropdown.
+  var demosChanged = true;
 
   // ----------------------------------------------------------------
   // Per-collection version cursor.
@@ -262,7 +266,7 @@ export const createServer = (config): express.Application => {
   // ----------------------------------------------------------------
   const collVersions: Record<string, number> = {
     jobs: 1, models: 1, leaderboard_scores: 1, env_specs: 1,
-    reward_designs: 1, experiment_designs: 1, gyms: 1,
+    reward_designs: 1, experiment_designs: 1, gyms: 1, demos: 1,
   };
   const bumpVersion = (name: string): number => {
     collVersions[name] = (collVersions[name] || 0) + 1;
@@ -312,6 +316,15 @@ export const createServer = (config): express.Application => {
     superviseChangeStream('reward_designs', dbo.collection("reward_designs"), () => { rewardDesignsChanged = true; return bumpVersion('reward_designs'); });
     superviseChangeStream('experiment_designs', dbo.collection("experiment_designs"), () => { experimentDesignsChanged = true; return bumpVersion('experiment_designs'); });
     superviseChangeStream('gyms', dbo.collection("gyms"), () => { gymsChanged = true; return bumpVersion('gyms'); });
+    superviseChangeStream('demos', dbo.collection("demos"), () => { demosChanged = true; return bumpVersion('demos'); });
+
+    // One demos row per DEMO job: the trainer and the backfill script both
+    // upsert on source_job_id. Hand-registered rows carry no source job.
+    dbo.collection("demos").createIndex(
+      { source_job_id: 1 },
+      { name: "demos_source_job", unique: true,
+        partialFilterExpression: { source_job_id: { $type: "string" } } }
+    ).catch((e) => console.warn('demos index create failed:', e && e.message));
 
     // One-shot, idempotent backfill of the per-job `course_type` field
     // (added alongside the New-job form's Course selector). Every job that
@@ -2178,6 +2191,118 @@ export const createServer = (config): express.Application => {
           return;
         }
         console.log('gym archived', body._id);
+        res.json(result);
+      });
+  });
+
+  // ---------------------------------------------------------------- *
+  // Demos CRUD
+  //
+  // An expert-demonstration TFRecords directory (schema in
+  // rl_agent/demos_registry.py). The trainer registers one per DEMO job
+  // when collection finishes; /add_demo registers any other directory.
+  //
+  // /get_demos     : list all demos
+  // /add_demo      : register a directory by hand
+  // /update_demo   : edit num_demos / course / description / path
+  // /archive_demo  : soft-delete (a hard delete would let the backfill
+  //                  script re-register the job)
+  // ---------------------------------------------------------------- *
+
+  app.get('/demos', (req, res) => {
+    res.sendFile(path.join(__dirname, '/../demos.html'));
+  });
+
+  app.get('/get_demos', (req, res) => {
+    if (needsUpdate(req, res, demosChanged, 'demos')) {
+      demosChanged = false;
+      dbo.collection("demos").find({}).toArray(function(err, result) {
+        if (err) { console.error('get_demos query failed:', err); demosChanged = true; res.status(500).json({ error: String(err && (err.message || err)) }); return; }
+        console.log(`${result.length} demos retrieved`);
+        res.json(result);
+      });
+      return;
+    }
+    console.log('No demos retrieved');
+    res.status(200).send('NO_CHANGES');
+  });
+
+  // Returns {fields} or {error}. `partial` allows omitted keys (update);
+  // a present key is always validated.
+  function demoFields(body: any, partial: boolean): { fields?: any, error?: string } {
+    const f: any = {};
+    if (body.num_demos !== undefined || !partial) {
+      const n = Number(body.num_demos);
+      if (body.num_demos === '' || body.num_demos == null || !isFinite(n) || Math.floor(n) !== n || n < 0) {
+        return { error: "num_demos must be a non-negative integer" };
+      }
+      f.num_demos = n;
+    }
+    if (body.tfrecords_path !== undefined || !partial) {
+      const p = stripQuotes(body.tfrecords_path);
+      if (!p) return { error: "tfrecords_path is required" };
+      f.tfrecords_path = p;
+    }
+    if (body.course      !== undefined) f.course      = String(body.course).trim();
+    if (body.description !== undefined) f.description = String(body.description);
+    return { fields: f };
+  }
+
+  app.post('/add_demo', (req, res) => {
+    const { fields, error } = demoFields(req.body || {}, false);
+    if (error) { res.status(400).json({ error }); return; }
+    const now = new Date();
+    const doc = {
+      course: '', description: '', ...fields,
+      archived: false, created_at: now, updated_at: now,
+    };
+    dbo.collection("demos").insertOne(doc, function(err, result) {
+      if (err) {
+        console.error('add_demo failed:', err);
+        res.status(500).json({ error: String(err.message || err) });
+        return;
+      }
+      res.json(result);
+    });
+  });
+
+  app.post('/update_demo', (req, res) => {
+    const body = req.body || {};
+    if (!body._id) { res.status(400).json({ error: "_id is required" }); return; }
+    const { fields, error } = demoFields(body, true);
+    if (error) { res.status(400).json({ error }); return; }
+    let idFilter;
+    try { idFilter = { "_id": ObjectID(body._id) }; }
+    catch (e) { idFilter = { "_id": String(body._id) }; }
+    dbo.collection("demos").updateOne(
+      idFilter, { "$set": { ...fields, updated_at: new Date() } }, { upsert: false },
+      function(err, result) {
+        if (err) {
+          console.error('update_demo failed:', err);
+          res.status(500).json({ error: String(err.message || err) });
+          return;
+        }
+        res.json(result);
+      });
+  });
+
+  app.post('/archive_demo', (req, res) => {
+    const body = req.body || {};
+    if (!body._id) { res.status(400).json({ error: "_id is required" }); return; }
+    let idFilter;
+    try { idFilter = { "_id": ObjectID(body._id) }; }
+    catch (e) { idFilter = { "_id": String(body._id) }; }
+    dbo.collection("demos").updateOne(
+      idFilter,
+      { "$set": { archived: body.archived === undefined ? true : !!body.archived,
+                  updated_at: new Date() } },
+      { upsert: false },
+      function(err, result) {
+        if (err) {
+          console.error('archive_demo failed:', err);
+          res.status(500).json({ error: String(err.message || err) });
+          return;
+        }
         res.json(result);
       });
   });

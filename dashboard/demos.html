@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en" class="dark h-full">
+<head>
+  <meta charset="utf-8">
+  <title>Demos · rl-roboracer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/tailwind.init.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator_simple.min.css">
+  <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="h-full m-0 font-sans antialiased text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-[#0b1120]">
+
+  <div class="flex flex-col h-screen w-full">
+
+    <!-- Toolbar -->
+    <div class="flex flex-wrap items-center gap-3 px-5 py-4 row-gap-2
+                bg-white dark:bg-slate-900
+                border-b border-slate-200 dark:border-slate-700
+                shadow-card relative z-[3] flex-shrink-0">
+      <h1 class="text-2xl font-semibold tracking-tight m-0 mr-3">Demos</h1>
+      <span data-role="demo-count"
+            class="px-2 py-0.5 rounded-full text-xs font-medium
+                   bg-slate-100 dark:bg-slate-800
+                   text-slate-600 dark:text-slate-300"></span>
+
+      <span data-role="freshness"
+            class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400"
+            aria-live="polite"
+            title="Time since the last successful poll of /get_demos">
+        <span data-role="freshness-dot"
+              class="inline-block w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+        <span data-role="freshness-text">connecting…</span>
+      </span>
+
+      <div class="flex flex-wrap gap-2 ml-auto items-center">
+        <label class="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300 cursor-pointer">
+          <input data-role="show-archived" type="checkbox" class="accent-sky-600">
+          Show archived
+        </label>
+        <button data-action="create" class="btn-base btn-primary"
+                title="Register a TFRecords directory that didn't come from a DEMO job. DEMO jobs register themselves when collection finishes.">+ Register demos</button>
+      </div>
+    </div>
+
+    <!-- Body -->
+    <div class="flex-1 overflow-hidden flex flex-col p-4 gap-4 bg-slate-50 dark:bg-[#0b1120]">
+      <div data-role="table"></div>
+    </div>
+
+  </div>
+
+  <!-- Add / edit modal -->
+  <div data-role="edit-modal" aria-hidden="true"
+       class="fixed inset-0 z-[100] modal-blur bg-slate-900/40 dark:bg-slate-950/65
+              flex items-center justify-center p-4
+              opacity-0 transition-opacity duration-200 pointer-events-none">
+    <div role="dialog" aria-modal="true" aria-labelledby="edit-modal-title"
+         class="w-full max-w-[560px] max-h-[calc(100vh-2rem)]
+                bg-white dark:bg-slate-900
+                border border-slate-200 dark:border-slate-700
+                rounded-2xl shadow-card-lg
+                flex flex-col
+                opacity-0 -translate-y-3 scale-[0.98]
+                transition duration-200">
+      <div class="px-6 py-5 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+        <h2 id="edit-modal-title" class="m-0 text-base font-semibold tracking-tight">Edit demos</h2>
+        <button data-action="close-modal" aria-label="Close"
+                class="px-2 py-1 text-sm rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400">×</button>
+      </div>
+      <div class="px-6 py-6 overflow-y-auto">
+        <form id="demo-form" onsubmit="return false;"
+              class="grid grid-cols-[minmax(120px,max-content)_1fr] gap-4 items-start">
+
+          <label for="f-num-demos" class="text-xs font-medium text-slate-600 dark:text-slate-300 pt-2">Number of demos</label>
+          <div class="flex flex-col gap-1">
+            <input id="f-num-demos" type="number" min="0" step="1" class="w-full input-base">
+            <p data-role="steps-hint" class="text-[11px] text-slate-400 dark:text-slate-500 m-0"></p>
+          </div>
+
+          <label for="f-course" class="text-xs font-medium text-slate-600 dark:text-slate-300 pt-2">Course</label>
+          <div class="flex flex-col gap-1">
+            <input id="f-course" type="text" list="course-options" placeholder="e.g. donut"
+                   class="w-full input-base">
+            <datalist id="course-options"></datalist>
+            <p class="text-[11px] text-slate-400 dark:text-slate-500 m-0">
+              The course the demos were recorded on.
+            </p>
+          </div>
+
+          <label for="f-description" class="text-xs font-medium text-slate-600 dark:text-slate-300 pt-2">Description</label>
+          <textarea id="f-description" rows="3" class="w-full input-base"></textarea>
+
+          <label for="f-path" class="text-xs font-medium text-slate-600 dark:text-slate-300 pt-2">TFRecords path</label>
+          <div class="flex flex-col gap-1">
+            <input id="f-path" type="text" placeholder="/tfrecords/job_<id>"
+                   class="w-full input-base font-mono text-xs">
+            <p class="text-[11px] text-slate-400 dark:text-slate-500 m-0">
+              Directory as the trainer sees it inside sim-controller. Every file in it is loaded.
+            </p>
+          </div>
+
+        </form>
+      </div>
+      <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
+        <button data-action="close-modal" class="btn-base btn-secondary">Cancel</button>
+        <button data-action="submit" class="btn-base btn-primary">Save changes</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/components.js?v=20261018-demos2"></script>
+  <script>
+    (function () {
+      const { TableView, formatters, showToast } = window.RoboracerUI;
+
+      function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+        }[c]));
+      }
+      const cell = (v) => `<span class="text-xs text-slate-600 dark:text-slate-300">${esc(v)}</span>`;
+
+      /* ---------- Table setup --------------------------------- */
+      const tableHost = document.querySelector('[data-role="table"]');
+      const table = new TableView(tableHost, {
+        selectable: false,
+        rowKey: (row) => row._id,
+        pageSize: 50,
+        emptyMessage: 'No demos yet. A DEMO job adds its demos here when collection finishes.',
+        persistColumnWidths: false,
+        columns: [
+          { key: 'num_demos', label: 'Number of demos', sortable: true, filter: false, width: 130,
+            render: (v) => cell(v == null ? '—' : Number(v).toLocaleString()) },
+          { key: 'course', label: 'Course', sortable: true, filter: true, width: 140,
+            render: (v) => cell(v) },
+          { key: 'description', label: 'Description', sortable: false, filter: true,
+            render: (v) => `<span class="text-xs text-slate-600 dark:text-slate-300 whitespace-normal">${esc(v)}</span>` },
+          { key: 'tfrecords_path', label: 'TFRecords path', sortable: true, filter: true,
+            render: (v) => `<span class="text-xs font-mono text-slate-600 dark:text-slate-300 break-all" title="${esc(v)}">${esc(v)}</span>` },
+          { key: 'num_steps', label: 'Steps', sortable: true, filter: false, width: 100,
+            render: (v) => cell(v == null ? '—' : Number(v).toLocaleString()) },
+          { key: 'gym_name', label: 'Gym', sortable: true, filter: true, width: 150,
+            render: (v) => cell(v || '—') },
+          { key: 'source_job_id', label: 'Source job', sortable: false, filter: true, width: 120,
+            render: (v) => v
+              ? `<button class="text-xs font-mono text-sky-600 dark:text-sky-400 hover:underline" data-open-job="${esc(v)}" title="${esc(v)}">${esc(String(v).slice(-8))}</button>`
+              : cell('manual') },
+          { key: 'collected_at', label: 'Collected', sortable: true, filter: false, width: 170,
+            render: (v) => {
+              const d = v ? new Date(v) : null;
+              if (!d || isNaN(d.getTime())) return cell('—');
+              return `<span class="text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap"
+                        title="Collection finished ${esc(d.toISOString())} (newest TFRecord file)">${esc(d.toLocaleString(undefined, {
+                year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }))}</span>`;
+            } },
+          { key: '_id', label: 'Actions', sortable: false, filter: false, width: 170,
+            render: (v, row) => row.archived
+              ? `<div class="flex gap-1.5 items-center">
+                   <span class="text-xs italic text-slate-400 dark:text-slate-500">archived</span>
+                   <button class="btn-base btn-secondary text-xs" data-restore-id="${esc(v)}">Restore</button>
+                 </div>`
+              : `<div class="flex gap-1.5 justify-start">
+                   <button class="btn-base btn-secondary text-xs" data-edit-id="${esc(v)}">Edit</button>
+                   <button class="btn-base btn-secondary text-xs" data-archive-id="${esc(v)}">Archive</button>
+                 </div>` },
+        ],
+      });
+      table.setLoading(true);
+
+      const demosById = new Map();
+      const showArchivedEl = document.querySelector('[data-role="show-archived"]');
+      const countEl = document.querySelector('[data-role="demo-count"]');
+
+      /* ---------- Freshness pill ------------------------------ */
+      const freshDot  = document.querySelector('[data-role="freshness-dot"]');
+      const freshText = document.querySelector('[data-role="freshness-text"]');
+      function setFresh(ok) {
+        freshDot.className = 'inline-block w-1.5 h-1.5 rounded-full ' + (ok ? 'bg-emerald-500' : 'bg-red-500');
+        freshText.textContent = ok ? 'updated ' + new Date().toLocaleTimeString() : 'connection error';
+      }
+
+      /* ---------- WebSocket + Polling ------------------------- */
+      const POLL_INTERVAL_WITH_WS = 30000;
+      const POLL_INTERVAL_WITHOUT_WS = 8000;
+      let pollHandle = null;
+      let dataWs = null;
+      let demosCache = [];
+
+      async function pollOnce() {
+        try {
+          const res = await fetch('/get_demos?force=true');
+          if (!res.ok) { setFresh(false); return; }
+          const text = await res.text();
+          if (text && text !== 'NO_CHANGES') {
+            demosCache = JSON.parse(text) || [];
+            renderTable();
+          }
+          setFresh(true);
+        } catch (e) {
+          console.warn('demos poll failed:', e);
+          setFresh(false);
+        }
+      }
+
+      function renderTable() {
+        demosById.clear();
+        for (const d of demosCache) demosById.set(String(d._id), d);
+        const rows = demosCache
+          .filter((d) => showArchivedEl.checked || !d.archived)
+          .sort((a, b) => RoboracerUI.demoTime(b).localeCompare(RoboracerUI.demoTime(a)));
+        table.setData(rows);
+        const active = demosCache.filter((d) => !d.archived).length;
+        countEl.textContent = active === 0 ? '' : `${active} demo set${active === 1 ? '' : 's'}`;
+      }
+      showArchivedEl.addEventListener('change', renderTable);
+
+      function handleWsChange(collection, change) {
+        if (collection !== 'demos') return;
+        const { operationType, documentKey, fullDocument } = change;
+        const id = documentKey?._id;
+        if (!id) return;
+        setFresh(true);
+        if ((operationType === 'insert' || operationType === 'update' || operationType === 'replace') && fullDocument) {
+          const idx = demosCache.findIndex((d) => String(d._id) === String(id));
+          if (idx >= 0) demosCache[idx] = fullDocument;
+          else demosCache.push(fullDocument);
+          renderTable();
+        } else if (operationType === 'delete') {
+          demosCache = demosCache.filter((d) => String(d._id) !== String(id));
+          renderTable();
+        }
+      }
+
+      function updatePollInterval() {
+        if (pollHandle) clearInterval(pollHandle);
+        pollHandle = setInterval(pollOnce,
+          dataWs?.isConnected() ? POLL_INTERVAL_WITH_WS : POLL_INTERVAL_WITHOUT_WS);
+      }
+
+      dataWs = new RoboracerUI.DataWebSocket({
+        collections: ['demos'],
+        onConnect: updatePollInterval,
+        onDisconnect: updatePollInterval,
+        onChange: handleWsChange,
+      });
+
+      pollOnce();
+      dataWs.connect();
+      updatePollInterval();
+
+      window.addEventListener('beforeunload', () => {
+        if (pollHandle) clearInterval(pollHandle);
+        if (dataWs) dataWs.close();
+      });
+
+      /* ---------- Row actions (event delegation) -------------- */
+      async function setArchived(id, archived) {
+        try {
+          const r = await fetch('/archive_demo', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ _id: id, archived }),
+          });
+          if (!r.ok) { showToast({ type: 'error', message: `Failed (HTTP ${r.status})` }); return; }
+          showToast({ type: 'success', message: archived ? 'Demos archived.' : 'Demos restored.' });
+          pollOnce();
+        } catch (e) {
+          showToast({ type: 'error', message: 'Request failed: ' + e });
+        }
+      }
+
+      tableHost.addEventListener('click', (ev) => {
+        const edit = ev.target.closest('[data-edit-id]');
+        if (edit) { openModal(edit.dataset.editId); return; }
+        const arch = ev.target.closest('[data-archive-id]');
+        if (arch) {
+          if (confirm('Archive these demos? They will no longer appear in the New job dropdown. Files on disk are kept.')) {
+            setArchived(arch.dataset.archiveId, true);
+          }
+          return;
+        }
+        const restore = ev.target.closest('[data-restore-id]');
+        if (restore) { setArchived(restore.dataset.restoreId, false); return; }
+        const job = ev.target.closest('[data-open-job]');
+        if (job && window.parent !== window) {
+          window.parent.postMessage({ type: 'roboracer:open-job', jobId: job.dataset.openJob }, '*');
+        }
+      });
+
+      /* ---------- Add / edit modal ---------------------------- */
+      const modal      = document.querySelector('[data-role="edit-modal"]');
+      const dialogEl   = modal.querySelector('[role="dialog"]');
+      const formEl     = document.getElementById('demo-form');
+      const submitBtn  = modal.querySelector('[data-action="submit"]');
+      const titleEl    = document.getElementById('edit-modal-title');
+      const numEl      = document.getElementById('f-num-demos');
+      const courseEl   = document.getElementById('f-course');
+      const descEl     = document.getElementById('f-description');
+      const pathEl     = document.getElementById('f-path');
+      const stepsHint  = modal.querySelector('[data-role="steps-hint"]');
+
+      document.getElementById('course-options').innerHTML = RoboracerUI.jobOptions.courses
+        .filter((c) => c.value !== RoboracerUI.jobOptions.courseDefault)
+        .map((c) => `<option value="${esc(c.value)}">${esc(c.label)}</option>`).join('');
+
+      // null = register mode; a string _id = edit mode.
+      let currentEditId = null;
+
+      function openModal(id) {
+        formEl.reset();
+        currentEditId = id ? String(id) : null;
+        if (currentEditId) {
+          const d = demosById.get(currentEditId);
+          if (!d) { showToast({ type: 'error', message: 'Demos not found; refresh and retry.' }); return; }
+          numEl.value = d.num_demos == null ? '' : d.num_demos;
+          courseEl.value = d.course || '';
+          descEl.value = d.description || '';
+          pathEl.value = d.tfrecords_path || '';
+          stepsHint.textContent = d.num_steps == null ? ''
+            : `${Number(d.num_steps).toLocaleString()} steps counted on disk when registered.`;
+          titleEl.textContent = 'Edit demos';
+          submitBtn.textContent = 'Save changes';
+        } else {
+          stepsHint.textContent = 'Episodes in the directory.';
+          titleEl.textContent = 'Register demos';
+          submitBtn.textContent = 'Register';
+        }
+        modal.classList.remove('opacity-0', 'pointer-events-none');
+        modal.classList.add('opacity-100', 'pointer-events-auto');
+        dialogEl.classList.remove('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        dialogEl.classList.add('opacity-100', 'translate-y-0', 'scale-100');
+        modal.setAttribute('aria-hidden', 'false');
+        numEl.focus();
+      }
+      function closeModal() {
+        modal.classList.add('opacity-0', 'pointer-events-none');
+        modal.classList.remove('opacity-100', 'pointer-events-auto');
+        dialogEl.classList.add('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        dialogEl.classList.remove('opacity-100', 'translate-y-0', 'scale-100');
+        modal.setAttribute('aria-hidden', 'true');
+        currentEditId = null;
+      }
+
+      document.querySelector('[data-action="create"]').addEventListener('click', () => openModal(null));
+      modal.addEventListener('click', (ev) => { if (ev.target === modal) closeModal(); });
+      modal.querySelectorAll('[data-action="close-modal"]').forEach((b) =>
+        b.addEventListener('click', closeModal));
+      document.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape' && modal.classList.contains('opacity-100')) closeModal();
+      });
+
+      submitBtn.addEventListener('click', async () => {
+        const n = numEl.value.trim();
+        const tfrecords_path = pathEl.value.trim();
+        if (n === '' || !Number.isInteger(Number(n)) || Number(n) < 0) {
+          showToast({ type: 'error', message: 'Number of demos must be a whole number ≥ 0.' });
+          return;
+        }
+        if (!tfrecords_path) { showToast({ type: 'error', message: 'TFRecords path is required.' }); return; }
+
+        const editing = currentEditId !== null;
+        const payload = {
+          num_demos: Number(n),
+          course: courseEl.value.trim(),
+          description: descEl.value.trim(),
+          tfrecords_path,
+        };
+        if (editing) payload._id = currentEditId;
+
+        submitBtn.disabled = true;
+        const origText = submitBtn.textContent;
+        submitBtn.textContent = editing ? 'Saving…' : 'Registering…';
+        try {
+          const res = await fetch(editing ? '/update_demo' : '/add_demo', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            showToast({ type: 'error', message: 'Failed: ' + (body.error || 'HTTP ' + res.status) });
+            return;
+          }
+          showToast({ type: 'success', message: editing ? 'Demos updated.' : 'Demos registered.' });
+          closeModal();
+          pollOnce();
+        } catch (e) {
+          showToast({ type: 'error', message: 'Request failed: ' + e });
+        } finally {
+          submitBtn.disabled = false;
+          submitBtn.textContent = origText;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
