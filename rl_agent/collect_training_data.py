@@ -576,7 +576,7 @@ def train_agent(root_dir, training_steps=10000):
 def bc_pretrain_actor_net(
         actor_net, time_step_spec, action_spec, strategy,
         trajectory_dataset, training_steps=1000, batch_size=256,
-        learning_rate=3e-5):
+        learning_rate=3e-5, critic_train_fn=None, critic_steps=0):
     """BC-supervise ``actor_net``'s weights on expert demonstrations.
 
     Pure SAC's actor loss is ``-E_s[Q(s, pi(s)) + alpha * H(pi)]`` where
@@ -627,41 +627,57 @@ def bc_pretrain_actor_net(
       learning_rate: Adam LR for the BC optimizer. The BC optimizer is
         separate from SAC's actor optimizer - we only share the
         underlying network weights, not optimizer slots.
+      critic_train_fn: optional zero-arg callable running one critic-only
+        update and returning its loss. Called in the same loop as the BC
+        steps (one critic step per BC step), so the critic tracks the actor
+        as it is cloned.
+      critic_steps: number of critic_train_fn calls. If it differs from
+        training_steps, the shorter of the two simply stops early.
     """
+    if critic_train_fn is None:
+        critic_steps = 0
+    total_steps = max(training_steps, critic_steps)
     print(f"BC pretraining actor_net for {training_steps} steps "
-          f"(batch_size={batch_size}, lr={learning_rate})...", flush=True)
+          f"(batch_size={batch_size}, lr={learning_rate}), critic warm-up "
+          f"{critic_steps} steps in the same loop...", flush=True)
 
-    with strategy.scope():
-        bc_optimizer = tf.compat.v1.train.AdamOptimizer(
-            learning_rate=learning_rate)
-        bc_agent = behavioral_cloning_agent.BehavioralCloningAgent(
-            time_step_spec=time_step_spec,
-            action_spec=action_spec,
-            cloning_network=actor_net,
-            optimizer=bc_optimizer,
-            num_outer_dims=1)
-        bc_agent.initialize()
+    bc_loss = critic_loss = None
+    if training_steps > 0:
+        with strategy.scope():
+            bc_optimizer = tf.compat.v1.train.AdamOptimizer(
+                learning_rate=learning_rate)
+            bc_agent = behavioral_cloning_agent.BehavioralCloningAgent(
+                time_step_spec=time_step_spec,
+                action_spec=action_spec,
+                cloning_network=actor_net,
+                optimizer=bc_optimizer,
+                num_outer_dims=1)
+            bc_agent.initialize()
 
-    # shuffle().batch().repeat(): each BC step sees a fresh batch
-    # sampled (with replacement across epochs) from the expert demos.
-    # buffer_size=10000 is large enough for good shuffling on the 50k
-    # expert items we typically load while keeping memory bounded.
-    bc_dataset = (trajectory_dataset
-                  .shuffle(buffer_size=10000)
-                  .batch(batch_size)
-                  .prefetch(10)
-                  .repeat())
-    bc_iter = iter(bc_dataset)
+        # shuffle().batch().repeat(): each BC step sees a fresh batch
+        # sampled (with replacement across epochs) from the expert demos.
+        # buffer_size=10000 is large enough for good shuffling on the 50k
+        # expert items we typically load while keeping memory bounded.
+        bc_dataset = (trajectory_dataset
+                      .shuffle(buffer_size=10000)
+                      .batch(batch_size)
+                      .prefetch(10)
+                      .repeat())
+        bc_iter = iter(bc_dataset)
 
-    for bc_step in range(training_steps):
-        batch = next(bc_iter)
-        loss_info = bc_agent.train(batch)
-        if bc_step % 100 == 0:
-            print(f"  BC step {bc_step}/{training_steps}: "
-                  f"loss={loss_info.loss.numpy():.4f}", flush=True)
+    for step in range(total_steps):
+        if step < training_steps:
+            bc_loss = bc_agent.train(next(bc_iter)).loss.numpy()
+        if step < critic_steps:
+            critic_loss = critic_train_fn()
+        if step % 100 == 0:
+            print(f"  warm-up step {step}/{total_steps}: "
+                  f"bc_loss={bc_loss if bc_loss is None else round(float(bc_loss), 4)} "
+                  f"critic_loss={critic_loss if critic_loss is None else round(critic_loss, 4)}",
+                  flush=True)
 
-    print(f"BC pretraining done (final loss={loss_info.loss.numpy():.4f}).",
-          flush=True)
+    print(f"BC pretraining done (final bc_loss={bc_loss}, "
+          f"critic_loss={critic_loss}).", flush=True)
 
 
 def train_agent_sampling(

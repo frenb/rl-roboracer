@@ -1028,6 +1028,43 @@ def _measure_demo_batch_fraction(demo_rb, online_rb, ratio, batch_size,
     return realized, demo_rows, total_rows
 
 
+def _make_critic_warmup_fn(agent, strategy, dataset):
+    """Return a callable that runs one critic-only SAC update and returns its loss.
+
+    Same critic update as ``SacAgent._train`` (its critic_loss, critic
+    optimizer and target-network update), with the actor and alpha left
+    untouched, so the critic learns Q for whatever the actor currently does.
+    ``dataset`` must yield (Trajectory, info) batches of 2-step sequences,
+    like the Learner's experience dataset.
+    """
+    it = iter(dataset)
+    critic_vars = (agent._critic_network_1.trainable_variables
+                   + agent._critic_network_2.trainable_variables)
+
+    @tf.function
+    def _step(experience):
+        time_steps, policy_steps, next_time_steps = agent._as_transition(experience)
+        with tf.GradientTape(watch_accessed_variables=False) as tape:
+            tape.watch(critic_vars)
+            loss = agent.critic_loss(
+                time_steps, policy_steps.action, next_time_steps,
+                td_errors_loss_fn=agent._td_errors_loss_fn,
+                gamma=agent._gamma,
+                reward_scale_factor=agent._reward_scale_factor,
+                training=True)
+        grads = tape.gradient(loss, critic_vars)
+        agent._apply_gradients(grads, critic_vars, agent._critic_optimizer)
+        agent._update_target()
+        return loss
+
+    def run():
+        experience, _ = next(it)
+        per_replica = strategy.run(_step, args=(experience,))
+        return float(strategy.reduce(tf.distribute.ReduceOp.MEAN, per_replica, axis=None))
+
+    return run
+
+
 def _append_eval_curve(job_id, step, avg_return, avg_ep_len):
     """Best-effort append of one in-training eval point to a per-job CSV.
 
@@ -1283,10 +1320,17 @@ def main(
     # epochs - typically not enough to fully BC-fit a 512x512 actor.
     # Set to 0 to skip and run pure SAC.
     bc_pretrain_steps_val=5000,
+    # Critic-only SAC updates on the demo transitions, run in the same loop
+    # as the BC pretrain (see _make_critic_warmup_fn). Without it SAC starts
+    # with a BC-fitted actor and a random critic whose Q-gradients pull the
+    # actor off the clone before the critic has learned anything. 0 = off.
+    critic_warmup_steps_val=0,
     batch_size_val=256,
     critic_learning_rate_val=3e-5,
     actor_learning_rate_val=3e-5,
     alpha_learning_rate_val=3e-5,
+    # Starting entropy coefficient; tf-agents' own default is 1.0.
+    initial_alpha_val=1.0,
     target_update_tau_val=0.005,
     target_update_period_val=1,
     gamma_val=0.99,
@@ -2164,6 +2208,7 @@ def main(
                 learning_rate=critic_learning_rate),
             alpha_optimizer=tf.compat.v1.train.AdamOptimizer(
                 learning_rate=alpha_learning_rate),
+            initial_log_alpha=math.log(float(initial_alpha_val)),
             target_update_tau=target_update_tau,
             target_update_period=target_update_period,
             td_errors_loss_fn=tf.math.squared_difference,
@@ -2419,16 +2464,31 @@ def main(
     # pretraining on top would overwrite that with another round of
     # imitation, wasting the saved policy progress.
     _phase("bc_pretrain")
-    if (bc_pretrain_steps_val > 0 and not is_resume_val
+    _bc_steps = (bc_pretrain_steps_val
+                 if trajectory_dataset is not None else 0)
+    _critic_warmup_steps = int(critic_warmup_steps_val or 0)
+    _critic_warmup_fn = None
+    if (_critic_warmup_steps > 0 and not is_resume_val
             and trajectory_dataset is not None):
+        # Needs demos in Reverb: sampling an empty table blocks forever.
+        # Two-table mode: the online table is still empty here (initial
+        # collect hasn't run), so warm up on the protected demo table alone.
+        # Single-table mode prefilled the demos into the online table.
+        _warmup_ds = (demo_replay.as_dataset(
+                          sample_batch_size=batch_size, num_steps=2).prefetch(5)
+                      if demo_replay is not None else dataset)
+        _critic_warmup_fn = _make_critic_warmup_fn(tf_agent, strategy, _warmup_ds)
+    if (_bc_steps > 0 or _critic_warmup_fn is not None) and not is_resume_val:
         collect_training_data.bc_pretrain_actor_net(
             actor_net=actor_net,
             time_step_spec=time_step_spec,
             action_spec=action_spec,
             strategy=strategy,
             trajectory_dataset=trajectory_dataset,
-            training_steps=bc_pretrain_steps_val,
-            batch_size=batch_size)
+            training_steps=_bc_steps,
+            batch_size=batch_size,
+            critic_train_fn=_critic_warmup_fn,
+            critic_steps=_critic_warmup_steps if _critic_warmup_fn else 0)
     elif is_resume_val:
         # NOTE: we deliberately don't print int(train_step.numpy()) here:
         # the Learner that restores train_step from the checkpoint isn't
@@ -3274,6 +3334,9 @@ def main(
                               data=_eval_mean_metric, step=step)
             tf.summary.scalar('eval/goals_per_episode_top3_this_eval',
                               data=_eval_topk_metric, step=step)
+            tf.summary.scalar('eval/max_goals_per_episode_this_eval',
+                              data=max(_eval_ep_goals) if _eval_ep_goals else 0.0,
+                              step=step)
             print(f"EVAL goals/ep (this eval only): "
                   f"top{_EVAL_TOPK}-mean={_eval_topk_metric:.2f} "
                   f"(top={[round(g, 1) for g in _eval_topk_goals]}), "
