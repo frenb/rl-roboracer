@@ -20,6 +20,12 @@ Why a daemon thread per env (rather than `asyncio.run`):
     dies with the process, no manual cleanup needed.
 """
 
+# `kill -USR1 <pid>` writes every thread's Python stack to stderr
+# (the trainer log). The container has no ptrace, so py-spy can't attach.
+import faulthandler
+import signal
+faulthandler.register(signal.SIGUSR1, all_threads=True)
+
 # Install uvloop as the asyncio event-loop policy BEFORE the first
 # `asyncio.new_event_loop()` call below in `_start_loop_thread`.
 # Mirrors the install block at the top of robotaxi.py - we need it

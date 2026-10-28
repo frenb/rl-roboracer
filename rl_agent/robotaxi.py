@@ -29,6 +29,12 @@ try:
 except ImportError:
     pass
 
+# `kill -USR1 <pid>` writes every thread's Python stack to stderr
+# (the trainer log). The container has no ptrace, so py-spy can't attach.
+import faulthandler
+import signal as _faulthandler_signal
+faulthandler.register(_faulthandler_signal.SIGUSR1, all_threads=True)
+
 # Verify uvloop actually took over the asyncio event-loop policy.
 # Inspects the policy class rather than calling get_event_loop()
 # because modern uvloop's get_event_loop() raises RuntimeError when
@@ -734,7 +740,10 @@ def build_train_env(num_envs, course_type='donut'):
     if num_envs <= 1:
         return _register_train_env(
             make_env('ros-server-0:50051', course_type=course_type))
+    return _make_parallel_train_env(num_envs, course_type)
 
+
+def _make_parallel_train_env(num_envs, course_type):
     from tf_agents.environments import parallel_py_environment
     # Quiesce the rollout-viz background sampler around the multiprocessing
     # spawn below. A concurrent TF/GPU inference in that thread races the
@@ -757,6 +766,83 @@ def build_train_env(num_envs, course_type='donut'):
                  for i in range(num_envs)]))
     finally:
         resume_viz()
+
+
+FIRST_RESET_TIMEOUT_S = 120
+FIRST_RESET_ATTEMPTS = 3
+
+
+def _reset_within(env, timeout_s):
+    """env.reset() on a helper thread. False if it hasn't returned in time."""
+    outcome = {}
+
+    def _run():
+        try:
+            env.reset()
+        except BaseException as e:  # noqa: BLE001 - reported to the caller
+            outcome["error"] = e
+
+    t = threading.Thread(target=_run, name="first-reset", daemon=True)
+    t.start()
+    t.join(timeout_s)
+    if t.is_alive():
+        return False
+    if "error" in outcome:
+        raise outcome["error"]
+    return True
+
+
+def _kill_hung_parallel_env(env):
+    """Dump stacks, then terminate the workers of a hung ParallelPyEnvironment.
+
+    close() can't be used: it messages and joins workers whose main
+    thread is stuck in the reset.
+    """
+    global _ACTIVE_TRAIN_ENVS
+    faulthandler.dump_traceback(all_threads=True)
+    procs = [pe._process for pe in getattr(env, "_envs", [])]
+    for p in procs:
+        if p.is_alive():
+            os.kill(p.pid, _faulthandler_signal.SIGUSR1)
+    time.sleep(2)
+    for p in procs:
+        if p.is_alive():
+            p.terminate()
+            p.join(5)
+        if p.is_alive():
+            p.kill()
+            p.join(5)
+    _ACTIVE_TRAIN_ENVS = [e for e in _ACTIVE_TRAIN_ENVS if e is not env]
+
+
+def ensure_first_reset(env, rebuild, timeout_s=FIRST_RESET_TIMEOUT_S,
+                       attempts=FIRST_RESET_ATTEMPTS):
+    """Return an env whose first reset completed, rebuilding it if needed.
+
+    The first reset of a ParallelPyEnvironment after a long BC pretrain
+    has hung with no reset command reaching ros-server (twice on
+    donut_camera). A single in-process env can't be killed, so it is
+    returned untouched.
+    """
+    from tf_agents.environments import parallel_py_environment
+    if not isinstance(env, parallel_py_environment.ParallelPyEnvironment):
+        return env
+    for attempt in range(1, attempts + 1):
+        if _reset_within(env, timeout_s):
+            if attempt > 1:
+                print(f"main: first reset succeeded on attempt {attempt}",
+                      flush=True)
+            return env
+        print(f"main: first reset hung for {timeout_s:.0f}s (attempt "
+              f"{attempt}/{attempts}); dumping stacks and rebuilding the "
+              f"env workers", flush=True)
+        _kill_hung_parallel_env(env)
+        if attempt == attempts:
+            break
+        env = rebuild()
+    raise RuntimeError(
+        f"first env reset hung {attempts} times ({timeout_s:.0f}s each); "
+        "stacks are in the trainer log")
 
 
 def configure_env(env, job_id="", pass_through_actions=False,
@@ -2426,6 +2512,23 @@ def main(
                 f"main: RESUME - Reverb restore check failed ({_e}); "
                 "falling back to initial_collect.",
                 flush=True)
+
+    def _rebuild_collect_env():
+        new_env = _make_parallel_train_env(num_envs, _course_type)
+        configure_env(new_env, job_id=job_id, pass_through_actions=False,
+                      corner_radius=_init_cr,
+                      curvature_difficulty=_init_cd,
+                      chicanes_north=_init_ch_n, chicanes_east=_init_ch_e,
+                      chicanes_south=_init_ch_s, chicanes_west=_init_ch_w,
+                      env_discount=env_discount_val)
+        if reward_design and reward_design.get("code"):
+            install_reward_design_on_env(
+                new_env, reward_design.get("name", "<unnamed>"),
+                reward_design["code"])
+        return new_env
+
+    _phase("first_reset")
+    env = ensure_first_reset(env, _rebuild_collect_env)
 
     _phase("initial_collect")
     if _reverb_restored:
