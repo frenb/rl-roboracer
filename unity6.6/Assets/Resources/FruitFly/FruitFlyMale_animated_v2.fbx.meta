@@ -1,0 +1,161 @@
+fileFormatVersion: 2
+guid: d51e7dd2a7052034dbc8747c21e27d6e
+ModelImporter:
+  serializedVersion: 20200
+  internalIDToNameTable:
+  - first:
+      74: -8512456087739583650
+    second: FruitFlyMale|FruitFly_fly_forward
+  - first:
+      74: 1537901592108732291
+    second: FruitFlyMale|FruitFly_fly_turn_left
+  - first:
+      74: -3819873654631312043
+    second: FruitFlyMale|FruitFly_fly_turn_right
+  - first:
+      74: 8591708162058685541
+    second: FruitFlyMale|FruitFly_hover
+  - first:
+      74: -117061705029051818
+    second: FruitFlyMale|FruitFly_hover_fall
+  - first:
+      74: 8289632925571704873
+    second: FruitFlyMale|FruitFly_idle
+  - first:
+      74: -6813596733749131207
+    second: FruitFlyMale|FruitFly_idle_look
+  - first:
+      74: 6036772065493319578
+    second: FruitFlyMale|FruitFly_land
+  - first:
+      74: -603590895896410112
+    second: FruitFlyMale|FruitFly_takeoff
+  - first:
+      74: -30363657638333783
+    second: FruitFlyMale|FruitFly_turn_left
+  - first:
+      74: -1079660451190164526
+    second: FruitFlyMale|FruitFly_turn_right
+  - first:
+      74: 3514302296661840082
+    second: FruitFlyMale|FruitFly_walk_backward
+  - first:
+      74: -1507847175522122337
+    second: FruitFlyMale|FruitFly_walk_forward
+  externalObjects:
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: SkinShader_skinShader
+    second: {fileID: 2100000, guid: e9dd103de8a84483a21fada3f72e5f9f, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: phong3
+    second: {fileID: 2100000, guid: dd658d76d80c4f60838f91e564a23705, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: phong1
+    second: {fileID: 2100000, guid: 71a6ab7e447743e9876e79f66a59d3ca, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: anisotropic1
+    second: {fileID: 2100000, guid: d51cbb2910fb425d893f3bc0e97c23ef, type: 2}
+  materials:
+    materialImportMode: 2
+    materialName: 0
+    materialSearch: 1
+    materialLocation: 1
+  animations:
+    legacyGenerateAnimations: 4
+    bakeSimulation: 0
+    resampleCurves: 1
+    optimizeGameObjects: 0
+    motionNodeName: 
+    rigImportErrors: 
+    rigImportWarnings: 
+    animationImportErrors: 
+    animationImportWarnings: 
+    animationRetargetingWarnings: 
+    animationDoRetargetingWarnings: 0
+    importAnimatedCustomProperties: 0
+    importConstraints: 0
+    animationCompression: 1
+    animationRotationError: 0.5
+    animationPositionError: 0.5
+    animationScaleError: 0.5
+    animationWrapMode: 0
+    extraExposedTransformPaths: []
+    extraUserProperties: []
+    clipAnimations: []
+    isReadable: 1
+  meshes:
+    lODScreenPercentages: []
+    globalScale: 1
+    meshCompression: 0
+    addColliders: 0
+    useSRGBMaterialColor: 1
+    sortHierarchyByName: 1
+    importVisibility: 1
+    importBlendShapes: 1
+    importCameras: 1
+    importLights: 1
+    fileIdsGeneration: 2
+    swapUVChannels: 0
+    generateSecondaryUV: 0
+    useFileUnits: 1
+    keepQuads: 0
+    weldVertices: 1
+    bakeAxisConversion: 0
+    preserveHierarchy: 0
+    skinWeightsMode: 0
+    maxBonesPerVertex: 4
+    minBoneWeight: 0.001
+    meshOptimizationFlags: -1
+    indexFormat: 0
+    secondaryUVAngleDistortion: 8
+    secondaryUVAreaDistortion: 15.000001
+    secondaryUVHardAngle: 88
+    secondaryUVMarginMethod: 1
+    secondaryUVMinLightmapResolution: 40
+    secondaryUVMinObjectScale: 1
+    secondaryUVPackMargin: 4
+    useFileScale: 1
+  tangentSpace:
+    normalSmoothAngle: 60
+    normalImportMode: 0
+    tangentImportMode: 3
+    normalCalculationMode: 4
+    legacyComputeAllNormalsFromSmoothingGroupsWhenMeshHasBlendShapes: 0
+    blendShapeNormalImportMode: 1
+    normalSmoothingSource: 0
+  referencedClips: []
+  importAnimation: 1
+  humanDescription:
+    serializedVersion: 3
+    human: []
+    skeleton: []
+    armTwist: 0.5
+    foreArmTwist: 0.5
+    upperLegTwist: 0.5
+    legTwist: 0.5
+    armStretch: 0.05
+    legStretch: 0.05
+    feetSpacing: 0
+    globalScale: 1
+    rootMotionBoneName: 
+    hasTranslationDoF: 0
+    hasExtraRoot: 0
+    skeletonHasParents: 1
+  lastHumanDescriptionAvatarSource: {instanceID: 0}
+  autoGenerateAvatarMappingIfUnspecified: 1
+  animationType: 2
+  humanoidOversampling: 1
+  avatarSetup: 0
+  addHumanoidExtraRootOnlyWhenUsingAvatar: 1
+  additionalBone: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
