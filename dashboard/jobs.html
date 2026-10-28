@@ -589,6 +589,19 @@
                 + 'text-[11px] font-medium border ' + cls + '" title="'
                 + c + '">' + c + '</span>';
             } },
+          // Unity gym executable stamped by the New-job form. Builds share the
+          // same exe name, so the ellipsis goes on the left to keep the
+          // build folder visible; the full path is in the tooltip.
+          { key: 'gym_file_path', label: 'Gym path', sortable: true, filter: true,
+            sortValue: (r) => r.gym_file_path || '',
+            render: (v) => {
+              if (!v) return '<span class="text-slate-500 dark:text-slate-400">—</span>';
+              const s = String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+              return '<span dir="rtl" class="inline-block max-w-[560px] truncate align-middle '
+                + 'text-left font-mono text-xs text-slate-600 dark:text-slate-300" title="'
+                + s + '"><bdi>' + s + '</bdi></span>';
+            } },
           { key: 'status',           label: 'Status',   sortable: true,  filter: true,
             render: (v) => formatters.statusBadge(v) },
           { key: 'percent_complete', label: 'Progress', sortable: true,  filter: false,
