@@ -7490,14 +7490,52 @@ def run_jobs_loop(num_envs=1):
                 _emergency_state.clear()
                 # Tear down the finished job's collect + eval envs
                 # (ParallelPyEnvironment Unity worker subprocesses +
-                # single-env asyncio loop-threads) so the NEXT job's
-                # ParallelPyEnvironment fork starts from a lean process
-                # instead of one still holding the previous job's live
-                # workers/threads (the 2026-08-10 fork segfault). Best-
-                # effort; see close_train_envs / _ACTIVE_TRAIN_ENVS.
+                # single-env asyncio loop-threads) so workers detach from
+                # the ros-server endpoints before the process restarts
+                # below. Best-effort; see close_train_envs /
+                # _ACTIVE_TRAIN_ENVS.
                 close_train_envs()
+            _restart_trainer_process()
         print("sleep")
         time.sleep(5)
+
+
+# Full original command line (script path + every flag, including the
+# --num-envs that __main__ strips before absl sees argv). None when robotaxi.py
+# is imported rather than run, which disables the per-job restart.
+_TRAINER_ARGV = None
+
+
+def _restart_trainer_process():
+    """Replace this process with a fresh trainer before the next job.
+
+    ParallelPyEnvironment forks its workers. After a job, the process still
+    holds gRPC's poller thread and the eval env's asyncio loop thread, and
+    forking with those alive segfaults the next job's spawn (2026-10-28 and
+    2026-10-29). execv keeps the pid, cwd and stdout (so the `tee` into
+    /tmp/trainer.log keeps working) but starts a clean interpreter, so every
+    job forks from the same lean state as the first job after startup.
+    """
+    if _TRAINER_ARGV is None:
+        return
+    argv = [sys.executable, '-u'] + _TRAINER_ARGV
+    print(f"restarting trainer process for a clean next job: "
+          f"{' '.join(argv)}", flush=True)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    import fcntl
+    try:
+        if _trainer_lock_fh is not None:
+            # Forked env workers share this lock's open file description; an
+            # explicit unlock frees it even if one of them is still exiting,
+            # so the new process doesn't refuse to start.
+            fcntl.flock(_trainer_lock_fh.fileno(), fcntl.LOCK_UN)
+        os.execv(sys.executable, argv)
+    except OSError as e:
+        print(f"_restart_trainer_process: execv failed ({e}); continuing in "
+              f"this process.", flush=True)
+        if _trainer_lock_fh is not None:
+            fcntl.flock(_trainer_lock_fh.fileno(), fcntl.LOCK_EX)
 
 
 # Fixed path for the trainer singleton lock. Held for the life of the main
@@ -7605,6 +7643,7 @@ def _acquire_singleton_lock_or_exit():
 if __name__ == "__main__":
     import argparse
     import sys
+    _TRAINER_ARGV = [os.path.abspath(sys.argv[0])] + sys.argv[1:]
     # Enforce single-trainer BEFORE spawning any env workers so a stray
     # duplicate command exits immediately instead of stacking up on the
     # shared ros-server endpoints. Env workers spawned later never run
