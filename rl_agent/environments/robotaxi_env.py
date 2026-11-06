@@ -248,9 +248,21 @@ class RobotaxiEnv(py_environment.PyEnvironment):
 
     def _front_camera_image(self, data):
         # Lazy import so donut / donut_no_hint never load cv2.
-        from vision.image_to_obs import image_to_obs
+        from vision.image_to_obs import image_to_obs, DST_HW
         frame = self._api.GetFrontCameraFrameBlocking(self._front_camera_cmd_id(data))
-        return image_to_obs(frame)
+        try:
+            obs = image_to_obs(frame)
+        except (ValueError, TypeError, KeyError) as e:
+            # RobotApi already drops malformed frames; this keeps one that
+            # slips through from raising in the env worker and failing the job.
+            last = getattr(self, '_last_camera_obs', None)
+            print(f'Front camera frame unusable ({e}); using '
+                  f'{"last good" if last is not None else "zeros"}.', flush=True)
+            if last is not None:
+                return last
+            return np.zeros((DST_HW[0], DST_HW[1], 3), dtype=np.float32)
+        self._last_camera_obs = obs
+        return obs
 
     def _pack_observation(self, data_arr, data=None):
         vec = np.asarray(data_arr, dtype=np.float32)

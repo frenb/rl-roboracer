@@ -437,9 +437,10 @@ def read_timeout_counts(env):
     Parallel envs: dispatch to each underlying ProcessPyEnvironment and
     sum.
 
-    The returned dict has the five counter keys
+    The returned dict has the five timeout keys
     ('reset_timeouts', 'apply_force_timeouts', 'scene_data_timeouts',
-    'front_camera_timeouts', 'publish_timeouts'); the
+    'front_camera_timeouts', 'publish_timeouts') plus
+    'front_camera_bad_frames' (malformed frames RobotApi dropped); the
     trainer prefixes them with 'timeouts/' when writing to tf.summary
     so they group together in TensorBoard's UI.
 
@@ -453,7 +454,7 @@ def read_timeout_counts(env):
     from tf_agents.environments import parallel_py_environment
     keys = ['reset_timeouts', 'apply_force_timeouts',
             'scene_data_timeouts', 'front_camera_timeouts',
-            'publish_timeouts']
+            'publish_timeouts', 'front_camera_bad_frames']
     if isinstance(env, parallel_py_environment.ParallelPyEnvironment):
         promises = [proc_env.call('get_timeout_counts')
                     for proc_env in env._envs]

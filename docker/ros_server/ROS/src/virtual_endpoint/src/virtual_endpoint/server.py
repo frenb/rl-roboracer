@@ -43,7 +43,13 @@ class RpcServer(ros_service_pb2_grpc.RosNodeServicer):
         self.loop.call_soon_threadsafe(self.put_topic_message, topic, message, id)
 
     def put_topic_message(self, topic, message, id):
-        self._get_topic(topic, id).put_nowait(message)
+        # put_nowait on a full queue raised QueueFull and dropped the NEW
+        # message, so a reader one message behind lost the frame it was
+        # waiting for. Drop the oldest instead, and only past a small backlog.
+        q = self._get_topic(topic, id)
+        if q.full():
+            q.get_nowait()
+        q.put_nowait(message)
 
     def _next_subscriber_index(self):
         ret = self.subscriber_index
@@ -55,7 +61,7 @@ class RpcServer(ros_service_pb2_grpc.RosNodeServicer):
             self.topics[topic] = {}
         if id not in self.topics[topic]:
             # TODO: this will never get cleaned up even if client disconnects.
-            self.topics[topic][id] = asyncio.Queue(maxsize=1)
+            self.topics[topic][id] = asyncio.Queue(maxsize=8)
         return self.topics[topic][id]
 
     def _new_subscriber(self, topic, msg_type, id):
