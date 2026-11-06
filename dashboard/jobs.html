@@ -470,7 +470,7 @@
        (Ctrl+Shift+R on the parent doesn't always force iframe
        subresources to re-fetch). Bump the version string whenever you
        change components.js. -->
-  <script src="/components.js?v=20261018-demos2"></script>
+  <script src="/components.js?v=20261029-demo-guard"></script>
   <script>
     (function () {
       const { TableView, formatters, showToast, confirmDialog } = window.RoboracerUI;
@@ -1259,6 +1259,23 @@
           eval_stage_start: sweepOn ? stageStartEl.value : '',
           eval_stage_end: sweepOn ? stageEndEl.value : '',
         });
+        if (jobType === 'TRAIN' && !payload.demo_tfrecords_paths
+            && RoboracerUI.COURSES_WITHOUT_DEFAULT_DEMOS.has(String(fd.get('course_type') || ''))) {
+          const features = await RoboracerUI.demoDependentDesignFeatures(edSel.value);
+          if (features.length) {
+            const ok = await RoboracerUI.confirmDialog({
+              title: 'No expert demos selected',
+              message: `The experiment design "${RoboracerUI.selectedName(edSel)}" uses `
+                + `${features.join(', ')}, but no demo is picked on the Demos tab and `
+                + `${fd.get('course_type')} has no default demos. All of these would be `
+                + `skipped and the job would train plain SAC from scratch.`,
+              confirmLabel: 'Train from scratch anyway',
+              cancelLabel: 'Go back and pick a demo',
+            });
+            if (!ok) return;
+            payload.allow_no_demos = true;
+          }
+        }
         try {
           const res = await fetch('/add_job', {
             method: 'POST',

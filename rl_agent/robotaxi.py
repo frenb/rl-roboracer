@@ -1272,6 +1272,35 @@ COURSE_DEFAULT_DEMO_JOB_IDS = {
 }
 
 
+def _demo_dependent_design_features(experiment_design_doc):
+    """Names of the demo-only features an experiment design turns on.
+
+    BC pretrain, critic warm-up, AWAC and demo prefill all silently become
+    no-ops when a job has no expert demos. The canonical Default design is
+    exempt: it carries BC/prefill values for the donut course's baked corpus
+    but is also the stock choice for from-scratch camera / fly runs.
+    """
+    if not experiment_design_doc:
+        return []
+    from experiment_designs import DEFAULT_DESIGN_ID
+    if str(experiment_design_doc.get("_id")) == DEFAULT_DESIGN_ID:
+        return []
+    checks = (
+        ("bc_pretrain_steps", "BC pretrain"),
+        ("critic_warmup_steps", "critic warm-up"),
+        ("awac_lambda", "AWAC"),
+        ("demo_prefill_count", "demo prefill"),
+    )
+    features = []
+    for key, label in checks:
+        try:
+            if float(experiment_design_doc.get(key) or 0) > 0:
+                features.append(label)
+        except (TypeError, ValueError):
+            pass
+    return features
+
+
 def _resolve_default_demo_job_id(course_type):
     """Return the baked-in default demo job id for a course, or None.
 
@@ -5509,6 +5538,18 @@ def do_job(job, num_envs=1):
         if not _demo_job_ids and not _picked_demo_paths:
             if (collect_training_data.COURSE_OBS_KIND.get(_job_course_type) == "dict"
                     or _job_course_type in collect_training_data.COURSES_WITHOUT_DEMOS):
+                _demo_features = _demo_dependent_design_features(
+                    experiment_design_doc)
+                if _demo_features and not job.get("allow_no_demos"):
+                    raise RuntimeError(
+                        f"TRAIN job {job.get('_id')} (course={_job_course_type}) "
+                        f"has no expert demos, but experiment design "
+                        f"{experiment_design_doc.get('name')!r} needs them for "
+                        f"{', '.join(_demo_features)}. Without demos all of "
+                        f"these are skipped and the job is plain SAC from "
+                        f"scratch. Pick a demo on the New-job dialog's Demos "
+                        f"tab, or set allow_no_demos=true on the job to run "
+                        f"from scratch anyway.")
                 print(
                     f"do_job: TRAIN course={_job_course_type} from scratch "
                     "(no expert-demo source).",

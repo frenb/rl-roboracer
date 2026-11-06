@@ -33,6 +33,7 @@
  *   loadJobListIntoSelect(kind, sel)      -> repopulate a picker from that list
  *   selectedName(sel) / selectedGym(sel)  -> read a picker back for a payload
  *   selectedDemo(sel) / demoLabel(row)    -> same, for the Expert demos picker
+ *   demoDependentDesignFeatures(id)       -> demo-only features a design enables
  *   clampTrialCount(v)                    -> 1..100
  *   evalCostEstimate(trials, epsPerTrial) -> {totalEpisodes, eta} footer line
  *   fillStageSelects(start, end, stages)  -> curriculum Start/End pickers
@@ -1771,6 +1772,34 @@
     };
   }
 
+  // Courses with no baked-in default demo corpus (COURSE_DEFAULT_DEMO_JOB_IDS
+  // maps them to None in robotaxi.py): a TRAIN job on these only gets demos
+  // if one is picked on the Demos tab.
+  const COURSES_WITHOUT_DEFAULT_DEMOS = new Set([
+    'donut_camera', 'donut_camera_no_rays', 'fly_donut', 'fly_donut_flow',
+  ]);
+
+  /**
+   * Demo-only features the experiment design turns on, as labels.
+   *
+   * Mirrors _demo_dependent_design_features in robotaxi.py, which fails a
+   * TRAIN job that asks for these without demos unless allow_no_demos is
+   * set. The canonical Default design is exempt there and here.
+   */
+  async function demoDependentDesignFeatures(designId) {
+    const id = String(designId || '');
+    if (!id || id === JOB_LIST_SOURCES.experiment_designs.pinned) return [];
+    const rows = await fetchJobList('experiment_designs');
+    const doc = rows.find((r) => String(r._id) === id);
+    if (!doc) return [];
+    return [
+      ['bc_pretrain_steps', 'BC pretrain'],
+      ['critic_warmup_steps', 'critic warm-up'],
+      ['awac_lambda', 'AWAC'],
+      ['demo_prefill_count', 'demo prefill'],
+    ].filter(([k]) => Number(doc[k]) > 0).map(([, label]) => label);
+  }
+
   /** The picked option's text, with the " (vN)" suffix hydrate added removed. */
   function selectedName(sel) {
     if (!sel || sel.selectedIndex < 0) return '';
@@ -1992,6 +2021,8 @@
     selectedName,
     selectedGym,
     selectedDemo,
+    COURSES_WITHOUT_DEFAULT_DEMOS,
+    demoDependentDesignFeatures,
     demoLabel,
     demoTime,
     clampTrialCount,
