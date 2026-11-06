@@ -1,0 +1,61 @@
+# Unity 6.6 copy of ../unity. Same rules as the unity/ block in the root
+# .gitignore, written relative to this folder.
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]serSettings/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+/CsiFrameDumps/
+/Videos/
+/.vscode/
+/_tmp_*
+
+# Third-party skybox pack (~390 MB). Re-import from the Asset Store.
+/Assets/Assets MOOD WARE/
+/Assets/Assets MOOD WARE.meta
+
+# Fly-model leftovers, kept out of the tree as in unity/.
+/Assets/FruitFlyMale_clips.fbx*
+/Assets/Materials/FruitFly*.mat*
+/Assets/Materials/SkinShader_skinShader.mat*
+/Assets/Materials/anisotropic1.mat*
+/Assets/Materials/lambert3.mat*
+/Assets/Materials/phong1.mat*
+/Assets/Materials/phong3.mat*
+/Assets/drosophila.unity*
+
+# com.unity.webrtc is embedded because it is patched for Unity 6. Its iOS,
+# macOS and Android plugins (~135 MB) are not used by the Windows gym builds;
+# restore them from the 2.4.0-exp registry package before building those.
+/Packages/com.unity.webrtc/Runtime/Plugins/iOS/
+/Packages/com.unity.webrtc/Runtime/Plugins/iOS.meta
+/Packages/com.unity.webrtc/Runtime/Plugins/macOS/
+/Packages/com.unity.webrtc/Runtime/Plugins/macOS.meta
+/Packages/com.unity.webrtc/Runtime/Plugins/Android/
+/Packages/com.unity.webrtc/Runtime/Plugins/Android.meta
+
+*.csproj
+*.sln
+*.slnx
+*.unityproj
+*.suo
+*.user
+*.userprefs
+*.tmp
+*.pidb*
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.apk
+*.aab
+*.unitypackage
+*.app
+crashlytics-build.properties
+/Assets/AssetStoreTools*

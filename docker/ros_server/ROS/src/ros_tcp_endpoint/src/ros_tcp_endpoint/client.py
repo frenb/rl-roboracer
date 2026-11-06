@@ -41,6 +41,22 @@ class ClientThread(Thread):
         self.incoming_port = incoming_port
 
     @staticmethod
+    def recv_exactly(conn, size):
+        """
+        Read exactly size bytes. recv() may return fewer than asked; a short
+        header read would desync the stream and corrupt every later message.
+
+        Returns: bytes, or None if the connection closed first.
+        """
+        data = b''
+        while len(data) < size:
+            packet = conn.recv(size - len(data))
+            if not packet:
+                return None
+            data += packet
+        return data
+
+    @staticmethod
     def read_int32(conn):
         """
         Reads four bytes from socket connection and unpacks them to an int
@@ -49,7 +65,7 @@ class ClientThread(Thread):
 
         """
         try:
-            raw_bytes = conn.recv(4)
+            raw_bytes = ClientThread.recv_exactly(conn, 4)
             num = struct.unpack('<I', raw_bytes)[0]
             return num
         except Exception as e:
@@ -70,7 +86,7 @@ class ClientThread(Thread):
         try:
             str_len = ClientThread.read_int32(conn)
 
-            str_bytes = conn.recv(str_len)
+            str_bytes = ClientThread.recv_exactly(conn, str_len)
             decoded_str = str_bytes.decode('utf-8')
 
             return decoded_str
@@ -107,8 +123,12 @@ class ClientThread(Thread):
 
             data += packet
 
-        if not data:
-            print("No data for a message size of {}, breaking!".format(full_message_size))
+        if len(data) < full_message_size:
+            # genpy slices variable-length arrays, so a short payload would
+            # deserialize "successfully" with a truncated field (e.g. a
+            # 13082-byte camera image). Drop it instead.
+            print("Dropping {} message: got {} of {} bytes".format(
+                destination, len(data), full_message_size))
             return
 
         return destination, data
@@ -159,7 +179,11 @@ class ClientThread(Thread):
             msg: the ROS msg type as bytes
 
         """
-        destination, data = self.read_message(self.conn)
+        message = self.read_message(self.conn)
+        if message is None:
+            self.conn.close()
+            return
+        destination, data = message
 
         if destination == '__syscommand':
             self.tcp_server.handle_syscommand(data)

@@ -1,0 +1,923 @@
+{
+  "name": "home-track-v2",
+  "source_video": "IMG_5748.MOV",
+  "model": "gemini-4-argon",
+  "units": "meters",
+  "scale_reference": "Exact given dimensions: mat is 3.20 m (x, width) by 2.80 m (y, length). Modular fence panels are 0.45 m wide (post to post) and 0.35 m tall. In the video, the outer perimeter is enclosed by 7 panels along the 3.20 m x-edges (7 * 0.45 = 3.15 m) and 6 panels along the 2.80 m y-edges (6 * 0.45 = 2.70 m). The inner barrier is a 5x4 panel rectangle (2.25 m x 1.80 m) sitting on the green islands to close off the central cross-roads into a single outer loop. v2: inner ring moved inward 0.05 m per side (2.15 x 1.70 m) so the model matches the colliders Unity builds.",
+  "confidence": "High confidence on mat dimensions, fence panel counts/positions, topology, and printed features (derived directly from the authoritative top-down image scaled to 3.2 m x 2.8 m and verified against the video).",
+  "mat": {
+    "width": 3.2,
+    "length": 2.8,
+    "base_color": "#454648"
+  },
+  "road": {
+    "width": 0.41,
+    "closed": true,
+    "centerline": [
+      {
+        "x": 0.54,
+        "y": 0.3
+      },
+      {
+        "x": 0.4898,
+        "y": 0.3048
+      },
+      {
+        "x": 0.4415,
+        "y": 0.319
+      },
+      {
+        "x": 0.3969,
+        "y": 0.3421
+      },
+      {
+        "x": 0.3579,
+        "y": 0.3732
+      },
+      {
+        "x": 0.3259,
+        "y": 0.4111
+      },
+      {
+        "x": 0.3021,
+        "y": 0.4543
+      },
+      {
+        "x": 0.2874,
+        "y": 0.5012
+      },
+      {
+        "x": 0.2825,
+        "y": 0.55
+      },
+      {
+        "x": 0.2825,
+        "y": 2.25
+      },
+      {
+        "x": 0.2874,
+        "y": 2.2988
+      },
+      {
+        "x": 0.3021,
+        "y": 2.3457
+      },
+      {
+        "x": 0.3259,
+        "y": 2.3889
+      },
+      {
+        "x": 0.3579,
+        "y": 2.4268
+      },
+      {
+        "x": 0.3969,
+        "y": 2.4579
+      },
+      {
+        "x": 0.4415,
+        "y": 2.481
+      },
+      {
+        "x": 0.4898,
+        "y": 2.4952
+      },
+      {
+        "x": 0.54,
+        "y": 2.5
+      },
+      {
+        "x": 2.69,
+        "y": 2.5
+      },
+      {
+        "x": 2.7373,
+        "y": 2.4952
+      },
+      {
+        "x": 2.7828,
+        "y": 2.481
+      },
+      {
+        "x": 2.8247,
+        "y": 2.4579
+      },
+      {
+        "x": 2.8615,
+        "y": 2.4268
+      },
+      {
+        "x": 2.8916,
+        "y": 2.3889
+      },
+      {
+        "x": 2.914,
+        "y": 2.3457
+      },
+      {
+        "x": 2.9278,
+        "y": 2.2988
+      },
+      {
+        "x": 2.9325,
+        "y": 2.25
+      },
+      {
+        "x": 2.9325,
+        "y": 0.55
+      },
+      {
+        "x": 2.9278,
+        "y": 0.5012
+      },
+      {
+        "x": 2.914,
+        "y": 0.4543
+      },
+      {
+        "x": 2.8916,
+        "y": 0.4111
+      },
+      {
+        "x": 2.8615,
+        "y": 0.3732
+      },
+      {
+        "x": 2.8247,
+        "y": 0.3421
+      },
+      {
+        "x": 2.7828,
+        "y": 0.319
+      },
+      {
+        "x": 2.7373,
+        "y": 0.3048
+      },
+      {
+        "x": 2.69,
+        "y": 0.3
+      }
+    ]
+  },
+  "islands": [
+    {
+      "label": "top_left_island",
+      "color": "#00682c",
+      "corner_radius": 0.12,
+      "points": [
+        {
+          "x": 0.54,
+          "y": 1.74
+        },
+        {
+          "x": 1.66,
+          "y": 1.74
+        },
+        {
+          "x": 1.66,
+          "y": 2.26
+        },
+        {
+          "x": 0.54,
+          "y": 2.26
+        }
+      ]
+    },
+    {
+      "label": "top_right_island",
+      "color": "#00682c",
+      "corner_radius": 0.12,
+      "points": [
+        {
+          "x": 2.13,
+          "y": 1.74
+        },
+        {
+          "x": 2.66,
+          "y": 1.74
+        },
+        {
+          "x": 2.66,
+          "y": 2.26
+        },
+        {
+          "x": 2.13,
+          "y": 2.26
+        }
+      ]
+    },
+    {
+      "label": "bottom_right_island",
+      "color": "#00682c",
+      "corner_radius": 0.12,
+      "points": [
+        {
+          "x": 2.13,
+          "y": 0.54
+        },
+        {
+          "x": 2.66,
+          "y": 0.54
+        },
+        {
+          "x": 2.66,
+          "y": 1.29
+        },
+        {
+          "x": 2.13,
+          "y": 1.29
+        }
+      ]
+    },
+    {
+      "label": "bottom_left_u_island",
+      "color": "#00682c",
+      "corner_radius": 0.1,
+      "points": [
+        {
+          "x": 0.54,
+          "y": 0.54
+        },
+        {
+          "x": 1.66,
+          "y": 0.54
+        },
+        {
+          "x": 1.66,
+          "y": 1.29
+        },
+        {
+          "x": 1.44,
+          "y": 1.29
+        },
+        {
+          "x": 1.44,
+          "y": 0.88
+        },
+        {
+          "x": 0.77,
+          "y": 0.88
+        },
+        {
+          "x": 0.77,
+          "y": 1.29
+        },
+        {
+          "x": 0.54,
+          "y": 1.29
+        }
+      ]
+    }
+  ],
+  "edge_lines": [
+    {
+      "color": "#f5e600",
+      "width": 0.035,
+      "closed": true,
+      "points": [
+        {
+          "x": 0.08,
+          "y": 0.35
+        },
+        {
+          "x": 0.08,
+          "y": 2.45
+        },
+        {
+          "x": 0.11,
+          "y": 2.58
+        },
+        {
+          "x": 0.22,
+          "y": 2.69
+        },
+        {
+          "x": 0.35,
+          "y": 2.72
+        },
+        {
+          "x": 2.85,
+          "y": 2.72
+        },
+        {
+          "x": 2.98,
+          "y": 2.69
+        },
+        {
+          "x": 3.09,
+          "y": 2.58
+        },
+        {
+          "x": 3.12,
+          "y": 2.45
+        },
+        {
+          "x": 3.12,
+          "y": 0.35
+        },
+        {
+          "x": 3.09,
+          "y": 0.22
+        },
+        {
+          "x": 2.98,
+          "y": 0.11
+        },
+        {
+          "x": 2.85,
+          "y": 0.08
+        },
+        {
+          "x": 0.35,
+          "y": 0.08
+        },
+        {
+          "x": 0.22,
+          "y": 0.11
+        },
+        {
+          "x": 0.11,
+          "y": 0.22
+        }
+      ]
+    },
+    {
+      "color": "#f5e600",
+      "width": 0.035,
+      "closed": true,
+      "points": [
+        {
+          "x": 0.52,
+          "y": 1.72
+        },
+        {
+          "x": 1.68,
+          "y": 1.72
+        },
+        {
+          "x": 1.68,
+          "y": 2.28
+        },
+        {
+          "x": 0.52,
+          "y": 2.28
+        }
+      ]
+    },
+    {
+      "color": "#f5e600",
+      "width": 0.035,
+      "closed": true,
+      "points": [
+        {
+          "x": 2.11,
+          "y": 1.72
+        },
+        {
+          "x": 2.68,
+          "y": 1.72
+        },
+        {
+          "x": 2.68,
+          "y": 2.28
+        },
+        {
+          "x": 2.11,
+          "y": 2.28
+        }
+      ]
+    },
+    {
+      "color": "#f5e600",
+      "width": 0.035,
+      "closed": true,
+      "points": [
+        {
+          "x": 2.11,
+          "y": 0.52
+        },
+        {
+          "x": 2.68,
+          "y": 0.52
+        },
+        {
+          "x": 2.68,
+          "y": 1.31
+        },
+        {
+          "x": 2.11,
+          "y": 1.31
+        }
+      ]
+    },
+    {
+      "color": "#f5e600",
+      "width": 0.035,
+      "closed": true,
+      "points": [
+        {
+          "x": 0.52,
+          "y": 0.52
+        },
+        {
+          "x": 1.68,
+          "y": 0.52
+        },
+        {
+          "x": 1.68,
+          "y": 1.31
+        },
+        {
+          "x": 1.42,
+          "y": 1.31
+        },
+        {
+          "x": 1.42,
+          "y": 0.9
+        },
+        {
+          "x": 0.79,
+          "y": 0.9
+        },
+        {
+          "x": 0.79,
+          "y": 1.31
+        },
+        {
+          "x": 0.52,
+          "y": 1.31
+        }
+      ]
+    }
+  ],
+  "crosswalks": [
+    {
+      "x": 0.3,
+      "y": 1.77,
+      "heading_deg": 0,
+      "length": 0.32,
+      "depth": 0.13,
+      "stripes": 11
+    },
+    {
+      "x": 0.3,
+      "y": 1.25,
+      "heading_deg": 0,
+      "length": 0.32,
+      "depth": 0.13,
+      "stripes": 11
+    },
+    {
+      "x": 0.58,
+      "y": 1.51,
+      "heading_deg": 90,
+      "length": 0.34,
+      "depth": 0.13,
+      "stripes": 11
+    },
+    {
+      "x": 1.6,
+      "y": 2.5,
+      "heading_deg": 90,
+      "length": 0.32,
+      "depth": 0.13,
+      "stripes": 11
+    },
+    {
+      "x": 2.18,
+      "y": 2.5,
+      "heading_deg": 90,
+      "length": 0.32,
+      "depth": 0.13,
+      "stripes": 11
+    },
+    {
+      "x": 1.89,
+      "y": 2.26,
+      "heading_deg": 0,
+      "length": 0.32,
+      "depth": 0.13,
+      "stripes": 11
+    },
+    {
+      "x": 1.89,
+      "y": 1.76,
+      "heading_deg": 0,
+      "length": 0.32,
+      "depth": 0.13,
+      "stripes": 11
+    },
+    {
+      "x": 1.89,
+      "y": 1.25,
+      "heading_deg": 0,
+      "length": 0.32,
+      "depth": 0.13,
+      "stripes": 11
+    },
+    {
+      "x": 1.89,
+      "y": 0.53,
+      "heading_deg": 0,
+      "length": 0.32,
+      "depth": 0.13,
+      "stripes": 11
+    },
+    {
+      "x": 1.6,
+      "y": 0.3,
+      "heading_deg": 90,
+      "length": 0.32,
+      "depth": 0.13,
+      "stripes": 11
+    },
+    {
+      "x": 2.18,
+      "y": 0.3,
+      "heading_deg": 90,
+      "length": 0.32,
+      "depth": 0.13,
+      "stripes": 11
+    },
+    {
+      "x": 2.61,
+      "y": 1.51,
+      "heading_deg": 90,
+      "length": 0.34,
+      "depth": 0.13,
+      "stripes": 11
+    },
+    {
+      "x": 2.9,
+      "y": 1.77,
+      "heading_deg": 0,
+      "length": 0.32,
+      "depth": 0.13,
+      "stripes": 11
+    },
+    {
+      "x": 2.9,
+      "y": 1.25,
+      "heading_deg": 0,
+      "length": 0.32,
+      "depth": 0.13,
+      "stripes": 11
+    }
+  ],
+  "arrows": [
+    {
+      "x": 0.3,
+      "y": 0.91,
+      "heading_deg": 0,
+      "kind": "straight_right",
+      "length": 0.32
+    },
+    {
+      "x": 0.32,
+      "y": 2.34,
+      "heading_deg": 0,
+      "kind": "right",
+      "length": 0.32
+    },
+    {
+      "x": 2.8,
+      "y": 2.48,
+      "heading_deg": 90,
+      "kind": "right",
+      "length": 0.32
+    },
+    {
+      "x": 2.88,
+      "y": 0.43,
+      "heading_deg": 180,
+      "kind": "right",
+      "length": 0.32
+    },
+    {
+      "x": 0.44,
+      "y": 0.32,
+      "heading_deg": 270,
+      "kind": "right",
+      "length": 0.32
+    }
+  ],
+  "fence_panels": [
+    {
+      "x1": 0.025,
+      "y1": 0.05,
+      "x2": 0.025,
+      "y2": 0.5,
+      "height": 0.35
+    },
+    {
+      "x1": 0.025,
+      "y1": 0.5,
+      "x2": 0.025,
+      "y2": 0.95,
+      "height": 0.35
+    },
+    {
+      "x1": 0.025,
+      "y1": 0.95,
+      "x2": 0.025,
+      "y2": 1.4,
+      "height": 0.35
+    },
+    {
+      "x1": 0.025,
+      "y1": 1.4,
+      "x2": 0.025,
+      "y2": 1.85,
+      "height": 0.35
+    },
+    {
+      "x1": 0.025,
+      "y1": 1.85,
+      "x2": 0.025,
+      "y2": 2.3,
+      "height": 0.35
+    },
+    {
+      "x1": 0.025,
+      "y1": 2.3,
+      "x2": 0.025,
+      "y2": 2.75,
+      "height": 0.35
+    },
+    {
+      "x1": 0.025,
+      "y1": 2.75,
+      "x2": 0.475,
+      "y2": 2.75,
+      "height": 0.35
+    },
+    {
+      "x1": 0.475,
+      "y1": 2.75,
+      "x2": 0.925,
+      "y2": 2.75,
+      "height": 0.35
+    },
+    {
+      "x1": 0.925,
+      "y1": 2.75,
+      "x2": 1.375,
+      "y2": 2.75,
+      "height": 0.35
+    },
+    {
+      "x1": 1.375,
+      "y1": 2.75,
+      "x2": 1.825,
+      "y2": 2.75,
+      "height": 0.35
+    },
+    {
+      "x1": 1.825,
+      "y1": 2.75,
+      "x2": 2.275,
+      "y2": 2.75,
+      "height": 0.35
+    },
+    {
+      "x1": 2.275,
+      "y1": 2.75,
+      "x2": 2.725,
+      "y2": 2.75,
+      "height": 0.35
+    },
+    {
+      "x1": 2.725,
+      "y1": 2.75,
+      "x2": 3.175,
+      "y2": 2.75,
+      "height": 0.35
+    },
+    {
+      "x1": 3.175,
+      "y1": 2.75,
+      "x2": 3.175,
+      "y2": 2.3,
+      "height": 0.35
+    },
+    {
+      "x1": 3.175,
+      "y1": 2.3,
+      "x2": 3.175,
+      "y2": 1.85,
+      "height": 0.35
+    },
+    {
+      "x1": 3.175,
+      "y1": 1.85,
+      "x2": 3.175,
+      "y2": 1.4,
+      "height": 0.35
+    },
+    {
+      "x1": 3.175,
+      "y1": 1.4,
+      "x2": 3.175,
+      "y2": 0.95,
+      "height": 0.35
+    },
+    {
+      "x1": 3.175,
+      "y1": 0.95,
+      "x2": 3.175,
+      "y2": 0.5,
+      "height": 0.35
+    },
+    {
+      "x1": 3.175,
+      "y1": 0.5,
+      "x2": 3.175,
+      "y2": 0.05,
+      "height": 0.35
+    },
+    {
+      "x1": 3.175,
+      "y1": 0.05,
+      "x2": 2.725,
+      "y2": 0.05,
+      "height": 0.35
+    },
+    {
+      "x1": 2.725,
+      "y1": 0.05,
+      "x2": 2.275,
+      "y2": 0.05,
+      "height": 0.35
+    },
+    {
+      "x1": 2.275,
+      "y1": 0.05,
+      "x2": 1.825,
+      "y2": 0.05,
+      "height": 0.35
+    },
+    {
+      "x1": 1.825,
+      "y1": 0.05,
+      "x2": 1.375,
+      "y2": 0.05,
+      "height": 0.35
+    },
+    {
+      "x1": 1.375,
+      "y1": 0.05,
+      "x2": 0.925,
+      "y2": 0.05,
+      "height": 0.35
+    },
+    {
+      "x1": 0.925,
+      "y1": 0.05,
+      "x2": 0.475,
+      "y2": 0.05,
+      "height": 0.35
+    },
+    {
+      "x1": 0.475,
+      "y1": 0.05,
+      "x2": 0.025,
+      "y2": 0.05,
+      "height": 0.35
+    },
+    {
+      "x1": 0.54,
+      "y1": 0.55,
+      "x2": 0.54,
+      "y2": 0.95,
+      "height": 0.35
+    },
+    {
+      "x1": 0.54,
+      "y1": 0.95,
+      "x2": 0.54,
+      "y2": 1.4,
+      "height": 0.35
+    },
+    {
+      "x1": 0.54,
+      "y1": 1.4,
+      "x2": 0.54,
+      "y2": 1.85,
+      "height": 0.35
+    },
+    {
+      "x1": 0.54,
+      "y1": 1.85,
+      "x2": 0.54,
+      "y2": 2.25,
+      "height": 0.35
+    },
+    {
+      "x1": 0.54,
+      "y1": 2.25,
+      "x2": 0.94,
+      "y2": 2.25,
+      "height": 0.35
+    },
+    {
+      "x1": 0.94,
+      "y1": 2.25,
+      "x2": 1.39,
+      "y2": 2.25,
+      "height": 0.35
+    },
+    {
+      "x1": 1.39,
+      "y1": 2.25,
+      "x2": 1.84,
+      "y2": 2.25,
+      "height": 0.35
+    },
+    {
+      "x1": 1.84,
+      "y1": 2.25,
+      "x2": 2.29,
+      "y2": 2.25,
+      "height": 0.35
+    },
+    {
+      "x1": 2.29,
+      "y1": 2.25,
+      "x2": 2.69,
+      "y2": 2.25,
+      "height": 0.35
+    },
+    {
+      "x1": 2.69,
+      "y1": 2.25,
+      "x2": 2.69,
+      "y2": 1.85,
+      "height": 0.35
+    },
+    {
+      "x1": 2.69,
+      "y1": 1.85,
+      "x2": 2.69,
+      "y2": 1.4,
+      "height": 0.35
+    },
+    {
+      "x1": 2.69,
+      "y1": 1.4,
+      "x2": 2.69,
+      "y2": 0.95,
+      "height": 0.35
+    },
+    {
+      "x1": 2.69,
+      "y1": 0.95,
+      "x2": 2.69,
+      "y2": 0.55,
+      "height": 0.35
+    },
+    {
+      "x1": 2.69,
+      "y1": 0.55,
+      "x2": 2.29,
+      "y2": 0.55,
+      "height": 0.35
+    },
+    {
+      "x1": 2.29,
+      "y1": 0.55,
+      "x2": 1.84,
+      "y2": 0.55,
+      "height": 0.35
+    },
+    {
+      "x1": 1.84,
+      "y1": 0.55,
+      "x2": 1.39,
+      "y2": 0.55,
+      "height": 0.35
+    },
+    {
+      "x1": 1.39,
+      "y1": 0.55,
+      "x2": 0.94,
+      "y2": 0.55,
+      "height": 0.35
+    },
+    {
+      "x1": 0.94,
+      "y1": 0.55,
+      "x2": 0.54,
+      "y2": 0.55,
+      "height": 0.35
+    }
+  ],
+  "start": {
+    "x": 0.3,
+    "y": 0.78,
+    "heading_deg": 0
+  },
+  "notes": "v2 of the home track. The outer fence is unchanged. The inner 5x4 ring is 0.05 m further in on every side (bounds x 0.54..2.69, y 0.55..2.25), which is what Real2SimCourse applies at runtime to layout.json. The centerline is the one Unity drives: middle of the lane, curving around the square inner corners. Do not apply innerBarrierInset or centerlineFromFences again if a scene is built from this file, or the ring shrinks twice. Printed features (islands, edge lines, crosswalks, arrows) re-measured against the Yahboom product photo and top-view.png: the centre cross-road is at y 1.29..1.74, not 1.15..1.66, and its crosswalks and the side arrows move with it.",
+  "derived_from": "layout.json",
+  "unity_adjustments": "Inner barrier ring inset 0.05 m on every side, matching Real2SimCourse.innerBarrierInset. Centerline rebuilt the same way as Real2SimCourse.centerlineFromFences: mid-lane on the straights, quarter-ellipse around each inner corner. Outer fence unchanged."
+}

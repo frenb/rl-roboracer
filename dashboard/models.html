@@ -422,7 +422,7 @@
   <!-- Cache-busted (see comment in jobs.html). Bump ?v=... when you
        edit components.js so the iframe inside GoldenLayout actually
        fetches the new file. -->
-  <script src="/components.js?v=20261018-demos2"></script>
+  <script src="/components.js?v=20261028-pt"></script>
   <script>
     (function () {
       const { TableView, formatters, showToast, confirmDialog } = window.RoboracerUI;
@@ -465,7 +465,7 @@
             // Date.parse-friendly ISO strings work automatically.
             filter: { type: 'date-range' },
             sortValue: (r) => r.create_date ? Date.parse(r.create_date) : 0,
-            render: (v) => formatters.relativeTime(v) },
+            render: (v) => formatters.pacificTimestamp(v) },
           { key: 'avg_return',          label: 'Avg return', sortable: true,
             // Numeric range filter (two number inputs: min / max).
             // sortValue is Number(...) so an empty/NaN row falls out

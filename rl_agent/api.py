@@ -34,6 +34,31 @@ def _front_camera_cmd_id(frame):
         return None
 
 
+def _front_camera_frame_problem(frame):
+    """None if frame is a well-formed 84x84 rgb8 Camera dict, else why not.
+
+    A malformed frame must never reach image_to_obs: it raises inside the
+    env worker and fails the whole job.
+    """
+    img = frame.get('frame') if isinstance(frame, dict) else None
+    if not isinstance(img, dict):
+        return 'no frame dict'
+    if (img.get('width') != FRONT_CAMERA_WIDTH
+            or img.get('height') != FRONT_CAMERA_HEIGHT
+            or img.get('encoding') != FRONT_CAMERA_ENCODING):
+        return (f"{img.get('width')}x{img.get('height')} "
+                f"{img.get('encoding')}")
+    data = img.get('data')
+    try:
+        nbytes = (len(base64.b64decode(data)) if isinstance(data, str)
+                  else len(data))
+    except Exception as e:  # noqa: BLE001
+        return f'undecodable data ({e})'
+    if nbytes != FRONT_CAMERA_BYTES:
+        return f'{nbytes} bytes, expected {FRONT_CAMERA_BYTES}'
+    return None
+
+
 def _empty_front_camera_frame(cmd_id=0):
     """84x84 rgb8 zeros, same shape as a live CSI publish."""
     return {
@@ -170,11 +195,14 @@ class RobotApi:
         #                  HTTP/2 channel to ros-server went stale and
         #                  the keepalive params on the channel are
         #                  either disabled or insufficient.
+        # front_camera_bad_frames is not a timeout: it counts frames dropped
+        # by _on_front_camera_frame for the wrong size/shape/encoding.
         self.reset_timeouts = 0
         self.apply_force_timeouts = 0
         self.scene_data_timeouts = 0
         self.front_camera_timeouts = 0
         self.publish_timeouts = 0
+        self.front_camera_bad_frames = 0
 
     def get_timeout_counts(self):
         """Snapshot the running tally of asyncio.TimeoutError occurrences.
@@ -191,6 +219,7 @@ class RobotApi:
             'scene_data_timeouts': self.scene_data_timeouts,
             'front_camera_timeouts': self.front_camera_timeouts,
             'publish_timeouts': self.publish_timeouts,
+            'front_camera_bad_frames': self.front_camera_bad_frames,
         }
 
     def _next_id(self):
@@ -254,7 +283,21 @@ class RobotApi:
         # GetFrontCameraFrame can return a frame that arrived before
         # the waiter registered (CSI is published after car_scene_data).
         cmd_id = _front_camera_cmd_id(frame)
-        self.latest_front_camera_frame = frame
+        problem = _front_camera_frame_problem(frame)
+        if problem is not None:
+            # Answer this step with the last good image so its waiter
+            # doesn't sit out FRONT_CAMERA_WAIT_S; with none yet, leave
+            # it to time out to zeros.
+            self.front_camera_bad_frames += 1
+            print(f'Front camera dropped bad frame cmd_id={cmd_id}: {problem}. '
+                  f'Using {"last good" if self.latest_front_camera_frame else "zeros"} '
+                  f'(bad frames so far: {self.front_camera_bad_frames}).',
+                  flush=True)
+            frame = self.latest_front_camera_frame
+            if frame is None:
+                return
+        else:
+            self.latest_front_camera_frame = frame
         if cmd_id is not None:
             self._remember_front_camera_frame(cmd_id, frame)
             ev = self.front_camera_events.get(cmd_id)

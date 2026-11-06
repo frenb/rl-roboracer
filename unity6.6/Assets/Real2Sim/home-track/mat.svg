@@ -1,0 +1,276 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3200 2800" width="2048" height="1792">
+  
+  <rect x="0" y="0" width="3200" height="2800" fill="#454648" />
+
+  
+  <rect x="80" y="80" width="3040" height="2640" rx="270" ry="270" fill="none" stroke="#f5e600" stroke-width="35" stroke-linejoin="round" />
+
+  
+  
+  <rect x="520" y="520" width="1160" height="560" rx="140" ry="140" fill="#f5e600" />
+  <rect x="555" y="555" width="1090" height="490" rx="105" ry="105" fill="#00682c" />
+
+  
+  <rect x="2110" y="520" width="570" height="560" rx="140" ry="140" fill="#f5e600" />
+  <rect x="2145" y="555" width="500" height="490" rx="105" ry="105" fill="#00682c" />
+
+  
+  <rect x="2110" y="1485" width="570" height="795" rx="140" ry="140" fill="#f5e600" />
+  <rect x="2145" y="1520" width="500" height="725" rx="105" ry="105" fill="#00682c" />
+
+  
+  <path d="M 520,1485 L 790,1485 L 790,1900 L 1420,1900 L 1420,1485 L 1680,1485 L 1680,2140 A 140,140 0 0 1 1540,2280 L 660,2280 A 140,140 0 0 1 520,2140 Z" fill="#f5e600" />
+  <path d="M 555,1520 L 755,1520 L 755,1935 L 1455,1935 L 1455,1520 L 1645,1520 L 1645,2140 A 105,105 0 0 1 1540,2245 L 660,2245 A 105,105 0 0 1 555,2140 Z" fill="#00682c" />
+
+  
+  <path transform="translate(0, -100)" d="M 1135,1870 L 1135,1750 L 1110,1750 L 1110,1785 L 1075,1785 A 42.5,42.5 0 0 0 1075,1870 Z M 1110,1845 L 1075,1845 A 17.5,17.5 0 0 1 1075,1810 L 1110,1810 Z" fill="#ffffff" />
+
+  
+  <g fill="#ffffff">
+    
+    <g transform="translate(300, 1030)">
+      <rect x="-157.5" y="-65" width="15" height="130" />
+      <rect x="-127.5" y="-65" width="15" height="130" />
+      <rect x="-97.5" y="-65" width="15" height="130" />
+      <rect x="-67.5" y="-65" width="15" height="130" />
+      <rect x="-37.5" y="-65" width="15" height="130" />
+      <rect x="-7.5" y="-65" width="15" height="130" />
+      <rect x="22.5" y="-65" width="15" height="130" />
+      <rect x="52.5" y="-65" width="15" height="130" />
+      <rect x="82.5" y="-65" width="15" height="130" />
+      <rect x="112.5" y="-65" width="15" height="130" />
+      <rect x="142.5" y="-65" width="15" height="130" />
+    </g>
+
+    
+    <g transform="translate(300, 1550)">
+      <rect x="-157.5" y="-65" width="15" height="130" />
+      <rect x="-127.5" y="-65" width="15" height="130" />
+      <rect x="-97.5" y="-65" width="15" height="130" />
+      <rect x="-67.5" y="-65" width="15" height="130" />
+      <rect x="-37.5" y="-65" width="15" height="130" />
+      <rect x="-7.5" y="-65" width="15" height="130" />
+      <rect x="22.5" y="-65" width="15" height="130" />
+      <rect x="52.5" y="-65" width="15" height="130" />
+      <rect x="82.5" y="-65" width="15" height="130" />
+      <rect x="112.5" y="-65" width="15" height="130" />
+      <rect x="142.5" y="-65" width="15" height="130" />
+    </g>
+
+    
+    <g transform="translate(1890, 540)">
+      <rect x="-157.5" y="-65" width="15" height="130" />
+      <rect x="-127.5" y="-65" width="15" height="130" />
+      <rect x="-97.5" y="-65" width="15" height="130" />
+      <rect x="-67.5" y="-65" width="15" height="130" />
+      <rect x="-37.5" y="-65" width="15" height="130" />
+      <rect x="-7.5" y="-65" width="15" height="130" />
+      <rect x="22.5" y="-65" width="15" height="130" />
+      <rect x="52.5" y="-65" width="15" height="130" />
+      <rect x="82.5" y="-65" width="15" height="130" />
+      <rect x="112.5" y="-65" width="15" height="130" />
+      <rect x="142.5" y="-65" width="15" height="130" />
+    </g>
+
+    
+    <g transform="translate(1890, 1040)">
+      <rect x="-157.5" y="-65" width="15" height="130" />
+      <rect x="-127.5" y="-65" width="15" height="130" />
+      <rect x="-97.5" y="-65" width="15" height="130" />
+      <rect x="-67.5" y="-65" width="15" height="130" />
+      <rect x="-37.5" y="-65" width="15" height="130" />
+      <rect x="-7.5" y="-65" width="15" height="130" />
+      <rect x="22.5" y="-65" width="15" height="130" />
+      <rect x="52.5" y="-65" width="15" height="130" />
+      <rect x="82.5" y="-65" width="15" height="130" />
+      <rect x="112.5" y="-65" width="15" height="130" />
+      <rect x="142.5" y="-65" width="15" height="130" />
+    </g>
+
+    
+    <g transform="translate(1890, 1550)">
+      <rect x="-157.5" y="-65" width="15" height="130" />
+      <rect x="-127.5" y="-65" width="15" height="130" />
+      <rect x="-97.5" y="-65" width="15" height="130" />
+      <rect x="-67.5" y="-65" width="15" height="130" />
+      <rect x="-37.5" y="-65" width="15" height="130" />
+      <rect x="-7.5" y="-65" width="15" height="130" />
+      <rect x="22.5" y="-65" width="15" height="130" />
+      <rect x="52.5" y="-65" width="15" height="130" />
+      <rect x="82.5" y="-65" width="15" height="130" />
+      <rect x="112.5" y="-65" width="15" height="130" />
+      <rect x="142.5" y="-65" width="15" height="130" />
+    </g>
+
+    
+    <g transform="translate(1890, 2270)">
+      <rect x="-157.5" y="-65" width="15" height="130" />
+      <rect x="-127.5" y="-65" width="15" height="130" />
+      <rect x="-97.5" y="-65" width="15" height="130" />
+      <rect x="-67.5" y="-65" width="15" height="130" />
+      <rect x="-37.5" y="-65" width="15" height="130" />
+      <rect x="-7.5" y="-65" width="15" height="130" />
+      <rect x="22.5" y="-65" width="15" height="130" />
+      <rect x="52.5" y="-65" width="15" height="130" />
+      <rect x="82.5" y="-65" width="15" height="130" />
+      <rect x="112.5" y="-65" width="15" height="130" />
+      <rect x="142.5" y="-65" width="15" height="130" />
+    </g>
+
+    
+    <g transform="translate(2900, 1030)">
+      <rect x="-157.5" y="-65" width="15" height="130" />
+      <rect x="-127.5" y="-65" width="15" height="130" />
+      <rect x="-97.5" y="-65" width="15" height="130" />
+      <rect x="-67.5" y="-65" width="15" height="130" />
+      <rect x="-37.5" y="-65" width="15" height="130" />
+      <rect x="-7.5" y="-65" width="15" height="130" />
+      <rect x="22.5" y="-65" width="15" height="130" />
+      <rect x="52.5" y="-65" width="15" height="130" />
+      <rect x="82.5" y="-65" width="15" height="130" />
+      <rect x="112.5" y="-65" width="15" height="130" />
+      <rect x="142.5" y="-65" width="15" height="130" />
+    </g>
+
+    
+    <g transform="translate(2900, 1550)">
+      <rect x="-157.5" y="-65" width="15" height="130" />
+      <rect x="-127.5" y="-65" width="15" height="130" />
+      <rect x="-97.5" y="-65" width="15" height="130" />
+      <rect x="-67.5" y="-65" width="15" height="130" />
+      <rect x="-37.5" y="-65" width="15" height="130" />
+      <rect x="-7.5" y="-65" width="15" height="130" />
+      <rect x="22.5" y="-65" width="15" height="130" />
+      <rect x="52.5" y="-65" width="15" height="130" />
+      <rect x="82.5" y="-65" width="15" height="130" />
+      <rect x="112.5" y="-65" width="15" height="130" />
+      <rect x="142.5" y="-65" width="15" height="130" />
+    </g>
+
+    
+    <g transform="translate(580, 1290)">
+      <rect x="-65" y="-167.5" width="130" height="15" />
+      <rect x="-65" y="-135.5" width="130" height="15" />
+      <rect x="-65" y="-103.5" width="130" height="15" />
+      <rect x="-65" y="-71.5" width="130" height="15" />
+      <rect x="-65" y="-39.5" width="130" height="15" />
+      <rect x="-65" y="-7.5" width="130" height="15" />
+      <rect x="-65" y="24.5" width="130" height="15" />
+      <rect x="-65" y="56.5" width="130" height="15" />
+      <rect x="-65" y="88.5" width="130" height="15" />
+      <rect x="-65" y="120.5" width="130" height="15" />
+      <rect x="-65" y="152.5" width="130" height="15" />
+    </g>
+
+    
+    <g transform="translate(2610, 1290)">
+      <rect x="-65" y="-167.5" width="130" height="15" />
+      <rect x="-65" y="-135.5" width="130" height="15" />
+      <rect x="-65" y="-103.5" width="130" height="15" />
+      <rect x="-65" y="-71.5" width="130" height="15" />
+      <rect x="-65" y="-39.5" width="130" height="15" />
+      <rect x="-65" y="-7.5" width="130" height="15" />
+      <rect x="-65" y="24.5" width="130" height="15" />
+      <rect x="-65" y="56.5" width="130" height="15" />
+      <rect x="-65" y="88.5" width="130" height="15" />
+      <rect x="-65" y="120.5" width="130" height="15" />
+      <rect x="-65" y="152.5" width="130" height="15" />
+    </g>
+
+    
+    <g transform="translate(1600, 300)">
+      <rect x="-65" y="-157.5" width="130" height="15" />
+      <rect x="-65" y="-127.5" width="130" height="15" />
+      <rect x="-65" y="-97.5" width="130" height="15" />
+      <rect x="-65" y="-67.5" width="130" height="15" />
+      <rect x="-65" y="-37.5" width="130" height="15" />
+      <rect x="-65" y="-7.5" width="130" height="15" />
+      <rect x="-65" y="22.5" width="130" height="15" />
+      <rect x="-65" y="52.5" width="130" height="15" />
+      <rect x="-65" y="82.5" width="130" height="15" />
+      <rect x="-65" y="112.5" width="130" height="15" />
+      <rect x="-65" y="142.5" width="130" height="15" />
+    </g>
+
+    
+    <g transform="translate(2180, 300)">
+      <rect x="-65" y="-157.5" width="130" height="15" />
+      <rect x="-65" y="-127.5" width="130" height="15" />
+      <rect x="-65" y="-97.5" width="130" height="15" />
+      <rect x="-65" y="-67.5" width="130" height="15" />
+      <rect x="-65" y="-37.5" width="130" height="15" />
+      <rect x="-65" y="-7.5" width="130" height="15" />
+      <rect x="-65" y="22.5" width="130" height="15" />
+      <rect x="-65" y="52.5" width="130" height="15" />
+      <rect x="-65" y="82.5" width="130" height="15" />
+      <rect x="-65" y="112.5" width="130" height="15" />
+      <rect x="-65" y="142.5" width="130" height="15" />
+    </g>
+
+    
+    <g transform="translate(1600, 2500)">
+      <rect x="-65" y="-157.5" width="130" height="15" />
+      <rect x="-65" y="-127.5" width="130" height="15" />
+      <rect x="-65" y="-97.5" width="130" height="15" />
+      <rect x="-65" y="-67.5" width="130" height="15" />
+      <rect x="-65" y="-37.5" width="130" height="15" />
+      <rect x="-65" y="-7.5" width="130" height="15" />
+      <rect x="-65" y="22.5" width="130" height="15" />
+      <rect x="-65" y="52.5" width="130" height="15" />
+      <rect x="-65" y="82.5" width="130" height="15" />
+      <rect x="-65" y="112.5" width="130" height="15" />
+      <rect x="-65" y="142.5" width="130" height="15" />
+    </g>
+
+    
+    <g transform="translate(2180, 2500)">
+      <rect x="-65" y="-157.5" width="130" height="15" />
+      <rect x="-65" y="-127.5" width="130" height="15" />
+      <rect x="-65" y="-97.5" width="130" height="15" />
+      <rect x="-65" y="-67.5" width="130" height="15" />
+      <rect x="-65" y="-37.5" width="130" height="15" />
+      <rect x="-65" y="-7.5" width="130" height="15" />
+      <rect x="-65" y="22.5" width="130" height="15" />
+      <rect x="-65" y="52.5" width="130" height="15" />
+      <rect x="-65" y="82.5" width="130" height="15" />
+      <rect x="-65" y="112.5" width="130" height="15" />
+      <rect x="-65" y="142.5" width="130" height="15" />
+    </g>
+  </g>
+
+  
+  <g fill="#ffffff">
+    
+    <g transform="translate(300, 1890)">
+      <polygon points="-35,160 -35,-70 -75,-70 -17,-160 41,-70 1,-70 1,-25 75,-25 75,-65 165,-7 75,51 75,11 1,11 1,160" />
+    </g>
+
+    
+    <g transform="translate(320, 450)">
+      <polygon points="-50,160 -50,-40 -10,-100 70,-100 70,-140 160,-82 70,-24 70,-64 10,-64 -14,-25 -14,160" />
+    </g>
+
+    
+    <g transform="translate(2800, 320) rotate(90)">
+      <polygon points="-50,160 -50,-40 -10,-100 70,-100 70,-140 160,-82 70,-24 70,-64 10,-64 -14,-25 -14,160" />
+    </g>
+
+    
+    <g transform="translate(2880, 2370) rotate(180)">
+      <polygon points="-50,160 -50,-40 -10,-100 70,-100 70,-140 160,-82 70,-24 70,-64 10,-64 -14,-25 -14,160" />
+    </g>
+
+    
+    <g transform="translate(440, 2480) rotate(270)">
+      <polygon points="-50,160 -50,-40 -10,-100 70,-100 70,-140 160,-82 70,-24 70,-64 10,-64 -14,-25 -14,160" />
+    </g>
+  </g>
+
+  
+  <g fill="#1c39bb" stroke="#8899dd" stroke-width="4">
+    <circle cx="80" cy="1540" r="38" />
+    <circle cx="1580" cy="80" r="38" />
+    <circle cx="3120" cy="1030" r="38" />
+    <circle cx="1200" cy="1080" r="38" />
+  </g>
+</svg>

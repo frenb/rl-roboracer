@@ -1,0 +1,327 @@
+using RosMessageTypes.Roboracer;
+using UnityEngine;
+using ROSGeometry;
+using System.Collections;
+using System.Collections.Generic;
+
+using Transform = UnityEngine.Transform;
+using Quaternion = UnityEngine.Quaternion;
+
+public class SceneDataPublisher : MonoBehaviour, IRosComponent
+{
+    // ROS Connector
+    private ROSConnection ros;
+    private string topicName = "car_scene_data";
+    private GameObject car;
+    private GameObject idealTrajectory;
+    private GameObject goal;
+    private GameObject debugSphere;
+    private GameObject debugSpherePrefab;
+    private Dictionary<int,Vector3> targetOnNextGoal;
+
+    void Start()
+    {
+        // Get ROS connection static instance
+        targetOnNextGoal = new Dictionary<int, Vector3>();
+        ros = ROSConnection.instance;
+        UpdateWorldRefs();
+        StartCoroutine(DoPublish());
+    }
+
+    public void UpdateWorldRefs(ApplyForce af)
+    {
+        
+        UpdateWorldRefs();
+        SimController.instance.car.gameObject.GetComponent<CarController>().cmd_id = af.cmd_id;
+    }
+    public void UpdateWorldRefs()
+    {
+        if (SimController.instance.car != null)
+        {
+            car = SimController.instance.car.gameObject;
+        }
+        if (SimController.instance.goal != null)
+        {
+            goal = SimController.instance.goal.gameObject;
+        }
+        debugSphere = SimController.instance.debugSphere;
+        if(SimController.instance.idealTrajectoryPrefab)
+        {
+            idealTrajectory = SimController.instance.idealTrajectory.gameObject;
+        }
+        // SimController.Restart() destroys + regenerates the ENTIRE track
+        // (new Goal-N GameObjects at new positions) before calling
+        // UpdateWorldRefs() on every single episode reset - not just on
+        // curriculum stage transitions (see SimController.Restart/
+        // ApplyTrackConfig). targetOnNextGoal caches GetAngleToGoal's
+        // closest-point calculation keyed by the raw (unwrapped) goalIndex,
+        // and was never invalidated across resets, so any goalIndex value
+        // reused after a regen silently returned a stale Vector3 pointing at
+        // a goal from the PREVIOUS (now-destroyed) track layout - corrupting
+        // dist_from_traj/GetAngleToGoal (obs[0], the sole signal every
+        // steering command is derived from) without any error. Longer runs
+        // accumulate more stale entries (more resets => more goalIndex
+        // collisions), which matches the "steering ignored" / progressively
+        // worse crash symptom seen most severely on later curriculum stages.
+        // Clearing here - the one choke point every reset path already
+        // passes through post-regen - guarantees the cache never outlives
+        // the goal objects it was computed against.
+        targetOnNextGoal.Clear();
+        // So one fresh scene_data before reset done signal sent.
+        Publish();
+    }
+
+    private IEnumerator DoPublish()
+    {
+        while (true)
+        {
+            Publish();
+            // GameObject.Find("MainCamera").GetComponent<UnityEngine.Camera>().Render();
+            // yield return new WaitForSeconds(0.01f); // 50Hz
+            yield return new WaitForSeconds(0.1f); // 20Hz
+            //yield return new WaitForSeconds(0.2f); // 10Hz
+        }
+    }
+
+    private void Publish()
+    {
+        CarSceneData sceneCarDataMessage = new CarSceneData();
+        if (car != null) {
+            CarController cc = car.GetComponent<CarController>();
+            // Always stamp the cmd_id so the trainer's scene_data_events[cmd_id]
+            // fires even when goals are temporarily unavailable. cc.cmd_id is a
+            // plain int on the car component — safe to read regardless of goal
+            // state. Without this, last_executed_cmd_id stays at 0 and the
+            // trainer waits the full 5s timeout every single step.
+            if (cc != null)
+                sceneCarDataMessage.last_executed_cmd_id = cc.cmd_id;
+
+            // If goals are mid-regeneration, skip the goal-dependent car data
+            // block but fall through so the ros.Send (below) still fires.
+            if (cc != null && GoalsAlive(cc))
+            {
+                sceneCarDataMessage.car.location_x = car.transform.position.x;
+                sceneCarDataMessage.car.location_y = car.transform.position.y;
+                sceneCarDataMessage.car.location_z = car.transform.position.z;
+                sceneCarDataMessage.car.speed = car.GetComponent<CarController>().GetSpeed();
+                sceneCarDataMessage.car.cost = GetDistanceFromTraj();          
+                sceneCarDataMessage.car.dist_from_goal = 
+                    Vector3.Distance(
+                        car.transform.position, 
+                        cc.GetNextGoal().transform.position);
+                    
+                sceneCarDataMessage.car.dist_from_traj = GetAngleToGoal()/180;
+                sceneCarDataMessage.car.has_reached_goal = IsGoalComplete();
+                sceneCarDataMessage.car.has_crashed = cc.HasCrashed();
+                sceneCarDataMessage.car.current_goal = GetCurrentGoalName();
+                sceneCarDataMessage.car.last_goal_reached = GetLastGoalCompletedName();
+                sceneCarDataMessage.car.rotation_z = car.transform.eulerAngles.z;
+                sceneCarDataMessage.car.left = cc.distToClosestObjects[0];
+                sceneCarDataMessage.car.forward_left = cc.distToClosestObjects[1];
+                sceneCarDataMessage.car.forward_left_left = cc.distToClosestObjects[2];
+                sceneCarDataMessage.car.n_27_50 = cc.distToClosestObjects[3];
+                sceneCarDataMessage.car.n_25_00 = cc.distToClosestObjects[4];
+                sceneCarDataMessage.car.n_22_50 = cc.distToClosestObjects[5];
+                sceneCarDataMessage.car.n_20_00 = cc.distToClosestObjects[6];
+                sceneCarDataMessage.car.n_17_50 = cc.distToClosestObjects[7];
+                sceneCarDataMessage.car.n_15_00 = cc.distToClosestObjects[8];
+                sceneCarDataMessage.car.n_12_50 = cc.distToClosestObjects[9];
+                sceneCarDataMessage.car.n_10_00 = cc.distToClosestObjects[10];
+                sceneCarDataMessage.car.n_07_50 = cc.distToClosestObjects[11];
+                sceneCarDataMessage.car.n_05_00 = cc.distToClosestObjects[12];
+                sceneCarDataMessage.car.n_02_50 = cc.distToClosestObjects[13];
+                sceneCarDataMessage.car.forward = cc.distToClosestObjects[14];
+                sceneCarDataMessage.car.p_02_50 = cc.distToClosestObjects[15];
+                sceneCarDataMessage.car.p_05_00 = cc.distToClosestObjects[16];
+                sceneCarDataMessage.car.p_07_50 = cc.distToClosestObjects[17];
+                sceneCarDataMessage.car.p_10_00 = cc.distToClosestObjects[18];
+                sceneCarDataMessage.car.p_12_50 = cc.distToClosestObjects[19];
+                sceneCarDataMessage.car.p_15_00 = cc.distToClosestObjects[20];
+                sceneCarDataMessage.car.p_17_50 = cc.distToClosestObjects[21];
+                sceneCarDataMessage.car.p_20_00 = cc.distToClosestObjects[22];
+                sceneCarDataMessage.car.p_22_50 = cc.distToClosestObjects[23];
+                sceneCarDataMessage.car.p_25_00 = cc.distToClosestObjects[24];
+                sceneCarDataMessage.car.p_27_50 = cc.distToClosestObjects[25];
+                sceneCarDataMessage.car.forward_right_right = cc.distToClosestObjects[26];
+                sceneCarDataMessage.car.forward_right = cc.distToClosestObjects[27];
+                sceneCarDataMessage.car.right = cc.distToClosestObjects[28];
+                sceneCarDataMessage.car.angular_velocity = cc.GetAngularVelocity();
+                sceneCarDataMessage.car.goal_1 = GetAllGoalCount();
+                sceneCarDataMessage.car.goal_2 = GetVelocityCarAngleDiff()/180;
+                sceneCarDataMessage.car.goal_3 =  GetGoalCount("Goal-3");
+                sceneCarDataMessage.car.goal_4 =  GetGoalCount("Goal-4");
+                sceneCarDataMessage.car.acceleration = cc.GetAcceleration();
+            }
+        }
+        ros.Send(topicName, sceneCarDataMessage);
+        // One CSI frame per cmd_id (not the 20 Hz scene_data loop).
+        if (CsiFramePublisher.Instance != null)
+            CsiFramePublisher.Instance.Request(sceneCarDataMessage.last_executed_cmd_id);
+    }
+
+    // True only when every goal in the car's list is still alive. Returns false
+    // during the brief window where a track regeneration has destroyed the
+    // Goal-N objects but the car hasn't been rebuilt yet, so Publish() can skip
+    // that frame instead of dereferencing a destroyed GameObject.
+    private static bool GoalsAlive(CarController cc)
+    {
+        if (cc.goals == null || cc.goals.Count == 0)
+        {
+            Debug.LogWarning("[SceneDataPublisher] GoalsAlive=false: goals list is " +
+                             (cc.goals == null ? "NULL" : "EMPTY (count=0)") +
+                             ". Car data will be published as zeros this frame.");
+            return false;
+        }
+        int nullCount = 0;
+        foreach (GameObject g in cc.goals)
+            if (g == null) nullCount++;
+        if (nullCount > 0)
+        {
+            Debug.LogWarning($"[SceneDataPublisher] GoalsAlive=false: {nullCount}/{cc.goals.Count} " +
+                             "goals are destroyed. Mid-regeneration window — car data will be zeros.");
+            return false;
+        }
+        return true;
+    }
+
+    private float GetAllGoalCount(){
+        float i = 1;
+        float allGoalCount = 0;
+        for(i=1;i<32;i++){
+            allGoalCount+=GetGoalCount("Goal-" + i);
+        }
+        return allGoalCount;
+    }
+    private float GetGoalCount(string name){
+        string goal; 
+        string goalName = "trig: " + name;
+        if(car.GetComponent<CarController>().stats.TryGetValue(goalName, out goal))
+            return float.Parse(goal);
+        else
+            return 0;
+    }
+
+    private string GetCurrentGoalName(){
+        CarController cc = car.GetComponent<CarController>();
+        string goalName = cc.goals[(cc.goalIndex + 1) % cc.goals.Count].name;
+        return goalName;
+    }
+
+    private string GetLastGoalCompletedName(){
+        CarController cc = car.GetComponent<CarController>();
+        if(cc.goalIndex == 0)
+            return "";
+        
+        string lastGoalName = cc.goals[(cc.goalIndex) % cc.goals.Count].name;
+        return lastGoalName;
+    } 
+    
+    private float GetVelocityCarAngleDiff()
+    {
+        Rigidbody rb = car.GetComponent<Rigidbody>();
+        Vector3 velocity = rb.linearVelocity;
+        float angle = Vector3.SignedAngle(
+            car.transform.forward, 
+            velocity,
+            Vector3.up);
+        return angle;
+    }
+
+    private float GetDistanceFromGoal(){
+        Collider coll = goal.GetComponent<Collider>();
+        Vector3 closestPoint = coll.ClosestPointOnBounds(car.transform.position);
+        float distance = Vector3.Distance(closestPoint, car.transform.position);
+        return distance;
+    }
+    public float AngleDir(GameObject car, Vector3 trajectory)
+    {
+       Vector3 DirectionFromCarToTrajectory = car.transform.InverseTransformPoint(trajectory);
+
+        if (DirectionFromCarToTrajectory.x < 0)
+        {
+            return -1f;
+        }
+        else if (DirectionFromCarToTrajectory.x > 0)
+        {
+            return 1f;
+        }
+        
+        return 0f;
+    }  
+
+    private void MoveDebugSphere(Vector3 pos, Vector3 carPos)
+    {
+        if(debugSphere == null){
+            throw new MissingReferenceException ("no debugsphere");
+        }
+        debugSphere.transform.SetPositionAndRotation(
+            new Vector3(pos.x,pos.y,carPos.z), 
+            debugSphere.transform.rotation);
+    }
+    
+    public Vector3 GetClosestPointOnCollider(GameObject first, GameObject second)
+    {
+        CarController cc = car.GetComponent<CarController>();
+        Vector3 closestPoint;
+        if(targetOnNextGoal.TryGetValue(cc.goalIndex, out closestPoint))
+        {
+            closestPoint = targetOnNextGoal[cc.goalIndex];
+        }
+        else
+        {
+            closestPoint = cc.GetClosestPointOnCollider(first, second);
+            targetOnNextGoal[cc.goalIndex]=closestPoint;
+        }
+
+        // NOTE: the visible "next goal" marker sphere is owned exclusively by
+        // CarController.UpdateGoalStates (see cc.sphere there). This method only
+        // computes the target point used for the angle-to-goal observation and
+        // must NOT instantiate or move a sphere, otherwise two owners fight over
+        // the marker and passed goals keep lingering spheres.
+        return closestPoint;
+    }
+   private float GetAngleToGoal(){
+        CarController cc = car.GetComponent<CarController>();
+        GameObject currentGoal = cc.goals[cc.goalIndex % cc.goals.Count];
+        GameObject nextGoal = cc.GetNextGoal();
+        Vector3 closestPointOnGoal = GetClosestPointOnCollider(currentGoal, nextGoal);
+        Vector3 targetDir = closestPointOnGoal - car.transform.position;
+        float angle = Vector3.SignedAngle(
+            car.transform.forward, 
+            targetDir,
+            Vector3.up);
+        return angle;
+    }
+    private float GetDistanceFromTraj(){
+        if(!SimController.instance.idealTrajectoryPrefab)
+            return 0f;
+        Collider coll = idealTrajectory.GetComponent<Collider>();
+        Vector3 closestPoint = Physics.ClosestPoint(
+            car.transform.position, 
+            coll,
+            idealTrajectory.transform.position,
+            idealTrajectory.transform.rotation);
+        float distance = Vector3.Distance(closestPoint, car.transform.position);
+        MoveDebugSphere(closestPoint, closestPoint);//car.transform.position);
+        float direction = AngleDir(car, closestPoint);
+        //Debug.Log("anglebetween: " + direction + " " + car.transform.position );
+        return direction * distance;
+    }
+    private bool IsGoalComplete(){
+        //Debug.Log(goal);
+        CarController cc = car.GetComponent<CarController>();
+        bool isGoalTrue=false;
+        foreach(GameObject g in cc.goals){
+            isGoalTrue = g.GetComponent<Goal>().goalComplete;
+            if(isGoalTrue)
+                break;
+        } 
+        bool isComplete = goal.GetComponent<Goal>().goalComplete || isGoalTrue;
+        if(isComplete){
+            SimController.instance.goal = goal = cc.GetNextGoal();
+            return true;
+        }else{
+            return false;
+        }    
+    }
+}

@@ -437,9 +437,10 @@ def read_timeout_counts(env):
     Parallel envs: dispatch to each underlying ProcessPyEnvironment and
     sum.
 
-    The returned dict has the five counter keys
+    The returned dict has the five timeout keys
     ('reset_timeouts', 'apply_force_timeouts', 'scene_data_timeouts',
-    'front_camera_timeouts', 'publish_timeouts'); the
+    'front_camera_timeouts', 'publish_timeouts') plus
+    'front_camera_bad_frames' (malformed frames RobotApi dropped); the
     trainer prefixes them with 'timeouts/' when writing to tf.summary
     so they group together in TensorBoard's UI.
 
@@ -453,7 +454,7 @@ def read_timeout_counts(env):
     from tf_agents.environments import parallel_py_environment
     keys = ['reset_timeouts', 'apply_force_timeouts',
             'scene_data_timeouts', 'front_camera_timeouts',
-            'publish_timeouts']
+            'publish_timeouts', 'front_camera_bad_frames']
     if isinstance(env, parallel_py_environment.ParallelPyEnvironment):
         promises = [proc_env.call('get_timeout_counts')
                     for proc_env in env._envs]
@@ -1269,6 +1270,35 @@ COURSE_DEFAULT_DEMO_JOB_IDS = {
     "fly_donut": None,
     "fly_donut_flow": None,
 }
+
+
+def _demo_dependent_design_features(experiment_design_doc):
+    """Names of the demo-only features an experiment design turns on.
+
+    BC pretrain, critic warm-up, AWAC and demo prefill all silently become
+    no-ops when a job has no expert demos. The canonical Default design is
+    exempt: it carries BC/prefill values for the donut course's baked corpus
+    but is also the stock choice for from-scratch camera / fly runs.
+    """
+    if not experiment_design_doc:
+        return []
+    from experiment_designs import DEFAULT_DESIGN_ID
+    if str(experiment_design_doc.get("_id")) == DEFAULT_DESIGN_ID:
+        return []
+    checks = (
+        ("bc_pretrain_steps", "BC pretrain"),
+        ("critic_warmup_steps", "critic warm-up"),
+        ("awac_lambda", "AWAC"),
+        ("demo_prefill_count", "demo prefill"),
+    )
+    features = []
+    for key, label in checks:
+        try:
+            if float(experiment_design_doc.get(key) or 0) > 0:
+                features.append(label)
+        except (TypeError, ValueError):
+            pass
+    return features
 
 
 def _resolve_default_demo_job_id(course_type):
@@ -5508,6 +5538,18 @@ def do_job(job, num_envs=1):
         if not _demo_job_ids and not _picked_demo_paths:
             if (collect_training_data.COURSE_OBS_KIND.get(_job_course_type) == "dict"
                     or _job_course_type in collect_training_data.COURSES_WITHOUT_DEMOS):
+                _demo_features = _demo_dependent_design_features(
+                    experiment_design_doc)
+                if _demo_features and not job.get("allow_no_demos"):
+                    raise RuntimeError(
+                        f"TRAIN job {job.get('_id')} (course={_job_course_type}) "
+                        f"has no expert demos, but experiment design "
+                        f"{experiment_design_doc.get('name')!r} needs them for "
+                        f"{', '.join(_demo_features)}. Without demos all of "
+                        f"these are skipped and the job is plain SAC from "
+                        f"scratch. Pick a demo on the New-job dialog's Demos "
+                        f"tab, or set allow_no_demos=true on the job to run "
+                        f"from scratch anyway.")
                 print(
                     f"do_job: TRAIN course={_job_course_type} from scratch "
                     "(no expert-demo source).",
@@ -7489,14 +7531,52 @@ def run_jobs_loop(num_envs=1):
                 _emergency_state.clear()
                 # Tear down the finished job's collect + eval envs
                 # (ParallelPyEnvironment Unity worker subprocesses +
-                # single-env asyncio loop-threads) so the NEXT job's
-                # ParallelPyEnvironment fork starts from a lean process
-                # instead of one still holding the previous job's live
-                # workers/threads (the 2026-08-10 fork segfault). Best-
-                # effort; see close_train_envs / _ACTIVE_TRAIN_ENVS.
+                # single-env asyncio loop-threads) so workers detach from
+                # the ros-server endpoints before the process restarts
+                # below. Best-effort; see close_train_envs /
+                # _ACTIVE_TRAIN_ENVS.
                 close_train_envs()
+            _restart_trainer_process()
         print("sleep")
         time.sleep(5)
+
+
+# Full original command line (script path + every flag, including the
+# --num-envs that __main__ strips before absl sees argv). None when robotaxi.py
+# is imported rather than run, which disables the per-job restart.
+_TRAINER_ARGV = None
+
+
+def _restart_trainer_process():
+    """Replace this process with a fresh trainer before the next job.
+
+    ParallelPyEnvironment forks its workers. After a job, the process still
+    holds gRPC's poller thread and the eval env's asyncio loop thread, and
+    forking with those alive segfaults the next job's spawn (2026-10-28 and
+    2026-10-29). execv keeps the pid, cwd and stdout (so the `tee` into
+    /tmp/trainer.log keeps working) but starts a clean interpreter, so every
+    job forks from the same lean state as the first job after startup.
+    """
+    if _TRAINER_ARGV is None:
+        return
+    argv = [sys.executable, '-u'] + _TRAINER_ARGV
+    print(f"restarting trainer process for a clean next job: "
+          f"{' '.join(argv)}", flush=True)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    import fcntl
+    try:
+        if _trainer_lock_fh is not None:
+            # Forked env workers share this lock's open file description; an
+            # explicit unlock frees it even if one of them is still exiting,
+            # so the new process doesn't refuse to start.
+            fcntl.flock(_trainer_lock_fh.fileno(), fcntl.LOCK_UN)
+        os.execv(sys.executable, argv)
+    except OSError as e:
+        print(f"_restart_trainer_process: execv failed ({e}); continuing in "
+              f"this process.", flush=True)
+        if _trainer_lock_fh is not None:
+            fcntl.flock(_trainer_lock_fh.fileno(), fcntl.LOCK_EX)
 
 
 # Fixed path for the trainer singleton lock. Held for the life of the main
@@ -7604,6 +7684,7 @@ def _acquire_singleton_lock_or_exit():
 if __name__ == "__main__":
     import argparse
     import sys
+    _TRAINER_ARGV = [os.path.abspath(sys.argv[0])] + sys.argv[1:]
     # Enforce single-trainer BEFORE spawning any env workers so a stray
     # duplicate command exits immediately instead of stacking up on the
     # shared ros-server endpoints. Env workers spawned later never run

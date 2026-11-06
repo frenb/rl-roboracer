@@ -17,6 +17,7 @@
  *                                            (data-action="view-experiment-design")
  *   formatters.percentBar(fraction0to1)   -> progress bar HTML
  *   formatters.relativeTime(date)         -> "5m ago", "2 days ago"
+ *   formatters.pacificTimestamp(date)     -> "2026-10-28 17:10:55 PDT"
  *   formatters.shortId(objectId)          -> last 8 chars of ObjectId, mono-spaced
  *   formatters.truncatePath(s)            -> path with mono+ellipsis cell
  *   formatters.number(v, opts)            -> tabular-nums-formatted number cell
@@ -32,6 +33,7 @@
  *   loadJobListIntoSelect(kind, sel)      -> repopulate a picker from that list
  *   selectedName(sel) / selectedGym(sel)  -> read a picker back for a payload
  *   selectedDemo(sel) / demoLabel(row)    -> same, for the Expert demos picker
+ *   demoDependentDesignFeatures(id)       -> demo-only features a design enables
  *   clampTrialCount(v)                    -> 1..100
  *   evalCostEstimate(trials, epsPerTrial) -> {totalEpisodes, eta} footer line
  *   fillStageSelects(start, end, stages)  -> curriculum Start/End pickers
@@ -87,6 +89,13 @@
   function badge(tone, text) {
     return `<span class="${BADGE_BASE} ${BADGE_TONE[tone] || BADGE_TONE.neutral}">${escape(text)}</span>`;
   }
+
+  const PACIFIC_PARTS = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hourCycle: 'h23', timeZoneName: 'short',
+  });
 
   const formatters = {
     statusBadge(status) {
@@ -285,6 +294,18 @@
       else label = d.toLocaleDateString();
       const iso = escape(d.toISOString());
       return `<span class="text-slate-600 dark:text-slate-300 whitespace-nowrap" title="${iso}">${escape(label)}</span>`;
+    },
+
+    pacificTimestamp(value) {
+      if (!value) return '<span class="text-slate-500 dark:text-slate-400 whitespace-nowrap">—</span>';
+      const d = (value instanceof Date) ? value : new Date(value);
+      if (isNaN(d.getTime())) {
+        return `<span class="font-mono text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">${escape(String(value))}</span>`;
+      }
+      const p = {};
+      for (const { type, value: v } of PACIFIC_PARTS.formatToParts(d)) p[type] = v;
+      const label = `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second} ${p.timeZoneName}`;
+      return `<span class="font-mono text-xs tabular-nums text-slate-600 dark:text-slate-300 whitespace-nowrap" title="${escape(d.toISOString())}">${escape(label)}</span>`;
     },
 
     shortId(id) {
@@ -1751,6 +1772,34 @@
     };
   }
 
+  // Courses with no baked-in default demo corpus (COURSE_DEFAULT_DEMO_JOB_IDS
+  // maps them to None in robotaxi.py): a TRAIN job on these only gets demos
+  // if one is picked on the Demos tab.
+  const COURSES_WITHOUT_DEFAULT_DEMOS = new Set([
+    'donut_camera', 'donut_camera_no_rays', 'fly_donut', 'fly_donut_flow',
+  ]);
+
+  /**
+   * Demo-only features the experiment design turns on, as labels.
+   *
+   * Mirrors _demo_dependent_design_features in robotaxi.py, which fails a
+   * TRAIN job that asks for these without demos unless allow_no_demos is
+   * set. The canonical Default design is exempt there and here.
+   */
+  async function demoDependentDesignFeatures(designId) {
+    const id = String(designId || '');
+    if (!id || id === JOB_LIST_SOURCES.experiment_designs.pinned) return [];
+    const rows = await fetchJobList('experiment_designs');
+    const doc = rows.find((r) => String(r._id) === id);
+    if (!doc) return [];
+    return [
+      ['bc_pretrain_steps', 'BC pretrain'],
+      ['critic_warmup_steps', 'critic warm-up'],
+      ['awac_lambda', 'AWAC'],
+      ['demo_prefill_count', 'demo prefill'],
+    ].filter(([k]) => Number(doc[k]) > 0).map(([, label]) => label);
+  }
+
   /** The picked option's text, with the " (vN)" suffix hydrate added removed. */
   function selectedName(sel) {
     if (!sel || sel.selectedIndex < 0) return '';
@@ -1972,6 +2021,8 @@
     selectedName,
     selectedGym,
     selectedDemo,
+    COURSES_WITHOUT_DEFAULT_DEMOS,
+    demoDependentDesignFeatures,
     demoLabel,
     demoTime,
     clampTrialCount,
