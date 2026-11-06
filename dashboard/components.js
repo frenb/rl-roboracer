@@ -17,6 +17,7 @@
  *                                            (data-action="view-experiment-design")
  *   formatters.percentBar(fraction0to1)   -> progress bar HTML
  *   formatters.relativeTime(date)         -> "5m ago", "2 days ago"
+ *   formatters.pacificTimestamp(date)     -> "2026-10-28 17:10:55 PDT"
  *   formatters.shortId(objectId)          -> last 8 chars of ObjectId, mono-spaced
  *   formatters.truncatePath(s)            -> path with mono+ellipsis cell
  *   formatters.number(v, opts)            -> tabular-nums-formatted number cell
@@ -87,6 +88,13 @@
   function badge(tone, text) {
     return `<span class="${BADGE_BASE} ${BADGE_TONE[tone] || BADGE_TONE.neutral}">${escape(text)}</span>`;
   }
+
+  const PACIFIC_PARTS = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hourCycle: 'h23', timeZoneName: 'short',
+  });
 
   const formatters = {
     statusBadge(status) {
@@ -285,6 +293,18 @@
       else label = d.toLocaleDateString();
       const iso = escape(d.toISOString());
       return `<span class="text-slate-600 dark:text-slate-300 whitespace-nowrap" title="${iso}">${escape(label)}</span>`;
+    },
+
+    pacificTimestamp(value) {
+      if (!value) return '<span class="text-slate-500 dark:text-slate-400 whitespace-nowrap">—</span>';
+      const d = (value instanceof Date) ? value : new Date(value);
+      if (isNaN(d.getTime())) {
+        return `<span class="font-mono text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">${escape(String(value))}</span>`;
+      }
+      const p = {};
+      for (const { type, value: v } of PACIFIC_PARTS.formatToParts(d)) p[type] = v;
+      const label = `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second} ${p.timeZoneName}`;
+      return `<span class="font-mono text-xs tabular-nums text-slate-600 dark:text-slate-300 whitespace-nowrap" title="${escape(d.toISOString())}">${escape(label)}</span>`;
     },
 
     shortId(id) {
