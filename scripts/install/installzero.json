@@ -1,6 +1,6 @@
 {
   "about": "The InstallZero engine (doctor, generic failure catalog) this installer uses. Install.ps1 downloads it once into %LOCALAPPDATA%\\installzero\\engine\\<version> and refuses it unless its sha256 matches. Releases: https://storage.googleapis.com/installzero/engine/",
-  "version": "v0.1.2",
-  "url": "https://storage.googleapis.com/installzero/engine/installzero-engine-v0.1.2.zip",
-  "sha256": "f59867e36d3421029786d756880eadf63a9506368734e892fb7f8d2dcd7f1ee2"
+  "version": "v0.1.4",
+  "url": "https://storage.googleapis.com/installzero/engine/installzero-engine-v0.1.4.zip",
+  "sha256": "ca550c7339c6ca88e5b2280346a25bdd24ef122b1141b4f74e50175b1976b496"
 }
