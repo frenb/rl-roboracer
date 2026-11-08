@@ -1,0 +1,21 @@
+{
+  "name": "roboracer-console-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server exposing the rl-roboracer dashboard console (jobs, models, designs, gyms, demos, MadScientist) and gym releases.",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": "src/index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "smoke": "node test/smoke.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "yazl": "^3.3.1",
+    "zod": "^4.6.7"
+  }
+}

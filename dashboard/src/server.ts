@@ -618,6 +618,63 @@ export const createServer = (config): express.Application => {
       });
   });
 
+  // ----------------------------------------------------------------
+  // Difficulty by goal gate. The same segment-end logs as /weakness_map
+  // (one doc per stretch the car drove toward a gate, ending in "has
+  // succeeded" or "has failed - reward"), grouped by the gate it was
+  // heading for (extra_data.car.current_goal, "Goal-N"). Gates are where
+  // SimController spawns the car on reset, so this is the unit a
+  // start-position curriculum would pick from.
+  //
+  // Gate numbering is per track layout: a curriculum stage that rebuilds
+  // the track renumbers the gates, so a job spanning stages mixes layouts.
+  // ----------------------------------------------------------------
+  app.get('/weakness_by_gate', (req, res) => {
+    const jobId = String(req.query.job_id || '');
+    const limit = Math.max(1, Math.min(20000, parseInt(String(req.query.limit || '2000'), 10) || 2000));
+    if (!jobId) { res.status(400).json({ ok: false, error: 'job_id required' }); return; }
+    const jobOr: any[] = [{ job_id: jobId }];
+    try { jobOr.push({ job_id: new ObjectID(jobId) }); } catch (e) { /* not a valid ObjectId */ }
+
+    dbo.collection('logs').aggregate([
+      { $match: { $and: [{ $or: jobOr }, { position_history: { $ne: null } }] } },
+      { $sort: { _id: -1 } },
+      { $limit: limit },
+      { $project: {
+          gate: '$extra_data.car.current_goal',
+          failed: { $regexMatch: { input: { $ifNull: ['$type', ''] }, regex: 'fail' } },
+          steps: { $size: { $regexFindAll: { input: '$position_history', regex: '\\[' } } },
+          x: '$extra_data.car.location_x',
+          z: '$extra_data.car.location_z',
+          at: { $toDate: '$_id' },
+      } },
+      { $group: {
+          _id: '$gate',
+          attempts: { $sum: 1 },
+          crashes: { $sum: { $cond: ['$failed', 1, 0] } },
+          mean_steps: { $avg: '$steps' },
+          mean_steps_success: { $avg: { $cond: ['$failed', null, '$steps'] } },
+          reach_x: { $avg: { $cond: ['$failed', null, '$x'] } },
+          reach_z: { $avg: { $cond: ['$failed', null, '$z'] } },
+          crash_x: { $avg: { $cond: ['$failed', '$x', null] } },
+          crash_z: { $avg: { $cond: ['$failed', '$z', null] } },
+          last_seen: { $max: '$at' },
+      } },
+    ], { maxTimeMS: 20000 }).toArray(function (err, rows) {
+      if (err) { res.status(500).json({ ok: false, error: String(err) }); return; }
+      const gates = (rows || []).map((r: any) => {
+        const m = /(\d+)$/.exec(String(r._id || ''));
+        return { gate: r._id || null, index: m ? parseInt(m[1], 10) : null, ...r, _id: undefined };
+      }).sort((a: any, b: any) => (a.index ?? 1e9) - (b.index ?? 1e9));
+      res.json({
+        ok: true,
+        job_id: jobId,
+        segments: gates.reduce((s: number, g: any) => s + g.attempts, 0),
+        gates,
+      });
+    });
+  });
+
   app.get('/jobs', (req, res) => {
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     const lb: string = path.join(__dirname, '/../jobs.html');
