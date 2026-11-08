@@ -11,7 +11,8 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "smoke": "node test/smoke.js"
+    "smoke": "node test/smoke.js",
+    "test": "node test/tools.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
