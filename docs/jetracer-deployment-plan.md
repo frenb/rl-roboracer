@@ -14,7 +14,7 @@ Sibling docs:
 - SavedModel → Melodic `/cmd_vel` background and the sim/real contract gap:
   [`tf-model-jetson-deployment-guide.md`](tf-model-jetson-deployment-guide.md).
 - On-car bringup, topics, and `lidar_estop`:
-  [`jetson.md`](../jetson.md).
+  [`jetson.md`](hardware/jetson.md).
 - Why the camera courses are not the starting point:
   [`csi-camera-observation-guide.md`](csi-camera-observation-guide.md).
 

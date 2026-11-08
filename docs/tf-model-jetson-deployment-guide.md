@@ -209,7 +209,7 @@ Do **not**:
 - Run the `ros-server` container on the Nano as the car’s ROS master.
 - Expect Unity `cmd_id` handshake. The real loop is async; you pick a rate (start 10 Hz).
 
-Hardware signs, lidar TF, and `/cmd_vel` ownership are in `jetson.md`. The rest of this guide is the **vector and Twist contracts** the adapter must honor.
+Hardware signs, lidar TF, and `/cmd_vel` ownership are in [`jetson.md`](hardware/jetson.md). The rest of this guide is the **vector and Twist contracts** the adapter must honor.
 
 ---
 
@@ -494,7 +494,7 @@ The gym will still go Unity → ROS-TCP → `ros-server` → gRPC → trainer. T
 | Unity rays / steer / ApplyForce | `unity/Assets/CarController.cs` |
 | Unity obs publish | `unity/Assets/Scripts/SceneDataPublisher.cs` |
 | Unity sim_status / command loop | `unity/Assets/Scripts/SimController.cs` |
-| Jetson ROS reality | `jetson.md` |
+| Jetson ROS reality | [`docs/hardware/jetson.md`](hardware/jetson.md) |
 | Motor / steer sign | `invert_linear` in `jetracer.launch`; `motor_direction_test.py`, `steer_direction_test.py` |
 
 ---

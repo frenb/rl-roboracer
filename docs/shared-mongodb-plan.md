@@ -12,7 +12,7 @@ Sibling docs:
 
 - The local stack this database serves: [`../README.md`](../README.md).
 - Why the Mongo image is pinned to `bitnamilegacy`: "Migrating off the legacy
-  Bitnami Mongo image" in [`../README.md`](../README.md).
+  Bitnami Mongo image" in [`operations.md`](operations.md#migrating-off-the-legacy-bitnami-mongo-image).
 
 ---
 
@@ -376,7 +376,7 @@ Do not skip to this. Phase 1 above is safe; this is the part that needs code.
 
 **Do this.** Add a `worker_id` to the queue, set per machine by an env var:
 
-1. Each developer sets `WORKER_ID` (`benja-desktop`, `dev2-laptop`) in `.env`.
+1. Each developer sets `WORKER_ID` (`dev1-desktop`, `dev2-laptop`) in `.env`.
 2. Replace the `find()` in `get_jobs()` with an atomic claim, so a job is
    taken by exactly one trainer:
 
@@ -407,7 +407,7 @@ logs pickups for its own `worker_id`.
 **Do this.** Decide how gym binaries and saved models are shared.
 
 The `gyms` documents store absolute Windows paths — the v13 gym is
-`C:\Users\benja\Documents\agents\robots\LATEST\UnityBinary\wCourseJetRacer2026.09.20-v13\robotaxi gym level 1.exe`
+`C:\Users\<you>\...\LATEST\UnityBinary\wCourseJetRacer2026.09.20-v13\robotaxi gym level 1.exe`
 — and model records point at `/saved_models/robotaxi/SacAgent/...`. Neither
 resolves on another machine, and `_signal_gym_switch` sends that exact path
 to the Unity supervisor for hot-swap.
