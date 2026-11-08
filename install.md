@@ -32,9 +32,11 @@ revenue); larger organisations need a paid subscription. Approving step 3
 accepts the Docker Subscription Service Agreement:
 https://www.docker.com/legal/docker-subscription-service-agreement/
 
-Not covered here yet (`scripts/install/Install.ps1` does them): starting the
-Unity client(s), the sign-in shortcut that restarts them, and the first
-TRAIN job.
+The last three steps start the Unity client, add a shortcut to your Startup
+folder that starts it again at each sign-in, and run a first short TRAIN
+job (2,000 iterations, up to 45 minutes) to show the stack trains end to end.
+To leave that job out: `installzero install --skip firstjob`. This file runs
+one Unity client; `scripts/install/Install.ps1 -Clients N` runs up to four.
 
 ## Step 1: wsl - WSL 2
 
@@ -507,4 +509,169 @@ $have = docker compose exec -T mongo mongosh --quiet -u root -p $pw --authentica
     Where-Object { $_ -match '^\s*\d+\s*$' } | Select-Object -Last 1
 Write-Output "$have of $want starter documents"
 if (-not $have -or [int]$have -ne $want) { exit 1 }
+```
+
+## Step 13: clients - Start the Unity client
+
+Why: training drives the gym through a Unity client on this PC, supervised
+by scripts\RunClientWrapper.ps1 (which restarts it if it exits). Unity sends
+its ROS handshake only at startup, so a client started before the current
+ros-server is restarted too.
+
+```detect powershell
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+$builds = '{{INSTALL_DIR}}\unity\Builds'
+$clients = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($builds, [StringComparison]::OrdinalIgnoreCase) -and $_.Path -notmatch 'UnityCrashHandler' })
+if ($clients.Count -ne 1 -or -not $clients[0].StartTime) { exit 1 }
+if (Get-NetTCPConnection -OwningProcess $clients[0].Id -RemotePort 10000 -State Established -ErrorAction SilentlyContinue) { exit 0 }
+$since = $clients[0].StartTime.ToUniversalTime().AddSeconds(-5).ToString('yyyy-MM-ddTHH:mm:ssZ')
+if (-not (docker compose logs --no-color --since $since ros-server 2>$null | Select-String 'ROS-Unity Handshake received')) { exit 1 }
+```
+
+```install powershell
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+$builds = '{{INSTALL_DIR}}\unity\Builds'
+# The wrapper relaunches a client it sees exit, so it goes first.
+Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' OR Name = 'pwsh.exe'" |
+    Where-Object { $_.CommandLine -like '*{{INSTALL_DIR}}\scripts\RunClientWrapper.ps1*' -or $_.CommandLine -like '*{{INSTALL_DIR}}\scripts\install\Start-ClientAtLogon.ps1*' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($builds, [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 3
+$gym = Join-Path (Split-Path '{{INSTALL_DIR}}') 'UnityBinary\wCourseJetRacer2026.09.20-v13\robotaxi gym level 1.exe'
+Start-Process -FilePath powershell.exe -WindowStyle Minimized -WorkingDirectory '{{INSTALL_DIR}}' -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"{{INSTALL_DIR}}\scripts\install\Start-ClientAtLogon.ps1`" -N 1 -GymSource `"$gym`""
+Write-Output 'Unity client starting (minimized); waiting for it to connect to ros-server ...'
+```
+
+```verify powershell phase=unity-client
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+$builds = '{{INSTALL_DIR}}\unity\Builds'
+$deadline = (Get-Date).AddMinutes(3)
+do {
+    $client = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($builds, [StringComparison]::OrdinalIgnoreCase) -and $_.Path -notmatch 'UnityCrashHandler' } | Select-Object -First 1
+    if ($client -and $client.StartTime) {
+        $since = $client.StartTime.ToUniversalTime().AddSeconds(-5).ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $line = docker compose logs --no-color --since $since ros-server 2>$null | Select-String 'ROS-Unity Handshake received' | Select-Object -Last 1
+        if ($line -or (Get-NetTCPConnection -OwningProcess $client.Id -RemotePort 10000 -State Established -ErrorAction SilentlyContinue)) {
+            Write-Output "Unity pid $($client.Id) connected to ros-server"
+            exit 0
+        }
+    }
+    Start-Sleep -Seconds 10
+} while ((Get-Date) -lt $deadline)
+$log = '{{INSTALL_DIR}}\unity\Builds\latest\Player.log'
+if (Test-Path $log) { Get-Content $log -Tail 120 }
+Write-Output "the Unity client did not connect to ros-server within 3 minutes (log: $log)"
+exit 1
+```
+
+## Step 14: autostart - Start the Unity client at sign-in
+
+Why: Docker brings the containers back by itself after a restart; the Unity
+client is a Windows program and does not come back unless something starts
+it. This puts a shortcut in your Startup folder that waits for Docker and
+ros-server, then starts the client (the same shortcut Install.ps1 makes).
+
+```detect powershell
+$lnk = Join-Path ([Environment]::GetFolderPath('Startup')) 'rl-roboracer Unity client.lnk'
+if (-not (Test-Path $lnk)) { exit 1 }
+$gym = Join-Path (Split-Path '{{INSTALL_DIR}}') 'UnityBinary\wCourseJetRacer2026.09.20-v13\robotaxi gym level 1.exe'
+$want = "-NoProfile -ExecutionPolicy Bypass -File `"{{INSTALL_DIR}}\scripts\install\Start-ClientAtLogon.ps1`" -N 1 -GymSource `"$gym`""
+if ((New-Object -ComObject WScript.Shell).CreateShortcut($lnk).Arguments -ne $want) { exit 1 }
+```
+
+```install powershell
+$lnk = Join-Path ([Environment]::GetFolderPath('Startup')) 'rl-roboracer Unity client.lnk'
+$gym = Join-Path (Split-Path '{{INSTALL_DIR}}') 'UnityBinary\wCourseJetRacer2026.09.20-v13\robotaxi gym level 1.exe'
+$s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+$s.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$s.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"{{INSTALL_DIR}}\scripts\install\Start-ClientAtLogon.ps1`" -N 1 -GymSource `"$gym`""
+$s.WorkingDirectory = '{{INSTALL_DIR}}'
+$s.WindowStyle = 7
+$s.Description = 'Waits for Docker and ros-server, then supervises the rl-roboracer Unity client (gym switching on).'
+$s.Save()
+```
+
+```verify powershell
+$lnk = Join-Path ([Environment]::GetFolderPath('Startup')) 'rl-roboracer Unity client.lnk'
+if (-not (Test-Path $lnk)) { Write-Output "missing $lnk"; exit 1 }
+$s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+if ($s.Arguments -notlike '*Start-ClientAtLogon.ps1*') { Write-Output "$lnk does not start Start-ClientAtLogon.ps1"; exit 1 }
+Write-Output "Startup shortcut: $lnk"
+```
+
+```uninstall powershell
+Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath('Startup')) 'rl-roboracer Unity client.lnk') -Force -ErrorAction SilentlyContinue
+```
+
+## Step 15: firstjob - First TRAIN job
+
+Why: proves the whole stack trains: queues a 2,000-iteration TRAIN job on
+the starter gym (scripts\install\first-job.js), waits for the trainer to
+pick it up, for two training iterations to finish, and for TensorBoard
+(http://localhost:6006) to show its scalars. The job keeps running after
+the install; watch it on the dashboard. Skip with `--skip firstjob`.
+
+```detect powershell
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+$pw = (Get-Content '{{INSTALL_DIR}}\.env' | Where-Object { $_ -match '^\s*MONGO_ROOT_PASSWORD\s*=' } | Select-Object -Last 1)
+$pw = if ($pw) { ($pw -split '=', 2)[1].Trim() } else { 'example' }
+$status = docker compose exec -T mongo mongosh --quiet -u root -p $pw --authenticationDatabase admin robotaxi --eval "const j = db.jobs.findOne({installer_first_job: true}, {status: 1}); print(j ? j.status : 'NONE')" 2>$null | Select-Object -Last 1
+if ("$status".Trim() -notin 'IN_PROGRESS', 'DONE') { exit 1 }
+```
+
+```install powershell phase=trainer timeout=50m
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+$pw = (Get-Content '{{INSTALL_DIR}}\.env' | Where-Object { $_ -match '^\s*MONGO_ROOT_PASSWORD\s*=' } | Select-Object -Last 1)
+$pw = if ($pw) { ($pw -split '=', 2)[1].Trim() } else { 'example' }
+function Get-JobStatus {
+    $s = docker compose exec -T mongo mongosh --quiet -u root -p $pw --authenticationDatabase admin robotaxi --eval "const j = db.jobs.findOne({installer_first_job: true}, {status: 1}); print(j ? j.status : 'NONE')" 2>$null | Select-Object -Last 1
+    "$s".Trim()
+}
+$trainLog = '{{INSTALL_DIR}}\rl_agent\robotaxi.out'
+function Stop-Trainer([string]$Message) {
+    if (Test-Path $trainLog) { Get-Content $trainLog -Tail 200 }
+    Write-Output "$Message (log: $trainLog)"
+    exit 1
+}
+docker compose cp '{{INSTALL_DIR}}\scripts\install\first-job.js' mongo:/tmp/rl-first-job.js
+if ($LASTEXITCODE -ne 0) { exit 1 }
+$out = docker compose exec -T mongo mongosh --quiet -u root -p $pw --authenticationDatabase admin robotaxi --file /tmp/rl-first-job.js 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0 -or $out -notmatch '(?m)^FIRST_JOB ') { Write-Output $out; exit 1 }
+Write-Output ($out -split "`n" | Where-Object { $_ -match '^(designs|FIRST_JOB) ' })
+$deadline = (Get-Date).AddMinutes(10)
+while ((Get-JobStatus) -notin 'IN_PROGRESS', 'DONE', 'FAILED') {
+    if ((Get-Date) -gt $deadline) { Stop-Trainer "the trainer did not start the job within 10 minutes (status $(Get-JobStatus))" }
+    Start-Sleep -Seconds 10
+}
+Write-Output 'Training started; waiting for the first two iterations ...'
+$deadline = (Get-Date).AddMinutes(30)
+do {
+    if ((Get-JobStatus) -eq 'FAILED') { Stop-Trainer 'the first training job failed' }
+    $n = if (Test-Path $trainLog) { @(Select-String -Path $trainLog -Pattern 'TRAIN end:\s+iter=').Count } else { 0 }
+    if ($n -ge 2) { break }
+    if ((Get-Date) -gt $deadline) { Stop-Trainer 'no training steps after 30 minutes' }
+    Start-Sleep -Seconds 20
+} while ($true)
+```
+
+```verify powershell phase=trainer
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+$pw = (Get-Content '{{INSTALL_DIR}}\.env' | Where-Object { $_ -match '^\s*MONGO_ROOT_PASSWORD\s*=' } | Select-Object -Last 1)
+$pw = if ($pw) { ($pw -split '=', 2)[1].Trim() } else { 'example' }
+$status = "$(docker compose exec -T mongo mongosh --quiet -u root -p $pw --authenticationDatabase admin robotaxi --eval "const j = db.jobs.findOne({installer_first_job: true}, {status: 1}); print(j ? j.status : 'NONE')" 2>$null | Select-Object -Last 1)".Trim()
+if ($status -notin 'IN_PROGRESS', 'DONE') { Write-Output "first job status: $status"; exit 1 }
+$deadline = (Get-Date).AddMinutes(4)
+do {
+    $tags = 0
+    try {
+        $runs = Invoke-RestMethod -Uri 'http://127.0.0.1:6006/data/plugin/scalars/tags' -TimeoutSec 10
+        foreach ($run in $runs.PSObject.Properties) { $tags += @($run.Value.PSObject.Properties).Count }
+    } catch { }
+    if ($tags -gt 0) { Write-Output "first job $status; $tags TensorBoard scalar tags"; exit 0 }
+    Start-Sleep -Seconds 15
+} while ((Get-Date) -lt $deadline)
+$log = '{{INSTALL_DIR}}\rl_agent\robotaxi.out'
+if (Test-Path $log) { Get-Content $log -Tail 120 }
+Write-Output 'training is running but TensorBoard shows no scalars (http://127.0.0.1:6006)'
+exit 1
 ```
