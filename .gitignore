@@ -92,6 +92,13 @@ docker/fly_brain/gen/
 # they survive a clean, but they are not part of the project.
 _tmp_*
 
+# Blender's automatic backups of the real2sim track models.
+*.blend1
+
+# Raw phone videos of the physical track, inputs to scripts/real2sim
+# (hundreds of MB each); the layout and model they produce are committed.
+unity/Videos/
+
 # Written by scripts/Monitor-Job.ps1 each time it polls.
 scripts/_monitor_logstats_tmp.sh
 

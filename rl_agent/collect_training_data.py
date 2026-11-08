@@ -1042,12 +1042,6 @@ def get_policy_type_name(policy):
         policy_type = type(policy).__name__
     return policy_type
 
-def get_save_dir_root(policy):
-    policy_type = get_policy_type_name(policy)
-    saved_models_dir = "C:/Users/benja/Documents/robots/LATEST/saved_models" #os.getenv('SAVED_MODELS_DIR')
-    robot_type = "robotaxi" #os.getenv('ROBOT_TYPE')
-    return os.path.join(saved_models_dir,robot_type,policy_type)
-
 def get_save_dir_root_docker(policy):
     policy_type = get_policy_type_name(policy)
     saved_models_dir = "/saved_models" #os.getenv('SAVED_MODELS_DIR')
