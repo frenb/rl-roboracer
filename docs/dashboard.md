@@ -7,7 +7,11 @@ changes need a **dashboard container restart** to recompile. `prestart` runs
 `npm install` **only when `node_modules` is missing**, then always `tsc` — so a
 restart is a fast offline compile rather than a network-dependent reinstall
 (after bumping the base image, do a one-time `rm -rf node_modules && npm install`
-so ABI-sensitive deps rebuild). A few architectural points are worth knowing:
+so ABI-sensitive deps rebuild).
+
+![Weakness tab: per-cell weakness blended from crash rate, slowness and pre-crash risk, with crash sites marked](images/weakness-map.png)
+
+A few architectural points are worth knowing:
 
 - **Crash resilience.** The server installs process-level `uncaughtException` /
   `unhandledRejection` guards, and every Mongo request handler responds with a

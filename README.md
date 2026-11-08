@@ -1,8 +1,16 @@
 # RL Roboracer
 
+[![CI](https://github.com/frenb/rl-roboracer/actions/workflows/ci.yml/badge.svg)](https://github.com/frenb/rl-roboracer/actions/workflows/ci.yml)
+
 **A reinforcement learning platform for autonomous driving: from a Unity gym to a real 1/10-scale robot car.**
 
 Build a simulated track, design rewards and experiments, train Soft Actor-Critic policies across parallel simulators, evaluate and diagnose them, and carry the best one toward a Waveshare JetRacer, with an AI research agent proposing the next experiment.
+
+<p align="center">
+  <img src="docs/images/sac-lap.gif" width="640" alt="A trained SAC policy driving a full lap of the donut course in the Unity gym, with its ray sensors drawn in green">
+  <br>
+  <sub>The SAC policy <code>7573_step_87314</code> driving a lap of <code>donut_no_hint</code> in the Unity gym from rays, speed and sideslip only (3× speed).</sub>
+</p>
 
 ![RL Roboracer: build, design, train, evaluate, sim to real, deploy](docs/images/readme-hero.png)
 
@@ -25,6 +33,10 @@ Average evaluation return of different drivers on the `donut_no_hint` course ([f
 | Random | ~1.0 |
 | Frozen fly connectome + ridge readout | 6.87 |
 | SAC (`7573_step_87314`) | 75.7 |
+
+The dashboard's weakness map shows where a policy struggles. Each cell blends crash rate, slowness and pre-crash risk from the logged trajectories, and crash sites are marked with ×. Per-gate crash statistics from the same logs back the `get_difficult_sections` and `suggest_start_gates` MCP tools.
+
+![Weakness map of a training run: the donut track colored by weakness, with crash hotspots in red](docs/images/weakness-map.png)
 
 ## How it fits together
 
