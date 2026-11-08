@@ -2,6 +2,7 @@
 name: rl-roboracer
 source: https://github.com/frenb/rl-roboracer
 summary: RL training stack for the Roboracer (Docker Desktop on WSL 2, NVIDIA GPU, Unity gyms), on Windows
+catalog: scripts/install/catalog
 ---
 
 # rl-roboracer install
@@ -115,7 +116,7 @@ docker info --format '{{.ServerVersion}}' 2>$null
 exit $LASTEXITCODE
 ```
 
-```install powershell
+```install powershell phase=docker-start
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 docker info 2>$null | Out-Null
 if ($LASTEXITCODE -eq 0) { exit 0 }
@@ -134,7 +135,7 @@ docker info
 exit 1
 ```
 
-```verify powershell
+```verify powershell phase=docker-gpu
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 $out = docker run --rm --gpus all nvidia/cuda:11.0.3-base-ubuntu20.04 nvidia-smi -L 2>&1 | Out-String
 Write-Output $out.Trim()
@@ -193,13 +194,13 @@ docker run --rm --entrypoint bash $img -c "echo $([Convert]::ToBase64String([Tex
 exit $LASTEXITCODE
 ```
 
-```install powershell
+```install powershell phase=build timeout=90m
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 docker compose build --progress=plain ros-server
 exit $LASTEXITCODE
 ```
 
-```verify powershell
+```verify powershell phase=verify
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 $img = (docker compose config --format json | ConvertFrom-Json).services.'ros-server'.image
 $check = "set -eo pipefail`nsource /opt/ros/noetic/setup.bash && source /catkin_ws/devel/setup.bash`npython3 -c 'from roboracer.msg import CarSceneData, SimCommand, SimStatus, Camera; from ros_tcp_endpoint import TcpServer; from virtual_endpoint import VirtualNode; print(""imports ok"")'"
@@ -221,13 +222,13 @@ docker run --rm --entrypoint bash $img -c "echo $([Convert]::ToBase64String([Tex
 exit $LASTEXITCODE
 ```
 
-```install powershell
+```install powershell phase=build timeout=90m
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 docker compose build --progress=plain sim-controller
 exit $LASTEXITCODE
 ```
 
-```verify powershell
+```verify powershell phase=verify
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 $img = (docker compose config --format json | ConvertFrom-Json).services.'sim-controller'.image
 $check = "set -eo pipefail`nkb=`$(du -s /usr/local/lib/python3.8/dist-packages/tensorflow | cut -f1)`n[ `"`$kb`" -gt 900000 ] || { echo `"tensorflow folder is only `${kb} KB - corrupted layer`"; exit 1; }`npython3 -c 'import tensorflow, tf_agents, reverb, pymongo; from tensorboard_plugin_profile import profile_plugin; print(""tf"", tensorflow.__version__)' 2>&1 | tail -1`nsource /opt/ros/noetic/setup.bash && source /catkin_ws/devel/setup.bash`npython3 -c 'from roboracer.msg import CarSceneData, SimCommand; print(""roboracer msgs ok"")'"
@@ -249,13 +250,13 @@ docker run --rm --entrypoint bash $img -c "echo $([Convert]::ToBase64String([Tex
 exit $LASTEXITCODE
 ```
 
-```install powershell
+```install powershell phase=build timeout=90m
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 docker compose build --progress=plain fly-brain
 exit $LASTEXITCODE
 ```
 
-```verify powershell
+```verify powershell phase=verify
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 $img = (docker compose config --format json | ConvertFrom-Json).services.'fly-brain'.image
 $check = "set -eo pipefail`npython -c 'import flybrain, cupy, grpc, google.protobuf; print(""grpc"", grpc.__version__)'"
@@ -278,7 +279,7 @@ $marker = '{{INSTALL_DIR}}\unity\Builds\latest\.roboracer-client.json'
 if (-not (Test-Path $marker) -or (Get-Content $marker -Raw | ConvertFrom-Json).gym -ne 'wCourseJetRacer2026.09.20-v13') { exit 1 }
 ```
 
-```install powershell
+```install powershell phase=download
 $ProgressPreference = 'SilentlyContinue'
 $bin = Join-Path (Split-Path '{{INSTALL_DIR}}') 'UnityBinary'
 $exe = 'robotaxi gym level 1.exe'
@@ -338,7 +339,7 @@ $dir = Join-Path (Split-Path '{{INSTALL_DIR}}') 'tfrecords\job_64168c1b58d4d8ccd
 if (-not @(Get-ChildItem $dir -Filter '*.tfrecord' -File -ErrorAction SilentlyContinue)) { exit 1 }
 ```
 
-```install powershell
+```install powershell phase=download
 $ProgressPreference = 'SilentlyContinue'
 $dir = Join-Path (Split-Path '{{INSTALL_DIR}}') 'tfrecords\job_64168c1b58d4d8ccdb76e721'
 $base = 'https://github.com/frenb/rl-roboracer/releases/download/v0.1'
@@ -384,7 +385,7 @@ foreach ($port in 10000, 6006) {
 }
 ```
 
-```install powershell
+```install powershell phase=compose-up
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 function Wait-Port([int]$Port, [int]$Minutes) {
     $deadline = (Get-Date).AddMinutes($Minutes)
@@ -423,7 +424,7 @@ if ($LASTEXITCODE -ne 0) { docker compose logs --no-color --tail 60 fly-brain; W
 if (-not (Wait-Port 80 5)) { Write-Output 'The dashboard is still starting (its first start runs npm install).' }
 ```
 
-```verify powershell
+```verify powershell phase=container
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 $want = 'ros-server', 'mongo', 'mongo-express', 'sim-controller', 'dashboard', 'fly-brain'
 $running = @(docker compose ps --status running --services | ForEach-Object { $_.Trim() })
@@ -461,7 +462,7 @@ $have = docker compose exec -T mongo mongosh --quiet -u root -p $pw --authentica
 if (-not $have -or [int]$have -ne $want) { exit 1 }
 ```
 
-```install powershell
+```install powershell phase=container
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 $pw = (Get-Content '{{INSTALL_DIR}}\.env' | Where-Object { $_ -match '^\s*MONGO_ROOT_PASSWORD\s*=' } | Select-Object -Last 1)
 $pw = if ($pw) { ($pw -split '=', 2)[1].Trim() } else { 'example' }
