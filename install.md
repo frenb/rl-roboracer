@@ -298,8 +298,7 @@ foreach ($g in $gyms) {
     if ((Test-Path (Join-Path $dest $exe)) -and (Test-Path (Join-Path $dest '.roboracer-client.json'))) { continue }
     $name = "roboracer-gym-$($g.Folder).zip"
     $zip = Join-Path $tmp $name
-    Write-Output "Downloading $base/$name"
-    Invoke-WebRequest "$base/$name" -OutFile $zip -UseBasicParsing
+    Invoke-IzDownload -Uri "$base/$name" -OutFile $zip
     $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
     try {
         Invoke-WebRequest "$base/$name.sha256" -OutFile "$zip.sha256" -UseBasicParsing
@@ -349,7 +348,7 @@ $base = 'https://github.com/frenb/rl-roboracer/releases/download/v0.1'
 $tmp = Join-Path $env:TEMP 'rl-roboracer-demos'
 New-Item -ItemType Directory -Force $tmp, $dir | Out-Null
 $zip = Join-Path $tmp 'roboracer-demos-donut.zip'
-Invoke-WebRequest "$base/roboracer-demos-donut.zip" -OutFile $zip -UseBasicParsing
+Invoke-IzDownload -Uri "$base/roboracer-demos-donut.zip" -OutFile $zip
 try {
     Invoke-WebRequest "$base/roboracer-demos-donut.zip.sha256" -OutFile "$zip.sha256" -UseBasicParsing
     $want = ((Get-Content "$zip.sha256" -Raw).Trim() -split '\s+')[0].ToLower()
