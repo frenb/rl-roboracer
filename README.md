@@ -8,7 +8,7 @@ Build a simulated track, design rewards and experiments, train Soft Actor-Critic
 
 ## Highlights
 
-- **Demonstration-guided RL that works.** SAC with advantage-weighted (AWAC) actor regularization, a demo-protected replay buffer and a performance-gated track curriculum reached **209 ± 126 goals per episode against a 4.16 baseline (50×)**. Write-up: [preprint](docs/rl-roboracer-preprint.md); internals: [training](docs/training.md).
+- **Demonstration-guided RL.** Soft Actor-Critic with advantage-weighted (AWAC) actor regularization, a demo-protected replay buffer and a performance-gated track curriculum, trained across up to four parallel simulators. See [training](docs/training.md).
 - **Real to sim with Gemini.** A phone video walking around the physical track goes to Gemini (`gemini-4-argon`), which returns a measured top-down layout. That becomes a Blender model and then a Unity gym of the real track ([`scripts/real2sim/`](scripts/real2sim/)).
 - **Sim to real by design.** The `donut_no_hint` policy sees only what the real car can measure (speed, sideslip, 29 lidar-like rays), and the simulator mirrors the JetRacer's body, camera and intrinsics. See [sim2real](docs/sim2real.md) and the [deployment plan](docs/jetracer-deployment-plan.md).
 - **An experiment platform, not a script.** A web dashboard for the job queue, reward designs written as versioned code, experiment designs, a leaderboard, statistical model comparison and a track **weakness map** that shows where a policy crashes. Everything is stored in MongoDB. See the [dashboard notes](docs/dashboard.md).
@@ -18,14 +18,7 @@ Build a simulated track, design rewards and experiments, train Soft Actor-Critic
 
 ## Results
 
-From the [preprint](docs/rl-roboracer-preprint.md), on the procedurally generated donut track:
-
-| Configuration | Goals per episode | Speed |
-|---|---|---|
-| Speed-reward SAC baseline | 4.16 | |
-| SAC + AWAC + demo-protected replay + goal-count reward | **209.22 ± 125.51** | 2.83 m/s |
-
-Average evaluation return of different drivers on the same course ([fly brain](docs/fly-brain.md)):
+Average evaluation return of different drivers on the `donut_no_hint` course ([fly brain](docs/fly-brain.md)):
 
 | Policy | Average return |
 |---|---|
@@ -63,7 +56,7 @@ More:
 - Manual developer setup: [docs/setup.md](docs/setup.md). With the InstallZero CLI, `installzero install` at the repo root follows [install.md](install.md).
 - Day-to-day start, stop and multi-actor runs: [docs/operations.md](docs/operations.md).
 
-**No Windows GPU machine?** The [preprint](docs/rl-roboracer-preprint.md), the [platform overview](docs/images/readme-platform-overview.png) and the [docs](docs/README.md) cover the system without running it.
+**No Windows GPU machine?** The [platform overview](docs/images/readme-platform-overview.png) and the [docs](docs/README.md) cover the system without running it.
 
 ## Repository layout
 

@@ -17,12 +17,6 @@ Start with the [project README](../README.md). Guides describe what exists; desi
 | [hardware/jetson.md](hardware/jetson.md) | The physical car: Jetson bringup, ROS topics, SLAM, gotchas |
 | [rltest-clean-test.md](rltest-clean-test.md) | Testing the installer in a clean Windows account |
 
-## Research
-
-| Doc | What it covers |
-|---|---|
-| [rl-roboracer-preprint.md](rl-roboracer-preprint.md) | Reward design and demonstration-guided RL for autonomous racing: ablations and results |
-
 ## Design notes (built)
 
 | Doc | What it covers |
@@ -47,6 +41,12 @@ Start with the [project README](../README.md). Guides describe what exists; desi
 | [shared-mongodb-plan.md](shared-mongodb-plan.md) | Sharing the database with a second developer |
 | [install-script-plan.md](install-script-plan.md) | The Windows one-script installer and how to test it |
 | [install-script-plan-macos.md](install-script-plan-macos.md) | A macOS installer |
+
+## Drafts
+
+| Doc | What it covers |
+|---|---|
+| [drafts/rl-roboracer-preprint.md](drafts/rl-roboracer-preprint.md) | Working draft: reward design and demonstration-guided RL ablations |
 
 ## Media
 
