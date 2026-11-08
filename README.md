@@ -70,7 +70,7 @@ rl-roboracer/
 ├── protos/            gRPC contracts between the trainer, ROS bridge and fly brain
 ├── mcp/console/       MCP server exposing the console to coding agents
 ├── scripts/           stack lifecycle, installer, Unity build and real2sim pipeline
-├── docs/              guides, design notes and the preprint (index: docs/README.md)
+├── docs/              guides, design notes and plans (index: docs/README.md)
 └── .cursor/skills/    agent skills: run diagnosis, sim-real gap, JetRacer deployment
 ```
 
