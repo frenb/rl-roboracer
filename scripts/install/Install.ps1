@@ -1534,13 +1534,14 @@ function Get-SeedJson {
 }
 
 # On an empty data folder Mongo runs its first-time setup and then restarts,
-# so one successful ping is not enough; require three in a row.
+# and then elects itself primary of its one-member replica set (until then it
+# answers but refuses writes: "not primary"); require three primary answers in a row.
 function Wait-MongoReady([int]$TimeoutSec = 240) {
     $streak = 0
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        $r = Invoke-Mongo 'print(db.runCommand({ping: 1}).ok)'
-        if ($r.Code -eq 0 -and $r.Out -match '(?m)^1\s*$') { $streak++ } else { $streak = 0 }
+        $r = Invoke-Mongo 'print(db.hello().isWritablePrimary)'
+        if ($r.Code -eq 0 -and $r.Out -match '(?m)^true\s*$') { $streak++ } else { $streak = 0 }
         if ($streak -ge 3) { return $true }
         Start-Sleep -Seconds 5
     }
@@ -1566,7 +1567,7 @@ function Invoke-SeedPhase {
     } -Install {
         Write-Info 'waiting for MongoDB to finish starting (a new database restarts once after setup) ...'
         if (-not (Wait-MongoReady)) {
-            Stop-WithDiagnosis 'container' (Get-ServiceLogs @('mongo')) 'MongoDB did not answer within 4 minutes'
+            Stop-WithDiagnosis 'container' (Get-ServiceLogs @('mongo')) 'MongoDB did not become primary within 4 minutes'
         }
         $tmp = Join-Path $StateDir 'rl-seed.json'
         [IO.File]::WriteAllText($tmp, (Get-SeedJson), (New-Object Text.UTF8Encoding $false))

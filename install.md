@@ -468,14 +468,15 @@ if (-not $have -or [int]$have -ne $want) { exit 1 }
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 $pw = (Get-Content '{{INSTALL_DIR}}\.env' | Where-Object { $_ -match '^\s*MONGO_ROOT_PASSWORD\s*=' } | Select-Object -Last 1)
 $pw = if ($pw) { ($pw -split '=', 2)[1].Trim() } else { 'example' }
-# A new database restarts once after its first-time setup: wait for three pings in a row.
+# A new database restarts once after its first-time setup, then elects itself primary of its one-member
+# replica set; until then it answers but refuses writes ("not primary"). Wait until it is primary three times in a row.
 $streak = 0; $deadline = (Get-Date).AddMinutes(4)
 while ($streak -lt 3 -and (Get-Date) -lt $deadline) {
-    $ok = docker compose exec -T mongo mongosh --quiet -u root -p $pw --authenticationDatabase admin robotaxi --eval 'print(db.runCommand({ping: 1}).ok)' 2>$null
-    if ($LASTEXITCODE -eq 0 -and ($ok -match '^1\s*$')) { $streak++ } else { $streak = 0 }
+    $ok = docker compose exec -T mongo mongosh --quiet -u root -p $pw --authenticationDatabase admin robotaxi --eval 'print(db.hello().isWritablePrimary)' 2>$null
+    if ($LASTEXITCODE -eq 0 -and ($ok -match '^true\s*$')) { $streak++ } else { $streak = 0 }
     Start-Sleep -Seconds 5
 }
-if ($streak -lt 3) { docker compose logs --no-color --tail 60 mongo; Write-Error 'MongoDB did not answer within 4 minutes'; exit 1 }
+if ($streak -lt 3) { docker compose logs --no-color --tail 60 mongo; Write-Error 'MongoDB did not become primary within 4 minutes'; exit 1 }
 $bin = Join-Path (Split-Path '{{INSTALL_DIR}}') 'UnityBinary'
 $tmp = Join-Path $env:TEMP 'rl-seed.json'
 [IO.File]::WriteAllText($tmp, (Get-Content '{{INSTALL_DIR}}\scripts\install\seed\seed.json' -Raw).Replace('{{UNITY_BINARY_DIR}}', $bin.Replace('\', '\\')), (New-Object Text.UTF8Encoding $false))
