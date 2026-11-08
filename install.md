@@ -21,8 +21,9 @@ Run it at the repo root: `installzero install`. The data folders
 `docker-compose.yml` expects them (`../saved_models`, `../mongodb`).
 
 Step 1 installs WSL 2 when it is missing, which needs a restart of Windows:
-the step stops there; restart, then run `installzero install` again and it
-continues where it stopped. Building the images takes 20 to 60 minutes the
+the install stops there and offers to continue at your next sign-in (or
+run `installzero install` again after restarting); steps already done are
+skipped. Building the images takes 20 to 60 minutes the
 first time.
 
 Docker Desktop is free for personal use, education, non-commercial open
@@ -58,12 +59,12 @@ exit $LASTEXITCODE
 ```install powershell
 $p = Start-Process wsl.exe -ArgumentList '--install', '--no-distribution' -Verb RunAs -Wait -PassThru
 if ($p.ExitCode -ne 0) { Write-Error "wsl --install exited $($p.ExitCode)"; exit 1 }
-Write-Output 'WSL 2 is installed. Restart Windows, then run installzero install again.'
+exit 3010
 ```
 
 ```verify powershell
 wsl.exe --version | Out-Null
-if ($LASTEXITCODE -ne 0) { Write-Output 'WSL needs a restart of Windows to finish installing.'; exit 1 }
+if ($LASTEXITCODE -ne 0) { exit 1 }
 wsl.exe --status | Out-Null
 exit $LASTEXITCODE
 ```
