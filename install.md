@@ -564,6 +564,14 @@ Write-Output "the Unity client did not connect to ros-server within 3 minutes (l
 exit 1
 ```
 
+```uninstall powershell
+Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' OR Name = 'pwsh.exe'" |
+    Where-Object { $_.CommandLine -like '*{{INSTALL_DIR}}\scripts\RunClientWrapper.ps1*' -or $_.CommandLine -like '*{{INSTALL_DIR}}\scripts\install\Start-ClientAtLogon.ps1*' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith('{{INSTALL_DIR}}\unity\Builds', [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 3
+```
+
 ## Step 14: autostart - Start the Unity client at sign-in
 
 Why: Docker brings the containers back by itself after a restart; the Unity
