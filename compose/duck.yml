@@ -6,12 +6,10 @@
 # or `.\scripts\Start-Stack.ps1 -Duck`. Paths are relative to the repo root
 # (the first compose file's directory), as in compose/scale.yml.
 #
-# Train by hand inside the container (no job queue yet):
-#
-#   docker compose -f docker-compose.yml -f compose/duck.yml exec duck-trainer \
-#     train Mjlab-Velocity-Flat-MicroDuck --env.scene.num-envs 2048
-#
-# Checkpoints land in ../saved_models/microduck/rsl_rl/<experiment>/<run>/.
+# The container runs the duck job worker (rl_agent/duck/worker.py), which
+# claims robot="microduck" jobs from the shared queue. Checkpoints land in
+# ../saved_models/microduck/rsl_rl/<experiment>/<run>/ and per-job logs in
+# ../saved_models/microduck/jobs/.
 
 services:
   duck-trainer:
@@ -20,6 +18,7 @@ services:
       context: ./third_party/microduck_rl
       dockerfile: ../../docker/duck_trainer/Dockerfile
     restart: unless-stopped
+    command: python -u /python_ws/src/duck/worker.py
     environment:
       - ROBOT_TYPE=microduck
       - DATABASE_NAME=robotaxi
@@ -42,6 +41,11 @@ services:
       - type: bind
         source: ./rl_agent
         target: /python_ws/src
+      # The car stack's /tmp volume; the worker writes duck_trainer.log
+      # there for the dashboard, next to the car's trainer.log.
+      - type: volume
+        source: tmpdata
+        target: /shared_tmp
       # Compiled Warp kernels (several minutes to build on first run).
       - type: volume
         source: duck_warp_cache
