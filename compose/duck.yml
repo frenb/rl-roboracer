@@ -1,0 +1,52 @@
+# Microduck overlay: adds the duck-trainer service (mjlab + rsl_rl PPO on
+# MuJoCo Warp) next to the roboracer stack. Opt-in:
+#
+#   docker compose -f docker-compose.yml -f compose/scale.yml -f compose/duck.yml up -d
+#
+# or `.\scripts\Start-Stack.ps1 -Duck`. Paths are relative to the repo root
+# (the first compose file's directory), as in compose/scale.yml.
+#
+# Train by hand inside the container (no job queue yet):
+#
+#   docker compose -f docker-compose.yml -f compose/duck.yml exec duck-trainer \
+#     train Mjlab-Velocity-Flat-MicroDuck --env.scene.num-envs 2048
+#
+# Checkpoints land in ../saved_models/microduck/rsl_rl/<experiment>/<run>/.
+
+services:
+  duck-trainer:
+    image: ${IMAGE_PREFIX:-}duck_trainer:latest
+    build:
+      context: ./third_party/microduck_rl
+      dockerfile: ../../docker/duck_trainer/Dockerfile
+    restart: unless-stopped
+    environment:
+      - ROBOT_TYPE=microduck
+      - DATABASE_NAME=robotaxi
+      - MONGO_URL=${MONGO_URL:-mongodb://root:${MONGO_ROOT_PASSWORD:-example}@mongo:27017/}
+      - WANDB_MODE=disabled
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      # mjlab writes runs under <cwd>/logs; keep them with the other models.
+      - type: bind
+        source: ../saved_models/microduck
+        target: /microduck_rl/logs
+      # rl-roboracer side of the integration (the duck job worker lands in
+      # rl_agent/duck); mounted like sim-controller's /python_ws/src.
+      - type: bind
+        source: ./rl_agent
+        target: /python_ws/src
+      # Compiled Warp kernels (several minutes to build on first run).
+      - type: volume
+        source: duck_warp_cache
+        target: /root/.cache/warp
+    shm_size: 8gb
+
+volumes:
+  duck_warp_cache:

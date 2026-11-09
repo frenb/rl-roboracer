@@ -56,8 +56,16 @@
     you don't want the auto-recovery loop interfering, or if you're
     starting the Watchdog separately with custom parameters.
 
+.PARAMETER Duck
+    Also start the duck-trainer service from compose/duck.yml (Microduck
+    training with mjlab on MuJoCo Warp). Off by default; the duck needs
+    no Unity clients, so -Duck -SkipUnity brings up a duck-only session.
+
 .EXAMPLE
     .\scripts\Start-Stack.ps1
+
+.EXAMPLE
+    .\scripts\Start-Stack.ps1 -Duck -SkipUnity
 
 .EXAMPLE
     .\scripts\Start-Stack.ps1 -N 2 -Popup
@@ -75,17 +83,21 @@ param(
     [switch]$Popup,
     [int]$WaitForRosServersSeconds = 8,
     [switch]$SkipUnity,
-    [switch]$SkipWatchdog
+    [switch]$SkipWatchdog,
+    [switch]$Duck
 )
 
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
 
-Write-Host "Starting docker compose stack (with scale overlay)..."
+$composeFiles = @('-f', 'docker-compose.yml', '-f', 'compose/scale.yml')
+if ($Duck) { $composeFiles += @('-f', 'compose/duck.yml') }
+
+Write-Host "Starting docker compose stack (with scale overlay$(if ($Duck) { ' and duck-trainer' }))..."
 Push-Location $repoRoot
 try {
-    docker compose -f docker-compose.yml -f compose/scale.yml up -d
+    docker compose @composeFiles up -d
     if ($LASTEXITCODE -ne 0) {
         throw "docker compose up failed with code $LASTEXITCODE"
     }

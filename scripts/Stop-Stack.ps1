@@ -142,11 +142,13 @@ if ($unities.Count -eq 0) {
 # down`` only knows about docker-compose.yml's services and would leave
 # the overlay containers running, blocking the network from being
 # removed (we hit this footgun earlier this session).
+# compose/duck.yml is always included for the same reason: a duck-trainer
+# started with Start-Stack -Duck would otherwise outlive the stack.
 if (-not $KeepDocker) {
-    Write-Host "Stopping docker compose stack (with scale overlay)..."
+    Write-Host "Stopping docker compose stack (with scale and duck overlays)..."
     Push-Location $repoRoot
     try {
-        docker compose -f docker-compose.yml -f compose/scale.yml down
+        docker compose -f docker-compose.yml -f compose/scale.yml -f compose/duck.yml down
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "docker compose down exited with code $LASTEXITCODE; check output above."
         }
