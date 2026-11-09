@@ -13,7 +13,8 @@ Follows the car trainer's job lifecycle so the dashboard treats both alike:
 Any other status written while a job runs (e.g. DONE from "Set to done")
 stops it without overwriting that status.
 
-Job types: TRAIN, EXPORT, EVAL. Field reference: duck/launch.py.
+Job types: TRAIN, EXPORT, EVAL, VIDEO (progression video of a TRAIN job's
+checkpoints). Field reference: duck/launch.py.
 """
 import datetime
 import json
@@ -39,10 +40,14 @@ LOG_ROOT = WORKDIR / "logs"
 JOB_LOG_DIR = LOG_ROOT / "jobs"
 SHARED_LOG = pathlib.Path(os.environ.get("DUCK_SHARED_LOG", "/shared_tmp/duck_trainer.log"))
 EVALUATE_SCRIPT = pathlib.Path(__file__).resolve().parent / "evaluate.py"
+RENDER_PROGRESS_SCRIPT = pathlib.Path(__file__).resolve().parent / "render_progress.py"
 POLL_S = 5
 STATUS_POLL_S = 2
 PROGRESS_WRITE_S = 5
 STOP_GRACE_S = 30
+# mjlab writes a clip in one go once it has all its frames; skip files that
+# may still be mid-write.
+VIDEO_SETTLE_S = 5
 # Velocity policies deployed on the real duck: 48 proprioception + 13 command
 # inputs -> 14 servo targets. Other tasks have their own shapes.
 DEPLOY_SHAPE = {"Mjlab-Velocity-": (61, 14)}
@@ -187,18 +192,23 @@ def find_run_dir(name):
     return matches[-1] if matches else None
 
 
-def resolve_checkpoint(job):
-    """Checkpoint an EXPORT or EVAL job targets: explicit, or a TRAIN job's latest."""
-    if job.get("checkpoint"):
-        return pathlib.Path(job["checkpoint"])
+def resolve_source_job(job):
+    """The TRAIN job named by ``source_job_id``."""
     source_id = job.get("source_job_id")
     if source_id is None:
-        raise launch.JobSpecError("set checkpoint or source_job_id")
+        raise launch.JobSpecError("set source_job_id")
     source = db.jobs.find_one({"_id": source_id}) or db.jobs.find_one(
         {"_id": _maybe_object_id(source_id)})
     if not source or not source.get("duck_checkpoint"):
         raise launch.JobSpecError(f"job {source_id} has no microduck checkpoint")
-    return pathlib.Path(source["duck_checkpoint"])
+    return source
+
+
+def resolve_checkpoint(job):
+    """Checkpoint an EXPORT or EVAL job targets: explicit, or a TRAIN job's latest."""
+    if job.get("checkpoint"):
+        return pathlib.Path(job["checkpoint"])
+    return pathlib.Path(resolve_source_job(job)["duck_checkpoint"])
 
 
 def _maybe_object_id(value):
@@ -279,17 +289,21 @@ def run_train(job, resume, log):
     job_id = job["_id"]
     run_dirs = list(job.get("duck_run_dirs") or [])
     latest = launch.latest_checkpoint(run_dirs) if resume else None
+    prior_videos = list(job.get("videos") or []) if resume else []
     if not resume:
         run_dirs = []
         update_job(job_id, duck_run_dirs=[], duck_checkpoint=None, duck_iteration=0,
-                   paused_at_step=None)
+                   paused_at_step=None, videos=[], progress_video=None, progress_gif=None)
+    offset = launch.iteration_offset(job)
     total = launch.positive_int(job, "max_iterations")
+    start_iteration = latest[0] if latest else offset
     attempt = len(run_dirs)
     argv, extra_env = launch.train_command(job, attempt, resume_from=latest and latest[1])
     if latest:
         log.write(f"[duck-worker] resuming from {latest[1]} (iteration {latest[0]})\n")
 
-    state = {"run_dir": None, "checkpoint": latest, "last_write": 0.0, "progress": {}}
+    state = {"run_dir": None, "checkpoint": latest, "last_write": 0.0, "progress": {},
+             "videos": len(prior_videos)}
     name = launch.run_name(job, attempt)
 
     def on_line(line):
@@ -308,7 +322,8 @@ def run_train(job, resume, log):
         fields = {}
         if "iteration" in progress:
             fields["duck_iteration"] = progress["iteration"]
-            fields["percent_complete"] = min(100.0, round(100.0 * (progress["iteration"] + 1) / total, 1))
+            done = progress["iteration"] + 1 - offset
+            fields["percent_complete"] = min(100.0, round(100.0 * done / total, 1))
         if "mean_reward" in progress:
             fields["mean_reward"] = progress["mean_reward"]
         if "mean_episode_length" in progress:
@@ -318,6 +333,13 @@ def run_train(job, resume, log):
             state["checkpoint"] = newest
             fields["duck_checkpoint"] = str(newest[1])
             upsert_model(job, newest[1], newest[0], avg_return=progress.get("mean_reward"))
+        if state["run_dir"] is not None:
+            clips = [{"iteration": it, "path": str(p)}
+                     for it, p in launch.training_videos(state["run_dir"], start_iteration)
+                     if time.time() - p.stat().st_mtime > VIDEO_SETTLE_S]
+            if len(prior_videos) + len(clips) != state["videos"]:
+                state["videos"] = len(prior_videos) + len(clips)
+                fields["videos"] = prior_videos + clips
         if fields:
             update_job(job_id, **fields)
 
@@ -333,7 +355,7 @@ def run_train(job, resume, log):
             # Iterations after the last checkpoint are lost, so report where
             # the resume will actually restart.
             update_job(job_id, status="PAUSED", paused_at_step=step, duck_iteration=step,
-                       percent_complete=round(100.0 * step / total, 1),
+                       percent_complete=round(100.0 * (step - offset) / total, 1),
                        duck_checkpoint=str(newest[1]) if newest else None)
             log.write(f"[duck-worker] paused at checkpoint iteration {step}\n")
             return
@@ -354,6 +376,37 @@ def run_train(job, resume, log):
                      obs_dim=report["obs_dim"], act_dim=report["act_dim"],
                      avg_return=state["progress"].get("mean_reward"))
         update_job(job_id, onnx_location=str(onnx_path))
+    if outcome == "finished" and job.get("progress_video"):
+        render_progress(job, job, run_dirs, log)
+
+
+def render_progress(job, source, run_dirs, log):
+    """Progression video for ``source``'s checkpoints, recorded on both jobs."""
+    picked = launch.pick_evenly(launch.checkpoints(run_dirs),
+                                launch.positive_int(job, "video_checkpoints"))
+    if not picked:
+        raise RuntimeError(f"job {source['_id']} has no checkpoints to render")
+    last_iteration, last_checkpoint = picked[-1]
+    out_mp4 = last_checkpoint.parent / f"progress_{last_iteration}.mp4"
+    argv = launch.progress_video_command(
+        {**job, "task_id": launch.task_id(source)}, [p for _, p in picked], out_mp4,
+        RENDER_PROGRESS_SCRIPT)
+    outcome, rc, tail = run_process(job["_id"], argv, log)
+    if outcome == "pause":
+        update_job(job["_id"], status="PAUSED")
+    if outcome != "finished":
+        return
+    if rc != 0 or not out_mp4.exists():
+        raise RuntimeError(f"progress video exited {rc}:\n{tail}")
+    paths = {"progress_video": str(out_mp4), "progress_gif": str(out_mp4.with_suffix(".gif"))}
+    for target in {job["_id"], source["_id"]}:
+        update_job(target, **paths)
+
+
+def run_video(job, log):
+    source = resolve_source_job(job)
+    render_progress(job, source, source.get("duck_run_dirs") or [], log)
+    update_job(job["_id"], percent_complete=100)
 
 
 def run_export(job, log):
@@ -407,6 +460,8 @@ def do_job(job):
             run_export(job, log)
         elif job_type == "EVAL":
             run_eval(job, log)
+        elif job_type == "VIDEO":
+            run_video(job, log)
         else:
             raise launch.JobSpecError(f"unsupported job_type {job_type!r} for {ROBOT}")
     except Exception as exc:  # noqa: BLE001 - record it and keep draining the queue

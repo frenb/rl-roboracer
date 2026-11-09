@@ -54,6 +54,50 @@ def test_whole_floats_from_the_dashboard_are_accepted():
     assert flag(argv, "--env.scene.num-envs") == "512"
 
 
+def test_warm_started_job_resumes_against_its_offset_budget():
+    job = {"_id": "abc", "max_iterations": 500, "init_checkpoint": f"{RUN}/model_900.pt"}
+    assert launch.iteration_offset(job) == 900
+    argv, _ = launch.train_command(job, attempt=1, resume_from=f"{RUN}/model_1100.pt")
+    assert flag(argv, "--agent.max-iterations") == "300"
+
+
+def test_training_video_flags_convert_iterations_to_env_steps():
+    argv, _ = launch.train_command({"_id": "abc", "video": True, "video_every": 100}, attempt=0)
+    assert flag(argv, "--video") == "True"
+    assert flag(argv, "--video-interval") == str(100 * launch.STEPS_PER_ITERATION)
+    assert flag(argv, "--video-length") == str(launch.DEFAULTS["video_seconds"] * launch.CONTROL_HZ)
+    assert flag(argv, "--env.viewer.distance") == str(launch.CAMERA["distance"])
+    argv, _ = launch.train_command({"_id": "abc"}, attempt=0)
+    assert "--video" not in argv
+
+
+def test_training_videos_are_offset_by_the_resume_iteration(tmp_path):
+    clips = tmp_path / "videos" / "train"
+    clips.mkdir(parents=True)
+    (clips / "rl-video-step-0.mp4").touch()
+    (clips / f"rl-video-step-{50 * launch.STEPS_PER_ITERATION}.mp4").touch()
+    (clips / "notes.txt").touch()
+    assert [it for it, _ in launch.training_videos(tmp_path, 200)] == [200, 250]
+    assert launch.training_videos(tmp_path / "missing", 0) == []
+
+
+def test_pick_evenly_keeps_first_and_last():
+    assert launch.pick_evenly(list(range(11)), 3) == [0, 5, 10]
+    assert launch.pick_evenly([1, 2], 10) == [1, 2]
+    assert launch.pick_evenly([1, 2, 3], 1) == [3]
+    assert launch.pick_evenly([], 5) == []
+
+
+def test_progress_video_command():
+    argv = launch.progress_video_command(
+        {"task_id": "T"}, [f"{RUN}/model_0.pt", f"{RUN}/model_50.pt"], "/o/p.mp4", "r.py")
+    assert argv[:3] == ["python", "r.py", "T"]
+    assert flag(argv, "--seconds") == "5"
+    assert argv[argv.index("--checkpoints") + 1:] == [f"{RUN}/model_0.pt", f"{RUN}/model_50.pt"]
+    with pytest.raises(launch.JobSpecError):
+        launch.progress_video_command({}, [], "/o/p.mp4", "r.py")
+
+
 def test_seed_task_and_extra_args():
     job = {"_id": "abc", "task_id": "Mjlab-Velocity-Rough-Backlash-MicroDuck", "seed": 7,
            "train_args": ["--agent.algorithm.entropy-coef", "0.005"]}

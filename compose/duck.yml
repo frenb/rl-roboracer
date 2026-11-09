@@ -24,6 +24,12 @@ services:
       - DATABASE_NAME=robotaxi
       - MONGO_URL=${MONGO_URL:-mongodb://root:${MONGO_ROOT_PASSWORD:-example}@mongo:27017/}
       - WANDB_MODE=disabled
+      # GPU OpenGL for MuJoCo's offscreen renderer (videos, viewer) under
+      # Docker Desktop's WSL2 backend: Mesa's d3d12 driver over /dev/dxg.
+      # Without it Mesa falls back to llvmpipe on the CPU.
+      - GALLIUM_DRIVER=d3d12
+      - MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
+      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
     deploy:
       resources:
         reservations:
@@ -31,7 +37,15 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    devices:
+      - /dev/dxg
     volumes:
+      # WSL's D3D12 user-mode libraries, from Docker Desktop's VM (see
+      # GALLIUM_DRIVER above).
+      - type: bind
+        source: /usr/lib/wsl
+        target: /usr/lib/wsl
+        read_only: true
       # mjlab writes runs under <cwd>/logs; keep them with the other models.
       - type: bind
         source: ../saved_models/microduck
@@ -50,6 +64,10 @@ services:
       - type: volume
         source: duck_warp_cache
         target: /root/.cache/warp
+    # mjlab's browser viewer (viser), started on demand by
+    # scripts/Watch-Duck.ps1. Host 8080 is the dashboard's log socket.
+    ports:
+      - "8090:8080"
     shm_size: 8gb
 
 volumes:
