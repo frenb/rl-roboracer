@@ -32,19 +32,23 @@ LATEST/
 
 ## Quick install (Windows)
 
-The installer is InstallZero, an agentic installer that diagnoses its own
-failures. On Windows 10 or 11 with an NVIDIA GPU and at least 60 GB free, open
-PowerShell (not as administrator) and run:
+The installer is [InstallZero](https://github.com/InstallZero/installzero), an
+agentic installer that diagnoses its own failures. On Windows 10 or 11 with an
+NVIDIA GPU and at least 60 GB free, download
+[installzero.exe](https://github.com/frenb/rl-roboracer/releases/latest/download/installzero.exe)
+from the latest release and open it. Until InstallZero is code-signed, Windows
+asks you to confirm: More info, then Run anyway.
+
+Or, in PowerShell (not as administrator):
 
 ```powershell
 irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/install.ps1 | iex
 ```
 
-It downloads the [InstallZero](https://github.com/InstallZero/installzero) CLI
-(v0.1.8, checked against the release's SHA256SUMS) into
-`%LOCALAPPDATA%\installzero\bin`, clones the repo into
-`%USERPROFILE%\rl-roboracer\rl-roboracer` (or downloads it as a zip when Git
-is not installed yet), and runs `installzero install` there, which follows
+Either way, InstallZero asks before it starts, keeps itself in
+`%LOCALAPPDATA%\installzero\bin`, gets the repo into
+`%USERPROFILE%\rl-roboracer\rl-roboracer` (git clone, or GitHub's archive when
+Git is not installed yet), and follows
 [install.md](install.md): WSL 2, Git and Docker Desktop if they are missing,
 the Docker images (30-60 minutes the first time), the Unity gyms and expert
 demonstrations, the stack, one Unity client and a short first training job.

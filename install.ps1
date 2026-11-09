@@ -7,22 +7,22 @@
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/install.ps1))) --model google
 #
 # Downloads the InstallZero CLI (the version below, checked against the
-# release's SHA256SUMS) into %LOCALAPPDATA%\installzero\bin, gets the repo into
-# %USERPROFILE%\rl-roboracer\rl-roboracer (git clone, or the branch's zip when
-# Git is not installed yet; install.md installs it), and runs installzero
-# install there, which follows install.md. RL_INSTALL_BRANCH picks another
-# branch, INSTALLZERO_VERSION another InstallZero release (or latest).
+# release's SHA256SUMS) into %LOCALAPPDATA%\installzero\bin and runs
+# installzero install frenb/rl-roboracer, which gets the repo into
+# %USERPROFILE%\rl-roboracer\rl-roboracer (git clone, or GitHub's archive when
+# Git is not installed yet; install.md installs it) and follows its install.md.
+# The same CLI is attached to each release as installzero.exe, which does this
+# when opened. RL_INSTALL_BRANCH picks another branch, INSTALLZERO_VERSION
+# another InstallZero release (or latest).
 
 & {
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-    $repo = 'frenb/rl-roboracer'
-    $branch = if ($env:RL_INSTALL_BRANCH) { $env:RL_INSTALL_BRANCH } else { 'main' }
-    $version = if ($env:INSTALLZERO_VERSION) { $env:INSTALLZERO_VERSION } else { 'v0.1.8' }
-    $installDir = Join-Path $env:USERPROFILE 'rl-roboracer'
-    $repoDir = Join-Path $installDir 'rl-roboracer'
+    $project = 'frenb/rl-roboracer'
+    if ($env:RL_INSTALL_BRANCH) { $project += "@$env:RL_INSTALL_BRANCH" }
+    $version = if ($env:INSTALLZERO_VERSION) { $env:INSTALLZERO_VERSION } else { 'v0.1.9' }
 
     $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') { 'arm64' } else { 'amd64' }
     $asset = "installzero-windows-$arch.exe"
@@ -44,34 +44,6 @@
     }
     Move-Item -Force $tmp $bin
 
-    if (Test-Path (Join-Path $repoDir 'install.md')) {
-        Write-Host "Using the rl-roboracer checkout in $repoDir"
-    } elseif (Test-Path (Join-Path $repoDir '.git')) {
-        Write-Host "Updating the rl-roboracer checkout in $repoDir (it has no install.md yet) ..."
-        git -C $repoDir pull --ff-only
-        if (-not (Test-Path (Join-Path $repoDir 'install.md'))) { throw "$repoDir has no install.md after git pull; update it to $branch and run this again." }
-    } elseif (Test-Path $repoDir) {
-        throw "$repoDir exists but holds no rl-roboracer checkout; move it aside and run this again."
-    } elseif (Get-Command git -ErrorAction SilentlyContinue) {
-        Write-Host "Cloning $repo ($branch) into $repoDir ..."
-        New-Item -ItemType Directory -Force $installDir | Out-Null
-        git clone --branch $branch "https://github.com/$repo.git" $repoDir
-        if ($LASTEXITCODE -ne 0) { throw "git clone failed (exit $LASTEXITCODE)" }
-    } else {
-        Write-Host "Git is not installed yet (install.md installs it); downloading $repo ($branch) as a zip into $repoDir ..."
-        $zip = Join-Path $env:TEMP "rl-roboracer-$PID.zip"
-        $unz = Join-Path $env:TEMP "rl-roboracer-$PID"
-        Invoke-WebRequest -UseBasicParsing "https://codeload.github.com/$repo/zip/refs/heads/$branch" -OutFile $zip
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [IO.Compression.ZipFile]::ExtractToDirectory($zip, $unz)
-        New-Item -ItemType Directory -Force $installDir | Out-Null
-        Move-Item (Get-ChildItem $unz -Directory | Select-Object -First 1).FullName $repoDir
-        Remove-Item $zip, $unz -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "This copy is not a git checkout; to update it later, git clone https://github.com/$repo.git" -ForegroundColor Yellow
-    }
-
-    Push-Location $repoDir
-    try { & $bin install @args }
-    finally { Pop-Location }
-    Write-Host "installzero is in $bin; from $repoDir run it again to resume, or $bin uninstall rl-roboracer to remove what it installed."
+    & $bin install $project @args
+    Write-Host "installzero is in $bin; run it again with the same arguments to resume, or $bin uninstall rl-roboracer to remove what it installed."
 } @args

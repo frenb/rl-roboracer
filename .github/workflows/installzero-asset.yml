@@ -1,0 +1,52 @@
+# Attaches installzero.exe to a release: the InstallZero CLI tagged with this
+# repo at the release's tag, so opening the downloaded file installs that
+# release (it asks first). Run it by hand for an existing release; ref picks
+# what the copy installs (default: the release's tag; "default" for the
+# default branch, for a release that predates install.md).
+name: InstallZero release asset
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Release tag to attach installzero.exe to
+        required: true
+      ref:
+        description: Branch, tag or commit the copy installs (empty = the release tag, default = the default branch)
+        required: false
+
+permissions:
+  contents: write
+
+env:
+  INSTALLZERO_VERSION: v0.1.9
+
+jobs:
+  attach:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download InstallZero and check it against SHA256SUMS
+        run: |
+          base="https://github.com/InstallZero/installzero/releases/download/$INSTALLZERO_VERSION"
+          curl -fsSL -o installzero-linux-amd64 "$base/installzero-linux-amd64" \
+                     -o installzero-windows-amd64.exe "$base/installzero-windows-amd64.exe" \
+                     -o SHA256SUMS "$base/SHA256SUMS"
+          sha256sum --check --ignore-missing SHA256SUMS
+          chmod +x installzero-linux-amd64
+
+      - name: Tag it with this repo and attach it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE: ${{ github.event.release.tag_name || inputs.release }}
+          REF: ${{ inputs.ref }}
+        run: |
+          case "$REF" in
+            "") project="$GITHUB_REPOSITORY@$RELEASE" ;;
+            default) project="$GITHUB_REPOSITORY" ;;
+            *) project="$GITHUB_REPOSITORY@$REF" ;;
+          esac
+          ./installzero-linux-amd64 tag "$project" -i installzero-windows-amd64.exe -o installzero.exe
+          ./installzero-linux-amd64 tag --show installzero.exe
+          gh release upload "$RELEASE" installzero.exe --clobber -R "$GITHUB_REPOSITORY"
