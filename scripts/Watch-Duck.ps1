@@ -21,7 +21,7 @@
     Pin the view to one microduck TRAIN job instead of following.
 
 .PARAMETER NumEnvs
-    Robots shown. Default 4.
+    Robots shown. Default 2. The view idles while its window is closed.
 
 .PARAMETER WindowWidth
     App window width. Default 960, the Unity clients' default.
@@ -47,7 +47,7 @@
 #>
 param(
     [string]$JobId,
-    [int]$NumEnvs = 4,
+    [int]$NumEnvs = 2,
     [int]$WindowWidth = 960,
     [int]$WindowHeight = 540,
     [switch]$NoBrowser,
@@ -169,6 +169,9 @@ Start-Process $browser -ArgumentList @(
     # Policy-installed extensions otherwise open onboarding tabs in the
     # fresh profile next to the viewer.
     '--disable-extensions',
+    # WebGL on the integrated GPU: on the NVIDIA one, Windows time-slices it
+    # against training's CUDA work and training steps get several times slower.
+    '--force_low_power_gpu',
     '--no-first-run',
     '--no-default-browser-check'
 )

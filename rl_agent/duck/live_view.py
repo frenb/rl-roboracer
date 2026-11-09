@@ -2,7 +2,7 @@
 
 Runs inside the duck-trainer container, from /microduck_rl:
 
-    python /python_ws/src/duck/live_view.py [--job-id ID] [--num-envs 4]
+    python /python_ws/src/duck/live_view.py [--job-id ID] [--num-envs 2]
 
 Follows the running microduck TRAIN job (or, when none is running, the most
 recent one with a checkpoint): every new checkpoint it saves is loaded as it
@@ -40,6 +40,24 @@ from duck import launch  # noqa: E402
 
 POLL_S = 10
 EXIT_JOB_CHANGED = 3
+FRAME_RATE = 30.0
+IDLE_SLEEP_S = 0.25
+
+
+class LiveViewer(ViserPlayViewer):
+    """Play viewer that stops simulating while no browser is connected.
+
+    The view shares the GPU with training, so with nobody watching it only
+    drains queued actions (job switches, checkpoint loads) and sleeps.
+    """
+
+    def tick(self):
+        if self._server.get_clients():
+            return super().tick()
+        self._process_actions()
+        self._last_tick_time = time.perf_counter()
+        time.sleep(IDLE_SLEEP_S)
+        return False
 
 db = MongoClient(os.environ.get("MONGO_URL", "mongodb://root:example@mongo:27017/"))[
     os.environ.get("DATABASE_NAME", "robotaxi")]
@@ -79,7 +97,7 @@ def wait_for_job(server, job_id):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--job-id")
-    parser.add_argument("--num-envs", type=int, default=4)
+    parser.add_argument("--num-envs", type=int, default=2)
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -114,7 +132,8 @@ def main():
     newest = max(state["paths"], key=launch.checkpoint_iteration)
     manager = CheckpointManager(current_name=newest, fetch_available=available,
                                 load_checkpoint=load, run_name=str(job["_id"]))
-    viewer = ViserPlayViewer(env, load(newest), viser_server=server, checkpoint_manager=manager)
+    viewer = LiveViewer(env, load(newest), frame_rate=FRAME_RATE, viser_server=server,
+                        checkpoint_manager=manager)
     exit_code = {"value": 0}
 
     def watch():
