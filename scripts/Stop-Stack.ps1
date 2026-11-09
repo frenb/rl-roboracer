@@ -137,6 +137,13 @@ if ($unities.Count -eq 0) {
     }
 }
 
+# Duck live view: its app window and supervisor run on the host, so they
+# would outlive the containers (and the supervisor would keep relaunching).
+$watchDuck = Join-Path $PSScriptRoot 'Watch-Duck.ps1'
+if (Test-Path -LiteralPath $watchDuck) {
+    try { & $watchDuck -Stop } catch { Write-Warning "Duck live view stop failed: $_" }
+}
+
 # 3. Docker compose stack. Pass BOTH compose files so the scale-overlay
 # ros-server-{1..3} services come down too - plain ``docker compose
 # down`` only knows about docker-compose.yml's services and would leave

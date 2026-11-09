@@ -60,6 +60,10 @@
     Also start the duck-trainer service from compose/duck.yml (Microduck
     training with mjlab on MuJoCo Warp). Off by default; the duck needs
     no Unity clients, so -Duck -SkipUnity brings up a duck-only session.
+    Also opens the duck's live 3D view window (scripts/Watch-Duck.ps1).
+
+.PARAMETER SkipDuckViewer
+    With -Duck, don't open the live 3D view window.
 
 .EXAMPLE
     .\scripts\Start-Stack.ps1
@@ -84,7 +88,8 @@ param(
     [int]$WaitForRosServersSeconds = 8,
     [switch]$SkipUnity,
     [switch]$SkipWatchdog,
-    [switch]$Duck
+    [switch]$Duck,
+    [switch]$SkipDuckViewer
 )
 
 $ErrorActionPreference = 'Stop'
@@ -103,6 +108,15 @@ try {
     }
 } finally {
     Pop-Location
+}
+
+if ($Duck -and -not $SkipDuckViewer) {
+    Write-Host "Opening the duck live 3D view window..."
+    try {
+        & (Join-Path $PSScriptRoot 'Watch-Duck.ps1')
+    } catch {
+        Write-Warning "Duck live view did not start: $_"
+    }
 }
 
 if ($SkipUnity) {

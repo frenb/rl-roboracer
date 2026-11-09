@@ -1,63 +1,76 @@
 <#
 .SYNOPSIS
-    Watch a microduck policy walk in the browser (mjlab's viser viewer).
+    Open the live microduck 3D view in its own window, like the Unity
+    clients do for the roboracer.
 
 .DESCRIPTION
-    Starts mjlab's ``play`` viewer inside the duck-trainer container and
-    opens http://localhost:8090. The viewer's checkpoint picker lists every
-    model_<N>.pt in the run directory and re-reads it when opened, so
-    pointing it at a job that is still training lets you switch to newer
-    checkpoints as they are saved and watch the gait improve.
+    Starts rl_agent/duck/live_view.py in the duck-trainer container under a
+    supervisor (a minimized PowerShell window that restarts it if it exits)
+    and opens http://localhost:8090 as a standalone app window (Edge or
+    Chrome --app mode: no tabs or address bar), 960x540 like a Unity client.
 
-    A resumed job spreads its checkpoints over one run directory per
-    attempt; the picker only shows the directory of the checkpoint it
-    started from (the latest one by default).
+    The view follows the running microduck TRAIN job, loading each new
+    checkpoint as it is saved, and moves on to the next job by itself. With
+    no duck job yet it shows a waiting message.
 
-    The viewer shares the GPU with any running training job; it simulates
-    a handful of robots, so the slowdown is small. Stop it with -Stop.
+    The view shares the GPU with training; it simulates a handful of
+    robots, so the slowdown is small. Start-Stack.ps1 -Duck runs this
+    script; Stop-Stack.ps1 runs it with -Stop.
 
 .PARAMETER JobId
-    Microduck TRAIN job to watch. Defaults to the most recently created
-    one that has a checkpoint.
-
-.PARAMETER Checkpoint
-    A specific model_<N>.pt, as a container path (/microduck_rl/logs/...)
-    or a host path under saved_models\microduck. Overrides -JobId.
-
-.PARAMETER Task
-    mjlab task id. Defaults to the job's task_id.
+    Pin the view to one microduck TRAIN job instead of following.
 
 .PARAMETER NumEnvs
-    Robots shown in the viewer. Default 4.
+    Robots shown. Default 4.
+
+.PARAMETER WindowWidth
+    App window width. Default 960, the Unity clients' default.
+
+.PARAMETER WindowHeight
+    App window height. Default 540.
 
 .PARAMETER NoBrowser
-    Don't open the viewer page once it is ready.
+    Start the view and its supervisor without opening a window.
 
 .PARAMETER Stop
-    Stop a running viewer and exit.
+    Close the window, stop the supervisor and the view.
+
+.PARAMETER Supervise
+    Internal: run the supervisor loop in this process.
 
 .EXAMPLE
     .\scripts\Watch-Duck.ps1
 .EXAMPLE
-    .\scripts\Watch-Duck.ps1 -JobId 6af1fd71784ae02d91685ee9
+    .\scripts\Watch-Duck.ps1 -JobId 6af2304da205b116dc617a35
 .EXAMPLE
     .\scripts\Watch-Duck.ps1 -Stop
 #>
 param(
     [string]$JobId,
-    [string]$Checkpoint,
-    [string]$Task,
     [int]$NumEnvs = 4,
+    [int]$WindowWidth = 960,
+    [int]$WindowHeight = 540,
     [switch]$NoBrowser,
-    [switch]$Stop
+    [switch]$Stop,
+    [switch]$Supervise
 )
 
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-Set-Location $RepoRoot
-$composeArgs = @('-f', 'docker-compose.yml', '-f', 'compose/scale.yml', '-f', 'compose/duck.yml')
+# Absolute paths so callers (Start-Stack, Stop-Stack) keep their location;
+# compose resolves relative paths from the first file's directory.
+$composeArgs = @('docker-compose.yml', 'compose/scale.yml', 'compose/duck.yml') |
+    ForEach-Object { '-f'; Join-Path $RepoRoot $_ }
 $url = 'http://localhost:8090'
-$viewerLog = '/microduck_rl/logs/jobs/viewer.log'
+# Windows PowerShell tries localhost over IPv6 first and times out on
+# Docker Desktop's port forward; the IPv4 loopback answers at once.
+$probeUrl = 'http://127.0.0.1:8090'
+$viewerLog = '/microduck_rl/logs/jobs/live_view.log'
+# A dedicated browser profile makes the app window its own process tree,
+# so -Stop can close it without touching the user's other browser windows.
+$profileDir = Join-Path $env:LOCALAPPDATA 'rl-roboracer\duck-viewer-browser'
+# "[l]ive_view" keeps the pattern from matching the shell running pgrep/pkill.
+$viewerPattern = "'[l]ive_view.py'"
 
 function Invoke-Duck([string[]]$Command, [switch]$Detached) {
     $execArgs = @('compose') + $composeArgs + @('exec', '-T', '-w', '/microduck_rl')
@@ -65,62 +78,147 @@ function Invoke-Duck([string[]]$Command, [switch]$Detached) {
     & docker @($execArgs + 'duck-trainer' + $Command)
 }
 
-# "[/]" keeps the pattern from matching the shell that runs pkill/pgrep.
-$viewerPattern = "'[/]opt/venv/bin/play '"
-Invoke-Duck @('sh', '-c', "pkill -f $viewerPattern || true") | Out-Null
+function Test-ViewerRunning {
+    try {
+        $out = Invoke-Duck @('sh', '-c', "pgrep -f $viewerPattern >/dev/null && echo yes || echo no") 2>$null
+    } catch {
+        return $false
+    }
+    return (($out | Out-String).Trim() -eq 'yes')
+}
+
+function Start-Viewer {
+    $viewArgs = "--num-envs $NumEnvs" + $(if ($JobId) { " --job-id $JobId" } else { '' })
+    Invoke-Duck -Detached @('sh', '-c',
+        "python -u /python_ws/src/duck/live_view.py $viewArgs >> $viewerLog 2>&1")
+}
+
+function Get-SupervisorProcesses {
+    Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" |
+        Where-Object { $_.CommandLine -like '*Watch-Duck.ps1*-Supervise*' -and $_.ProcessId -ne $PID }
+}
+
+function Stop-All {
+    Get-SupervisorProcesses | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Get-CimInstance Win32_Process -Filter "Name = 'msedge.exe' OR Name = 'chrome.exe'" |
+        Where-Object { $_.CommandLine -like "*$profileDir*" } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    # Fails harmlessly when the duck-trainer container isn't running.
+    try { Invoke-Duck @('sh', '-c', "pkill -f $viewerPattern || true") 2>$null | Out-Null } catch { }
+}
+
+function Find-Browser {
+    $candidates = @(
+        "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+        "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+        "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+        "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
+    )
+    return $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+}
+
+if ($Supervise) {
+    $Host.UI.RawUI.WindowTitle = 'duck live view supervisor'
+    while ($true) {
+        if (-not (Test-ViewerRunning)) {
+            Write-Host "$(Get-Date -Format T) starting live view"
+            Start-Viewer
+        }
+        Start-Sleep -Seconds 15
+    }
+}
+
+Stop-All
 if ($Stop) {
-    Write-Host 'Duck viewer stopped.'
+    Write-Host 'Duck live view stopped.'
     return
 }
 
-if ($Checkpoint) {
-    $hostRoot = (Resolve-Path (Join-Path $RepoRoot '..\saved_models\microduck')).Path
-    if ($Checkpoint.StartsWith($hostRoot, [StringComparison]::OrdinalIgnoreCase)) {
-        $Checkpoint = '/microduck_rl/logs' + $Checkpoint.Substring($hostRoot.Length).Replace('\', '/')
-    }
-    if (-not $Task) { throw '-Task is required with -Checkpoint.' }
-} else {
-    $query = @'
-import json, os, pymongo
-from bson import ObjectId
-db = pymongo.MongoClient(os.environ["MONGO_URL"])["robotaxi"]
-job_id = os.environ.get("WATCH_JOB_ID")
-q = {"robot": "microduck", "job_type": "TRAIN", "duck_checkpoint": {"$ne": None}}
-if job_id:
-    q["_id"] = ObjectId(job_id) if ObjectId.is_valid(job_id) else job_id
-job = db.jobs.find_one(q, sort=[("create_date", -1)])
-print(json.dumps(job and {"id": str(job["_id"]), "task": job.get("task_id") or "Mjlab-Velocity-Flat-MicroDuck",
-                          "checkpoint": job["duck_checkpoint"], "status": job.get("status")}))
-'@
-    # Piped through stdin: Windows PowerShell strips the double quotes from
-    # native-command arguments, which would mangle the Python source.
-    $execArgs = @('compose') + $composeArgs + @('exec', '-T', '-e', "WATCH_JOB_ID=$JobId", 'duck-trainer', 'python', '-')
-    $job = ($query | & docker @execArgs | Select-Object -Last 1) | ConvertFrom-Json
-    if (-not $job) { throw "No microduck TRAIN job with a checkpoint$(if ($JobId) { " for id $JobId" })." }
-    $Checkpoint = $job.checkpoint
-    if (-not $Task) { $Task = $job.task }
-    Write-Host "Job $($job.id) ($($job.status)): $Checkpoint"
-}
+$superviseArgs = @('-NoExit', '-File', $PSCommandPath, '-Supervise', '-NumEnvs', $NumEnvs)
+if ($JobId) { $superviseArgs += @('-JobId', $JobId) }
+Start-Process powershell -ArgumentList $superviseArgs -WindowStyle Minimized
+Write-Host 'Starting the duck live view...'
 
-Invoke-Duck -Detached @('sh', '-c',
-    "play $Task --checkpoint-file '$Checkpoint' --viewer viser --num-envs $NumEnvs > $viewerLog 2>&1")
-Write-Host "Starting viewer for $Task (first start compiles GPU kernels, up to a few minutes)..."
-
-$deadline = (Get-Date).AddMinutes(6)
+$deadline = (Get-Date).AddMinutes(3)
 while ((Get-Date) -lt $deadline) {
-    Start-Sleep -Seconds 5
+    Start-Sleep -Seconds 3
     try {
-        # Windows PowerShell tries localhost over IPv6 first and times out on
-        # Docker Desktop's port forward; the IPv4 loopback answers at once.
-        Invoke-WebRequest -Uri 'http://127.0.0.1:8090' -UseBasicParsing -TimeoutSec 3 | Out-Null
-        Write-Host "Viewer ready: $url  (stop with .\scripts\Watch-Duck.ps1 -Stop)"
-        if (-not $NoBrowser) { Start-Process $url }
-        return
+        Invoke-WebRequest -Uri $probeUrl -UseBasicParsing -TimeoutSec 3 | Out-Null
+        break
     } catch { }
-    $running = Invoke-Duck @('sh', '-c', "pgrep -f $viewerPattern >/dev/null && echo yes || echo no")
-    if (($running | Out-String).Trim() -ne 'yes') {
-        Invoke-Duck @('tail', '-n', '30', $viewerLog)
-        throw 'Viewer exited before it was ready; log above.'
-    }
 }
-throw "Viewer did not come up within 6 minutes; see $viewerLog in the duck-trainer container."
+if ((Get-Date) -ge $deadline) {
+    throw "Live view did not answer on $url within 3 minutes; see $viewerLog in the duck-trainer container."
+}
+
+if ($NoBrowser) {
+    Write-Host "Live view ready: $url"
+    return
+}
+$browser = Find-Browser
+if (-not $browser) {
+    Write-Warning "No Edge or Chrome found; opening $url in the default browser instead."
+    Start-Process $url
+    return
+}
+New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
+Start-Process $browser -ArgumentList @(
+    "--app=$url",
+    "--window-size=$WindowWidth,$WindowHeight",
+    "--user-data-dir=$profileDir",
+    # Policy-installed extensions otherwise open onboarding tabs in the
+    # fresh profile next to the viewer.
+    '--disable-extensions',
+    '--no-first-run',
+    '--no-default-browser-check'
+)
+
+# Edge opens a fresh app window maximized whatever --window-size says, so
+# restore and size it once it exists. This (DPI-unaware) process works in
+# scaled pixels, so the size matches the Unity windows' on-screen footprint
+# at 100% scaling and grows with display scaling.
+if (-not ('DuckView.Win32' -as [type])) {
+    Add-Type -Namespace DuckView -Name Win32 -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+[DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+[DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr lParam);
+[DllImport("user32.dll")] static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder s, int n);
+[DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+[DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);
+delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+public static IntPtr FindWindow(uint[] pids, string title) {
+    IntPtr found = IntPtr.Zero;
+    EnumWindows((h, _) => {
+        uint pid;
+        GetWindowThreadProcessId(h, out pid);
+        if (!IsWindowVisible(h) || Array.IndexOf(pids, pid) < 0) return true;
+        var s = new System.Text.StringBuilder(256);
+        GetWindowText(h, s, 256);
+        if (s.ToString() != title) return true;
+        found = h;
+        return false;
+    }, IntPtr.Zero);
+    return found;
+}
+'@
+}
+# viser titles its page "Viser"; only windows of this profile's browser are
+# considered, so the user's own browser windows are never touched.
+$deadline = (Get-Date).AddSeconds(20)
+$hwnd = [IntPtr]::Zero
+while ($hwnd -eq [IntPtr]::Zero -and (Get-Date) -lt $deadline) {
+    Start-Sleep -Milliseconds 500
+    [uint32[]]$pids = Get-CimInstance Win32_Process -Filter "Name = 'msedge.exe' OR Name = 'chrome.exe'" |
+        Where-Object { $_.CommandLine -like "*$profileDir*" } | ForEach-Object { $_.ProcessId }
+    if ($pids) { $hwnd = [DuckView.Win32]::FindWindow($pids, 'Viser') }
+}
+if ($hwnd -ne [IntPtr]::Zero) {
+    $SW_RESTORE = 9
+    $SWP_NOZORDER = 0x0004
+    [DuckView.Win32]::ShowWindow($hwnd, $SW_RESTORE) | Out-Null
+    [DuckView.Win32]::SetWindowPos($hwnd, [IntPtr]::Zero, 40, 40,
+        $WindowWidth, $WindowHeight, $SWP_NOZORDER) | Out-Null
+} else {
+    Write-Warning 'Could not find the viewer window to size it; it may have opened maximized.'
+}
+Write-Host "Duck live view window opened ($url). Close it with .\scripts\Watch-Duck.ps1 -Stop"
