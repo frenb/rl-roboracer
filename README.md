@@ -40,28 +40,40 @@ PowerShell (not as administrator) and run:
 irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/install.ps1 | iex
 ```
 
-It installs WSL 2, Git and Docker Desktop if they are missing (asking for
-administrator rights when it needs them), clones the repo into
-`%USERPROFILE%\rl-roboracer`, builds the Docker images (30-60 minutes the
-first time), downloads the Unity gyms, starts the stack and one Unity client,
-and queues a short first training job. It may ask you to restart Windows or
-sign out and back in. After a restart it continues by itself; after a sign-out,
-run the same command again.
+It downloads the [InstallZero](https://github.com/InstallZero/installzero) CLI
+(v0.1.8, checked against the release's SHA256SUMS) into
+`%LOCALAPPDATA%\installzero\bin`, clones the repo into
+`%USERPROFILE%\rl-roboracer\rl-roboracer` (or downloads it as a zip when Git
+is not installed yet), and runs `installzero install` there, which follows
+[install.md](install.md): WSL 2, Git and Docker Desktop if they are missing,
+the Docker images (30-60 minutes the first time), the Unity gyms and expert
+demonstrations, the stack, one Unity client and a short first training job.
+Steps that change the whole machine are listed first and need your yes.
+Installing WSL needs a restart of Windows: the install stops there and offers
+to continue at your next sign-in; steps already done are skipped.
 
-At the start it asks which model, if any, the InstallZero doctor should use
-to diagnose a failed install:
-a local model, or a hosted one (Anthropic, OpenAI, xAI, Google) with your API
-key. The key is kept in memory for that run only.
+At the start it asks which model, if any, should step in when a step fails
+and the failure catalog has no fix: a local model, or a hosted one
+(Anthropic, OpenAI, xAI, Google). A hosted model's API key is checked with the
+provider and kept in Windows Credential Manager, not in a file or the install
+commands' environment (`installzero key status` shows where; `installzero key
+remove <provider>` deletes it). The choice is remembered for the next runs.
 
-To pass options, use this form instead:
+To pass `installzero install` options, use this form instead:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/install.ps1))) -Doctor xai -InstallDir D:\rl
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/install.ps1))) --model google --skip firstjob
 ```
 
-`-DryRun` reports what is present and what would be installed, without
-changing anything. After the first run, the full list of options is in
-`Get-Help $env:LOCALAPPDATA\rl-roboracer-install\Install.ps1 -Detailed`.
+`--plan` lists the steps without running anything, `--agent <model>` lets a
+model carry out the whole install.md (each step is still judged by its own
+verify block), and `--report <file>` writes timings and model use, which
+`installzero compare` puts side by side. Once installed, run
+`%LOCALAPPDATA%\installzero\bin\installzero.exe install` from the repo folder
+to resume or repair.
+
+The previous PowerShell installer, `scripts/install/Install.ps1` (up to four
+Unity clients with `-Clients N`, `-DryRun`), still works from a checkout.
 
 When it finishes: dashboard http://localhost, TensorBoard
 http://localhost:6006. The manual steps below are for development setups.
@@ -75,6 +87,9 @@ irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/uninstall.ps1 | ie
 It asks before removing anything, and asks separately before deleting
 trained models and the database. It removes only rl-roboracer's containers,
 volumes and built images, and leaves WSL, Git and Docker Desktop installed.
+`installzero uninstall rl-roboracer` instead undoes what `installzero install`
+recorded, including the programs it added (`--keep-packages` leaves them);
+data is kept unless you agree or pass `--data`.
 
 ## Setup
 
