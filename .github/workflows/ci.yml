@@ -35,6 +35,7 @@ jobs:
           cache-dependency-path: docker/madscientist/requirements.txt
       - run: pip install -r docker/madscientist/requirements.txt pytest
       - run: python scripts/ci/run_madscientist_tests.py
+      - run: python -m pytest -q rl_agent/test_job_queue.py
 
   dashboard:
     name: Dashboard build (TypeScript)

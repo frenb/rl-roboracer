@@ -307,6 +307,8 @@ client = MongoClient(os.environ.get('MONGO_URL', 'mongodb://root:example@mongo:2
 database_name = os.environ['DATABASE_NAME']
 db = client.robotaxi
 
+import job_queue
+
 
 # ---- Git provenance ------------------------------------------------ *
 #
@@ -4832,8 +4834,19 @@ def _is_queue_paused():
         return False
 
 
+_last_queue_gate_reason = None
+
+
 def get_jobs():
+    global _last_queue_gate_reason
     debug_print("in get_jobs")
+    allowed, reason = job_queue.may_claim(db, job_queue.DEFAULT_ROBOT)
+    if not allowed:
+        if reason != _last_queue_gate_reason:
+            print(f"Waiting for shared queue: {reason}", flush=True)
+            _last_queue_gate_reason = reason
+        return []
+    _last_queue_gate_reason = None
     is_not_started = {"status": "NOT_STARTED"}
     is_in_progress = {"status": "IN_PROGRESS"}
     # Drain the queue in a predictable FIFO order by creation time so the
@@ -4841,7 +4854,10 @@ def get_jobs():
     # one, not an arbitrary Mongo natural-order pick. create_date is
     # stamped at job creation; jobs missing it (legacy) sort first under
     # ascending order, which is fine.
-    jobs = db.jobs.find({"$or":[is_not_started, is_in_progress]}).sort("create_date", 1)
+    jobs = db.jobs.find({
+        "$and": [{"$or": [is_not_started, is_in_progress]},
+                 job_queue.robot_filter(job_queue.DEFAULT_ROBOT)],
+    }).sort("create_date", 1)
     debug_print(jobs)
     return jobs
 
@@ -7436,6 +7452,7 @@ def run_jobs_loop(num_envs=1):
     # Not a seed: re-published every start so the dashboard's form
     # always matches this trainer's SCHEMA. See the docstring.
     _publish_experiment_design_schema()
+    job_queue.start_heartbeat(db, job_queue.DEFAULT_ROBOT)
     print(f"Polling for jobs (num_envs={num_envs})...")
     queue_paused_logged = False
     while True:
