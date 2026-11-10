@@ -5,9 +5,12 @@
 # separate from sim_controller: that image is TensorFlow on CUDA 11, while
 # warp-lang 1.12 and torch 2.9 need a CUDA 12 driver stack and Python 3.12.
 #
-# Build context is the submodule, so the image only carries its ~60 MB:
+# Build context is the submodule, so the image only carries its ~60 MB, plus
+# a second `patches` context:
 #
-#   docker build -f docker/duck_trainer/Dockerfile third_party/microduck_rl -t duck_trainer
+#   docker build -f docker/duck_trainer/Dockerfile \
+#     --build-context patches=docker/duck_trainer/patches \
+#     third_party/microduck_rl -t duck_trainer
 #
 # CUDA itself comes from the torch and warp wheels; the base image only needs
 # the driver libraries the NVIDIA runtime injects, plus EGL for headless
@@ -56,6 +59,14 @@ COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen \
     && uv pip install --python /opt/venv/bin/python "pymongo~=4.7"
+
+# Speed patches for installed packages, from the `patches` build context
+# (docker/duck_trainer/patches). --fuzz=0 so a dependency bump that moves the
+# patched code fails the build instead of patching the wrong lines.
+RUN --mount=type=bind,from=patches,target=/patches \
+    for p in /patches/*.patch; do \
+        patch --fuzz=0 -p1 -d /opt/venv/lib/python3.12/site-packages < "$p" || exit 1; \
+    done
 
 ENV PATH=/opt/venv/bin:$PATH
 

@@ -1,0 +1,24 @@
+Make CircularBuffer.append sync-free (mjlab 1.3.0).
+
+`if torch.any(is_first_push)` copies a bool from the GPU every call. The
+actuator delay buffers append once per physics substep, so each env step
+stalled the CPU on the GPU four times and the Python side of the step could
+not overlap physics. The masked torch.where fills the same history without
+the readback: ~10% faster env steps at 4096 envs on the RTX 4090 laptop.
+
+--- a/mjlab/utils/buffers/circular_buffer.py
++++ b/mjlab/utils/buffers/circular_buffer.py
+@@ -208,9 +208,10 @@
+     self._buffer[self._pointer] = data
+ 
+     # Backfill entire history with first frame for newly initialized batches.
+-    is_first_push = self._num_pushes == 0
+-    if torch.any(is_first_push):
+-      self._buffer[:, is_first_push] = data[is_first_push]
++    # torch.where rather than `if torch.any(...)`: the branch would block the
++    # CPU on the GPU every physics substep.
++    is_first_push = (self._num_pushes == 0).view(1, -1, *([1] * (data.dim() - 1)))
++    torch.where(is_first_push, data.unsqueeze(0), self._buffer, out=self._buffer)
+ 
+     self._num_pushes += 1
+ 

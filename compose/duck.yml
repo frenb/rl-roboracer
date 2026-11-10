@@ -17,6 +17,8 @@ services:
     build:
       context: ./third_party/microduck_rl
       dockerfile: ../../docker/duck_trainer/Dockerfile
+      additional_contexts:
+        patches: ./docker/duck_trainer/patches
     restart: unless-stopped
     command: python -u /python_ws/src/duck/worker.py
     environment:
