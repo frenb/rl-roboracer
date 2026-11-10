@@ -245,7 +245,7 @@
           const st = compileState(s, r).state;
           return st === 'pending' ? '<span class="spec-chip is-warn">review</span>'
             : st === 'queued' || st === 'running' ? '<span class="spec-chip is-none">compiling…</span>'
-            : chip(s.summary.statuses[r]);
+            : s.summary.statuses[r] === 'fresh' ? '' : chip(s.summary.statuses[r]);
         }).join('');
         compiledHelpEl.textContent = !robots.length
           ? (isNew ? 'Save the spec, then compile it to see each robot\'s code here.' : '')
