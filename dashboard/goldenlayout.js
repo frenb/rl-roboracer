@@ -225,6 +225,14 @@ var config = {
                     },
                     {
                       type: 'component',
+                      title: 'Reward Specs',
+                      componentName: 'iframeComponent',
+                      // Robot-agnostic reward specs in Markdown; Mad
+                      // Scientist compiles each into per-robot reward designs.
+                      componentState: { src: "http://localhost/reward_specs.html?v=ws1", id: 'reward_specs' }
+                    },
+                    {
+                      type: 'component',
                       title: 'Experiment Design',
                       componentName: 'iframeComponent',
                       // Schema-driven form for training-loop config:

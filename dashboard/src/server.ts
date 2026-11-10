@@ -1814,12 +1814,18 @@ export const createServer = (config): express.Application => {
     if (body.description !== undefined) update["$set"].description = String(body.description);
     if (body.code        !== undefined) update["$set"].code        = String(body.code);
     if (body.archived    !== undefined) update["$set"].archived    = !!body.archived;
+    // Designs compiled from a spec change only through the spec.
+    if (body.code !== undefined) (idFilter as any).spec_id = { $exists: false };
     dbo.collection("reward_designs").updateOne(
       idFilter, update, { upsert: false },
       function(err, result) {
         if (err) {
           console.error('update_reward_design failed:', err);
           res.status(500).json({ error: String(err.message || err) });
+          return;
+        }
+        if (body.code !== undefined && result && result.matchedCount === 0) {
+          res.status(409).json({ error: "no such design, or it is compiled from a reward spec: edit the spec on the Reward Specs tab" });
           return;
         }
         console.log('reward_design updated', body._id, result);
@@ -1858,6 +1864,233 @@ export const createServer = (config): express.Application => {
         res.json(result);
       });
   });
+
+  // ---- design_specs: robot-agnostic reward specs -------------------- *
+  //
+  // A spec is Markdown prose (rl_agent/specs/spec.py) that Mad Scientist's
+  // spec_compiler turns into each robot's reward code. Compiles land as
+  // compile.<robot>.result with state "pending"; accepting one writes the code
+  // into the spec text and publishes it as the reward design
+  // "spec:<spec id>:<robot>", which jobs pick like any other. The published
+  // design carries spec_status (fresh / edited / stale) and the workers refuse
+  // stale ones, and edited ones in strict mode.
+  const SPEC_CLI = '/python_ws/src/specs/cli.py';
+  const SPEC_SETTINGS_ID = 'design_specs';
+
+  function specIdFilter(id: any): any {
+    try { return { _id: ObjectID(String(id)) }; } catch (e) { return { _id: String(id) }; }
+  }
+
+  async function specSettings(): Promise<{ strict_generated: boolean }> {
+    const doc = await dbo.collection('settings').findOne({ _id: SPEC_SETTINGS_ID } as any);
+    return { strict_generated: !!(doc && doc.strict_generated) };
+  }
+
+  async function lintSpecCode(robot: string, code: string, taskId: string): Promise<string[]> {
+    let gym: any = null;
+    let library: any[] = [];
+    if (robot === 'microduck') {
+      gym = await dbo.collection('gyms').findOne({ _id: 'microduck:' + taskId } as any,
+        { projection: { reward_defaults: 1 } });
+      const catalog = await dbo.collection('reward_term_catalog').findOne({ _id: 'microduck' } as any);
+      library = (catalog && catalog.functions) || [];
+    }
+    const r = await runDuckScript(SPEC_CLI, { op: 'lint', robot, code, gym, library });
+    return r.ok ? r.problems : [r.error];
+  }
+
+  // Mirror a spec's compiled code into reward_designs, one design per robot.
+  async function publishSpec(specId: any, summary: any): Promise<void> {
+    const now = new Date();
+    const designs = dbo.collection('reward_designs');
+    for (const robot of ['roboracer', 'microduck']) {
+      const _id = `spec:${String(specId)}:${robot}`;
+      const compiled = summary.compiled[robot];
+      if (!compiled || !summary.robots.includes(robot)) {
+        await designs.updateOne({ _id } as any, { $set: { archived: true, updated_at: now } });
+        continue;
+      }
+      const set: any = {
+        name: summary.name,
+        description: summary.description || String(summary.goal || '').split('\n\n')[0].replace(/\s+/g, ' ').trim(),
+        code: compiled.code,
+        author: 'reward spec',
+        archived: false,
+        spec_id: String(specId),
+        spec_status: summary.statuses[robot],
+        spec_inputs_sha: compiled.meta.inputs_sha || null,
+        updated_at: now,
+      };
+      if (robot !== 'roboracer') set.robot = robot;
+      const existing = await designs.findOne({ _id } as any, { projection: { code: 1 } });
+      const update: any = { $set: set, $setOnInsert: { created_at: now } };
+      if (!existing) update.$setOnInsert.version = 1;
+      else if (existing.code !== compiled.code) update.$inc = { version: 1 };
+      await designs.updateOne({ _id } as any, update, { upsert: true });
+    }
+    rewardDesignsChanged = true;
+  }
+
+  // Store new spec text (already checked) and republish.
+  async function storeSpecText(filter: any, text: string, summary: any, extra: any = {}): Promise<void> {
+    await dbo.collection('design_specs').updateOne(filter, {
+      $set: {
+        text, name: summary.name, robots: summary.robots, statuses: summary.statuses,
+        updated_at: new Date(), ...extra,
+      },
+      $inc: { version: 1 },
+    });
+    await publishSpec(filter._id, summary);
+  }
+
+  function specRoute(handler: (req: any, res: any) => Promise<void>) {
+    return (req: any, res: any) => {
+      handler(req, res).catch((err: any) => {
+        console.error(`${req.path} failed:`, err);
+        res.status(500).json({ error: String(err && (err.message || err)) });
+      });
+    };
+  }
+
+  app.get('/get_design_specs', specRoute(async (req, res) => {
+    const docs = await dbo.collection('design_specs').find({}).sort({ updated_at: -1 }).toArray();
+    for (const d of docs) {
+      const s = await runDuckScript(SPEC_CLI, { op: 'parse', text: d.text });
+      d.summary = s.ok ? s : null;
+      d.parse_error = s.ok ? null : s.error;
+    }
+    res.json({ specs: docs, settings: await specSettings() });
+  }));
+
+  app.get('/design_spec_template', specRoute(async (req, res) => {
+    res.json(await runDuckScript(SPEC_CLI, { op: 'template' }));
+  }));
+
+  app.post('/save_design_spec', specRoute(async (req, res) => {
+    const body = req.body || {};
+    const text = String(body.text || '');
+    const summary = await runDuckScript(SPEC_CLI, { op: 'parse', text });
+    if (!summary.ok) { res.status(400).json({ error: summary.error }); return; }
+    const specs = dbo.collection('design_specs');
+    const old = body._id ? await specs.findOne(specIdFilter(body._id)) : null;
+    if (body._id && !old) { res.status(404).json({ error: 'no such spec' }); return; }
+    const edited = await runDuckScript(SPEC_CLI, { op: 'edited', old_text: old ? old.text : '', text });
+    if (!edited.ok) { res.status(400).json({ error: edited.error }); return; }
+    if (edited.robots.length) {
+      if ((await specSettings()).strict_generated) {
+        res.status(400).json({
+          error: `strict mode: compiled code is generated only, but this save edits it for ${edited.robots.join(', ')}. ` +
+                 'Change the prose and recompile, or turn strict mode off.' });
+        return;
+      }
+      for (const robot of edited.robots) {
+        const problems = await lintSpecCode(robot, summary.compiled[robot].code, summary.microduck_task);
+        if (problems.length) {
+          res.status(400).json({ error: `hand-edited ${robot} code does not load: ${problems.join('; ')}` });
+          return;
+        }
+      }
+    }
+    let filter: any;
+    if (old) {
+      filter = { _id: old._id };
+    } else {
+      const now = new Date();
+      const ins = await specs.insertOne({ text, created_at: now, compile: {}, archived: false, version: 0 } as any);
+      filter = { _id: ins.insertedId };
+    }
+    await storeSpecText(filter, text, summary);
+    res.json({ ok: true, _id: filter._id, summary, hand_edited: edited.robots });
+  }));
+
+  app.post('/compile_design_spec', specRoute(async (req, res) => {
+    const body = req.body || {};
+    const doc = await dbo.collection('design_specs').findOne(specIdFilter(body._id));
+    if (!doc) { res.status(404).json({ error: 'no such spec; save it first' }); return; }
+    const summary = await runDuckScript(SPEC_CLI, { op: 'parse', text: doc.text });
+    if (!summary.ok) { res.status(400).json({ error: summary.error }); return; }
+    const robots: string[] = Array.isArray(body.robots) && body.robots.length ? body.robots : summary.robots;
+    const set: any = {};
+    for (const robot of robots) {
+      if (!summary.robots.includes(robot)) { res.status(400).json({ error: `${robot} is not in this spec's robots` }); return; }
+      const state = doc.compile && doc.compile[robot] && doc.compile[robot].state;
+      if (state === 'queued' || state === 'running') { res.status(409).json({ error: `${robot} is already compiling` }); return; }
+      set[`compile.${robot}`] = { state: 'queued', requested_at: new Date(), inputs_sha: summary.inputs_sha[robot] };
+    }
+    await dbo.collection('design_specs').updateOne({ _id: doc._id }, { $set: set });
+    res.json({ ok: true, queued: robots });
+  }));
+
+  app.post('/accept_design_spec_compile', specRoute(async (req, res) => {
+    const body = req.body || {};
+    const robot = String(body.robot || '');
+    const doc = await dbo.collection('design_specs').findOne(specIdFilter(body._id));
+    const c = doc && doc.compile && doc.compile[robot];
+    if (!c || c.state !== 'pending' || !c.result) { res.status(409).json({ error: `no compiled ${robot} code is waiting for review` }); return; }
+    const summary = await runDuckScript(SPEC_CLI, { op: 'parse', text: doc.text });
+    if (!summary.ok) { res.status(400).json({ error: summary.error }); return; }
+    if (summary.inputs_sha[robot] !== c.result.inputs_sha) {
+      res.status(409).json({ error: 'the spec changed after this compile started; compile again' });
+      return;
+    }
+    const set = await runDuckScript(SPEC_CLI, { op: 'set_compiled', text: doc.text, robot, code: c.result.code, model: c.result.model });
+    if (!set.ok) { res.status(400).json({ error: set.error }); return; }
+    const after = await runDuckScript(SPEC_CLI, { op: 'parse', text: set.text });
+    await storeSpecText({ _id: doc._id }, set.text, after, {
+      [`compile.${robot}.state`]: 'accepted', [`compile.${robot}.accepted_at`]: new Date() });
+    res.json({ ok: true, summary: after });
+  }));
+
+  app.post('/discard_design_spec_compile', specRoute(async (req, res) => {
+    const body = req.body || {};
+    const robot = String(body.robot || '');
+    const r = await dbo.collection('design_specs').updateOne(
+      { ...specIdFilter(body._id), [`compile.${robot}.state`]: { $in: ['pending', 'failed'] } },
+      { $set: { [`compile.${robot}.state`]: 'discarded' } });
+    if (!r.matchedCount) { res.status(409).json({ error: `nothing to discard for ${robot}` }); return; }
+    res.json({ ok: true });
+  }));
+
+  // Keep a robot's current (usually hand-edited) code for the current prose.
+  app.post('/repin_design_spec', specRoute(async (req, res) => {
+    const body = req.body || {};
+    const robot = String(body.robot || '');
+    if ((await specSettings()).strict_generated) {
+      res.status(400).json({ error: 'strict mode: stale code has to be recompiled' });
+      return;
+    }
+    const doc = await dbo.collection('design_specs').findOne(specIdFilter(body._id));
+    if (!doc) { res.status(404).json({ error: 'no such spec' }); return; }
+    const pinned = await runDuckScript(SPEC_CLI, { op: 'repin', text: doc.text, robot });
+    if (!pinned.ok) { res.status(400).json({ error: pinned.error }); return; }
+    const summary = await runDuckScript(SPEC_CLI, { op: 'parse', text: pinned.text });
+    const problems = await lintSpecCode(robot, summary.compiled[robot].code, summary.microduck_task);
+    if (problems.length) { res.status(400).json({ error: `${robot} code does not load: ${problems.join('; ')}` }); return; }
+    await storeSpecText({ _id: doc._id }, pinned.text, summary);
+    res.json({ ok: true, summary });
+  }));
+
+  app.post('/archive_design_spec', specRoute(async (req, res) => {
+    const body = req.body || {};
+    const filter = specIdFilter(body._id);
+    await dbo.collection('design_specs').updateOne(filter, { $set: { archived: body.archived !== false, updated_at: new Date() } });
+    if (body.archived !== false) {
+      await dbo.collection('reward_designs').updateMany({ spec_id: String(filter._id) }, { $set: { archived: true } });
+      rewardDesignsChanged = true;
+    } else {
+      const doc = await dbo.collection('design_specs').findOne(filter);
+      const summary = doc && await runDuckScript(SPEC_CLI, { op: 'parse', text: doc.text });
+      if (summary && summary.ok) await publishSpec(filter._id, summary);
+    }
+    res.json({ ok: true });
+  }));
+
+  app.post('/design_spec_settings', specRoute(async (req, res) => {
+    const strict = !!(req.body || {}).strict_generated;
+    await dbo.collection('settings').updateOne({ _id: SPEC_SETTINGS_ID } as any,
+      { $set: { strict_generated: strict, updated_at: new Date() } }, { upsert: true });
+    res.json({ ok: true, settings: { strict_generated: strict } });
+  }));
 
   // ---- experiment_designs CRUD + schema -------------------------- *
   //

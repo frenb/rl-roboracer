@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en" class="dark h-full">
+<head>
+  <meta charset="utf-8">
+  <title>Reward Specs · rl-roboracer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/tailwind.init.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/markdown/markdown.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/selection/active-line.min.js"></script>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="h-full m-0 font-sans antialiased text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-[#0b1120]">
+
+  <div class="flex flex-col h-screen w-full">
+    <div class="flex flex-wrap items-center gap-3 px-5 py-4
+                bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700
+                shadow-card relative z-[3] flex-shrink-0">
+      <h1 class="text-2xl font-semibold tracking-tight m-0 mr-3">Reward Specs</h1>
+      <span data-role="count" class="text-xs font-medium text-slate-500 dark:text-slate-400"></span>
+      <div class="flex flex-wrap gap-2 ml-auto items-center">
+        <label class="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 select-none"
+               title="On: compiled code can only come from the compiler; saves that change it are refused and hand-edited designs can't train. Off: a hand edit pins that robot's code and is flagged as diverged from the prose.">
+          <input data-role="strict" type="checkbox"
+                 class="w-3.5 h-3.5 rounded border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-indigo-500">
+          <span>Generated code only (strict)</span>
+        </label>
+        <label class="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 select-none">
+          <input data-role="show-archived" type="checkbox"
+                 class="w-3.5 h-3.5 rounded border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-indigo-500">
+          <span>Show archived</span>
+        </label>
+        <button data-action="new" class="btn-base btn-primary">+ New spec</button>
+      </div>
+    </div>
+
+    <div class="flex-1 overflow-hidden p-4 bg-slate-50 dark:bg-[#0b1120]">
+      <div class="rd-shell h-full">
+        <aside class="rd-card">
+          <div class="px-3 py-2.5 border-b border-slate-200 dark:border-slate-700 text-xs uppercase tracking-wide font-semibold text-slate-500 dark:text-slate-400">
+            Specs
+          </div>
+          <div data-role="list" class="rd-list"><div class="rd-empty">Loading…</div></div>
+        </aside>
+
+        <section class="rd-card">
+          <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3 flex-wrap">
+            <div class="flex flex-col gap-0.5 min-w-0">
+              <span data-role="title" class="text-sm font-semibold truncate">No spec selected</span>
+              <span data-role="meta" class="text-xs text-slate-500 dark:text-slate-400 font-mono"></span>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center">
+              <button data-action="archive" class="btn-base btn-secondary text-xs" disabled>Archive</button>
+              <button data-action="compile" class="btn-base btn-secondary text-xs" disabled
+                      title="Save first. Mad Scientist compiles each robot's code; you review it below before it is used.">Compile all robots</button>
+              <button data-action="save" class="btn-base btn-primary text-xs" disabled>Save</button>
+            </div>
+          </div>
+
+          <div class="p-4 flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto">
+            <p class="m-0 text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+              Write what the robot should learn under <code class="font-mono">## Goal</code>,
+              <code class="font-mono">## Encourage</code>, <code class="font-mono">## Discourage</code>,
+              <code class="font-mono">## Never</code> and <code class="font-mono">## Success looks like</code>, in terms that fit
+              any robot; <code class="font-mono">## Notes for &lt;robot&gt;</code> adds robot-specific guidance.
+              Compiling turns the prose into each robot's reward code, which lands under
+              <code class="font-mono">## Compiled: &lt;robot&gt;</code> once you accept it and is then a reward design
+              you can pick in New Job.
+            </p>
+            <div data-role="error" class="rd-lint-detail" hidden></div>
+            <div class="rd-editor-wrap" style="min-height:360px">
+              <div data-role="editor-host" class="rd-editor-host" style="min-height:360px"></div>
+            </div>
+            <div data-role="robots" class="flex flex-col gap-3"></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script src="/components.js?v=20261110-duck-experiments"></script>
+  <script>
+    (function () {
+      const { showToast, confirmDialog } = window.RoboracerUI;
+      const ROBOT_LABEL = { roboracer: 'Roboracer (car)', microduck: 'MicroDuck' };
+      const STATUS = {
+        fresh: ['compiled', 'is-ok', 'Compiled from the current prose.'],
+        edited: ['hand-edited', 'is-warn', 'The code was changed by hand after compiling; it no longer follows from the prose alone.'],
+        stale: ['stale', 'is-bad', 'The prose changed since this code was compiled. Jobs refuse it until you recompile (or keep the old code).'],
+        missing: ['not compiled', 'is-none', 'No code for this robot yet.'],
+      };
+
+      const $ = (sel) => document.querySelector(sel);
+      const listEl = $('[data-role="list"]'), countEl = $('[data-role="count"]');
+      const titleEl = $('[data-role="title"]'), metaEl = $('[data-role="meta"]');
+      const errorEl = $('[data-role="error"]'), robotsEl = $('[data-role="robots"]');
+      const strictBox = $('[data-role="strict"]'), showArchived = $('[data-role="show-archived"]');
+      const btnNew = $('[data-action="new"]'), btnSave = $('[data-action="save"]');
+      const btnCompile = $('[data-action="compile"]'), btnArchive = $('[data-action="archive"]');
+
+      let specs = [];
+      let settings = { strict_generated: false };
+      let selectedId = null;      // null + isNew = an unsaved spec
+      let isNew = false;
+      let savedText = '';
+      let editor = null;
+      let pollTimer = null;
+
+      const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
+        (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+      const selected = () => specs.find((s) => String(s._id) === String(selectedId)) || null;
+      const dirty = () => editor && editor.getValue() !== savedText;
+
+      async function api(path, body) {
+        const r = await fetch(path, body === undefined ? {} : {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+        return j;
+      }
+
+      function chip(status) {
+        const [label, cls, title] = STATUS[status] || [status, 'is-none', ''];
+        return `<span class="spec-chip ${cls}" title="${esc(title)}">${esc(label)}</span>`;
+      }
+
+      function compileState(spec, robot) {
+        return (spec && spec.compile && spec.compile[robot]) || {};
+      }
+
+      // ---- list ----------------------------------------------------------
+      function renderList() {
+        const shown = specs.filter((s) => showArchived.checked || !s.archived);
+        countEl.textContent = specs.length ? `${shown.length} of ${specs.length} spec${specs.length === 1 ? '' : 's'}` : '';
+        const rows = shown.map((s) => {
+          const sum = s.summary;
+          const robots = sum ? sum.robots.map((r) => {
+            const st = compileState(s, r).state;
+            const extra = st === 'pending' ? '<span class="spec-chip is-warn">review</span>'
+              : (st === 'queued' || st === 'running') ? '<span class="spec-chip is-none">compiling…</span>'
+              : st === 'failed' ? '<span class="spec-chip is-bad">compile failed</span>' : '';
+            return `<div class="rd-meta flex items-center gap-1.5">${esc(r)} ${chip(sum.statuses[r])}${extra}</div>`;
+          }).join('') : `<div class="rd-meta text-rose-500">${esc(s.parse_error || 'unreadable')}</div>`;
+          return `<div class="rd-list-item${String(s._id) === String(selectedId) ? ' is-selected' : ''}${s.archived ? ' is-archived' : ''}" data-id="${esc(s._id)}">
+              <div class="rd-name"><span class="truncate">${esc(s.name || '(unnamed)')}</span>${s.archived ? '<span class="rd-tag is-archived">archived</span>' : ''}</div>
+              <div class="rd-meta">v${s.version || 1} · ${s.updated_at ? new Date(s.updated_at).toLocaleString() : ''}</div>
+              ${robots}
+            </div>`;
+        });
+        if (isNew) rows.unshift('<div class="rd-list-item is-selected" data-id="__new__"><div class="rd-name"><span class="truncate">(new spec)</span><span class="rd-tag is-dirty">unsaved</span></div></div>');
+        listEl.innerHTML = rows.join('') || '<div class="rd-empty">No specs yet. Click "+ New spec" to write one.</div>';
+      }
+
+      listEl.addEventListener('click', async (e) => {
+        const row = e.target.closest('.rd-list-item');
+        if (!row || row.dataset.id === '__new__' || row.dataset.id === String(selectedId)) return;
+        if (dirty() && !(await confirmDialog({ title: 'Discard changes?', message: 'This spec has unsaved edits.', confirmLabel: 'Discard' }))) return;
+        select(row.dataset.id);
+      });
+
+      function select(id) {
+        isNew = false;
+        selectedId = id;
+        const s = selected();
+        savedText = s ? s.text : '';
+        editor.setValue(savedText);
+        editor.setOption('readOnly', false);
+        errorEl.hidden = true;
+        render();
+      }
+
+      // ---- editor + robot panels ----------------------------------------
+      function render() {
+        renderList();
+        const s = selected();
+        titleEl.textContent = isNew ? 'New spec (unsaved)' : s ? s.name : 'No spec selected';
+        metaEl.textContent = s ? `${String(s._id)} · v${s.version || 1}${dirty() ? ' · unsaved changes' : ''}` : (isNew ? 'not saved yet' : '');
+        btnSave.disabled = !(isNew || (s && dirty()));
+        btnCompile.disabled = !s || dirty() || !s.summary;
+        btnArchive.disabled = !s;
+        btnArchive.textContent = s && s.archived ? 'Unarchive' : 'Archive';
+        renderRobots(s);
+      }
+
+      function renderRobots(s) {
+        if (!s || !s.summary) { robotsEl.innerHTML = ''; return; }
+        robotsEl.innerHTML = s.summary.robots.map((robot) => robotPanel(s, robot)).join('');
+      }
+
+      function robotPanel(s, robot) {
+        const sum = s.summary, status = sum.statuses[robot], c = compileState(s, robot);
+        const design = `spec:${s._id}:${robot}`;
+        const busy = c.state === 'queued' || c.state === 'running';
+        const actions = [];
+        if (!busy) actions.push(`<button class="btn-base btn-secondary text-xs" data-act="compile" data-robot="${robot}"${dirty() ? ' disabled' : ''}>${status === 'missing' ? 'Compile' : 'Recompile'}</button>`);
+        if (status === 'stale' && !settings.strict_generated) {
+          actions.push(`<button class="btn-base btn-secondary text-xs" data-act="repin" data-robot="${robot}" title="Keep the current code for the changed prose; it is marked hand-edited.">Keep current code</button>`);
+        }
+        let body = '';
+        if (busy) {
+          body = `<p class="m-0 text-xs text-slate-500">${c.state === 'queued' ? 'Waiting for Mad Scientist to pick this up…' : 'Compiling (the compiler retries with check feedback up to 3 times)…'}</p>`;
+        } else if (c.state === 'pending' && c.result) {
+          body = reviewBlock(s, robot, c.result);
+        } else if (c.state === 'failed') {
+          const r = c.result;
+          body = `<div class="rd-lint-detail">${esc(c.error || 'compile failed')}${r && r.problems && r.problems.length ? '\n\nLast problems:\n- ' + r.problems.map(esc).join('\n- ') : ''}</div>
+                  <div class="flex gap-2"><button class="btn-base btn-secondary text-xs" data-act="discard" data-robot="${robot}">Dismiss</button></div>`;
+        }
+        const published = status === 'missing' ? '' :
+          `<span class="text-[11px] text-slate-500 dark:text-slate-400">Reward design <code class="font-mono">${esc(design)}</code>${status === 'stale' ? ' · jobs refuse it until recompiled' : status === 'edited' && settings.strict_generated ? ' · blocked by strict mode' : ''}</span>`;
+        return `<div class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-2">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-sm font-semibold">${esc(ROBOT_LABEL[robot] || robot)}</span>${chip(status)}
+              ${robot === 'microduck' ? `<span class="text-[11px] text-slate-500 font-mono">${esc(sum.microduck_task)}</span>` : ''}
+              <span class="ml-auto flex gap-2">${actions.join('')}</span>
+            </div>
+            ${published}
+            ${body}
+          </div>`;
+      }
+
+      function reviewBlock(s, robot, r) {
+        const current = (s.summary.compiled[robot] || {}).code || '';
+        const stale = r.inputs_sha !== s.summary.inputs_sha[robot];
+        const rationale = (r.rationale || []).map((x) =>
+          `<tr><td class="pr-2 align-top text-slate-500">${esc(x.section)}</td><td class="pr-2 align-top">${esc(x.bullet)}</td>
+               <td class="align-top">${esc(x.implementation || '')}${x.terms && x.terms.length ? ` <span class="font-mono text-slate-500">[${x.terms.map(esc).join(', ')}]</span>` : ''}</td></tr>`).join('');
+        const unsupported = (r.unsupported || []).map((x) =>
+          `<li><b>${esc(x.section)}:</b> ${esc(x.bullet)} <span class="text-slate-500">(${esc(x.reason || '')})</span></li>`).join('');
+        return `<div class="flex flex-col gap-2">
+            <div class="text-xs text-slate-600 dark:text-slate-300">New code to review · ${esc(r.model || '')} · ${(r.rounds || []).length} round(s) · $${Number(r.cost_usd || 0).toFixed(3)}
+              ${s.summary.statuses[robot] === 'edited' ? ' · <b class="text-amber-500">accepting replaces your hand edits</b>' : ''}
+              ${stale ? ' · <b class="text-rose-500">the spec changed after this compile; compile again</b>' : ''}</div>
+            <table class="w-full text-[11px]"><tbody>${rationale}</tbody></table>
+            ${unsupported ? `<div class="text-[11px]"><div class="font-semibold text-amber-500">Not implementable on this robot</div><ul class="m-0 pl-4">${unsupported}</ul></div>` : ''}
+            <pre class="spec-diff">${diffHtml(current, r.code)}</pre>
+            <div class="flex gap-2">
+              <button class="btn-base btn-primary text-xs" data-act="accept" data-robot="${robot}"${stale || dirty() ? ' disabled' : ''}>Accept</button>
+              <button class="btn-base btn-secondary text-xs" data-act="discard" data-robot="${robot}">Discard</button>
+            </div>
+          </div>`;
+      }
+
+      // Line diff (LCS); designs are short, so O(n*m) is fine.
+      function diffHtml(a, b) {
+        const x = a ? a.replace(/\n$/, '').split('\n') : [], y = b.replace(/\n$/, '').split('\n');
+        const n = x.length, m = y.length;
+        const L = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+        for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+          L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+        const out = [];
+        let i = 0, j = 0;
+        while (i < n || j < m) {
+          if (i < n && j < m && x[i] === y[j]) { out.push(`<span>  ${esc(x[i])}</span>`); i++; j++; }
+          else if (j < m && (i >= n || L[i][j + 1] >= L[i + 1][j])) { out.push(`<span class="is-add">+ ${esc(y[j])}</span>`); j++; }
+          else { out.push(`<span class="is-del">- ${esc(x[i])}</span>`); i++; }
+        }
+        return out.join('\n');
+      }
+
+      robotsEl.addEventListener('click', async (e) => {
+        const btn = e.target.closest('button[data-act]');
+        if (!btn) return;
+        const s = selected(), robot = btn.dataset.robot, act = btn.dataset.act;
+        btn.disabled = true;
+        try {
+          if (act === 'compile') await api('/compile_design_spec', { _id: s._id, robots: [robot] });
+          if (act === 'accept') await api('/accept_design_spec_compile', { _id: s._id, robot });
+          if (act === 'discard') await api('/discard_design_spec_compile', { _id: s._id, robot });
+          if (act === 'repin') await api('/repin_design_spec', { _id: s._id, robot });
+          await refresh(act === 'accept' || act === 'repin');
+          if (act === 'accept') showToast({ message: `${robot} code accepted and published`, type: 'success' });
+        } catch (err) {
+          showToast({ message: err.message, type: 'error' });
+          btn.disabled = false;
+        }
+      });
+
+      btnCompile.addEventListener('click', async () => {
+        try {
+          await api('/compile_design_spec', { _id: selected()._id });
+          await refresh();
+        } catch (err) { showToast({ message: err.message, type: 'error' }); }
+      });
+
+      btnSave.addEventListener('click', async () => {
+        btnSave.disabled = true;
+        try {
+          const r = await api('/save_design_spec', { _id: isNew ? undefined : selectedId, text: editor.getValue() });
+          errorEl.hidden = true;
+          isNew = false;
+          selectedId = String(r._id);
+          if (r.hand_edited && r.hand_edited.length) showToast({ message: `Hand-edited code kept for ${r.hand_edited.join(', ')}`, type: 'info' });
+          else showToast({ message: 'Saved', type: 'success' });
+          await refresh(true);
+        } catch (err) {
+          errorEl.hidden = false;
+          errorEl.textContent = err.message;
+          render();
+        }
+      });
+
+      btnArchive.addEventListener('click', async () => {
+        const s = selected();
+        try {
+          await api('/archive_design_spec', { _id: s._id, archived: !s.archived });
+          await refresh();
+        } catch (err) { showToast({ message: err.message, type: 'error' }); }
+      });
+
+      btnNew.addEventListener('click', async () => {
+        if (dirty() && !(await confirmDialog({ title: 'Discard changes?', message: 'This spec has unsaved edits.', confirmLabel: 'Discard' }))) return;
+        const t = await api('/design_spec_template');
+        isNew = true;
+        selectedId = null;
+        savedText = '';
+        editor.setValue(t.text);
+        editor.setOption('readOnly', false);
+        render();
+      });
+
+      strictBox.addEventListener('change', async () => {
+        try {
+          const r = await api('/design_spec_settings', { strict_generated: strictBox.checked });
+          settings = r.settings;
+          render();
+        } catch (err) {
+          strictBox.checked = !strictBox.checked;
+          showToast({ message: err.message, type: 'error' });
+        }
+      });
+      showArchived.addEventListener('change', renderList);
+
+      // ---- data ------------------------------------------------------------
+      async function refresh(reloadEditor) {
+        const r = await api('/get_design_specs');
+        specs = r.specs;
+        settings = r.settings;
+        strictBox.checked = !!settings.strict_generated;
+        const s = selected();
+        if (s && (reloadEditor || (!dirty() && s.text !== savedText))) {
+          savedText = s.text;
+          const cursor = editor.getCursor();
+          editor.setValue(savedText);
+          editor.setCursor(cursor);
+        }
+        if (!s && !isNew && specs.length) { select(String(specs[0]._id)); return schedule(); }
+        render();
+        schedule();
+      }
+
+      function schedule() {
+        clearTimeout(pollTimer);
+        const busy = specs.some((s) => Object.values(s.compile || {}).some((c) => c && (c.state === 'queued' || c.state === 'running')));
+        pollTimer = setTimeout(() => refresh().catch(() => schedule()), busy ? 3000 : 15000);
+      }
+
+      function boot() {
+        editor = CodeMirror($('[data-role="editor-host"]'), {
+          mode: 'markdown', lineNumbers: true, lineWrapping: true, styleActiveLine: true, readOnly: 'nocursor', value: '',
+        });
+        editor.on('change', () => render());
+        let t = null;
+        window.addEventListener('resize', () => { clearTimeout(t); t = setTimeout(() => editor.refresh(), 80); });
+        refresh().catch((err) => { listEl.innerHTML = `<div class="rd-empty">${esc(err.message)}</div>`; });
+      }
+      (function wait() { window.CodeMirror && CodeMirror.modes.markdown ? boot() : setTimeout(wait, 50); })();
+    })();
+  </script>
+</body>
+</html>

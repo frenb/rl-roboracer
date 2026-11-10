@@ -52,6 +52,7 @@ from . import judge
 from . import orchestrator
 from . import outcome_ingester
 from . import researcher
+from . import spec_compiler
 
 
 _should_exit = False
@@ -246,11 +247,23 @@ def main():
         name="email-bridge-loop",
         daemon=True,
     )
+    spec_thread = threading.Thread(
+        target=spec_compiler.compile_loop,
+        kwargs={
+            "db": db,
+            "anthropic_client": anthropic_client,
+            "monthly_budget_usd": budget_usd_per_month,
+            "should_stop_fn": lambda: _should_exit,
+        },
+        name="spec-compiler-loop",
+        daemon=True,
+    )
     judge_thread.start()
     researcher_thread.start()
     orchestrator_thread.start()
     outcome_thread.start()
     email_thread.start()
+    spec_thread.start()
 
     # Block the main thread until either:
     #   (a) any worker thread exits (which usually means it hit an
@@ -265,6 +278,7 @@ def main():
         ("orchestrator", orchestrator_thread),
         ("outcome", outcome_thread),
         ("email", email_thread),
+        ("spec-compiler", spec_thread),
     ]
     while not _should_exit:
         died = next(

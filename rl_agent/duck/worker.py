@@ -33,6 +33,7 @@ from pymongo import MongoClient
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import job_queue  # noqa: E402
 from duck import experiment_design, gyms, launch, reward_design  # noqa: E402
+from specs import spec as reward_spec  # noqa: E402
 
 ROBOT = "microduck"
 WORKDIR = pathlib.Path(os.environ.get("MICRODUCK_RL_DIR", "/microduck_rl"))
@@ -243,6 +244,9 @@ def job_reward_design(job, resume):
         raise launch.JobSpecError(
             f"reward design {doc.get('name')!r} is a {doc.get('robot') or 'roboracer'} design; "
             f"pick one made for the {ROBOT}")
+    blocked = reward_spec.unusable_reason(doc, reward_spec.strict_generated(db))
+    if blocked:
+        raise launch.JobSpecError(blocked)
     task = launch.task_id(job)
     gym = db.gyms.find_one({"_id": gyms.gym_id(task)}, {"reward_terms": 1}) or {}
     catalog = db.reward_term_catalog.find_one({"_id": ROBOT}, {"functions.name": 1}) or {}

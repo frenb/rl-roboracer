@@ -924,6 +924,40 @@ html.dark .rd-lint-detail {
   border-color: rgba(252, 165, 165, 0.3);
 }
 
+/* Reward Specs: per-robot status chips and the compiled-code review diff */
+.spec-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.4rem;
+  border-radius: 0.25rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.spec-chip.is-ok   { background: rgba(16, 185, 129, 0.18); color: rgb(5 150 105); }
+.spec-chip.is-warn { background: rgba(245, 158, 11, 0.2);  color: rgb(180 83 9); }
+.spec-chip.is-bad  { background: rgba(244, 63, 94, 0.18);  color: rgb(225 29 72); }
+.spec-chip.is-none { background: rgba(100, 116, 139, 0.18); color: rgb(100 116 139); }
+html.dark .spec-chip.is-ok   { color: rgb(110 231 183); }
+html.dark .spec-chip.is-warn { color: rgb(252 211 77); }
+html.dark .spec-chip.is-bad  { color: rgb(253 164 175); }
+html.dark .spec-chip.is-none { color: rgb(148 163 184); }
+.spec-diff {
+  margin: 0;
+  max-height: 22rem;
+  overflow: auto;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  font-size: 11px;
+  line-height: 1.45;
+  background: rgb(241 245 249);
+  white-space: pre;
+}
+html.dark .spec-diff { background: rgb(15 23 42); }
+.spec-diff .is-add { display: inline-block; width: 100%; background: rgba(16, 185, 129, 0.15); }
+.spec-diff .is-del { display: inline-block; width: 100%; background: rgba(244, 63, 94, 0.15); }
+
 /* Tag pills on the list rows (canonical / archived / unsaved) */
 .rd-tag {
   display: inline-flex;
@@ -1033,6 +1067,17 @@ html.dark .CodeMirror .cm-number        { color: rgb(196 181 253); }   /* violet
 
 html.dark .CodeMirror .cm-operator      { color: rgb(203 213 225); }
 .cm-s-default .cm-operator              { color: rgb(51 65 85); }
+
+/* Markdown mode (Reward Specs) */
+html.dark .CodeMirror .cm-header        { color: rgb(165 180 252); }   /* indigo-300 */
+.cm-s-default .cm-header                { color: rgb(67 56 202); }
+html.dark .CodeMirror .cm-variable-2,
+html.dark .CodeMirror .cm-variable-3,
+html.dark .CodeMirror .cm-keyword.cm-variable-2 { color: rgb(226 232 240); }  /* list text */
+html.dark .CodeMirror .cm-link,
+html.dark .CodeMirror .cm-url           { color: rgb(125 211 252); }   /* sky-300 */
+html.dark .CodeMirror .cm-hr,
+html.dark .CodeMirror .cm-meta          { color: rgb(148 163 184); }
 
 /* Editor + status wrapper: enable inner flex so CodeMirror's
  * percentage-height layout collapses cleanly into the right pane. */

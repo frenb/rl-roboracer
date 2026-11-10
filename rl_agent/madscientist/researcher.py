@@ -281,6 +281,15 @@ def fetch_budget_status(
             spent_this_month = float(agg[0].get("total") or 0.0)
     except Exception:  # noqa: BLE001
         spent_this_month = 0.0
+    try:
+        agg = list(db.spec_compile_runs.aggregate([
+            {"$match": {"created_at": {"$gte": month_start}}},
+            {"$group": {"_id": None, "total": {"$sum": {"$ifNull": ["$cost_usd", 0.0]}}}},
+        ]))
+        if agg:
+            spent_this_month += float(agg[0].get("total") or 0.0)
+    except Exception:  # noqa: BLE001
+        pass
 
     proposals_today = 0
     try:

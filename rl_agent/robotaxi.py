@@ -5682,6 +5682,12 @@ def do_job(job, num_envs=1):
             f"{bool(main_kwargs.get('skip_first_eval_val'))}",
             flush=True)
         try:
+            if reward_design_doc and reward_design_doc.get("spec_id"):
+                from specs import spec as _reward_spec
+                _blocked = _reward_spec.unusable_reason(
+                    reward_design_doc, _reward_spec.strict_generated(db))
+                if _blocked:
+                    raise RewardDesignError(_blocked)
             main(**main_kwargs)
         except RewardDesignError as e:
             err_msg = str(e)
