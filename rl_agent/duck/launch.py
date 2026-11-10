@@ -11,6 +11,7 @@ Job fields read here (all optional except ``job_type``):
     save_interval    iterations between checkpoints; bounds the work lost on pause
     seed             PPO seed
     init_checkpoint  model_<N>.pt to warm-start a fresh TRAIN job from
+    reward_design_id reward_designs document to apply (see reward_design.py)
     train_args       extra tyro flags, e.g. ["--agent.algorithm.entropy-coef", "0.005"]
     checkpoint       model_<N>.pt to EXPORT or EVAL
     eval_num_envs    robots simulated by EVAL
@@ -47,6 +48,7 @@ CONTROL_HZ = 50
 CAMERA = {"distance": 1.2, "elevation": -15.0}
 TRAIN_CLIP_SIZE = (480, 360)
 PROGRESS_VIDEO_SIZE = (640, 480)
+CFG_HOOK = Path(__file__).resolve().parent / "cfg_hook.py"
 
 _CHECKPOINT_RE = re.compile(r"^model_(\d+)\.pt$")
 _VIDEO_RE = re.compile(r"^rl-video-step-(\d+)\.mp4$")
@@ -133,12 +135,14 @@ def iteration_offset(job):
     return checkpoint_iteration(job["init_checkpoint"]) if job.get("init_checkpoint") else 0
 
 
-def train_command(job, attempt, resume_from=None):
+def train_command(job, attempt, resume_from=None, reward_design_file=None):
     """``(argv, env)`` for one TRAIN attempt.
 
     ``resume_from`` is this job's own latest checkpoint after a pause or
     crash; only the remaining iterations are requested. ``init_checkpoint``
     instead warm-starts a fresh job from another run with the full budget.
+    ``reward_design_file`` is a reward design JSON that ``cfg_hook.py``
+    applies to the task's reward terms inside the trainer.
     """
     total = iteration_offset(job) + positive_int(job, "max_iterations")
     argv = [
@@ -149,6 +153,9 @@ def train_command(job, attempt, resume_from=None):
         "--agent.run-name", run_name(job, attempt),
     ]
     env = {}
+    if reward_design_file is not None:
+        env["MICRODUCK_CFG_HOOK"] = f"{CFG_HOOK}:apply"
+        env["MICRODUCK_REWARD_DESIGN"] = str(reward_design_file)
     if resume_from is not None:
         remaining = total - checkpoint_iteration(resume_from)
         if remaining <= 0:

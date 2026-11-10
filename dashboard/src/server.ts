@@ -1738,7 +1738,7 @@ export const createServer = (config): express.Application => {
       return;
     }
     const now = new Date();
-    const doc = {
+    const doc: any = {
       name: String(body.name),
       description: String(body.description || ''),
       code: String(body.code),
@@ -1748,6 +1748,10 @@ export const createServer = (config): express.Application => {
       created_at: now,
       updated_at: now,
     };
+    // Car designs carry no robot field; duck designs (a top-level TERMS dict)
+    // are stamped so the duck worker accepts them and car jobs can't pick them.
+    const robot = body.robot || (/(^|\n)TERMS\s*=/.test(doc.code) ? 'microduck' : null);
+    if (robot && robot !== 'roboracer') doc.robot = String(robot);
     dbo.collection("reward_designs").insertOne(doc, function(err, result) {
       if (err) {
         console.error('add_reward_design failed:', err);
@@ -2416,6 +2420,23 @@ export const createServer = (config): express.Application => {
     const code: string = body.code;
     if (!code.trim()) {
       res.json({ ok: false, error: "code is empty", funcs: [] });
+      return;
+    }
+    // MicroDuck designs (rl_agent/duck/reward_design.py) edit the task's reward
+    // terms through a top-level TERMS dict plus optional term_<name>() functions;
+    // the duck worker runs the full lint against the task when a job starts.
+    if (body.robot === 'microduck' || /(^|\n)TERMS\s*=/.test(code)) {
+      if (!/(^|\n)TERMS\s*=/.test(code)) {
+        res.json({ ok: false, error: "microduck designs must define TERMS at top level (TERMS = {} keeps the task's defaults)", funcs: [] });
+        return;
+      }
+      const termFuncs = Array.from(code.matchAll(/(^|\n)def\s+(term_\w+)\s*\(/g), m => m[2]);
+      const badImport = code.match(/(^|\n)\s*(import|from)\s+\w+/);
+      if (badImport) {
+        res.json({ ok: false, error: "imports are not available in duck designs; torch and math are already in scope", funcs: termFuncs });
+        return;
+      }
+      res.json({ ok: true, error: null, funcs: termFuncs });
       return;
     }
     const allowedFuncs = ['reward_standard', 'reward_success', 'reward_failure'];

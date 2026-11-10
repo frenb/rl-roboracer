@@ -83,6 +83,7 @@ def gym_doc(task):
         "rollers": parsed["rollers"],
         "episode_s": task.get("episode_s"),
         "reward_terms": task.get("reward_terms") or [],
+        "reward_defaults": task.get("reward_defaults") or [],
         "file_path": "",
         "description": f"mjlab task {task['task_id']}",
         "managed_by": "duck-worker",

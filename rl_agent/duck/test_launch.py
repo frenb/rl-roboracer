@@ -49,6 +49,15 @@ def test_init_checkpoint_warm_starts_with_full_budget():
     assert env == {"MICRODUCK_WARM_START": "1"}
 
 
+def test_reward_design_is_handed_to_the_fork_hook():
+    _, env = launch.train_command({"_id": "abc"}, 0, reward_design_file="/logs/jobs/abc.json")
+    path, _, func = env["MICRODUCK_CFG_HOOK"].rpartition(":")
+    assert pathlib.Path(path) == launch.CFG_HOOK and launch.CFG_HOOK.exists() and func == "apply"
+    assert env["MICRODUCK_REWARD_DESIGN"] == "/logs/jobs/abc.json"
+    _, env = launch.train_command({"_id": "abc"}, 0)
+    assert "MICRODUCK_CFG_HOOK" not in env
+
+
 def test_whole_floats_from_the_dashboard_are_accepted():
     argv, _ = launch.train_command({"_id": "abc", "num_envs": 512.0}, attempt=0)
     assert flag(argv, "--env.scene.num-envs") == "512"

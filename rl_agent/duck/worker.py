@@ -32,7 +32,7 @@ from pymongo import MongoClient
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import job_queue  # noqa: E402
-from duck import gyms, launch  # noqa: E402
+from duck import gyms, launch, reward_design  # noqa: E402
 
 ROBOT = "microduck"
 WORKDIR = pathlib.Path(os.environ.get("MICRODUCK_RL_DIR", "/microduck_rl"))
@@ -52,6 +52,8 @@ VIDEO_SETTLE_S = 5
 # Velocity policies deployed on the real duck: 48 proprioception + 13 command
 # inputs -> 14 servo targets. Other tasks have their own shapes.
 DEPLOY_SHAPE = {"Mjlab-Velocity-": (61, 14)}
+# Copied onto the job when it starts and onto its models, as for car designs.
+DESIGN_FIELDS = ("reward_design_id", "reward_design_name", "reward_design_version", "reward_design_code")
 
 db = MongoClient(os.environ.get("MONGO_URL", "mongodb://root:example@mongo:27017/"))[
     os.environ.get("DATABASE_NAME", "robotaxi")]
@@ -220,6 +222,45 @@ def _maybe_object_id(value):
         return value
 
 
+def job_reward_design(job, resume):
+    """The job's reward design as ``{field: value}`` in ``DESIGN_FIELDS``, or None.
+
+    A resumed job reuses the snapshot taken when it started, so editing the
+    design mid-run can't change the reward under a half-trained policy.
+    """
+    if resume and job.get("reward_design_code") is not None:
+        return {k: job.get(k) for k in DESIGN_FIELDS}
+    rd_id = job.get("reward_design_id")
+    if not rd_id:
+        return None
+    doc = db.reward_designs.find_one({"_id": _maybe_object_id(rd_id)}) or db.reward_designs.find_one(
+        {"_id": str(rd_id)})
+    if doc is None:
+        raise launch.JobSpecError(f"reward_design_id {rd_id!r} not found")
+    if doc.get("robot") != ROBOT:
+        raise launch.JobSpecError(
+            f"reward design {doc.get('name')!r} is a {doc.get('robot') or 'roboracer'} design; "
+            f"pick one made for the {ROBOT}")
+    task = launch.task_id(job)
+    gym = db.gyms.find_one({"_id": gyms.gym_id(task)}, {"reward_terms": 1}) or {}
+    catalog = db.reward_term_catalog.find_one({"_id": ROBOT}, {"functions.name": 1}) or {}
+    library = [f["name"] for f in catalog.get("functions") or []] or None
+    result = reward_design.lint(doc.get("code") or "", gym.get("reward_terms"), library)
+    if not result["ok"]:
+        raise launch.JobSpecError(f"reward design {doc.get('name')!r} on {task}: {result['error']}")
+    return {"reward_design_id": str(doc["_id"]), "reward_design_name": doc.get("name"),
+            "reward_design_version": doc.get("version"), "reward_design_code": doc["code"]}
+
+
+def write_reward_design(job_id, design):
+    path = JOB_LOG_DIR / f"{job_id}.reward_design.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"_id": design["reward_design_id"], "name": design["reward_design_name"],
+                                "version": design["reward_design_version"],
+                                "code": design["reward_design_code"]}))
+    return path
+
+
 def upsert_model(job, checkpoint, iteration, **fields):
     """One ``models`` document per TRAIN job, pointing at its latest checkpoint."""
     db.models.update_one(
@@ -230,6 +271,7 @@ def upsert_model(job, checkpoint, iteration, **fields):
             "task_id": launch.task_id(job),
             "model_type": "PPO",
             "updated_at": now(),
+            **{k: job[k] for k in DESIGN_FIELDS if job.get(k) is not None},
             **fields,
         }, "$setOnInsert": {
             "robot": ROBOT,
@@ -299,7 +341,16 @@ def run_train(job, resume, log):
     total = launch.positive_int(job, "max_iterations")
     start_iteration = latest[0] if latest else offset
     attempt = len(run_dirs)
-    argv, extra_env = launch.train_command(job, attempt, resume_from=latest and latest[1])
+    design = job_reward_design(job, resume)
+    design_file = None
+    if design:
+        job.update(design)
+        update_job(job_id, **design)
+        design_file = write_reward_design(job_id, design)
+        log.write(f"[duck-worker] reward design {design['reward_design_name']!r} "
+                  f"v{design['reward_design_version']}\n")
+    argv, extra_env = launch.train_command(job, attempt, resume_from=latest and latest[1],
+                                           reward_design_file=design_file)
     if latest:
         log.write(f"[duck-worker] resuming from {latest[1]} (iteration {latest[0]})\n")
 
@@ -446,9 +497,11 @@ def sync_gyms():
         out = subprocess.run([sys.executable, str(LIST_TASKS_SCRIPT)], cwd=WORKDIR,
                              capture_output=True, text=True, timeout=600, check=True).stdout
         # The fork prints "[mdp] Patch ..." banners on import; the JSON is the last line.
-        tasks = json.loads(out.strip().splitlines()[-1])
-        upserted, archived = gyms.sync(db, tasks)
-        print(f"[duck-worker] gyms: {upserted} microduck tasks registered, {archived} archived", flush=True)
+        listing = json.loads(out.strip().splitlines()[-1])
+        upserted, archived = gyms.sync(db, listing["tasks"])
+        reward_design.seed(db, listing["functions"], now())
+        print(f"[duck-worker] gyms: {upserted} microduck tasks registered, {archived} archived; "
+              f"{len(listing['functions'])} library reward functions", flush=True)
     except Exception as exc:  # noqa: BLE001
         print(f"[duck-worker] gym sync failed: {exc}", flush=True)
 
