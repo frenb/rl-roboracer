@@ -6,7 +6,8 @@ using UnityEngine.InputSystem;
 /// gym window does not keep the GPU busy while another robot's job (e.g. a
 /// microduck run in duck-trainer) holds the shared job queue.
 ///
-/// "Idle" means no SimCommand and no keyboard or mouse input for
+/// "Idle" means no SimCommand and no keyboard or mouse input (while the
+/// window has focus) for
 /// <see cref="IdleAfterSeconds"/> of real time. Any of those restores the
 /// uncapped rate RosBootstrap sets; the first command after a long idle waits
 /// at most one idle frame (1 / idle fps) before it is processed.
@@ -68,6 +69,9 @@ public class IdleThrottle : MonoBehaviour
 
     static bool UserInput()
     {
+        // Unfocused, the Input System still reports mouse movement made in
+        // other windows, which would keep a background client awake.
+        if (!Application.isFocused) return false;
         var kb = Keyboard.current;
         if (kb != null && kb.anyKey.isPressed) return true;
         var mouse = Mouse.current;
