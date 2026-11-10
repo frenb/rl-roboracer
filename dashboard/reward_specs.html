@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/markdown/markdown.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/selection/active-line.min.js"></script>
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -58,21 +59,30 @@
             </div>
           </div>
 
+          <div class="spec-tabs" role="tablist">
+            <button class="spec-tab is-active" role="tab" data-tab="markdown">Markdown</button>
+            <button class="spec-tab" role="tab" data-tab="compiled">Compiled <span data-role="tab-chips" class="inline-flex gap-1"></span></button>
+          </div>
+
           <div class="p-4 flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto">
-            <p class="m-0 text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-              Write what the robot should learn under <code class="font-mono">## Goal</code>,
-              <code class="font-mono">## Encourage</code>, <code class="font-mono">## Discourage</code>,
-              <code class="font-mono">## Never</code> and <code class="font-mono">## Success looks like</code>, in terms that fit
-              any robot; <code class="font-mono">## Notes for &lt;robot&gt;</code> adds robot-specific guidance.
-              Compiling turns the prose into each robot's reward code, which lands under
-              <code class="font-mono">## Compiled: &lt;robot&gt;</code> once you accept it and is then a reward design
-              you can pick in New Job.
-            </p>
             <div data-role="error" class="rd-lint-detail" hidden></div>
-            <div class="rd-editor-wrap" style="min-height:360px">
-              <div data-role="editor-host" class="rd-editor-host" style="min-height:360px"></div>
+            <div data-pane="markdown" class="flex flex-col gap-3 flex-1 min-h-0">
+              <p class="m-0 text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                Write what the robot should learn under <code class="font-mono">## Goal</code>,
+                <code class="font-mono">## Encourage</code>, <code class="font-mono">## Discourage</code>,
+                <code class="font-mono">## Never</code> and <code class="font-mono">## Success looks like</code>, in terms that fit
+                any robot; <code class="font-mono">## Notes for &lt;robot&gt;</code> adds robot-specific guidance.
+                Compiling turns the prose into each robot's reward code, shown on the Compiled tab; once you
+                accept it, it is a reward design you can pick in New Job.
+              </p>
+              <div class="rd-editor-wrap" style="min-height:360px">
+                <div data-role="editor-host" class="rd-editor-host" style="min-height:360px"></div>
+              </div>
             </div>
-            <div data-role="robots" class="flex flex-col gap-3"></div>
+            <div data-pane="compiled" class="flex flex-col gap-3" hidden>
+              <p data-role="compiled-help" class="m-0 text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed"></p>
+              <div data-role="robots" class="flex flex-col gap-3"></div>
+            </div>
           </div>
         </section>
       </div>
@@ -98,19 +108,65 @@
       const strictBox = $('[data-role="strict"]'), showArchived = $('[data-role="show-archived"]');
       const btnNew = $('[data-action="new"]'), btnSave = $('[data-action="save"]');
       const btnCompile = $('[data-action="compile"]'), btnArchive = $('[data-action="archive"]');
+      const tabChipsEl = $('[data-role="tab-chips"]'), compiledHelpEl = $('[data-role="compiled-help"]');
 
       let specs = [];
       let settings = { strict_generated: false };
       let selectedId = null;      // null + isNew = an unsaved spec
       let isNew = false;
       let savedText = '';
-      let editor = null;
+      let editor = null;          // the Markdown tab: everything before the first "## Compiled:"
+      let doc = { headSep: '', sections: [] };
+      let codeEditors = {};       // robot -> CodeMirror on the Compiled tab
+      let tab = 'markdown';
       let pollTimer = null;
 
       const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
         (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
       const selected = () => specs.find((s) => String(s._id) === String(selectedId)) || null;
-      const dirty = () => editor && editor.getValue() !== savedText;
+      const dirty = () => editor && joinDoc() !== savedText;
+
+      // ---- the document: prose, then one "## Compiled: <robot>" section per robot
+      const COMPILED_RE = /^## Compiled: *(\S+)[ \t]*$/gm;
+      const FENCE_RE = /```python[^\n]*\n([\s\S]*?)```/;
+
+      function loadDoc(text) {
+        text = text.replace(/\r\n/g, '\n');
+        const marks = [...text.matchAll(COMPILED_RE)];
+        const head = marks.length ? text.slice(0, marks[0].index) : text;
+        const trimmed = marks.length ? head.replace(/\s+$/, '') : head;
+        doc = {
+          headSep: head.slice(trimmed.length),
+          sections: marks.map((m, i) => {
+            const raw = text.slice(m.index, i + 1 < marks.length ? marks[i + 1].index : text.length);
+            const f = FENCE_RE.exec(raw);
+            if (!f) return { robot: m[1], raw, code: null };
+            const start = f.index + f[0].indexOf('\n') + 1;
+            return { robot: m[1], before: raw.slice(0, start), code: f[1], after: raw.slice(start + f[1].length) };
+          }),
+        };
+        robotsEl.innerHTML = '';
+        codeEditors = {};
+        editor.setValue(marks.length ? trimmed + '\n' : head);
+      }
+
+      function joinDoc() {
+        if (!doc.sections.length) return editor.getValue();
+        return editor.getValue().replace(/\s+$/, '') + doc.headSep + doc.sections.map((s) => {
+          if (s.code === null) return s.raw;
+          let code = codeEditors[s.robot] ? codeEditors[s.robot].getValue() : s.code;
+          if (code && !code.endsWith('\n')) code += '\n';
+          return s.before + code + s.after;
+        }).join('');
+      }
+
+      function showTab(name) {
+        tab = name;
+        document.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('is-active', b.dataset.tab === name));
+        document.querySelectorAll('[data-pane]').forEach((p) => { p.hidden = p.dataset.pane !== name; });
+        (name === 'markdown' ? [editor] : Object.values(codeEditors)).forEach((cm) => cm.refresh());
+      }
+      document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
       async function api(path, body) {
         const r = await fetch(path, body === undefined ? {} : {
@@ -163,8 +219,8 @@
         isNew = false;
         selectedId = id;
         const s = selected();
-        savedText = s ? s.text : '';
-        editor.setValue(savedText);
+        savedText = s ? s.text.replace(/\r\n/g, '\n') : '';
+        loadDoc(savedText);
         editor.setOption('readOnly', false);
         errorEl.hidden = true;
         render();
@@ -184,8 +240,54 @@
       }
 
       function renderRobots(s) {
-        if (!s || !s.summary) { robotsEl.innerHTML = ''; return; }
-        robotsEl.innerHTML = s.summary.robots.map((robot) => robotPanel(s, robot)).join('');
+        const robots = s && s.summary ? s.summary.robots : [];
+        tabChipsEl.innerHTML = robots.map((r) => {
+          const st = compileState(s, r).state;
+          return st === 'pending' ? '<span class="spec-chip is-warn">review</span>'
+            : st === 'queued' || st === 'running' ? '<span class="spec-chip is-none">compiling…</span>'
+            : chip(s.summary.statuses[r]);
+        }).join('');
+        compiledHelpEl.textContent = !robots.length
+          ? (isNew ? 'Save the spec, then compile it to see each robot\'s code here.' : '')
+          : settings.strict_generated
+            ? 'Strict mode is on: this code can only come from the compiler.'
+            : 'You can edit the code here. Saving an edit pins that robot\'s code as hand-edited: it no longer follows from the prose alone.';
+        for (const card of [...robotsEl.children]) {
+          if (!robots.includes(card.dataset.robot)) { delete codeEditors[card.dataset.robot]; card.remove(); }
+        }
+        robots.forEach((robot, i) => {
+          let card = robotsEl.querySelector(`[data-robot-card="${robot}"]`);
+          if (!card) card = robotCard(robot);
+          if (robotsEl.children[i] !== card) robotsEl.insertBefore(card, robotsEl.children[i] || null);
+          const { head, body } = robotPanel(s, robot);
+          card.querySelector('[data-part="head"]').innerHTML = head;
+          card.querySelector('[data-part="body"]').innerHTML = body;
+          if (codeEditors[robot]) codeEditors[robot].setOption('readOnly', settings.strict_generated ? 'nocursor' : false);
+        });
+      }
+
+      // The card's code editor lives across renders; only its head and body are redrawn.
+      function robotCard(robot) {
+        const card = document.createElement('div');
+        card.className = 'rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-2';
+        card.dataset.robot = robot;
+        card.dataset.robotCard = robot;
+        card.innerHTML = '<div data-part="head" class="flex flex-col gap-1"></div><div data-part="body"></div><div data-part="code"></div>';
+        const section = doc.sections.find((x) => x.robot === robot && x.code !== null);
+        const codeEl = card.querySelector('[data-part="code"]');
+        if (section) {
+          codeEl.className = 'spec-code-host';
+          const cm = CodeMirror(codeEl, {
+            mode: 'python', lineNumbers: true, styleActiveLine: true, indentUnit: 4, viewportMargin: Infinity,
+            value: section.code, readOnly: settings.strict_generated ? 'nocursor' : false,
+          });
+          cm.on('change', () => render());
+          codeEditors[robot] = cm;
+          if (tab === 'compiled') setTimeout(() => cm.refresh(), 0);
+        } else {
+          codeEl.innerHTML = '<p class="m-0 text-xs text-slate-500">No code yet: compile this robot to generate it.</p>';
+        }
+        return card;
       }
 
       function robotPanel(s, robot) {
@@ -207,17 +309,19 @@
           body = `<div class="rd-lint-detail">${esc(c.error || 'compile failed')}${r && r.problems && r.problems.length ? '\n\nLast problems:\n- ' + r.problems.map(esc).join('\n- ') : ''}</div>
                   <div class="flex gap-2"><button class="btn-base btn-secondary text-xs" data-act="discard" data-robot="${robot}">Dismiss</button></div>`;
         }
+        const meta = (sum.compiled[robot] || {}).meta || {};
+        const compiledAt = meta.at ? ` · compiled ${esc(new Date(meta.at).toLocaleString())}${meta.model ? ` by ${esc(meta.model)}` : ''}` : '';
         const published = status === 'missing' ? '' :
-          `<span class="text-[11px] text-slate-500 dark:text-slate-400">Reward design <code class="font-mono">${esc(design)}</code>${status === 'stale' ? ' · jobs refuse it until recompiled' : status === 'edited' && settings.strict_generated ? ' · blocked by strict mode' : ''}</span>`;
-        return `<div class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-2">
-            <div class="flex flex-wrap items-center gap-2">
+          `<span class="text-[11px] text-slate-500 dark:text-slate-400">Reward design <code class="font-mono">${esc(design)}</code>${compiledAt}${status === 'stale' ? ' · jobs refuse it until recompiled' : status === 'edited' && settings.strict_generated ? ' · blocked by strict mode' : ''}</span>`;
+        return {
+          head: `<div class="flex flex-wrap items-center gap-2">
               <span class="text-sm font-semibold">${esc(ROBOT_LABEL[robot] || robot)}</span>${chip(status)}
               ${robot === 'microduck' ? `<span class="text-[11px] text-slate-500 font-mono">${esc(sum.microduck_task)}</span>` : ''}
               <span class="ml-auto flex gap-2">${actions.join('')}</span>
             </div>
-            ${published}
-            ${body}
-          </div>`;
+            ${published}`,
+          body,
+        };
       }
 
       function reviewBlock(s, robot, r) {
@@ -287,7 +391,7 @@
       btnSave.addEventListener('click', async () => {
         btnSave.disabled = true;
         try {
-          const r = await api('/save_design_spec', { _id: isNew ? undefined : selectedId, text: editor.getValue() });
+          const r = await api('/save_design_spec', { _id: isNew ? undefined : selectedId, text: joinDoc() });
           errorEl.hidden = true;
           isNew = false;
           selectedId = String(r._id);
@@ -315,8 +419,9 @@
         isNew = true;
         selectedId = null;
         savedText = '';
-        editor.setValue(t.text);
+        loadDoc(t.text);
         editor.setOption('readOnly', false);
+        showTab('markdown');
         render();
       });
 
@@ -339,10 +444,11 @@
         settings = r.settings;
         strictBox.checked = !!settings.strict_generated;
         const s = selected();
-        if (s && (reloadEditor || (!dirty() && s.text !== savedText))) {
-          savedText = s.text;
+        const text = s ? s.text.replace(/\r\n/g, '\n') : '';
+        if (s && (reloadEditor || (!dirty() && text !== savedText))) {
+          savedText = text;
           const cursor = editor.getCursor();
-          editor.setValue(savedText);
+          loadDoc(savedText);
           editor.setCursor(cursor);
         }
         if (!s && !isNew && specs.length) { select(String(specs[0]._id)); return schedule(); }
@@ -362,10 +468,15 @@
         });
         editor.on('change', () => render());
         let t = null;
-        window.addEventListener('resize', () => { clearTimeout(t); t = setTimeout(() => editor.refresh(), 80); });
+        window.addEventListener('resize', () => {
+          clearTimeout(t);
+          t = setTimeout(() => [editor, ...Object.values(codeEditors)].forEach((cm) => cm.refresh()), 80);
+        });
         refresh().catch((err) => { listEl.innerHTML = `<div class="rd-empty">${esc(err.message)}</div>`; });
       }
-      (function wait() { window.CodeMirror && CodeMirror.modes.markdown ? boot() : setTimeout(wait, 50); })();
+      (function wait() {
+        window.CodeMirror && CodeMirror.modes.markdown && CodeMirror.modes.python ? boot() : setTimeout(wait, 50);
+      })();
     })();
   </script>
 </body>
