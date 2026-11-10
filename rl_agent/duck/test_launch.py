@@ -158,3 +158,12 @@ def test_parse_progress_reads_rsl_rl_output():
     assert launch.parse_progress("   Mean reward:  88.21") == {"mean_reward": 88.21}
     assert launch.parse_progress("Mean episode length: 866.80") == {"mean_episode_length": 866.8}
     assert launch.parse_progress("Computation: 51234 steps/s") == {}
+
+
+def test_play_config_gets_training_push_timing():
+    from types import SimpleNamespace as NS
+    play = NS(events={"push_robot": NS(interval_range_s=(0.5, 1.0)), "reset_base": NS(), "gone": None})
+    train = NS(events={"push_robot": NS(interval_range_s=(3.0, 6.0)), "reset_base": NS()})
+    launch.match_training_intervals(play, train)
+    assert play.events["push_robot"].interval_range_s == (3.0, 6.0)
+    assert not hasattr(play.events["reset_base"], "interval_range_s")

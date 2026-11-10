@@ -47,7 +47,15 @@
         <span data-role="freshness-text">connecting…</span>
       </span>
 
-      <div class="flex flex-wrap gap-2 ml-auto">
+      <div class="flex flex-wrap gap-2 ml-auto items-center">
+        <label class="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"
+               title="Car designs replace three scalar reward functions; MicroDuck designs edit an mjlab task's reward terms.">
+          <span>Robot</span>
+          <select data-role="robot" class="input-base appearance-none select-chevron pr-8 text-xs py-1">
+            <option value="roboracer">Roboracer (car)</option>
+            <option value="microduck">MicroDuck</option>
+          </select>
+        </label>
         <label class="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 select-none">
           <input data-role="show-archived" type="checkbox"
                  class="w-3.5 h-3.5 rounded border-slate-300 dark:border-slate-600
@@ -118,7 +126,50 @@
                  server's error message otherwise. -->
             <div data-role="lint-detail" class="rd-lint-detail" hidden></div>
 
-            <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+            <!-- MicroDuck only: what a design can change. Default terms come
+                 from the picked task's gym, addable functions from
+                 /get_reward_term_catalog; clicking one inserts a TERMS entry. -->
+            <details data-role="duck-ref" open hidden
+                     class="rounded-lg border border-slate-200 dark:border-slate-700 text-xs">
+              <summary class="px-3 py-2 cursor-pointer select-none font-medium text-slate-600 dark:text-slate-300">
+                Reward terms reference
+              </summary>
+              <div class="px-3 pb-3 flex flex-col gap-2">
+                <div class="flex flex-wrap items-center gap-2">
+                  <label for="rd-duck-task" class="text-slate-600 dark:text-slate-300">Task</label>
+                  <select id="rd-duck-task" class="input-base appearance-none select-chevron pr-8 text-xs py-1 min-w-[18rem]"></select>
+                  <input data-role="duck-ref-filter" type="search" placeholder="Filter terms and functions"
+                         class="input-base text-xs py-1 flex-1 min-w-[10rem]">
+                </div>
+                <p class="m-0 text-[11px] text-slate-500 dark:text-slate-400">
+                  Lint checks the design against this task. Click a row to insert a TERMS entry at the cursor.
+                </p>
+                <div class="grid grid-cols-1 xl:grid-cols-2 gap-3 max-h-64 overflow-auto">
+                  <div>
+                    <div class="font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide text-[10px] mb-1">Task defaults</div>
+                    <table class="w-full font-mono text-[11px]"><tbody data-role="duck-defaults"></tbody></table>
+                  </div>
+                  <div>
+                    <div class="font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide text-[10px] mb-1">Library functions (add with "func")</div>
+                    <table class="w-full font-mono text-[11px]"><tbody data-role="duck-library"></tbody></table>
+                  </div>
+                </div>
+              </div>
+            </details>
+
+            <p data-role="help-microduck" hidden class="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+              Define <code class="font-mono text-[11px]">TERMS</code>, a dict of changes to the task&rsquo;s
+              default reward terms: <code class="font-mono text-[11px]">None</code> drops a term,
+              <code class="font-mono text-[11px]">{"weight": w, "params": {...}}</code> reweights or
+              re-parameterises one, and a new name adds a term from the library
+              (<code class="font-mono text-[11px]">"func"</code>) or a
+              <code class="font-mono text-[11px]">term_&lt;name&gt;(env, **params)</code> you define, returning
+              one reward per robot (<code class="font-mono text-[11px]">Tensor[num_envs]</code>).
+              <code class="font-mono text-[11px]">torch</code> and <code class="font-mono text-[11px]">math</code>
+              are in scope; imports, file IO and network are not. A curriculum that ramps a term you
+              change is removed for the run.
+            </p>
+            <p data-role="help-roboracer" class="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
               Define one or more of
               <code class="font-mono text-[11px]">reward_standard</code>,
               <code class="font-mono text-[11px]">reward_success</code>,
@@ -143,7 +194,7 @@
 
   <!-- Bumped to 20260517-rd to bust iframe caches. Whenever this page or
        components.js changes substantively, bump this string. -->
-  <script src="/components.js?v=20261018-demos2"></script>
+  <script src="/components.js?v=20261110-duck-designs"></script>
   <script>
     (function () {
       const { formatters, showToast, confirmDialog, FreshnessIndicator } = window.RoboracerUI;
@@ -179,6 +230,35 @@ def reward_failure(data, data_arr, step_costs, position_history, *,
     """Terminal reward when the episode ends in failure."""
     return defaults.failure(data, data_arr, step_costs, position_history)
 `;
+      // Kept in sync with PASSTHROUGH_DESIGN_CODE in rl_agent/duck/reward_design.py.
+      const DUCK_TEMPLATE_CODE = `"""Brief description of what this reward design changes.
+
+TERMS maps a reward term name to
+  None                              drop the task's default term
+  {"weight": w, "params": {...}}    reweight / re-parameterise a default term
+  {"func": "<library fn>", "weight": w, "params": {...}}   add a library term
+  {"weight": w, "params": {...}}    add term_<name> defined below
+A curriculum that ramps a term's weight or params is removed when this design
+drops the term or sets what the curriculum ramps; the job log lists them.
+
+env offers: num_envs, device, step_dt, episode_length_buf, robot (joint_pos,
+joint_vel, root_link_lin_vel_b, root_link_ang_vel_b, projected_gravity_b, ...),
+action, prev_action, command(name), sensor(name), joint_ids(regex),
+body_ids(regex).
+"""
+
+TERMS = {
+}
+
+
+# def term_lean_forward(env, target):
+#     pitch = -env.robot.projected_gravity_b[:, 0]
+#     return torch.exp(-((pitch - target) ** 2) / 0.01)
+`;
+      const TEMPLATES = { roboracer: TEMPLATE_CODE, microduck: DUCK_TEMPLATE_CODE };
+      const CANONICAL_IDS = new Set(['passthrough-course-default', 'microduck-passthrough']);
+      const DEFAULT_DUCK_TASK = 'Mjlab-Velocity-Flat-MicroDuck';
+      const designRobot = (d) => (d && d.robot) || 'roboracer';
 
       // ---- DOM handles ----------------------------------------------
       const listEl       = document.querySelector('[data-role="design-list"]');
@@ -197,6 +277,18 @@ def reward_failure(data, data_arr, step_costs, position_history, *,
       const btnArchive   = document.querySelector('[data-action="archive"]');
       const btnUnarchive = document.querySelector('[data-action="unarchive"]');
       const btnLint      = document.querySelector('[data-action="lint"]');
+      const robotSel     = document.querySelector('[data-role="robot"]');
+      const duckRef      = document.querySelector('[data-role="duck-ref"]');
+      const duckTaskSel  = document.getElementById('rd-duck-task');
+      const duckFilter   = document.querySelector('[data-role="duck-ref-filter"]');
+      const duckDefaults = document.querySelector('[data-role="duck-defaults"]');
+      const duckLibrary  = document.querySelector('[data-role="duck-library"]');
+
+      let robot = localStorage.getItem('rd-robot') === 'microduck' ? 'microduck' : 'roboracer';
+      robotSel.value = robot;
+      // MicroDuck reference data: gyms carry each task's default terms.
+      let duckGyms = [];
+      let duckLibraryRows = [];
 
       // ---- State ----------------------------------------------------
       // `designs` mirrors the server's reward_designs collection. When
@@ -327,7 +419,8 @@ def reward_failure(data, data_arr, step_costs, position_history, *,
       // Cheap to call on every change; the list is small (tens of rows
       // at most for a single research project).
       function renderList() {
-        const filtered = designs
+        const ofRobot = designs.filter((d) => designRobot(d) === robot);
+        const filtered = ofRobot
           .filter((d) => showArchived.checked || !d.archived)
           .slice()
           .sort((a, b) => {
@@ -339,9 +432,9 @@ def reward_failure(data, data_arr, step_costs, position_history, *,
             return String(a.name || '').localeCompare(String(b.name || ''));
           });
 
-        countEl.textContent = designs.length === 0
+        countEl.textContent = ofRobot.length === 0
           ? ''
-          : `${filtered.length} of ${designs.length} design${designs.length === 1 ? '' : 's'}`;
+          : `${filtered.length} of ${ofRobot.length} design${ofRobot.length === 1 ? '' : 's'}`;
 
         if (!filtered.length) {
           listEl.innerHTML =
@@ -401,10 +494,9 @@ def reward_failure(data, data_arr, step_costs, position_history, *,
       }
 
       function isCanonical(d) {
-        // The seeded passthrough design uses a string _id, not an
-        // ObjectId. Anything matching that sentinel is the
-        // "canonical / built-in" design.
-        return String(d._id || '') === 'passthrough-course-default';
+        // The seeded passthrough designs (one per robot) use string _ids,
+        // not ObjectIds. Those are the "canonical / built-in" designs.
+        return CANONICAL_IDS.has(String(d._id || ''));
       }
 
       // Click handler delegated to the list so we don't have to rewire
@@ -472,12 +564,12 @@ def reward_failure(data, data_arr, step_costs, position_history, *,
         const enter = () => {
           editorState = makeEmptyEditorState();
           editorState.isNew = true;
-          editorState.code = TEMPLATE_CODE;
+          editorState.code = TEMPLATES[robot];
           editorState.name = '';
           editorState.description = '';
           if (editor) {
             editor.setOption('readOnly', false);
-            editor.setValue(TEMPLATE_CODE);
+            editor.setValue(TEMPLATES[robot]);
             editor.clearHistory();
             editor.focus();
           }
@@ -537,11 +629,20 @@ def reward_failure(data, data_arr, step_costs, position_history, *,
           const res = await fetch('/lint_reward_design', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code }),
+            body: JSON.stringify(robot === 'microduck'
+              ? { code, robot, task_id: duckTaskSel.value || null }
+              : { code }),
           });
           const json = await res.json();
           if (json.ok) {
-            showLintOk(json.funcs || []);
+            const notes = json.funcs || [];
+            if (robot === 'microduck') {
+              const taskNote = json.task_checked && duckTaskSel.value
+                ? `fits ${duckTaskSel.value}` : 'task not checked';
+              showLintOk([`${(json.terms || []).length} TERMS entries`, ...notes, taskNote]);
+            } else {
+              showLintOk(notes);
+            }
             return true;
           }
           showLintBad(json.error || 'lint failed');
@@ -623,7 +724,7 @@ def reward_failure(data, data_arr, step_costs, position_history, *,
             res = await fetch('/add_reward_design', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ name, description: desc, code }),
+              body: JSON.stringify({ name, description: desc, code, robot }),
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             // Mongo's Node driver returns the inserted ObjectId on the
@@ -797,6 +898,115 @@ def reward_failure(data, data_arr, step_costs, position_history, *,
         refreshButtons();
       }
 
+      // ---- Robot switch ----------------------------------------------
+      function applyRobot() {
+        const duck = robot === 'microduck';
+        document.querySelector('[data-role="help-microduck"]').hidden = !duck;
+        document.querySelector('[data-role="help-roboracer"]').hidden = duck;
+        duckRef.hidden = !duck;
+        if (duck && !duckGyms.length) {
+          loadDuckReference().catch((err) => console.warn('duck reference load failed:', err));
+        }
+      }
+
+      robotSel.addEventListener('change', async () => {
+        const next = robotSel.value;
+        if (isDirty() || editorState.isNew) {
+          const ok = await confirmDialog({
+            title: 'Discard unsaved changes?',
+            message: 'Switching robots closes the current design.',
+            confirmLabel: 'Discard',
+            confirmVariant: 'danger',
+          });
+          if (!ok) { robotSel.value = robot; return; }
+        }
+        robot = next;
+        localStorage.setItem('rd-robot', robot);
+        editorState = makeEmptyEditorState();
+        renderEditorEmpty();
+        applyRobot();
+        renderList();
+      });
+
+      // ---- MicroDuck reference panel -----------------------------------
+      async function loadDuckReference() {
+        const [gymsRes, catRes] = await Promise.all([
+          fetch('/get_gyms?force=true'), fetch('/get_reward_term_catalog?robot=microduck')]);
+        const gymsText = await gymsRes.text();
+        if (gymsText && gymsText !== 'NO_CHANGES') {
+          duckGyms = (JSON.parse(gymsText) || [])
+            .filter((g) => g.robot === 'microduck' && !g.archived)
+            .sort((a, b) => String(a.task_id).localeCompare(String(b.task_id)));
+        }
+        duckLibraryRows = ((await catRes.json()) || {}).functions || [];
+        const keep = duckTaskSel.value || localStorage.getItem('rd-duck-task') || DEFAULT_DUCK_TASK;
+        duckTaskSel.innerHTML = duckGyms.map((g) =>
+          `<option value="${escapeAttr(g.task_id)}">${escapeHtml(g.task_id)}</option>`).join('');
+        if (duckGyms.some((g) => g.task_id === keep)) duckTaskSel.value = keep;
+        renderDuckReference();
+      }
+
+      function renderDuckReference() {
+        const q = duckFilter.value.trim().toLowerCase();
+        const match = (...parts) => !q || parts.some((p) => String(p || '').toLowerCase().includes(q));
+        const gym = duckGyms.find((g) => g.task_id === duckTaskSel.value);
+        const defaults = ((gym && gym.reward_defaults) || []).filter((t) => match(t.name, t.func));
+        duckDefaults.innerHTML = defaults.map((t) =>
+          `<tr class="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800" data-insert-default="${escapeAttr(t.name)}"`
+          + ` title="${escapeAttr(t.func + ' ' + JSON.stringify(t.params))}">`
+          + `<td class="pr-2 py-0.5">${escapeHtml(t.name)}</td>`
+          + `<td class="pr-2 text-right ${t.weight < 0 ? 'text-rose-500' : 'text-emerald-500'}">${t.weight}</td>`
+          + `<td class="text-slate-500 truncate max-w-[12rem]">${escapeHtml(t.func)}</td></tr>`).join('')
+          || '<tr><td class="text-slate-500">No terms.</td></tr>';
+        const lib = duckLibraryRows.filter((f) => match(f.name, f.doc));
+        duckLibrary.innerHTML = lib.map((f) => {
+          const args = (f.params || []).map((p) => p.required ? p.name : p.name + '?').join(', ');
+          return `<tr class="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800" data-insert-func="${escapeAttr(f.name)}"`
+            + ` title="${escapeAttr((f.doc || '') + '\n' + f.module)}">`
+            + `<td class="pr-2 py-0.5">${escapeHtml(f.name)}</td>`
+            + `<td class="text-slate-500 truncate max-w-[16rem]">${escapeHtml(args)}</td></tr>`;
+        }).join('') || '<tr><td class="text-slate-500">No functions.</td></tr>';
+      }
+
+      function insertTermsEntry(text) {
+        if (!editor || editor.getOption('readOnly')) {
+          showToast({ type: 'error', message: 'Create or open an editable design first.' });
+          return;
+        }
+        const doc = editor.getDoc();
+        const cur = doc.getCursor();
+        const line = doc.getLine(cur.line);
+        const at = line.trim() ? { line: cur.line + 1, ch: 0 } : { line: cur.line, ch: 0 };
+        doc.replaceRange(text + '\n', at);
+        doc.setCursor({ line: at.line, ch: text.length });
+        editor.focus();
+      }
+
+      duckDefaults.addEventListener('click', (ev) => {
+        const row = ev.target.closest('[data-insert-default]');
+        if (!row) return;
+        const gym = duckGyms.find((g) => g.task_id === duckTaskSel.value);
+        const t = ((gym && gym.reward_defaults) || []).find((x) => x.name === row.dataset.insertDefault);
+        if (t) insertTermsEntry(`    ${JSON.stringify(t.name)}: {"weight": ${t.weight}},`);
+      });
+      duckLibrary.addEventListener('click', (ev) => {
+        const row = ev.target.closest('[data-insert-func]');
+        if (!row) return;
+        const f = duckLibraryRows.find((x) => x.name === row.dataset.insertFunc);
+        if (!f) return;
+        const required = (f.params || []).filter((p) => p.required).map((p) => p.name);
+        const params = required.length
+          ? `, "params": {${required.map((p) => `${JSON.stringify(p)}: None`).join(', ')}}},  # fill in ${required.join(', ')}`
+          : '},';
+        insertTermsEntry(`    ${JSON.stringify(f.name)}: {"func": ${JSON.stringify(f.name)}, "weight": 0.0${params}`);
+      });
+      duckTaskSel.addEventListener('change', () => {
+        localStorage.setItem('rd-duck-task', duckTaskSel.value);
+        renderDuckReference();
+        if (lintStatus && !lintStatus.hidden) hideLint();
+      });
+      duckFilter.addEventListener('input', renderDuckReference);
+
       // ---- Helpers ---------------------------------------------------
       function escapeHtml(s) {
         return String(s == null ? '' : s)
@@ -818,6 +1028,7 @@ def reward_failure(data, data_arr, step_costs, position_history, *,
         // Initial state: empty editor; the list will populate from the
         // first poll.
         renderEditorEmpty();
+        applyRobot();
 
         dataWs = new RoboracerUI.DataWebSocket({
           collections: ['reward_designs'],

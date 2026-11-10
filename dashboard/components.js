@@ -1663,6 +1663,9 @@
     reward_designs: { url: '/get_reward_designs', pinned: 'passthrough-course-default' },
     experiment_designs: { url: '/get_experiment_designs', pinned: 'experiment-default' },
   };
+  const ROBOT_SCOPED_LISTS = new Set(['gyms', 'reward_designs']);
+  // Seeded designs pinned first for non-car robots (rl_agent/duck/reward_design.py).
+  const ROBOT_PINNED = { reward_designs: 'microduck-passthrough' };
   const JOB_LIST_TTL_MS = 30000;
   const _jobListCache = new Map();
 
@@ -1710,21 +1713,22 @@
    * no gym" value which selects the trainer's legacy code path, so
    * wiping it would change what an untouched form submits.
    */
-  async function loadJobListIntoSelect(kind, sel, { force = true } = {}) {
+  async function loadJobListIntoSelect(kind, sel, { force = true, robot = 'roboracer' } = {}) {
     if (!sel) return;
     const src = JOB_LIST_SOURCES[kind];
+    const pinned = robot === 'roboracer' ? src.pinned : ROBOT_PINNED[kind];
     const rows = await fetchJobList(kind, { force });
     while (sel.options.length > 1) sel.remove(1);
     const visible = rows
       .filter((r) => !r.archived)
-      // The job and eval forms build car jobs; microduck gyms (an mjlab
-      // task each) get their own form with the robot switcher.
-      .filter((r) => kind !== 'gyms' || !r.robot || r.robot === 'roboracer')
+      // Gyms and reward designs belong to one robot; car rows predate the
+      // field. The car job/eval forms and the microduck form each list their own.
+      .filter((r) => !ROBOT_SCOPED_LISTS.has(kind) || (r.robot || 'roboracer') === robot)
       .sort((a, b) => {
         // Demos have no name; newest first is the useful order.
         if (kind === 'demos') return demoTime(b).localeCompare(demoTime(a));
-        const aCan = src.pinned && String(a._id || '') === src.pinned;
-        const bCan = src.pinned && String(b._id || '') === src.pinned;
+        const aCan = pinned && String(a._id || '') === pinned;
+        const bCan = pinned && String(b._id || '') === pinned;
         if (aCan && !bCan) return -1;
         if (bCan && !aCan) return 1;
         return String(a.name || '').localeCompare(String(b.name || ''));

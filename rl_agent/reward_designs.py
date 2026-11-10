@@ -62,7 +62,10 @@ import math
 import time
 import traceback
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:  # the dashboard lints duck designs with a bare python3
+    np = None
 
 
 REWARD_DESIGN_NAMESPACE_BUILTINS = {

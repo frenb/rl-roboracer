@@ -60,6 +60,7 @@ def iteration_of(path):
 def render(task_id, checkpoints, seconds, out_mp4, device):
     configure_torch_backends()
     env_cfg = load_env_cfg(task_id, play=True)
+    launch.match_training_intervals(env_cfg, load_env_cfg(task_id))
     env_cfg.scene.num_envs = 1
     env_cfg.viewer.width, env_cfg.viewer.height = launch.PROGRESS_VIDEO_SIZE
     env_cfg.viewer.distance = launch.CAMERA["distance"]

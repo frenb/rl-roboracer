@@ -5,8 +5,11 @@ Runs inside the duck-trainer venv (imports mjlab), from /microduck_rl:
     python /python_ws/src/duck/evaluate.py <TASK_ID> --checkpoint model_N.pt \
         --num-envs 512 --steps 1000 --out result.json
 
-Uses the play configuration (the one deployment exports are checked against)
-and counts an episode as a fall when it terminates rather than times out.
+Uses the training configuration, not the play one: microduck's play configs
+push the robot every 0.5-1 s instead of every 3-6 s, a stress demo that made a
+policy losing 2.5% of robots in 10 s under training conditions lose 26%.
+Curricula start at their first stage. An episode is a fall when it terminates
+rather than times out (walking off the terrain counts as a time-out).
 """
 import argparse
 import json
@@ -25,7 +28,7 @@ from mjlab.utils.torch import configure_torch_backends
 
 def evaluate(task_id, checkpoint, num_envs, steps, device):
     configure_torch_backends()
-    env_cfg = load_env_cfg(task_id, play=True)
+    env_cfg = load_env_cfg(task_id, play=False)
     env_cfg.scene.num_envs = num_envs
     agent_cfg = load_rl_cfg(task_id)
     env = RslRlVecEnvWrapper(ManagerBasedRlEnv(cfg=env_cfg, device=device),

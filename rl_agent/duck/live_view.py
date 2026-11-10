@@ -111,6 +111,7 @@ def main():
 
     configure_torch_backends()
     env_cfg = load_env_cfg(task, play=True)
+    launch.match_training_intervals(env_cfg, load_env_cfg(task))
     env_cfg.scene.num_envs = args.num_envs
     agent_cfg = load_rl_cfg(task)
     env = RslRlVecEnvWrapper(ManagerBasedRlEnv(cfg=env_cfg, device=device),

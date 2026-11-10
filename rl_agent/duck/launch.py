@@ -74,6 +74,18 @@ def task_id(job):
     return job.get("task_id") or DEFAULT_TASK
 
 
+def match_training_intervals(play_cfg, train_cfg):
+    """Give a play config the training config's interval-event timing.
+
+    microduck's play configs push the robot every 0.5-1 s instead of every
+    3-6 s, so a policy that walks fine in training is shown falling over.
+    """
+    for name, term in (play_cfg.events or {}).items():
+        trained = (train_cfg.events or {}).get(name)
+        if term is not None and trained is not None and hasattr(term, "interval_range_s"):
+            term.interval_range_s = trained.interval_range_s
+
+
 def positive_int(job, key):
     value = setting(job, key)
     if isinstance(value, float) and value.is_integer():

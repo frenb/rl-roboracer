@@ -105,6 +105,89 @@
                 class="px-2 py-1 text-sm rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400">×</button>
       </div>
       <div class="px-6 py-6 overflow-y-auto">
+        <!-- Robot switcher: the car and the MicroDuck have different job
+             fields, so each gets its own form. -->
+        <div class="grid grid-cols-[minmax(140px,max-content)_1fr] gap-4 items-center mb-4">
+          <label for="f-robot" class="text-xs font-medium text-slate-600 dark:text-slate-300">Robot</label>
+          <select id="f-robot" class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="roboracer" selected>Roboracer (car, Unity + SAC)</option>
+            <option value="microduck">MicroDuck (mjlab + PPO)</option>
+          </select>
+        </div>
+
+        <form id="create-duck-form" onsubmit="return false;" style="display: none"
+              class="grid grid-cols-[minmax(140px,max-content)_1fr] gap-4 items-center">
+          <label for="d-job-type" class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="TRAIN: PPO on an mjlab task. EVAL: score a checkpoint. EXPORT: checkpoint to ONNX. VIDEO: progression video of a TRAIN job's checkpoints.">Job type</label>
+          <select id="d-job-type" class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="TRAIN" selected>TRAIN</option>
+            <option value="EVAL">EVAL</option>
+            <option value="EXPORT">EXPORT</option>
+            <option value="VIDEO">VIDEO</option>
+          </select>
+
+          <label for="d-name" class="text-xs font-medium text-slate-600 dark:text-slate-300">Name</label>
+          <input id="d-name" type="text" maxlength="120" placeholder="optional, e.g. walk with lean bonus"
+                 class="w-full input-base">
+
+          <label for="d-gym" data-duck="TRAIN" class="text-xs font-medium text-slate-600 dark:text-slate-300">Task</label>
+          <select id="d-gym" data-duck="TRAIN" class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="">Pick a MicroDuck task</option>
+          </select>
+
+          <label for="d-reward-design" data-duck="TRAIN" class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="Edits the task's reward terms; author designs on the Reward Design tab with Robot = MicroDuck.">Reward design</label>
+          <select id="d-reward-design" data-duck="TRAIN" class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="">Task default (no reward design)</option>
+          </select>
+
+          <label for="d-init" data-duck="TRAIN" class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="Warm-start from another run's checkpoint with the full iteration budget. Same task family only: the policy's inputs and outputs must match.">Warm start from</label>
+          <select id="d-init" data-duck="TRAIN" class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="">Nothing (train from scratch)</option>
+          </select>
+
+          <label for="d-model" data-duck="EVAL EXPORT VIDEO" class="hidden text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="EVAL/EXPORT use this checkpoint; VIDEO renders the checkpoints of the TRAIN job that produced it.">Model</label>
+          <select id="d-model" data-duck="EVAL EXPORT VIDEO" class="hidden w-full input-base appearance-none select-chevron pr-8">
+            <option value="">Pick a MicroDuck model</option>
+          </select>
+
+          <label for="d-num-envs" data-duck="TRAIN" class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="Robots simulated in parallel on the GPU.">Robots in parallel</label>
+          <input id="d-num-envs" data-duck="TRAIN" type="number" min="1" step="1" placeholder="2048" class="w-full input-base">
+
+          <label for="d-iterations" data-duck="TRAIN" class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="PPO iterations (24 steps per robot each).">Iterations</label>
+          <input id="d-iterations" data-duck="TRAIN" type="number" min="1" step="1" placeholder="1000" class="w-full input-base">
+
+          <label for="d-save-interval" data-duck="TRAIN" class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="Iterations between checkpoints; also the most work a pause can lose.">Checkpoint every</label>
+          <input id="d-save-interval" data-duck="TRAIN" type="number" min="1" step="1" placeholder="50" class="w-full input-base">
+
+          <label for="d-seed" data-duck="TRAIN" class="text-xs font-medium text-slate-600 dark:text-slate-300">Seed</label>
+          <input id="d-seed" data-duck="TRAIN" type="number" step="1" placeholder="task default" class="w-full input-base">
+
+          <span data-duck="TRAIN" class="text-xs font-medium text-slate-600 dark:text-slate-300">Videos</span>
+          <div data-duck="TRAIN" class="flex flex-col gap-1 text-xs text-slate-600 dark:text-slate-300">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input id="d-video" type="checkbox" class="accent-sky-600"> Record a clip every 50 iterations (slows training)
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input id="d-progress-video" type="checkbox" class="accent-sky-600" checked> Progression video when training finishes
+            </label>
+          </div>
+
+          <label for="d-eval-envs" data-duck="EVAL" class="hidden text-xs font-medium text-slate-600 dark:text-slate-300">Robots in parallel</label>
+          <input id="d-eval-envs" data-duck="EVAL" type="number" min="1" step="1" placeholder="512" class="hidden w-full input-base">
+
+          <label for="d-eval-steps" data-duck="EVAL" class="hidden text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="Control steps at 50 Hz; 1000 = 20 s per robot.">Steps</label>
+          <input id="d-eval-steps" data-duck="EVAL" type="number" min="1" step="1" placeholder="1000" class="hidden w-full input-base">
+
+          <p id="d-hint" class="col-span-2 m-0 text-xs leading-relaxed text-slate-500 dark:text-slate-400"></p>
+        </form>
+
         <form id="create-job-form" onsubmit="return false;"
               class="grid grid-cols-[minmax(140px,max-content)_1fr] gap-4 items-center">
           <label for="f-status" class="text-xs font-medium text-slate-600 dark:text-slate-300">Status</label>
@@ -470,7 +553,7 @@
        (Ctrl+Shift+R on the parent doesn't always force iframe
        subresources to re-fetch). Bump the version string whenever you
        change components.js. -->
-  <script src="/components.js?v=20261109-duck-gyms"></script>
+  <script src="/components.js?v=20261110-duck-designs"></script>
   <script>
     (function () {
       const { TableView, formatters, showToast, confirmDialog } = window.RoboracerUI;
@@ -1120,6 +1203,7 @@
         // same as on the Models tab: leaving it armed would silently
         // turn the next eval into a multi-stage run.
         sweepEl.checked = false;
+        applyRobotForm();
         updateJobHint();
         // Hydrate the reward-design + experiment-design dropdowns
         // each time the modal opens so newly-authored designs show
@@ -1223,7 +1307,186 @@
         }
       });
 
+      /* ---------- MicroDuck job form ---------------------------
+       *
+       * Duck jobs are picked up by rl_agent/duck/worker.py; their fields are
+       * documented in rl_agent/duck/launch.py. /add_job stamps robot and
+       * task_id from the gym, but the form sets both so EVAL/EXPORT/VIDEO
+       * (which have no gym) route the same way.
+       * ----------------------------------------------------- */
+      const robotEl = document.getElementById('f-robot');
+      const duckFormEl = document.getElementById('create-duck-form');
+      const duckJobTypeEl = document.getElementById('d-job-type');
+      const duckModelEl = document.getElementById('d-model');
+      const duckInitEl = document.getElementById('d-init');
+      let duckModels = [];
+
+      function applyRobotForm() {
+        const duck = robotEl.value === 'microduck';
+        duckFormEl.style.display = duck ? '' : 'none';
+        formEl.style.display = duck ? 'none' : '';
+        localStorage.setItem('new-job-robot', robotEl.value);
+        if (duck) {
+          updateDuckRows();
+          loadDuckPickers().catch((err) => console.warn('duck pickers hydrate failed:', err));
+        }
+      }
+
+      function updateDuckRows() {
+        const jt = duckJobTypeEl.value;
+        duckFormEl.querySelectorAll('[data-duck]').forEach((el) => {
+          el.classList.toggle('hidden', !el.dataset.duck.split(' ').includes(jt));
+        });
+        const hints = {
+          TRAIN: 'PPO on the picked mjlab task. A reward design edits its reward terms; the job fails '
+            + 'within seconds if the design does not fit the task. The policy is exported to ONNX and '
+            + 'checked when training ends.',
+          EVAL: 'Runs the checkpoint under the task\u2019s training conditions (random commands and pushes) '
+            + 'and records falls, return and episode length on the job and its model.',
+          EXPORT: 'Writes the checkpoint as ONNX (observation normaliser baked in) and validates it.',
+          VIDEO: 'Renders evenly spaced checkpoints of the TRAIN job that produced this model into one '
+            + 'progression video.',
+        };
+        document.getElementById('d-hint').textContent = hints[jt] || '';
+      }
+
+      function duckModelLabel(m) {
+        const it = m.training_iterations != null ? `it ${m.training_iterations}` : '';
+        const design = m.reward_design_name ? ` \u00b7 ${m.reward_design_name}` : '';
+        return `${m.task_id || '?'} \u00b7 ${it}${design} \u00b7 job \u2026${String(m.job_id || '').slice(-6)}`;
+      }
+
+      async function loadDuckPickers() {
+        const robot = 'microduck';
+        await Promise.all([
+          RoboracerUI.loadJobListIntoSelect('gyms', document.getElementById('d-gym'), { robot }),
+          RoboracerUI.loadJobListIntoSelect('reward_designs', document.getElementById('d-reward-design'), { robot }),
+          (async () => {
+            const res = await fetch('/get_robot_models?robot=microduck');
+            duckModels = res.ok ? await res.json() : [];
+            for (const sel of [duckModelEl, duckInitEl]) {
+              const keep = sel.value;
+              while (sel.options.length > 1) sel.remove(1);
+              for (const m of duckModels) {
+                const opt = document.createElement('option');
+                opt.value = String(m._id);
+                opt.textContent = duckModelLabel(m);
+                opt.title = String(m.location || '');
+                sel.appendChild(opt);
+              }
+              if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+            }
+          })(),
+        ]);
+        const gymSel = document.getElementById('d-gym');
+        if (!gymSel.value) {
+          const walk = [...gymSel.options].find((o) => o.value === 'microduck:Mjlab-Velocity-Flat-MicroDuck');
+          if (walk) {
+            gymSel.value = walk.value;
+            await preselectWarmStart();
+          }
+        }
+      }
+
+      // A microduck gym can name the checkpoint new runs on it should start
+      // from (default_init_checkpoint); picking the task preselects it.
+      async function preselectWarmStart() {
+        const gyms = await RoboracerUI.fetchJobList('gyms');
+        const gym = gyms.find((g) => String(g._id) === document.getElementById('d-gym').value);
+        const model = gym && gym.default_init_checkpoint
+          && duckModels.find((m) => m.location === gym.default_init_checkpoint);
+        duckInitEl.value = model ? String(model._id) : '';
+      }
+      document.getElementById('d-gym').addEventListener('change', () => {
+        preselectWarmStart().catch((err) => console.warn('warm-start preselect failed:', err));
+      });
+
+      function positiveIntField(id, label) {
+        const raw = document.getElementById(id).value;
+        if (raw === '') return undefined;
+        const n = Number(raw);
+        if (!Number.isInteger(n) || n <= 0) throw new Error(`${label} must be a positive whole number`);
+        return n;
+      }
+
+      function buildDuckPayload() {
+        const jt = duckJobTypeEl.value;
+        const payload = { robot: 'microduck', job_type: jt, status: 'NOT_STARTED',
+                          create_date: new Date().toISOString() };
+        const name = document.getElementById('d-name').value.trim();
+        if (name) payload.name = name;
+        if (jt === 'TRAIN') {
+          const gymId = document.getElementById('d-gym').value;
+          if (!gymId) throw new Error('Pick a task');
+          payload.gym_id = gymId;
+          payload.task_id = gymId.replace(/^microduck:/, '');
+          const rd = document.getElementById('d-reward-design');
+          if (rd.value) {
+            payload.reward_design_id = rd.value;
+            payload.reward_design_name = RoboracerUI.selectedName(rd);
+          }
+          const init = duckModels.find((m) => String(m._id) === duckInitEl.value);
+          if (init) payload.init_checkpoint = init.location;
+          const fields = [['num_envs', 'd-num-envs', 'Robots in parallel'],
+                          ['max_iterations', 'd-iterations', 'Iterations'],
+                          ['save_interval', 'd-save-interval', 'Checkpoint every']];
+          for (const [key, id, label] of fields) {
+            const v = positiveIntField(id, label);
+            if (v !== undefined) payload[key] = v;
+          }
+          const seed = document.getElementById('d-seed').value;
+          if (seed !== '') payload.seed = Number(seed);
+          payload.video = document.getElementById('d-video').checked;
+          payload.progress_video = document.getElementById('d-progress-video').checked;
+          return payload;
+        }
+        const model = duckModels.find((m) => String(m._id) === duckModelEl.value);
+        if (!model) throw new Error('Pick a model');
+        payload.task_id = model.task_id;
+        payload.source_job_id = model.job_id;
+        if (jt !== 'VIDEO') payload.checkpoint = model.location;
+        if (jt === 'EVAL') {
+          for (const [key, id, label] of [['eval_num_envs', 'd-eval-envs', 'Robots in parallel'],
+                                          ['eval_steps', 'd-eval-steps', 'Steps']]) {
+            const v = positiveIntField(id, label);
+            if (v !== undefined) payload[key] = v;
+          }
+        }
+        return payload;
+      }
+
+      async function submitDuck() {
+        let payload;
+        try {
+          payload = buildDuckPayload();
+        } catch (err) {
+          showToast({ type: 'error', message: err.message || String(err) });
+          return;
+        }
+        try {
+          const res = await fetch('/add_job', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          showToast({ type: 'success', message: `New MicroDuck ${payload.job_type} job created.` });
+          closeModal();
+          scheduleImmediatePoll();
+        } catch (err) {
+          showToast({ type: 'error', message: `Failed to create job: ${err.message || err}` });
+        }
+      }
+
+      robotEl.value = localStorage.getItem('new-job-robot') === 'microduck' ? 'microduck' : 'roboracer';
+      robotEl.addEventListener('change', applyRobotForm);
+      duckJobTypeEl.addEventListener('change', updateDuckRows);
+
       submitBtn.addEventListener('click', async () => {
+        if (robotEl.value === 'microduck') {
+          await submitDuck();
+          return;
+        }
         const fd = new FormData(formEl);
         const jobType = fd.get('job_type');
         // The EVAL rows stay in the form while hidden, so a trial count

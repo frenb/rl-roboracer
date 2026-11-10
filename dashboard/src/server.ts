@@ -1605,6 +1605,26 @@ export const createServer = (config): express.Application => {
         });
       });
   });
+  // One robot's models for pickers (the microduck job form), newest first;
+  // /get_models carries every car model and is too heavy for that.
+  app.get('/get_robot_models', async (req, res) => {
+    try {
+      const robot = String(req.query.robot || '');
+      if (!robot || robot === 'roboracer') {
+        res.status(400).json({ error: "robot is required (not roboracer)" });
+        return;
+      }
+      const rows = await dbo.collection("models").find(
+        { robot },
+        { projection: { job_id: 1, location: 1, task_id: 1, training_iterations: 1, onnx_location: 1,
+                        avg_return: 1, reward_design_name: 1, updated_at: 1, create_date: 1 } })
+        .sort({ updated_at: -1 }).limit(200).toArray();
+      res.json(rows);
+    } catch (err) {
+      res.status(500).json({ error: String(err && ((err as any).message || err)) });
+    }
+  });
+
   app.get('/get_models', (req,res) => {
     if(needsUpdate(req, res, modelsChanged, 'models'))
     {
@@ -2393,6 +2413,64 @@ export const createServer = (config): express.Application => {
       });
   });
 
+  // Task-aware lint for a duck design: the task's default term names (from its
+  // gym) and the addable library (reward_term_catalog) go to
+  // rl_agent/duck/lint_design.py, which needs nothing but python3.
+  const DUCK_LINT_SCRIPT = '/python_ws/src/duck/lint_design.py';
+  const DUCK_LINT_TIMEOUT_MS = 10000;
+  async function lintDuckDesign(code: string, taskId: string | null): Promise<any> {
+    let defaultTerms: string[] | null = null;
+    if (taskId) {
+      const gym = await dbo.collection("gyms").findOne(
+        { _id: taskId.startsWith('microduck:') ? taskId : 'microduck:' + taskId },
+        { projection: { reward_terms: 1 } });
+      if (gym && Array.isArray(gym.reward_terms)) defaultTerms = gym.reward_terms;
+    }
+    const catalog = await dbo.collection("reward_term_catalog").findOne(
+      { _id: 'microduck' }, { projection: { 'functions.name': 1 } });
+    const library = catalog && Array.isArray(catalog.functions)
+      ? catalog.functions.map((f: any) => f.name) : null;
+    return new Promise((resolve) => {
+      const proc = spawn('python3', [DUCK_LINT_SCRIPT]);
+      let out = '';
+      let err = '';
+      const timer = setTimeout(() => proc.kill('SIGKILL'), DUCK_LINT_TIMEOUT_MS);
+      proc.stdout.on('data', (d: Buffer) => { out += d.toString(); });
+      proc.stderr.on('data', (d: Buffer) => { err += d.toString(); });
+      proc.on('error', (e: Error) => {
+        clearTimeout(timer);
+        resolve({ ok: false, error: `lint could not run: ${e.message}`, funcs: [] });
+      });
+      proc.on('close', (codeExit: number | null, signal: string | null) => {
+        clearTimeout(timer);
+        if (signal) {
+          resolve({ ok: false, error: `lint timed out after ${DUCK_LINT_TIMEOUT_MS / 1000}s (module-level code runs at load)`, funcs: [] });
+          return;
+        }
+        try {
+          const result = JSON.parse(out);
+          result.task_checked = defaultTerms !== null;
+          resolve(result);
+        } catch (_e) {
+          resolve({ ok: false, error: `lint exited ${codeExit}: ${err.trim().split('\n').slice(-3).join(' ')}`, funcs: [] });
+        }
+      });
+      proc.stdin.end(JSON.stringify({ code, default_terms: defaultTerms, library }));
+    });
+  }
+
+  // Default terms per task live on the microduck gyms; this is the library of
+  // reward functions a duck design can add ("func": name).
+  app.get('/get_reward_term_catalog', async (req, res) => {
+    try {
+      const robot = String(req.query.robot || 'microduck');
+      const doc = await dbo.collection("reward_term_catalog").findOne({ _id: robot });
+      res.json(doc || { _id: robot, functions: [] });
+    } catch (err) {
+      res.status(500).json({ error: String(err && ((err as any).message || err)) });
+    }
+  });
+
   app.post('/lint_reward_design', (req, res) => {
     // Cheap structural lint of a candidate reward-design code string.
     //
@@ -2423,20 +2501,13 @@ export const createServer = (config): express.Application => {
       return;
     }
     // MicroDuck designs (rl_agent/duck/reward_design.py) edit the task's reward
-    // terms through a top-level TERMS dict plus optional term_<name>() functions;
-    // the duck worker runs the full lint against the task when a job starts.
+    // terms through a top-level TERMS dict plus optional term_<name>() functions.
+    // They are linted by the same Python the duck worker runs at job start, so
+    // a pass here means the design applies to the chosen task.
     if (body.robot === 'microduck' || /(^|\n)TERMS\s*=/.test(code)) {
-      if (!/(^|\n)TERMS\s*=/.test(code)) {
-        res.json({ ok: false, error: "microduck designs must define TERMS at top level (TERMS = {} keeps the task's defaults)", funcs: [] });
-        return;
-      }
-      const termFuncs = Array.from(code.matchAll(/(^|\n)def\s+(term_\w+)\s*\(/g), m => m[2]);
-      const badImport = code.match(/(^|\n)\s*(import|from)\s+\w+/);
-      if (badImport) {
-        res.json({ ok: false, error: "imports are not available in duck designs; torch and math are already in scope", funcs: termFuncs });
-        return;
-      }
-      res.json({ ok: true, error: null, funcs: termFuncs });
+      lintDuckDesign(code, body.task_id ? String(body.task_id) : null)
+        .then((result) => res.json(result))
+        .catch((err) => res.json({ ok: false, error: String(err && (err.message || err)), funcs: [] }));
       return;
     }
     const allowedFuncs = ['reward_standard', 'reward_success', 'reward_failure'];
