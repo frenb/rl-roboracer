@@ -191,13 +191,18 @@
         countEl.textContent = specs.length ? `${shown.length} of ${specs.length} spec${specs.length === 1 ? '' : 's'}` : '';
         const rows = shown.map((s) => {
           const sum = s.summary;
-          const robots = sum ? sum.robots.map((r) => {
+          const groups = new Map();  // robots with the same chips share one line
+          for (const r of sum ? sum.robots : []) {
             const st = compileState(s, r).state;
             const extra = st === 'pending' ? '<span class="spec-chip is-warn">review</span>'
               : (st === 'queued' || st === 'running') ? '<span class="spec-chip is-none">compiling…</span>'
               : st === 'failed' ? '<span class="spec-chip is-bad">compile failed</span>' : '';
-            return `<div class="rd-meta flex items-center gap-1.5">${esc(r)} ${chip(sum.statuses[r])}${extra}</div>`;
-          }).join('') : `<div class="rd-meta text-rose-500">${esc(s.parse_error || 'unreadable')}</div>`;
+            const chips = chip(sum.statuses[r]) + extra;
+            groups.set(chips, [...(groups.get(chips) || []), r]);
+          }
+          const robots = sum ? [...groups].map(([chips, rs]) =>
+            `<div class="rd-meta flex items-center gap-1.5">${rs.map(esc).join(' · ')} ${chips}</div>`).join('')
+            : `<div class="rd-meta text-rose-500">${esc(s.parse_error || 'unreadable')}</div>`;
           return `<div class="rd-list-item${String(s._id) === String(selectedId) ? ' is-selected' : ''}${s.archived ? ' is-archived' : ''}" data-id="${esc(s._id)}">
               <div class="rd-name"><span class="truncate">${esc(s.name || '(unnamed)')}</span>${s.archived ? '<span class="rd-tag is-archived">archived</span>' : ''}</div>
               <div class="rd-meta">v${s.version || 1} · ${s.updated_at ? new Date(s.updated_at).toLocaleString() : ''}</div>
