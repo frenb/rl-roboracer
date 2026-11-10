@@ -8,6 +8,7 @@ import pathlib
 import sys
 
 import pytest
+from bson import ObjectId
 from pymongo import MongoClient
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -97,6 +98,35 @@ def test_paused_jobs_do_not_hold_the_queue(db):
     add_job(db, 1, status="PAUSED", robot="microduck")
     add_job(db, 2)
     assert claim(db, "roboracer")
+
+
+def test_string_dated_job_does_not_jump_a_date_dated_one(db):
+    # Mongo sorts strings before dates whatever they say.
+    alive(db, "roboracer", "microduck")
+    add_job(db, 1, robot="microduck")
+    db.jobs.insert_one({"status": "NOT_STARTED",
+                        "create_date": (T0 + datetime.timedelta(minutes=2)).isoformat()})
+    assert claim(db, "microduck")
+    assert not claim(db, "roboracer")
+
+
+def test_undated_job_is_ordered_by_its_object_id(db):
+    # Dashboard jobs carry no create_date; Mongo sorts missing first.
+    alive(db, "roboracer", "microduck")
+    add_job(db, 1, robot="microduck")
+    db.jobs.insert_one({"_id": ObjectId.from_datetime(T0 + datetime.timedelta(minutes=2)),
+                        "status": "NOT_STARTED"})
+    assert claim(db, "microduck")
+    assert not claim(db, "roboracer")
+
+
+def test_created_at_formats():
+    oid = ObjectId.from_datetime(T0)
+    assert job_queue.created_at({"create_date": T0}) == T0
+    assert job_queue.created_at({"create_date": T0.replace(tzinfo=None)}) == T0
+    assert job_queue.created_at({"create_date": "2026-01-01T00:00:00.000Z"}) == T0
+    assert job_queue.created_at({"create_date": "not a date", "_id": oid}) == T0
+    assert job_queue.created_at({"_id": str(oid)}) == T0
 
 
 def test_beat_marks_worker_live(db):

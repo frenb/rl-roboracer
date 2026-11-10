@@ -16,6 +16,8 @@ import datetime
 import socket
 import threading
 
+from bson import ObjectId
+
 DEFAULT_ROBOT = "roboracer"
 HEARTBEAT_INTERVAL_S = 30
 HEARTBEAT_TTL_S = 120
@@ -62,6 +64,37 @@ def start_heartbeat(db, robot, interval_s=HEARTBEAT_INTERVAL_S):
     return t
 
 
+_EPOCH = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+
+
+def created_at(job):
+    """When ``job`` was queued, comparable across how it was written.
+
+    ``create_date`` is a BSON date (duck worker), an ISO string (car trainer
+    follow-ups) or missing (dashboard and older jobs). Mongo sorts those
+    types apart (missing < string < date) rather than by time, so FIFO
+    order is computed here, falling back to the ObjectId's timestamp.
+    """
+    value = job.get("create_date")
+    if isinstance(value, str):
+        try:
+            value = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            value = None
+    if isinstance(value, datetime.datetime):
+        return value if value.tzinfo else value.replace(tzinfo=datetime.timezone.utc)
+    oid = job.get("_id")
+    if isinstance(oid, str) and ObjectId.is_valid(oid):
+        oid = ObjectId(oid)
+    return oid.generation_time if isinstance(oid, ObjectId) else _EPOCH
+
+
+def oldest(db, query, projection=None):
+    """The earliest-queued job matching ``query`` by ``created_at``, or None."""
+    fields = {"create_date": 1, **(projection or {})}
+    return min(db.jobs.find(query, fields), key=created_at, default=None)
+
+
 def live_robots(db, now=None):
     cutoff = (now or _now()) - datetime.timedelta(seconds=HEARTBEAT_TTL_S)
     return {w["_id"] for w in db.workers.find({"last_seen": {"$gte": cutoff}}, {"_id": 1})}
@@ -89,9 +122,7 @@ def may_claim(db, robot, now=None):
         return True, "own job in progress"
 
     live_values = robot_values(robot) + other_values
-    head = db.jobs.find_one(
-        {"status": "NOT_STARTED", "robot": {"$in": live_values}},
-        {"robot": 1}, sort=[("create_date", 1)])
+    head = oldest(db, {"status": "NOT_STARTED", "robot": {"$in": live_values}}, {"robot": 1})
     if head is None or job_robot(head) == robot:
         return True, "head of queue"
     return False, f"{job_robot(head)} job {head['_id']} is ahead in the queue"

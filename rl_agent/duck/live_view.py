@@ -36,6 +36,7 @@ from mjlab.viewer import ViserPlayViewer
 from mjlab.viewer.viser.viewer import CheckpointManager, format_time_ago
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import job_queue  # noqa: E402
 from duck import launch  # noqa: E402
 
 POLL_S = 10
@@ -69,7 +70,7 @@ def followed_job(job_id):
         return db.jobs.find_one({"_id": ObjectId(job_id) if ObjectId.is_valid(job_id) else job_id})
     base = {"robot": "microduck", "job_type": "TRAIN", "duck_checkpoint": {"$ne": None}}
     return (db.jobs.find_one({**base, "status": "IN_PROGRESS"})
-            or db.jobs.find_one(base, sort=[("create_date", -1)]))
+            or max(db.jobs.find(base), key=job_queue.created_at, default=None))
 
 
 def job_checkpoints(job):
