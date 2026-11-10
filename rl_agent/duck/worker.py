@@ -32,7 +32,7 @@ from pymongo import MongoClient
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import job_queue  # noqa: E402
-from duck import launch  # noqa: E402
+from duck import gyms, launch  # noqa: E402
 
 ROBOT = "microduck"
 WORKDIR = pathlib.Path(os.environ.get("MICRODUCK_RL_DIR", "/microduck_rl"))
@@ -41,6 +41,7 @@ JOB_LOG_DIR = LOG_ROOT / "jobs"
 SHARED_LOG = pathlib.Path(os.environ.get("DUCK_SHARED_LOG", "/shared_tmp/duck_trainer.log"))
 EVALUATE_SCRIPT = pathlib.Path(__file__).resolve().parent / "evaluate.py"
 RENDER_PROGRESS_SCRIPT = pathlib.Path(__file__).resolve().parent / "render_progress.py"
+LIST_TASKS_SCRIPT = pathlib.Path(__file__).resolve().parent / "list_tasks.py"
 POLL_S = 5
 STATUS_POLL_S = 2
 PROGRESS_WRITE_S = 5
@@ -84,9 +85,9 @@ def is_queue_paused():
 
 def next_job():
     mine = job_queue.robot_filter(ROBOT)
-    return (db.jobs.find_one({"status": "IN_PROGRESS", **mine})
-            or db.jobs.find_one({"status": "NOT_STARTED", **mine},
-                                sort=[("create_date", 1)]))
+    head = (db.jobs.find_one({"status": "IN_PROGRESS", **mine}, {"_id": 1})
+            or job_queue.oldest(db, {"status": "NOT_STARTED", **mine}))
+    return db.jobs.find_one({"_id": head["_id"]}) if head else None
 
 
 class JobLog:
@@ -438,9 +439,28 @@ def run_eval(job, log):
                           {"$set": {"eval_results": results}})
 
 
+def sync_gyms():
+    """Register every microduck task as a gym. Never fatal: jobs naming a
+    task_id run without the registry."""
+    try:
+        out = subprocess.run([sys.executable, str(LIST_TASKS_SCRIPT)], cwd=WORKDIR,
+                             capture_output=True, text=True, timeout=600, check=True).stdout
+        # The fork prints "[mdp] Patch ..." banners on import; the JSON is the last line.
+        tasks = json.loads(out.strip().splitlines()[-1])
+        upserted, archived = gyms.sync(db, tasks)
+        print(f"[duck-worker] gyms: {upserted} microduck tasks registered, {archived} archived", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[duck-worker] gym sync failed: {exc}", flush=True)
+
+
 def do_job(job):
     job_id = job["_id"]
     job_type = job.get("job_type")
+    if not job.get("task_id"):
+        task = gyms.task_for_job(db, job)
+        if task:
+            job["task_id"] = task
+            update_job(job_id, task_id=task)
     # Same discriminator as robotaxi: IN_PROGRESS at pickup is crash recovery,
     # NOT_STARTED with paused_at_step set is an operator resume.
     resume = job_type == "TRAIN" and (
@@ -482,6 +502,7 @@ def do_job(job):
 
 def main():
     job_queue.start_heartbeat(db, ROBOT)
+    sync_gyms()
     print(f"[duck-worker] polling for {ROBOT} jobs", flush=True)
     waiting_reason = None
     while True:

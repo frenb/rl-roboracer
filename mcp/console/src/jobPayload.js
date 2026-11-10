@@ -82,6 +82,9 @@ export async function buildJob(o, lists = pickLists()) {
   let gym = null;
   if (o.gym) {
     gym = activeRow(await lists.gyms(), o.gym, 'gym');
+    if (gym.robot && gym.robot !== 'roboracer') {
+      throw new Error(`gym "${gym.name || gym._id}" is a ${gym.robot} gym; this tool builds roboracer jobs only`);
+    }
     // The dialog preselects the gym's validated course/designs unless set.
     const defaults = o.no_gym_defaults ? [] : [
       ['course_type', gym.default_course_type, () => !course, (v) => { course = v; }],

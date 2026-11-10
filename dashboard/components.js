@@ -1717,6 +1717,9 @@
     while (sel.options.length > 1) sel.remove(1);
     const visible = rows
       .filter((r) => !r.archived)
+      // The job and eval forms build car jobs; microduck gyms (an mjlab
+      // task each) get their own form with the robot switcher.
+      .filter((r) => kind !== 'gyms' || !r.robot || r.robot === 'roboracer')
       .sort((a, b) => {
         // Demos have no name; newest first is the useful order.
         if (kind === 'demos') return demoTime(b).localeCompare(demoTime(a));

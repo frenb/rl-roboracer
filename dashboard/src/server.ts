@@ -443,8 +443,28 @@ export const createServer = (config): express.Application => {
     // });
 
   })
-  app.post('/add_job', (req,res) => {
+  // A job's gym decides which worker claims it: duck gyms
+  // (robot: "microduck", from rl_agent/duck/gyms.py) stamp robot and
+  // task_id so the car trainer, which takes every job without a robot,
+  // never picks them up.
+  async function stampRobotFromGym(job: any) {
+    if (!job || !job.gym_id) return;
+    const gym = await dbo.collection("gyms").findOne(
+      { _id: String(job.gym_id) }, { projection: { robot: 1, task_id: 1 } });
+    if (!gym || !gym.robot || gym.robot === 'roboracer') return;
+    job.robot = gym.robot;
+    if (!job.task_id && gym.task_id) job.task_id = gym.task_id;
+  }
+
+  app.post('/add_job', async (req,res) => {
     console.log("add_job: " + JSON.stringify(req.body));
+    try {
+      await stampRobotFromGym(req.body);
+    } catch (err) {
+      console.error('add_job gym lookup failed:', err);
+      res.status(500).json({ error: String(err && ((err as any).message || err)) });
+      return;
+    }
     dbo.collection("jobs").insertOne(req.body,function(err, result) {
       if (err) { console.error('add_job failed:', err); res.status(500).json({ error: String(err && (err.message || err)) }); return; }
       res.json(result)
@@ -2211,6 +2231,11 @@ export const createServer = (config): express.Application => {
     let idFilter;
     try { idFilter = { "_id": ObjectID(body._id) }; }
     catch (e) { idFilter = { "_id": String(body._id) }; }
+    if (String(body._id).startsWith('microduck:')
+        && (body.name !== undefined || body.file_path !== undefined)) {
+      res.status(400).json({ error: "microduck gyms are registered by the duck worker; only description and archived can change" });
+      return;
+    }
     const setFields: any = { updated_at: new Date() };
     if (body.name        !== undefined) setFields.name        = String(body.name);
     if (body.file_path   !== undefined) setFields.file_path   = stripQuotes(body.file_path);
