@@ -99,6 +99,9 @@ public class SimController : MonoBehaviour
         // drives that camera's transform. Display only - the policy's camera
         // input comes from JetRacerCsiCamera via its own RenderTexture.
         AttachOverheadFit();
+        // Drop to a few fps when no trainer has sent a command for a minute,
+        // so an idle client does not compete with other robots' jobs for the GPU.
+        gameObject.AddComponent(typeof(IdleThrottle));
         Debug.Log("ros.rosIPAddress=" + ros.rosIPAddress);
         Debug.Log("ros.overrideUnityIP=" + ros.overrideUnityIP);
         ros.Subscribe<SimCommand>(simCommandTopic, onCommand);
@@ -285,6 +288,7 @@ public class SimController : MonoBehaviour
 
     private void onCommand(SimCommand cmd)
     {
+        IdleThrottle.Wake();
         ApplyForce af = (ApplyForce) cmd.ApplyForce;
         switch ((Command) cmd.cmd )
         {
