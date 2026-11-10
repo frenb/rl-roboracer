@@ -11,6 +11,10 @@ accepts it on the dashboard, which writes the code into the spec text and the
 
 Every LLM call is logged in ``spec_compile_runs``, whose cost counts against
 Mad Scientist's monthly budget.
+
+The LLM is reached through the Cursor SDK when ``CURSOR_API_KEY`` is set
+(billed to the Cursor account, so logged at $0), else the Anthropic API;
+``SPEC_COMPILER_BACKEND=cursor|anthropic`` forces one.
 """
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ import datetime
 import os
 import re
 import sys
+import tempfile
 import time
 import traceback
 
@@ -27,7 +32,10 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__f
 import spec as specs  # noqa: E402
 import targets  # noqa: E402
 
-SPEC_COMPILER_MODEL = os.environ.get("SPEC_COMPILER_MODEL", researcher.RESEARCHER_MODEL)
+BACKEND = os.environ.get("SPEC_COMPILER_BACKEND") or (
+    "cursor" if os.environ.get("CURSOR_API_KEY") else "anthropic")
+SPEC_COMPILER_MODEL = os.environ.get("SPEC_COMPILER_MODEL") or (
+    "claude-opus-5-5" if BACKEND == "cursor" else researcher.RESEARCHER_MODEL)
 MAX_ROUNDS = int(os.environ.get("SPEC_COMPILER_MAX_ROUNDS", "3"))
 MAX_TOKENS = 6000
 DEFAULT_POLL_INTERVAL_SECONDS = 10
@@ -97,6 +105,28 @@ def parse_answer(text):
     return py.group(1), rationale, unsupported
 
 
+def call_cursor(client, system, messages, *, max_tokens=MAX_TOKENS):
+    """One Cursor agent prompt per round, carrying the whole conversation so far."""
+    from cursor_sdk import Agent, AgentOptions, CursorAgentError, LocalAgentOptions
+    turns = "\n\n".join(f"### {m['role']}\n{m['content']}" for m in messages)
+    prompt = (f"{system}\n\nDo not use any tools or read any files: answer from this message alone, "
+              f"as the next assistant turn of this conversation.\n\n{turns}")
+    with tempfile.TemporaryDirectory() as cwd:
+        try:
+            result = Agent.prompt(prompt, AgentOptions(
+                api_key=os.environ["CURSOR_API_KEY"], model=SPEC_COMPILER_MODEL,
+                local=LocalAgentOptions(cwd=cwd)))
+        except CursorAgentError as e:
+            raise RuntimeError(f"Cursor agent did not start: {e.message}") from e
+    if result.status != "finished":
+        raise RuntimeError(f"Cursor agent run {result.id} ended {result.status}")
+    return {"text": result.result or "", "input_tokens": 0, "output_tokens": 0}
+
+
+def default_call():
+    return call_cursor if BACKEND == "cursor" else researcher.call_anthropic_researcher
+
+
 def _context(db, spec, robot):
     if robot != "microduck":
         return {}
@@ -110,7 +140,7 @@ def _context(db, spec, robot):
 
 def compile_robot(db, client, spec, robot, *, spec_id=None, call=None):
     """Run the compile loop for one robot. Returns the result dict to store."""
-    call = call or researcher.call_anthropic_researcher
+    call = call or default_call()
     ctx = _context(db, spec, robot)
     system = SYSTEM_PROMPT + targets.target_prompt(robot, **ctx)
     messages = [{"role": "user", "content": f"Compile this spec for {robot}.\n\n{spec.prose}"}]
@@ -190,7 +220,7 @@ def requeue_interrupted(db):
 
 def compile_loop(db, anthropic_client, *, monthly_budget_usd,
                  poll_interval_seconds=DEFAULT_POLL_INTERVAL_SECONDS, should_stop_fn=lambda: False):
-    print(f"spec_compiler: polling every {poll_interval_seconds}s (model={SPEC_COMPILER_MODEL}, "
+    print(f"spec_compiler: polling every {poll_interval_seconds}s (backend={BACKEND}, model={SPEC_COMPILER_MODEL}, "
           f"max_rounds={MAX_ROUNDS})", flush=True)
     requeue_interrupted(db)
     while not should_stop_fn():
