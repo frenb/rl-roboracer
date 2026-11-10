@@ -31,7 +31,15 @@
         <span data-role="freshness-text">connecting…</span>
       </span>
 
-      <div class="flex flex-wrap gap-2 ml-auto">
+      <div class="flex flex-wrap gap-2 ml-auto items-center">
+        <label class="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"
+               title="Car designs set SAC / BC / replay knobs for robotaxi.py; MicroDuck designs set PPO, network and environment knobs for an mjlab task.">
+          <span>Robot</span>
+          <select data-role="robot" class="input-base appearance-none select-chevron pr-8 text-xs py-1">
+            <option value="roboracer">Roboracer (car)</option>
+            <option value="microduck">MicroDuck</option>
+          </select>
+        </label>
         <label class="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 select-none">
           <input data-role="show-archived" type="checkbox"
                  class="w-3.5 h-3.5 rounded border-slate-300 dark:border-slate-600
@@ -102,23 +110,36 @@
                  frozen and points to the Duplicate workflow. The
                  banner is wired up via the [data-role="canonical-
                  banner"] hook in selectDesign() below. -->
-            <div data-role="canonical-banner" hidden
-                 class="text-[11px] leading-relaxed rounded-lg px-3 py-2
+            <!-- Tailwind's `flex` beats the hidden attribute, so hide a plain wrapper. -->
+            <div data-role="canonical-banner" hidden>
+            <div class="text-[11px] leading-relaxed rounded-lg px-3 py-2
                         border border-amber-300 dark:border-amber-700
                         bg-amber-50 dark:bg-amber-900/30
                         text-amber-800 dark:text-amber-200 flex items-start gap-2">
               <span class="font-semibold tracking-tight">Read-only baseline.</span>
               <span>
-                The <strong>Default</strong> design is the trainer&rsquo;s canonical reference set &mdash;
+                This is the robot&rsquo;s canonical reference design &mdash;
                 seeded automatically at boot and intentionally not editable so jobs stamped
-                with <code class="font-mono text-[11px]">experiment_design_id=experiment-default</code>
+                with its <code class="font-mono text-[11px]">experiment_design_id</code>
                 always trace back to the same numbers. To customise, click
                 <strong>Duplicate</strong> (top-right) for a pre-filled copy you can edit, or
                 <strong>+ New design</strong> for an empty form.
               </span>
             </div>
+            </div>
 
-            <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+            <p data-role="help-microduck" hidden
+               class="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+              Leave an input <strong>empty</strong> (or on <em>task default</em>) to keep the mjlab
+              task&rsquo;s own value. Defaults differ per task; hover a field for the flat walk
+              task&rsquo;s value. A job&rsquo;s own num_envs /
+              iterations / save interval / seed win over the design&rsquo;s. Network fields change the
+              checkpoint&rsquo;s shape: such a run can only warm-start from, and be warm-started by,
+              a run with the same network. Applied by
+              <code class="font-mono text-[11px]">rl_agent/duck/experiment_design.py</code>.
+            </p>
+            <p data-role="help-roboracer"
+               class="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
               Leave an input <strong>empty</strong> to use the trainer&rsquo;s built-in default
               (shown as placeholder text). Only fields you fill in get stored on the design
               document &mdash; the rest are inherited from <code class="font-mono text-[11px]">rl_agent/robotaxi.py::main()</code>.
@@ -138,7 +159,7 @@
 
   <!-- Bump cache buster whenever this page or its consumed shared
        components change. -->
-  <script src="/components.js?v=20261110-duck-designs"></script>
+  <script src="/components.js?v=20261110-duck-experiments"></script>
   <script>
     (function () {
       const { showToast, confirmDialog, FreshnessIndicator } = window.RoboracerUI;
@@ -159,6 +180,7 @@
       const btnReset     = document.querySelector('[data-action="reset-overrides"]');
       const btnDuplicate = document.querySelector('[data-action="duplicate"]');
       const canonicalBanner = document.querySelector('[data-role="canonical-banner"]');
+      const robotSel     = document.querySelector('[data-role="robot"]');
 
       // ---- State -----------------------------------------------------
       // `schema` is fetched once at boot from /get_experiment_design_schema
@@ -172,7 +194,10 @@
       // trainer default" from "user filled in zero / false / etc."
       let editorState = makeEmptyEditorState();
 
-      const CANONICAL_DEFAULT_ID = 'experiment-default';
+      const CANONICAL_IDS = new Set(['experiment-default', 'microduck-experiment-default']);
+      const designRobot = (d) => (d && d.robot) || 'roboracer';
+      let robot = localStorage.getItem('ed-robot') === 'microduck' ? 'microduck' : 'roboracer';
+      robotSel.value = robot;
 
       function makeEmptyEditorState() {
         return {
@@ -206,17 +231,23 @@
       }
 
       function isCanonical(d) {
-        return String(d && d._id || '') === CANONICAL_DEFAULT_ID;
+        return CANONICAL_IDS.has(String(d && d._id || ''));
       }
 
       // ---- Schema fetch + form rendering -----------------------------
 
       async function fetchSchema() {
         try {
-          const res = await fetch('/get_experiment_design_schema');
+          const res = await fetch('/get_experiment_design_schema?robot=' + encodeURIComponent(robot));
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const json = await res.json();
           schema = Array.isArray(json.fields) ? json.fields : [];
+          if (json.source === 'missing') {
+            showToast({
+              type: 'error',
+              message: 'No MicroDuck experiment-design schema yet: it is published when the duck worker starts.',
+            });
+          }
         } catch (err) {
           console.error('Failed to load schema:', err);
           schema = [];
@@ -306,14 +337,25 @@
         const t = entry.type;
         const def = entry.default;
         const ph = (def === null || def === undefined) ? '' : String(def);
-        const isCan = editorState.id === CANONICAL_DEFAULT_ID;
+        const isCan = isCanonical({ _id: editorState.id });
         const ro = isCan ? ' readonly' : '';
         // Booleans become checkboxes; everything else a text/number input.
         // For ints / floats we use type="number" so the browser brings
         // up the right keyboard on mobile + validates non-numeric input
         // client-side. step="any" lets floats accept decimals.
+        // Enums, and bools with no fixed default (a checkbox can't say
+        // "keep the task's value"), are selects whose empty option means unset.
         let inputHtml;
-        if (t === 'bool') {
+        if (t === 'enum' || (t === 'bool' && def === null)) {
+          const choices = t === 'enum' ? (entry.choices || []) : ['true', 'false'];
+          const label = (c) => (t === 'bool' ? (c === 'true' ? 'on' : 'off') : c);
+          inputHtml =
+            `<select data-field-name="${escapeAttr(name)}" data-field-type="${escapeAttr(t)}"
+                     class="w-full input-base appearance-none select-chevron pr-8 text-sm font-mono ed-field-input">` +
+            `<option value="">task default</option>` +
+            choices.map((c) => `<option value="${escapeAttr(c)}">${escapeHtml(label(c))}</option>`).join('') +
+            `</select>`;
+        } else if (t === 'bool') {
           inputHtml = `<input type="checkbox" data-field-name="${escapeAttr(name)}" data-field-type="bool" ${ro}
                               class="w-4 h-4 rounded border-slate-300 dark:border-slate-600
                                      bg-white dark:bg-slate-800 text-indigo-500
@@ -327,7 +369,7 @@
           inputHtml =
             `<textarea data-field-name="${escapeAttr(name)}" data-field-type="json" rows="6"${ro}
                        spellcheck="false"
-                       placeholder="JSON array; leave empty to use the trainer default"
+                       placeholder="JSON; leave empty to use the ${robot === 'microduck' ? 'task' : 'trainer'} default"
                        class="w-full input-base text-sm font-mono ed-field-input ed-field-textarea"></textarea>` +
             `<div class="ed-field-error" data-error-for="${escapeAttr(name)}" hidden></div>`;
         } else {
@@ -336,7 +378,7 @@
           const minAttr = entry.min !== null && entry.min !== undefined ? ` min="${entry.min}"` : '';
           const maxAttr = entry.max !== null && entry.max !== undefined ? ` max="${entry.max}"` : '';
           inputHtml = `<input type="number" data-field-name="${escapeAttr(name)}" data-field-type="${escapeAttr(t)}" ${numAttrs}${minAttr}${maxAttr}${ro}
-                              placeholder="default: ${escapeAttr(ph)}"
+                              placeholder="${ph === '' ? 'task default' : 'default: ' + escapeAttr(ph)}"
                               class="w-full input-base text-sm font-mono ed-field-input">`;
         }
         // Paper-ref chip when present, on the field label.
@@ -449,7 +491,8 @@
       // ---- List rendering --------------------------------------------
 
       function renderList() {
-        const filtered = designs
+        const ofRobot = designs.filter((d) => designRobot(d) === robot);
+        const filtered = ofRobot
           .filter((d) => showArchived.checked || !d.archived)
           .slice()
           .sort((a, b) => {
@@ -460,9 +503,9 @@
             return String(a.name || '').localeCompare(String(b.name || ''));
           });
 
-        countEl.textContent = designs.length === 0
+        countEl.textContent = ofRobot.length === 0
           ? ''
-          : `${filtered.length} of ${designs.length} design${designs.length === 1 ? '' : 's'}`;
+          : `${filtered.length} of ${ofRobot.length} design${ofRobot.length === 1 ? '' : 's'}`;
 
         if (!filtered.length) {
           listEl.innerHTML = '<div class="rd-empty">No experiment designs yet. Click "+ New design" to author one.</div>';
@@ -716,7 +759,8 @@
         // Name-collision warning on new-design path.
         if (editorState.isNew) {
           const collision = designs.find(
-            (d) => !d.archived && String(d.name || '').toLowerCase() === name.toLowerCase());
+            (d) => !d.archived && designRobot(d) === robot
+              && String(d.name || '').toLowerCase() === name.toLowerCase());
           if (collision) {
             const ok = await confirmDialog({
               title: 'A design with this name already exists',
@@ -729,12 +773,19 @@
             if (!ok) return;
           }
         }
-        // Coerce the overrides per schema type. Empty -> omit.
+        // Coerce the overrides per schema type. Empty -> omit, or null if
+        // the saved design had a value, since an omitted key is left as is.
         const payload = { name, description: desc };
+        if (editorState.isNew) payload.robot = robot;
         for (const entry of schema || []) {
           if (entry.kind !== 'field') continue;
           const raw = editorState.overrides[entry.name];
-          if (raw === undefined || raw === null || raw === '') continue;
+          if (raw === undefined || raw === null || raw === '') {
+            if (!editorState.isNew && editorState.originalOverrides[entry.name] !== undefined) {
+              payload[entry.name] = null;
+            }
+            continue;
+          }
           let val;
           if (entry.type === 'json') {
             if (String(raw).trim() === '') continue;
@@ -806,7 +857,7 @@
           let fresh = assignedId
             ? designs.find((d) => String(d._id) === String(assignedId))
             : null;
-          if (!fresh) fresh = designs.find((d) => d.name === name);
+          if (!fresh) fresh = designs.find((d) => d.name === name && designRobot(d) === robot);
           if (fresh) selectDesign(fresh);
         } catch (err) {
           showToast({ type: 'error', message: `Save failed: ${err.message || err}` });
@@ -964,8 +1015,36 @@
         return t.length <= n ? t : t.slice(0, n - 1) + '…';
       }
 
+      // ---- Robot switch ----------------------------------------------
+      function applyRobot() {
+        const duck = robot === 'microduck';
+        document.querySelector('[data-role="help-microduck"]').hidden = !duck;
+        document.querySelector('[data-role="help-roboracer"]').hidden = duck;
+      }
+
+      robotSel.addEventListener('change', async () => {
+        const next = robotSel.value;
+        if (isDirty() || editorState.isNew) {
+          const ok = await confirmDialog({
+            title: 'Discard unsaved changes?',
+            message: 'Switching robots closes the current design.',
+            confirmLabel: 'Discard',
+            confirmVariant: 'danger',
+          });
+          if (!ok) { robotSel.value = robot; return; }
+        }
+        robot = next;
+        localStorage.setItem('ed-robot', robot);
+        editorState = makeEmptyEditorState();
+        applyRobot();
+        await fetchSchema();
+        renderEditorEmpty();
+        renderList();
+      });
+
       // ---- Boot ------------------------------------------------------
       (async () => {
+        applyRobot();
         await fetchSchema();
         renderEditorEmpty();
 

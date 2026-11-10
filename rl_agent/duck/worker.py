@@ -32,7 +32,7 @@ from pymongo import MongoClient
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import job_queue  # noqa: E402
-from duck import gyms, launch, reward_design  # noqa: E402
+from duck import experiment_design, gyms, launch, reward_design  # noqa: E402
 
 ROBOT = "microduck"
 WORKDIR = pathlib.Path(os.environ.get("MICRODUCK_RL_DIR", "/microduck_rl"))
@@ -54,6 +54,8 @@ VIDEO_SETTLE_S = 5
 DEPLOY_SHAPE = {"Mjlab-Velocity-": (61, 14)}
 # Copied onto the job when it starts and onto its models, as for car designs.
 DESIGN_FIELDS = ("reward_design_id", "reward_design_name", "reward_design_version", "reward_design_code")
+EXPERIMENT_FIELDS = ("experiment_design_id", "experiment_design_name", "experiment_design_version",
+                     "experiment_design_fields")
 
 db = MongoClient(os.environ.get("MONGO_URL", "mongodb://root:example@mongo:27017/"))[
     os.environ.get("DATABASE_NAME", "robotaxi")]
@@ -252,6 +254,58 @@ def job_reward_design(job, resume):
             "reward_design_version": doc.get("version"), "reward_design_code": doc["code"]}
 
 
+def job_experiment_design(job, resume):
+    """The job's experiment design as ``{field: value}`` in ``EXPERIMENT_FIELDS``, or None.
+
+    Snapshotted at job start like reward designs, so editing the design can't change a
+    half-trained run's PPO settings or network.
+    """
+    if resume and job.get("experiment_design_fields") is not None:
+        return {k: job.get(k) for k in EXPERIMENT_FIELDS}
+    ed_id = job.get("experiment_design_id")
+    if not ed_id:
+        return None
+    doc = db.experiment_designs.find_one({"_id": _maybe_object_id(ed_id)}) or db.experiment_designs.find_one(
+        {"_id": str(ed_id)})
+    if doc is None:
+        raise launch.JobSpecError(f"experiment_design_id {ed_id!r} not found")
+    if doc.get("robot") != ROBOT:
+        raise launch.JobSpecError(
+            f"experiment design {doc.get('name')!r} is a {doc.get('robot') or 'roboracer'} design; "
+            f"pick one made for the {ROBOT}")
+    try:
+        fields = experiment_design.validate(doc)
+    except experiment_design.ExperimentDesignError as exc:
+        raise launch.JobSpecError(f"experiment design {doc.get('name')!r}: {exc}") from exc
+    return {"experiment_design_id": str(doc["_id"]), "experiment_design_name": doc.get("name"),
+            "experiment_design_version": doc.get("version"), "experiment_design_fields": fields}
+
+
+def write_experiment_design(job_id, design):
+    path = JOB_LOG_DIR / f"{job_id}.experiment_design.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"_id": design["experiment_design_id"],
+                                "name": design["experiment_design_name"],
+                                "version": design["experiment_design_version"],
+                                "fields": design["experiment_design_fields"]}))
+    return path
+
+
+def train_job_for_checkpoint(checkpoint):
+    """The TRAIN job whose run directory holds ``checkpoint``, or None."""
+    return db.jobs.find_one({"robot": ROBOT, "job_type": "TRAIN",
+                             "duck_run_dirs": str(pathlib.Path(checkpoint).parent)})
+
+
+def checkpoint_design_env(job_id, checkpoint):
+    """Hook variables so a process loading ``checkpoint`` builds its run's network."""
+    source = train_job_for_checkpoint(checkpoint)
+    if not source or not source.get("experiment_design_fields"):
+        return {}
+    path = write_experiment_design(job_id, {k: source.get(k) for k in EXPERIMENT_FIELDS})
+    return launch.design_env(experiment_design_file=path, train=False)
+
+
 def write_reward_design(job_id, design):
     path = JOB_LOG_DIR / f"{job_id}.reward_design.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -271,7 +325,7 @@ def upsert_model(job, checkpoint, iteration, **fields):
             "task_id": launch.task_id(job),
             "model_type": "PPO",
             "updated_at": now(),
-            **{k: job[k] for k in DESIGN_FIELDS if job.get(k) is not None},
+            **{k: job[k] for k in DESIGN_FIELDS + EXPERIMENT_FIELDS if job.get(k) is not None},
             **fields,
         }, "$setOnInsert": {
             "robot": ROBOT,
@@ -314,7 +368,8 @@ def export_checkpoint(job, checkpoint, log):
     iteration = launch.checkpoint_iteration(checkpoint)
     onnx_path = checkpoint.parent / f"policy_{iteration}.onnx"
     outcome, rc, tail = run_process(
-        job["_id"], launch.export_command(job, checkpoint, onnx_path), log)
+        job["_id"], launch.export_command(job, checkpoint, onnx_path), log,
+        checkpoint_design_env(job["_id"], checkpoint))
     if outcome == "pause":
         update_job(job["_id"], status="PAUSED", paused_at_step=iteration)
     if outcome != "finished":
@@ -337,6 +392,25 @@ def run_train(job, resume, log):
         run_dirs = []
         update_job(job_id, duck_run_dirs=[], duck_checkpoint=None, duck_iteration=0,
                    paused_at_step=None, videos=[], progress_video=None, progress_gif=None)
+    experiment = job_experiment_design(job, resume)
+    experiment_file = None
+    if experiment:
+        job.update(experiment)
+        update_job(job_id, **experiment)
+        # The job's own num_envs / max_iterations / ... win over the design's.
+        job = experiment_design.effective_job(job)
+        experiment_file = write_experiment_design(job_id, experiment)
+        log.write(f"[duck-worker] experiment design {experiment['experiment_design_name']!r} "
+                  f"v{experiment['experiment_design_version']}: "
+                  f"{json.dumps(experiment['experiment_design_fields'])}\n")
+    if job.get("init_checkpoint") and not resume:
+        source = train_job_for_checkpoint(job["init_checkpoint"]) or {}
+        try:
+            experiment_design.check_warm_start(
+                (experiment or {}).get("experiment_design_fields") or {},
+                source.get("experiment_design_fields") or {})
+        except experiment_design.ExperimentDesignError as exc:
+            raise launch.JobSpecError(str(exc)) from exc
     offset = launch.iteration_offset(job)
     total = launch.positive_int(job, "max_iterations")
     start_iteration = latest[0] if latest else offset
@@ -350,7 +424,8 @@ def run_train(job, resume, log):
         log.write(f"[duck-worker] reward design {design['reward_design_name']!r} "
                   f"v{design['reward_design_version']}\n")
     argv, extra_env = launch.train_command(job, attempt, resume_from=latest and latest[1],
-                                           reward_design_file=design_file)
+                                           reward_design_file=design_file,
+                                           experiment_design_file=experiment_file)
     if latest:
         log.write(f"[duck-worker] resuming from {latest[1]} (iteration {latest[0]})\n")
 
@@ -387,7 +462,8 @@ def run_train(job, resume, log):
             upsert_model(job, newest[1], newest[0], avg_return=progress.get("mean_reward"))
         if state["run_dir"] is not None:
             clips = [{"iteration": it, "path": str(p)}
-                     for it, p in launch.training_videos(state["run_dir"], start_iteration)
+                     for it, p in launch.training_videos(state["run_dir"], start_iteration,
+                                                         launch.steps_per_iteration(job))
                      if time.time() - p.stat().st_mtime > VIDEO_SETTLE_S]
             if len(prior_videos) + len(clips) != state["videos"]:
                 state["videos"] = len(prior_videos) + len(clips)
@@ -443,7 +519,8 @@ def render_progress(job, source, run_dirs, log):
     argv = launch.progress_video_command(
         {**job, "task_id": launch.task_id(source)}, [p for _, p in picked], out_mp4,
         RENDER_PROGRESS_SCRIPT)
-    outcome, rc, tail = run_process(job["_id"], argv, log)
+    outcome, rc, tail = run_process(job["_id"], argv, log,
+                                    checkpoint_design_env(job["_id"], last_checkpoint))
     if outcome == "pause":
         update_job(job["_id"], status="PAUSED")
     if outcome != "finished":
@@ -477,7 +554,7 @@ def run_eval(job, log):
     checkpoint = resolve_checkpoint(job)
     out_json = JOB_LOG_DIR / f"{job['_id']}.eval.json"
     argv = launch.eval_command(job, checkpoint, out_json, EVALUATE_SCRIPT)
-    outcome, rc, tail = run_process(job["_id"], argv, log)
+    outcome, rc, tail = run_process(job["_id"], argv, log, checkpoint_design_env(job["_id"], checkpoint))
     if outcome == "pause":
         update_job(job["_id"], status="PAUSED")
     if outcome != "finished":
@@ -500,6 +577,7 @@ def sync_gyms():
         listing = json.loads(out.strip().splitlines()[-1])
         upserted, archived = gyms.sync(db, listing["tasks"])
         reward_design.seed(db, listing["functions"], now())
+        experiment_design.seed(db, now())
         print(f"[duck-worker] gyms: {upserted} microduck tasks registered, {archived} archived; "
               f"{len(listing['functions'])} library reward functions", flush=True)
     except Exception as exc:  # noqa: BLE001

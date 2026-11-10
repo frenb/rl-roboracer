@@ -141,6 +141,12 @@
             <option value="">Task default (no reward design)</option>
           </select>
 
+          <label for="d-experiment-design" data-duck="TRAIN" class="text-xs font-medium text-slate-600 dark:text-slate-300"
+                 title="PPO, network and environment settings; author designs on the Experiment Design tab with Robot = MicroDuck. Values typed below win over the design's.">Experiment design</label>
+          <select id="d-experiment-design" data-duck="TRAIN" class="w-full input-base appearance-none select-chevron pr-8">
+            <option value="">Task default (no experiment design)</option>
+          </select>
+
           <label for="d-init" data-duck="TRAIN" class="text-xs font-medium text-slate-600 dark:text-slate-300"
                  title="Warm-start from another run's checkpoint with the full iteration budget. Same task family only: the policy's inputs and outputs must match.">Warm start from</label>
           <select id="d-init" data-duck="TRAIN" class="w-full input-base appearance-none select-chevron pr-8">
@@ -553,7 +559,7 @@
        (Ctrl+Shift+R on the parent doesn't always force iframe
        subresources to re-fetch). Bump the version string whenever you
        change components.js. -->
-  <script src="/components.js?v=20261110-duck-designs"></script>
+  <script src="/components.js?v=20261110-duck-experiments"></script>
   <script>
     (function () {
       const { TableView, formatters, showToast, confirmDialog } = window.RoboracerUI;
@@ -1352,7 +1358,8 @@
 
       function duckModelLabel(m) {
         const it = m.training_iterations != null ? `it ${m.training_iterations}` : '';
-        const design = m.reward_design_name ? ` \u00b7 ${m.reward_design_name}` : '';
+        const design = [m.reward_design_name, m.experiment_design_name].filter(Boolean)
+          .map((n) => ` \u00b7 ${n}`).join('');
         return `${m.task_id || '?'} \u00b7 ${it}${design} \u00b7 job \u2026${String(m.job_id || '').slice(-6)}`;
       }
 
@@ -1361,6 +1368,7 @@
         await Promise.all([
           RoboracerUI.loadJobListIntoSelect('gyms', document.getElementById('d-gym'), { robot }),
           RoboracerUI.loadJobListIntoSelect('reward_designs', document.getElementById('d-reward-design'), { robot }),
+          RoboracerUI.loadJobListIntoSelect('experiment_designs', document.getElementById('d-experiment-design'), { robot }),
           (async () => {
             const res = await fetch('/get_robot_models?robot=microduck');
             duckModels = res.ok ? await res.json() : [];
@@ -1424,6 +1432,11 @@
           if (rd.value) {
             payload.reward_design_id = rd.value;
             payload.reward_design_name = RoboracerUI.selectedName(rd);
+          }
+          const ed = document.getElementById('d-experiment-design');
+          if (ed.value) {
+            payload.experiment_design_id = ed.value;
+            payload.experiment_design_name = RoboracerUI.selectedName(ed);
           }
           const init = duckModels.find((m) => String(m._id) === duckInitEl.value);
           if (init) payload.init_checkpoint = init.location;

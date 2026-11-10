@@ -12,6 +12,8 @@ Job fields read here (all optional except ``job_type``):
     seed             PPO seed
     init_checkpoint  model_<N>.pt to warm-start a fresh TRAIN job from
     reward_design_id reward_designs document to apply (see reward_design.py)
+    experiment_design_id  experiment_designs document to apply (see experiment_design.py)
+    num_steps_per_env  steps per robot per iteration, when an experiment design changes it
     train_args       extra tyro flags, e.g. ["--agent.algorithm.entropy-coef", "0.005"]
     checkpoint       model_<N>.pt to EXPORT or EVAL
     eval_num_envs    robots simulated by EVAL
@@ -38,8 +40,9 @@ DEFAULTS = {
     "video_checkpoints": 10,
     "seconds_per_checkpoint": 5,
 }
-# Every microduck task collects 24 environment steps per PPO iteration and
-# runs its policy at 50 Hz; mjlab's video trigger counts environment steps.
+# Every microduck task collects 24 environment steps per PPO iteration (unless an
+# experiment design changes it) and runs its policy at 50 Hz; mjlab's video
+# trigger counts environment steps.
 STEPS_PER_ITERATION = 24
 CONTROL_HZ = 50
 # The task cameras sit 3 m away at 320x240, leaving the 30 cm duck a few
@@ -72,6 +75,24 @@ def setting(job, key):
 
 def task_id(job):
     return job.get("task_id") or DEFAULT_TASK
+
+
+def steps_per_iteration(job):
+    return job.get("num_steps_per_env") or STEPS_PER_ITERATION
+
+
+def design_env(reward_design_file=None, experiment_design_file=None, train=True):
+    """Hook variables for a subprocess. Only training edits the env cfg; anything that
+    loads a checkpoint needs the agent hook so the runner matches the trained network."""
+    env = {}
+    if experiment_design_file is not None:
+        env["MICRODUCK_RL_CFG_HOOK"] = f"{CFG_HOOK}:apply_agent"
+        env["MICRODUCK_EXPERIMENT_DESIGN"] = str(experiment_design_file)
+    if train and reward_design_file is not None:
+        env["MICRODUCK_REWARD_DESIGN"] = str(reward_design_file)
+    if train and (reward_design_file is not None or experiment_design_file is not None):
+        env["MICRODUCK_CFG_HOOK"] = f"{CFG_HOOK}:apply"
+    return env
 
 
 def match_training_intervals(play_cfg, train_cfg):
@@ -147,14 +168,15 @@ def iteration_offset(job):
     return checkpoint_iteration(job["init_checkpoint"]) if job.get("init_checkpoint") else 0
 
 
-def train_command(job, attempt, resume_from=None, reward_design_file=None):
+def train_command(job, attempt, resume_from=None, reward_design_file=None,
+                  experiment_design_file=None):
     """``(argv, env)`` for one TRAIN attempt.
 
     ``resume_from`` is this job's own latest checkpoint after a pause or
     crash; only the remaining iterations are requested. ``init_checkpoint``
     instead warm-starts a fresh job from another run with the full budget.
-    ``reward_design_file`` is a reward design JSON that ``cfg_hook.py``
-    applies to the task's reward terms inside the trainer.
+    ``reward_design_file`` / ``experiment_design_file`` are design JSON files
+    that ``cfg_hook.py`` applies inside the trainer.
     """
     total = iteration_offset(job) + positive_int(job, "max_iterations")
     argv = [
@@ -164,10 +186,7 @@ def train_command(job, attempt, resume_from=None, reward_design_file=None):
         "--agent.logger", "tensorboard",
         "--agent.run-name", run_name(job, attempt),
     ]
-    env = {}
-    if reward_design_file is not None:
-        env["MICRODUCK_CFG_HOOK"] = f"{CFG_HOOK}:apply"
-        env["MICRODUCK_REWARD_DESIGN"] = str(reward_design_file)
+    env = design_env(reward_design_file, experiment_design_file)
     if resume_from is not None:
         remaining = total - checkpoint_iteration(resume_from)
         if remaining <= 0:
@@ -183,7 +202,7 @@ def train_command(job, attempt, resume_from=None, reward_design_file=None):
     if job.get("video"):
         argv += [
             "--video", "True",
-            "--video-interval", str(positive_int(job, "video_every") * STEPS_PER_ITERATION),
+            "--video-interval", str(positive_int(job, "video_every") * steps_per_iteration(job)),
             "--video-length", str(positive_int(job, "video_seconds") * CONTROL_HZ),
             "--env.viewer.width", str(TRAIN_CLIP_SIZE[0]),
             "--env.viewer.height", str(TRAIN_CLIP_SIZE[1]),
@@ -214,7 +233,7 @@ def pick_evenly(items, count):
     return [items[round(i * step)] for i in range(count)]
 
 
-def training_videos(run_dir, start_iteration):
+def training_videos(run_dir, start_iteration, steps_per_iter=STEPS_PER_ITERATION):
     """``(iteration, Path)`` for clips mjlab recorded in one run directory.
 
     Clip names count environment steps from the start of that run, so a
@@ -227,7 +246,7 @@ def training_videos(run_dir, start_iteration):
     for f in folder.iterdir():
         match = _VIDEO_RE.match(f.name)
         if match:
-            clips.append((start_iteration + int(match.group(1)) // STEPS_PER_ITERATION, f))
+            clips.append((start_iteration + int(match.group(1)) // steps_per_iter, f))
     return sorted(clips)
 
 

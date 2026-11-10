@@ -1617,7 +1617,8 @@ export const createServer = (config): express.Application => {
       const rows = await dbo.collection("models").find(
         { robot },
         { projection: { job_id: 1, location: 1, task_id: 1, training_iterations: 1, onnx_location: 1,
-                        avg_return: 1, reward_design_name: 1, updated_at: 1, create_date: 1 } })
+                        avg_return: 1, reward_design_name: 1, experiment_design_name: 1,
+                      updated_at: 1, create_date: 1 } })
         .sort({ updated_at: -1 }).limit(200).toArray();
       res.json(rows);
     } catch (err) {
@@ -1952,11 +1953,18 @@ export const createServer = (config): express.Application => {
   // constant, a field the trainer had just added would be rendered by
   // the form, posted back by the user, and then rejected as an unknown
   // key by the same server that advertised it.
+  //
+  // Other robots publish their own list (the duck worker writes
+  // schema_registry/experiment_design:microduck, see
+  // rl_agent/duck/experiment_design.py) and have no fallback: with nothing
+  // published the list is empty and every field is rejected as unknown.
   function withExperimentDesignSchema(
     cb: (fields: any[], source: string) => void,
+    robot: string = 'roboracer',
   ): void {
+    const car = robot === 'roboracer';
     dbo.collection('schema_registry').findOne(
-      { _id: 'experiment_design' } as any,
+      { _id: car ? 'experiment_design' : `experiment_design:${robot}` } as any,
       (err: any, doc: any) => {
         if (err) {
           console.error('schema_registry read failed; using built-in fallback:', err);
@@ -1964,7 +1972,7 @@ export const createServer = (config): express.Application => {
           cb(doc.fields, 'trainer');
           return;
         }
-        cb(EXPERIMENT_DESIGN_SCHEMA, 'fallback');
+        cb(car ? EXPERIMENT_DESIGN_SCHEMA : [], car ? 'fallback' : 'missing');
       });
   }
 
@@ -1979,9 +1987,10 @@ export const createServer = (config): express.Application => {
     // running trainer published it, 'fallback' means this build's
     // built-in copy, which may be older than the trainer. Surfacing it
     // here is what turns a silent drift back into a visible one.
+    const robot = String(req.query.robot || 'roboracer');
     withExperimentDesignSchema((fields, source) => {
-      res.json({ fields, source });
-    });
+      res.json({ fields, source, robot });
+    }, robot);
   });
 
   app.get('/get_experiment_designs', (req, res) => {
@@ -2005,7 +2014,7 @@ export const createServer = (config): express.Application => {
   // tweak it, POST it back) isn't rejected for echoing them.
   const EXPERIMENT_DESIGN_META_KEYS = new Set([
     '_id', 'name', 'description', 'author', 'archived', 'fields',
-    'version', 'created_at', 'updated_at',
+    'version', 'created_at', 'updated_at', 'robot',
   ]);
 
   // Body keys that are neither metadata nor a known field. The copy
@@ -2067,6 +2076,7 @@ export const createServer = (config): express.Application => {
     // Validate and copy against the SAME field list the GET endpoint
     // serves, so the form can never offer a field this handler would
     // reject or drop.
+    const robot = String(body.robot || 'roboracer');
     withExperimentDesignSchema((schemaFields) => {
       if (rejectUnknownKeys(body, res, schemaFields)) return;
       const now = new Date();
@@ -2079,6 +2089,7 @@ export const createServer = (config): express.Application => {
         created_at: now,
         updated_at: now,
       };
+      if (robot !== 'roboracer') doc.robot = robot;
       // Allow callers to omit the field-override block entirely (= all
       // nulls = trainer defaults), or pass them as a flat top-level
       // spread. We accept both shapes for ergonomics.
@@ -2090,17 +2101,28 @@ export const createServer = (config): express.Application => {
         const name = entry.name;
         if (fieldOverrides[name] !== undefined) doc[name] = fieldOverrides[name];
       }
-      dbo.collection("experiment_designs").insertOne(doc, function(err, result) {
-        if (err) {
-          console.error('add_experiment_design failed:', err);
-          res.status(500).json({ error: String(err.message || err) });
-          return;
-        }
-        console.log('experiment_design inserted', result.insertedId);
-        res.json(result);
+      checkExperimentDesign(robot, doc).then((check) => {
+        if (!check.ok) { res.status(400).json({ error: check.error }); return; }
+        dbo.collection("experiment_designs").insertOne(doc, function(err, result) {
+          if (err) {
+            console.error('add_experiment_design failed:', err);
+            res.status(500).json({ error: String(err.message || err) });
+            return;
+          }
+          console.log('experiment_design inserted', result.insertedId);
+          res.json(result);
+        });
       });
-    });
+    }, robot);
   });
+
+  // Car designs are clamped by the trainer at job start; duck designs are
+  // checked here with the same rl_agent/duck/experiment_design.validate the
+  // worker runs, so a bad value fails on Save instead of minutes into a job.
+  function checkExperimentDesign(robot: string, doc: any): Promise<any> {
+    if (robot !== 'microduck') return Promise.resolve({ ok: true });
+    return runDuckScript(DUCK_EXPERIMENT_CHECK_SCRIPT, doc);
+  }
 
   app.post('/update_experiment_design', (req, res) => {
     // Body shape: { _id, name?, description?, archived?, ...field_overrides }
@@ -2111,16 +2133,19 @@ export const createServer = (config): express.Application => {
       res.status(400).json({ error: "_id is required" });
       return;
     }
+    let idFilter: any;
+    try {
+      idFilter = { "_id": ObjectID(body._id) };
+    } catch (e) {
+      idFilter = { "_id": String(body._id) };  // canonical "Default" uses string _id
+    }
     // Same resolved field list as the GET endpoint - see the comment
-    // on withExperimentDesignSchema.
+    // on withExperimentDesignSchema - for the robot the design belongs to.
+    dbo.collection("experiment_designs").findOne(idFilter, (findErr: any, existing: any) => {
+    if (findErr) { res.status(500).json({ error: String(findErr.message || findErr) }); return; }
+    if (!existing) { res.status(404).json({ error: `experiment design ${body._id} not found` }); return; }
     withExperimentDesignSchema((schemaFields) => {
       if (rejectUnknownKeys(body, res, schemaFields)) return;
-      let idFilter;
-      try {
-        idFilter = { "_id": ObjectID(body._id) };
-      } catch (e) {
-        idFilter = { "_id": String(body._id) };  // canonical "Default" uses string _id
-      }
       const update: any = {
         "$set": { updated_at: new Date() },
         "$inc": { version: 1 },
@@ -2136,17 +2161,22 @@ export const createServer = (config): express.Application => {
         const name = entry.name;
         if (fieldOverrides[name] !== undefined) update["$set"][name] = fieldOverrides[name];
       }
-      dbo.collection("experiment_designs").updateOne(
-        idFilter, update, { upsert: false },
-        function(err, result) {
-          if (err) {
-            console.error('update_experiment_design failed:', err);
-            res.status(500).json({ error: String(err.message || err) });
-            return;
-          }
-          console.log('experiment_design updated', body._id, result);
-          res.json(result);
-        });
+      const robot = existing.robot || 'roboracer';
+      checkExperimentDesign(robot, { ...existing, ...update["$set"] }).then((check) => {
+        if (!check.ok) { res.status(400).json({ error: check.error }); return; }
+        dbo.collection("experiment_designs").updateOne(
+          idFilter, update, { upsert: false },
+          function(err, result) {
+            if (err) {
+              console.error('update_experiment_design failed:', err);
+              res.status(500).json({ error: String(err.message || err) });
+              return;
+            }
+            console.log('experiment_design updated', body._id, result);
+            res.json(result);
+          });
+      });
+    }, existing.robot || 'roboracer');
     });
   });
 
@@ -2417,7 +2447,38 @@ export const createServer = (config): express.Application => {
   // gym) and the addable library (reward_term_catalog) go to
   // rl_agent/duck/lint_design.py, which needs nothing but python3.
   const DUCK_LINT_SCRIPT = '/python_ws/src/duck/lint_design.py';
-  const DUCK_LINT_TIMEOUT_MS = 10000;
+  const DUCK_EXPERIMENT_CHECK_SCRIPT = '/python_ws/src/duck/check_experiment_design.py';
+  const DUCK_SCRIPT_TIMEOUT_MS = 10000;
+
+  // Run one of rl_agent/duck's stdin->stdout JSON checkers with the dashboard's python3.
+  function runDuckScript(script: string, input: any): Promise<any> {
+    return new Promise((resolve) => {
+      const proc = spawn('python3', [script]);
+      let out = '';
+      let err = '';
+      const timer = setTimeout(() => proc.kill('SIGKILL'), DUCK_SCRIPT_TIMEOUT_MS);
+      proc.stdout.on('data', (d: Buffer) => { out += d.toString(); });
+      proc.stderr.on('data', (d: Buffer) => { err += d.toString(); });
+      proc.on('error', (e: Error) => {
+        clearTimeout(timer);
+        resolve({ ok: false, error: `check could not run: ${e.message}` });
+      });
+      proc.on('close', (codeExit: number | null, signal: string | null) => {
+        clearTimeout(timer);
+        if (signal) {
+          resolve({ ok: false, error: `check timed out after ${DUCK_SCRIPT_TIMEOUT_MS / 1000}s (module-level code runs at load)` });
+          return;
+        }
+        try {
+          resolve(JSON.parse(out));
+        } catch (_e) {
+          resolve({ ok: false, error: `check exited ${codeExit}: ${err.trim().split('\n').slice(-3).join(' ')}` });
+        }
+      });
+      proc.stdin.end(JSON.stringify(input));
+    });
+  }
+
   async function lintDuckDesign(code: string, taskId: string | null): Promise<any> {
     let defaultTerms: string[] | null = null;
     if (taskId) {
@@ -2430,33 +2491,8 @@ export const createServer = (config): express.Application => {
       { _id: 'microduck' }, { projection: { 'functions.name': 1 } });
     const library = catalog && Array.isArray(catalog.functions)
       ? catalog.functions.map((f: any) => f.name) : null;
-    return new Promise((resolve) => {
-      const proc = spawn('python3', [DUCK_LINT_SCRIPT]);
-      let out = '';
-      let err = '';
-      const timer = setTimeout(() => proc.kill('SIGKILL'), DUCK_LINT_TIMEOUT_MS);
-      proc.stdout.on('data', (d: Buffer) => { out += d.toString(); });
-      proc.stderr.on('data', (d: Buffer) => { err += d.toString(); });
-      proc.on('error', (e: Error) => {
-        clearTimeout(timer);
-        resolve({ ok: false, error: `lint could not run: ${e.message}`, funcs: [] });
-      });
-      proc.on('close', (codeExit: number | null, signal: string | null) => {
-        clearTimeout(timer);
-        if (signal) {
-          resolve({ ok: false, error: `lint timed out after ${DUCK_LINT_TIMEOUT_MS / 1000}s (module-level code runs at load)`, funcs: [] });
-          return;
-        }
-        try {
-          const result = JSON.parse(out);
-          result.task_checked = defaultTerms !== null;
-          resolve(result);
-        } catch (_e) {
-          resolve({ ok: false, error: `lint exited ${codeExit}: ${err.trim().split('\n').slice(-3).join(' ')}`, funcs: [] });
-        }
-      });
-      proc.stdin.end(JSON.stringify({ code, default_terms: defaultTerms, library }));
-    });
+    const result = await runDuckScript(DUCK_LINT_SCRIPT, { code, default_terms: defaultTerms, library });
+    return { funcs: [], ...result, task_checked: defaultTerms !== null };
   }
 
   // Default terms per task live on the microduck gyms; this is the library of

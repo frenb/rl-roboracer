@@ -1663,9 +1663,11 @@
     reward_designs: { url: '/get_reward_designs', pinned: 'passthrough-course-default' },
     experiment_designs: { url: '/get_experiment_designs', pinned: 'experiment-default' },
   };
-  const ROBOT_SCOPED_LISTS = new Set(['gyms', 'reward_designs']);
-  // Seeded designs pinned first for non-car robots (rl_agent/duck/reward_design.py).
-  const ROBOT_PINNED = { reward_designs: 'microduck-passthrough' };
+  const ROBOT_SCOPED_LISTS = new Set(['gyms', 'reward_designs', 'experiment_designs']);
+  // Seeded designs pinned first for non-car robots (rl_agent/duck/reward_design.py
+  // and experiment_design.py).
+  const ROBOT_PINNED = { reward_designs: 'microduck-passthrough',
+                         experiment_designs: 'microduck-experiment-default' };
   const JOB_LIST_TTL_MS = 30000;
   const _jobListCache = new Map();
 
@@ -1721,7 +1723,7 @@
     while (sel.options.length > 1) sel.remove(1);
     const visible = rows
       .filter((r) => !r.archived)
-      // Gyms and reward designs belong to one robot; car rows predate the
+      // Gyms and designs belong to one robot; car rows predate the
       // field. The car job/eval forms and the microduck form each list their own.
       .filter((r) => !ROBOT_SCOPED_LISTS.has(kind) || (r.robot || 'roboracer') === robot)
       .sort((a, b) => {

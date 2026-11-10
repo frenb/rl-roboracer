@@ -37,7 +37,7 @@ from mjlab.viewer.viser.viewer import CheckpointManager, format_time_ago
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import job_queue  # noqa: E402
-from duck import launch  # noqa: E402
+from duck import experiment_design, launch  # noqa: E402
 
 POLL_S = 10
 EXIT_JOB_CHANGED = 3
@@ -79,6 +79,7 @@ def job_checkpoints(job):
 
 
 def caption(job):
+    job = experiment_design.effective_job(job)
     reward = job.get("mean_reward")
     return (f"**{job.get('name') or 'microduck job'}** ({job.get('status')})  \n"
             f"`{job['_id']}` · {launch.task_id(job)}  \n"
@@ -114,6 +115,8 @@ def main():
     launch.match_training_intervals(env_cfg, load_env_cfg(task))
     env_cfg.scene.num_envs = args.num_envs
     agent_cfg = load_rl_cfg(task)
+    # The job's network shapes its checkpoints; a job switch restarts this process.
+    experiment_design.apply_agent(job.get("experiment_design_fields") or {}, agent_cfg)
     env = RslRlVecEnvWrapper(ManagerBasedRlEnv(cfg=env_cfg, device=device),
                              clip_actions=agent_cfg.clip_actions)
     runner = (load_runner_cls(task) or MjlabOnPolicyRunner)(env, asdict(agent_cfg), device=device)
