@@ -86,7 +86,8 @@ CAR_COURSE_ATTRS = {
     "goals_reached": "goals reached so far this episode",
 }
 CAR_SIGNALS = {
-    "progress": "reward_success (fires on each goal reached); in reward_standard, low dist_from_goal",
+    "progress": "reward_success (fires on each goal reached); in reward_standard, the drop in "
+                "dist_from_goal since the previous step (keep the previous value in a module-level dict)",
     "heading": "abs(data['car']['dist_from_traj']) near 0",
     "speed": "data['car']['speed']",
     "stability": "abs(data['car']['goal_2']) (sideslip)",
@@ -119,7 +120,10 @@ def reward_success(data, data_arr, step_costs, position_history, *, defaults, co
 def reward_failure(data, data_arr, step_costs, position_history, *, defaults, course):  # crash
 
 In scope: np (numpy), math, and builtins abs/min/max/sum/len/float/int/round/range/
-enumerate/zip/sorted/list/dict/tuple. No imports, no I/O.
+enumerate/zip/sorted/list/dict/tuple. No imports, no I/O, no getattr/hasattr.
+Module-level variables (e.g. a dict) persist across calls for the whole run, so they
+can carry state between steps; reward_success starts a new goal segment and
+reward_failure ends the episode, so reset per-segment state there.
 defaults.standard(data, data_arr, step_costs), defaults.success(...), defaults.failure(...)
 return the course default reward (same positional arguments) for "shape on top of default".
 
@@ -215,13 +219,15 @@ def car_lint(code):
 
 # --- microduck ---------------------------------------------------------------
 
+EPISODE_END = "episode_end"
 DUCK_SIGNALS = {
     "progress": "track_linear_velocity / track_angular_velocity (velocity tasks)",
     "heading": "track_angular_velocity, or a term on the base orientation",
     "speed": "the commanded velocity sets the speed; reward tracking it",
     "stability": "upright, body_ang_vel, angular_momentum",
-    "termination": "the task ends episodes on falls; a library term such as is_terminated "
-                   "can add a penalty on top",
+    "termination": "the task ends episodes on falls, which forfeits the rest of the episode's "
+                   f"reward; a Never item met by that alone cites the term {EPISODE_END!r}. "
+                   "A library term such as is_terminated can add a penalty on top",
     "smoothness": "action_rate_l2",
     "effort": "library terms on joint torques / velocities / accelerations",
     "clearance": "dof_pos_limits, self_collisions",
@@ -296,6 +302,8 @@ def duck_checks(spec, code, rationale, gym):
         if section not in want:
             continue
         for term in r.get("terms") or []:
+            if term == EPISODE_END and section == "never":
+                continue
             if term not in weights:
                 problems.append(f"{section} bullet {r.get('bullet')!r} cites term {term!r}, "
                                 "which the compiled reward doesn't have")

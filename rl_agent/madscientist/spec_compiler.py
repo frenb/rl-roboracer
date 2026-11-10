@@ -38,6 +38,7 @@ SPEC_COMPILER_MODEL = os.environ.get("SPEC_COMPILER_MODEL") or (
     "claude-opus-5-5" if BACKEND == "cursor" else researcher.RESEARCHER_MODEL)
 MAX_ROUNDS = int(os.environ.get("SPEC_COMPILER_MAX_ROUNDS", "3"))
 MAX_TOKENS = 6000
+CURSOR_ATTEMPTS = 4
 DEFAULT_POLL_INTERVAL_SECONDS = 10
 
 _PY_RE = re.compile(r"```python\s*\n(.*?)```", re.S)
@@ -111,16 +112,21 @@ def call_cursor(client, system, messages, *, max_tokens=MAX_TOKENS):
     turns = "\n\n".join(f"### {m['role']}\n{m['content']}" for m in messages)
     prompt = (f"{system}\n\nDo not use any tools or read any files: answer from this message alone, "
               f"as the next assistant turn of this conversation.\n\n{turns}")
-    with tempfile.TemporaryDirectory() as cwd:
-        try:
-            result = Agent.prompt(prompt, AgentOptions(
-                api_key=os.environ["CURSOR_API_KEY"], model=SPEC_COMPILER_MODEL,
-                local=LocalAgentOptions(cwd=cwd)))
-        except CursorAgentError as e:
-            raise RuntimeError(f"Cursor agent did not start: {e.message}") from e
-    if result.status != "finished":
-        raise RuntimeError(f"Cursor agent run {result.id} ended {result.status}")
-    return {"text": result.result or "", "input_tokens": 0, "output_tokens": 0}
+    for attempt in range(CURSOR_ATTEMPTS):
+        if attempt:
+            time.sleep(15 * 2 ** (attempt - 1))
+        with tempfile.TemporaryDirectory() as cwd:
+            try:
+                result = Agent.prompt(prompt, AgentOptions(
+                    api_key=os.environ["CURSOR_API_KEY"], model=SPEC_COMPILER_MODEL,
+                    local=LocalAgentOptions(cwd=cwd)))
+            except CursorAgentError as e:
+                error = RuntimeError(f"Cursor agent did not start: {e.message}")
+                continue
+        if result.status == "finished":
+            return {"text": result.result or "", "input_tokens": 0, "output_tokens": 0}
+        error = RuntimeError(f"Cursor agent run {result.id} ended {result.status}")
+    raise error
 
 
 def default_call():

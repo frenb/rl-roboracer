@@ -5,6 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import compare  # noqa: E402
 import spec as specs  # noqa: E402
 import targets  # noqa: E402
 
@@ -131,6 +132,9 @@ class TargetsTest(unittest.TestCase):
         unknown = self.rationale({"encourage": ["nope"], "discourage": ["action_rate_l2"],
                                   "never": ["action_rate_l2"]})
         self.assertTrue(any("doesn't have" in p for p in targets.duck_checks(self.spec, DUCK_CODE, unknown, GYM)))
+        episode_end = self.rationale({"encourage": ["track_linear_velocity"], "discourage": ["action_rate_l2"],
+                                      "never": [targets.EPISODE_END]})
+        self.assertEqual(targets.duck_checks(self.spec, DUCK_CODE, episode_end, GYM), [])
 
     def test_validate_lints_first(self):
         problems = targets.validate("microduck", self.spec, 'TERMS = {"nope": None}\n', gym=GYM, library=[])
@@ -146,6 +150,24 @@ class TargetsTest(unittest.TestCase):
                                      library=[{"name": "joint_vel_l2", "params": ["asset_cfg"], "doc": "Penalise."}])
         self.assertIn("track_linear_velocity: func=track_lin_vel weight=2.0", duck)
         self.assertIn("joint_vel_l2(asset_cfg): Penalise.", duck)
+
+
+class CompareTest(unittest.TestCase):
+    @unittest.skipIf(targets.reward_designs.np is None, "needs numpy")
+    def test_car(self):
+        self.assertEqual(compare.compare("roboracer", CAR_CODE, CAR_CODE)["verdict"], "same")
+        nudged = CAR_CODE.replace("0.01 *", "0.0105 *")
+        self.assertEqual(compare.compare("roboracer", CAR_CODE, nudged)["verdict"], "close")
+        harsher = CAR_CODE.replace("return -1.0", "return -10.0")
+        self.assertEqual(compare.compare("roboracer", CAR_CODE, harsher)["verdict"], "differs")
+
+    def test_duck(self):
+        self.assertEqual(compare.compare("microduck", DUCK_CODE, DUCK_CODE, GYM)["verdict"], "same")
+        nudged = DUCK_CODE.replace("3.0", "3.1")
+        self.assertEqual(compare.compare("microduck", DUCK_CODE, nudged, GYM)["verdict"], "close")
+        r = compare.compare("microduck", DUCK_CODE, 'TERMS = {"upright": None}\n', GYM)
+        self.assertEqual(r["verdict"], "differs")
+        self.assertTrue(any(d.startswith("upright: dropped") for d in r["term_diffs"]), r)
 
 
 class CliTest(unittest.TestCase):
