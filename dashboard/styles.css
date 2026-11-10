@@ -979,6 +979,8 @@ html.dark .spec-tabs { border-color: rgb(51 65 85); }
 html.dark .spec-tab:hover { color: rgb(226 232 240); }
 .spec-tab.is-active { color: rgb(79 70 229); border-color: rgb(99 102 241); }
 html.dark .spec-tab.is-active { color: rgb(165 180 252); }
+/* Tailwind's .flex outranks the UA [hidden] rule, so a hidden pane would still show. */
+[data-pane][hidden] { display: none !important; }
 .spec-code-host {
   border: 1px solid rgb(226 232 240);
   border-radius: 0.5rem;
