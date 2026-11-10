@@ -803,6 +803,7 @@ html.dark .tabulator-row.rc-row-flash {
   display: flex;
   flex-direction: column;
   min-height: 0;                          /* let inner flex children scroll */
+  min-width: 0;                           /* wide tables scroll instead of widening the grid column */
 }
 html.dark .rd-card {
   background-color: rgb(15 23 42);        /* slate-900 */
@@ -1037,7 +1038,9 @@ html.dark .CodeMirror .cm-operator      { color: rgb(203 213 225); }
  * percentage-height layout collapses cleanly into the right pane. */
 .rd-editor-wrap {
   flex: 1;
-  min-height: 0;
+  /* Same floor as .rd-editor-host: below it the editor spills over the
+     panels under it instead of the pane scrolling. */
+  min-height: 240px;
   display: flex;
   flex-direction: column;
 }
