@@ -112,6 +112,29 @@ def compare_car(original, compiled):
     return {"verdict": max(verdicts, key=order.get), "episodes": episodes}
 
 
+def replay_car(code, records):
+    """Rewards ``code`` pays on logged steps: ``[{"kind": step|goal|crash, "car": {...},
+    "steps_since_last_goal": n}]`` in order (module state carries across them)."""
+    with contextlib.redirect_stdout(io.StringIO()):
+        funcs = targets.reward_designs.load_reward_design("<replay>", code)
+        course = _Course()
+        kw = {"defaults": _Defaults(course), "course": course}
+        arr, costs, hist = [0.0] * 32, [1.0], [(0.0, 0.0)]
+        out = []
+        for rec in records:
+            course.steps_since_last_goal = rec["steps_since_last_goal"]
+            data = {"car": rec["car"]}
+            name = {"step": "reward_standard", "goal": "reward_success", "crash": "reward_failure"}[rec["kind"]]
+            fn = funcs.get(name)
+            extra = () if rec["kind"] == "step" else (hist,)
+            if fn:
+                r = fn(data, arr, costs, *extra, **kw)
+            else:
+                r = getattr(kw["defaults"], name[len("reward_"):])(data, arr, costs, *extra)
+            out.append(float(r))
+        return out
+
+
 # --- microduck ---------------------------------------------------------------
 
 def _norm_src(src):
