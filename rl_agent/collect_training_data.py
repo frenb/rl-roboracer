@@ -971,16 +971,40 @@ def bc_pretrain_actor_net(
         # sampled (with replacement across epochs) from the expert demos.
         # buffer_size=10000 is large enough for good shuffling on the 50k
         # expert items we typically load while keeping memory bounded.
+        # The actor's tanh squash puts the action-spec bounds at atanh(+-1), so
+        # the log-likelihood of a demo action sitting exactly on a bound (e.g.
+        # throttle == the spec minimum, ~0.35% of the donut demos) is huge, and
+        # now and then a batch tips the BC loss into inf/NaN. Pull actions a
+        # hair inside the bounds for cloning only; Reverb keeps the originals.
+        lo = np.asarray(action_spec.minimum, dtype=np.float32)
+        hi = np.asarray(action_spec.maximum, dtype=np.float32)
+        margin = (hi - lo) * np.float32(1e-3)
+        inner_lo = tf.constant(lo + margin)
+        inner_hi = tf.constant(hi - margin)
         bc_dataset = (trajectory_dataset
+                      .map(lambda t: t._replace(action=tf.clip_by_value(t.action, inner_lo, inner_hi)))
                       .shuffle(buffer_size=10000)
                       .batch(batch_size)
                       .prefetch(10)
                       .repeat())
         bc_iter = iter(bc_dataset)
 
+    # tf_agents checks the loss for inf/NaN before applying gradients, so a
+    # rejected batch leaves the weights untouched and can simply be skipped.
+    max_bad_batches = 20
+    bad_batches = 0
     for step in range(total_steps):
         if step < training_steps:
-            bc_loss = bc_agent.train(next(bc_iter)).loss.numpy()
+            try:
+                bc_loss = bc_agent.train(next(bc_iter)).loss.numpy()
+            except tf.errors.InvalidArgumentError as exc:
+                if 'inf or nan' not in str(exc):
+                    raise
+                bad_batches += 1
+                print(f"  warm-up step {step}: BC loss was inf/NaN, batch skipped "
+                      f"({bad_batches}/{max_bad_batches})", flush=True)
+                if bad_batches >= max_bad_batches:
+                    raise
         if step < critic_steps:
             critic_loss = critic_train_fn()
         if step % 100 == 0:
