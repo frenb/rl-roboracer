@@ -67,6 +67,11 @@
     historical 320x240 borderless popup (cheap when several actors share
     one GPU); pass -WindowWidth 1280 etc. to override.
 
+.PARAMETER IdleFps
+    Forwarded as --idle-fps: the frame rate IdleThrottle.cs caps the client
+    at after 60 s without a trainer command. Default 0 never throttles; the
+    2 fps cap left trainers timing out on reset/step after an idle spell.
+
 .PARAMETER Popup
     Use Unity's -popupwindow flag: borderless, fixed-size, no title bar.
     Useful when running -RunNClients for multi-actor training and you
@@ -133,6 +138,7 @@ param(
     [int]$WindowHeight = 0,
     [string]$WindowQuality = 'Fastest',
     [switch]$Popup,
+    [int]$IdleFps = 0,
     [string]$LogFile,
     [int]$GymPollSeconds = 10,
     # Use the IPv4 loopback explicitly. 'localhost' resolves to the IPv6
@@ -237,6 +243,7 @@ function Set-ActiveExePath {
         '--ros-ip',     $RosIp,
         '--ros-port',   $RosPort,
         '--unity-port', $UnityPort,
+        '--idle-fps',   $IdleFps,
         '-screen-width',    $WindowWidth,
         '-screen-height',   $WindowHeight,
         '-screen-quality',  $WindowQuality,
