@@ -24,6 +24,7 @@
  *
  *   showToast({type, message, duration})  -> renders a transient toast
  *   confirmDialog({title, message, ...})  -> Promise<boolean>
+ *   duckMedia.open(job, title)            -> MicroDuck progression video + clips modal
  *
  *   jobOptions                            -> option lists for the job dialogs
  *                                            (statuses, job/model/robot types,
@@ -514,6 +515,106 @@
       });
     });
   }
+
+  /* ---------- MicroDuck media ----------------------------------- *
+   *
+   * A MicroDuck TRAIN (or VIDEO) job stores progress_video / progress_gif
+   * (paths under /microduck_rl/logs, served by the dashboard's /duck_media
+   * route) and a videos[] list of periodic training clips. progress_video
+   * is a boolean request flag until the worker replaces it with the path.
+   * -------------------------------------------------------------- */
+  const duckMedia = {
+    url: (p) => '/duck_media?path=' + encodeURIComponent(p),
+    progressVideo: (job) => (job && typeof job.progress_video === 'string' ? job.progress_video : ''),
+    clips: (job) => (job && Array.isArray(job.videos) ? job.videos.filter((v) => v && v.path) : []),
+    has(job) {
+      return !!duckMedia.progressVideo(job) || duckMedia.clips(job).length > 0;
+    },
+
+    open(job, title) {
+      const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      const parts = [];
+      const progress = duckMedia.progressVideo(job);
+      if (progress) {
+        const gif = typeof job.progress_gif === 'string' ? job.progress_gif : '';
+        parts.push('<section class="flex flex-col gap-2">'
+          + '<h3 class="m-0 text-sm font-semibold">Progression</h3>'
+          + '<p class="m-0 text-xs text-slate-500 dark:text-slate-400">Evenly spaced checkpoints from this '
+          + 'training run, rendered when it finished.</p>'
+          + `<video controls autoplay muted loop playsinline class="w-full max-h-[60vh] object-contain rounded-lg bg-black" src="${esc(duckMedia.url(progress))}"></video>`
+          + '<div class="flex gap-3 text-xs">'
+          + `<a class="underline whitespace-nowrap shrink-0" href="${esc(duckMedia.url(progress))}" target="_blank" rel="noopener">Open MP4</a>`
+          + (gif ? `<a class="underline whitespace-nowrap shrink-0" href="${esc(duckMedia.url(gif))}" target="_blank" rel="noopener">Open GIF</a>` : '')
+          + `<span class="font-mono text-slate-500 dark:text-slate-400 truncate min-w-0" title="${esc(progress)}">${esc(progress)}</span>`
+          + '</div></section>');
+      }
+      const clips = duckMedia.clips(job).slice().sort((a, b) => (a.iteration || 0) - (b.iteration || 0));
+      if (clips.length) {
+        parts.push('<section class="flex flex-col gap-2">'
+          + `<h3 class="m-0 text-sm font-semibold">Training clips (${clips.length})</h3>`
+          + '<div class="grid grid-cols-2 md:grid-cols-3 gap-3">'
+          + clips.map((c) => '<figure class="m-0 flex flex-col gap-1">'
+            + `<video controls muted playsinline preload="metadata" class="w-full rounded-md bg-black" src="${esc(duckMedia.url(c.path))}"></video>`
+            + `<figcaption class="text-[11px] text-slate-500 dark:text-slate-400">iteration ${esc(c.iteration ?? '?')}</figcaption>`
+            + '</figure>').join('')
+          + '</div></section>');
+      }
+      if (!parts.length) {
+        parts.push('<p class="m-0 text-sm text-slate-500 dark:text-slate-400">This training job has no videos yet. '
+          + 'The progression video is rendered when a TRAIN job with progress_video set finishes; '
+          + "select the model on the Models tab and click 'Render video' to make one.</p>");
+      }
+
+      const backdrop = document.createElement('div');
+      backdrop.className =
+        'fixed inset-0 z-[100] modal-blur bg-slate-900/40 dark:bg-slate-950/65 ' +
+        'flex items-center justify-center p-4 ' +
+        'opacity-0 transition-opacity duration-200 pointer-events-none';
+      backdrop.innerHTML = `
+        <div role="dialog" aria-modal="true"
+             class="w-full max-w-[960px] max-h-[calc(100vh-2rem)]
+                    bg-white dark:bg-slate-900
+                    border border-slate-200 dark:border-slate-700
+                    rounded-2xl shadow-card-lg flex flex-col
+                    opacity-0 -translate-y-3 scale-[0.98]
+                    transition duration-200">
+          <div class="px-6 py-5 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3">
+            <h2 class="m-0 text-base font-semibold tracking-tight truncate text-slate-900 dark:text-slate-100"></h2>
+            <button data-action="close" aria-label="Close"
+                    class="px-2 py-1 text-sm rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400">×</button>
+          </div>
+          <div class="px-6 py-4 overflow-y-auto flex-1 min-h-0 flex flex-col gap-4">${parts.join('')}</div>
+          <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
+            <button data-action="close" class="btn-base btn-secondary">Close</button>
+          </div>
+        </div>`;
+      backdrop.querySelector('h2').textContent = title || 'MicroDuck videos';
+      const dialog = backdrop.querySelector('[role="dialog"]');
+
+      function close() {
+        // Detach the media right away so videos stop playing during the fade.
+        backdrop.querySelectorAll('video').forEach((v) => { v.pause(); v.removeAttribute('src'); v.load(); });
+        backdrop.classList.add('opacity-0', 'pointer-events-none');
+        dialog.classList.add('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        setTimeout(() => backdrop.remove(), 250);
+        document.removeEventListener('keydown', onKey);
+      }
+      function onKey(ev) {
+        if (ev.key === 'Escape') close();
+      }
+      backdrop.addEventListener('click', (ev) => { if (ev.target === backdrop) close(); });
+      backdrop.querySelectorAll('[data-action="close"]').forEach((b) => b.addEventListener('click', close));
+      document.addEventListener('keydown', onKey);
+      document.body.appendChild(backdrop);
+      requestAnimationFrame(() => {
+        backdrop.classList.remove('opacity-0', 'pointer-events-none');
+        backdrop.classList.add('opacity-100', 'pointer-events-auto');
+        dialog.classList.remove('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        dialog.classList.add('opacity-100', 'translate-y-0', 'scale-100');
+      });
+    },
+  };
 
   /* ---------- typed-filter constants ---------------------------- *
    *
@@ -2021,6 +2122,7 @@
     formatters,
     showToast,
     confirmDialog,
+    duckMedia,
     TableView,
     FreshnessIndicator,
     DataWebSocket,

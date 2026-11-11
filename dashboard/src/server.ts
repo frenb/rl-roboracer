@@ -1662,6 +1662,28 @@ export const createServer = (config): express.Application => {
   // requests, so videos seek.
   const DUCK_LOGS_PREFIX = '/microduck_rl/logs/';
   const DUCK_MEDIA_ROOT = '/saved_models/microduck';
+
+  // One job by id, for tabs that don't hold the whole job list (the Models
+  // tab's MicroDuck video button).
+  app.get('/get_job/:id', async (req, res) => {
+    let filter;
+    try {
+      filter = { _id: ObjectID(req.params.id) };
+    } catch (e) {
+      filter = { _id: String(req.params.id) };
+    }
+    try {
+      const job = await dbo.collection("jobs").findOne(filter);
+      if (!job) {
+        res.status(404).json({ error: `no job ${req.params.id}` });
+        return;
+      }
+      res.json(job);
+    } catch (e) {
+      res.status(500).json({ error: String((e as Error).message || e) });
+    }
+  });
+
   app.get('/duck_media', (req, res) => {
     const stored = String(req.query.path || '');
     if (!stored.startsWith(DUCK_LOGS_PREFIX)) {

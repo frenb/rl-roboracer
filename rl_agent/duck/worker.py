@@ -571,7 +571,8 @@ def run_eval(job, log):
     results = json.loads(out_json.read_text())
     update_job(job["_id"], eval_results=results, percent_complete=100)
     db.models.update_many({"robot": ROBOT, "location": str(checkpoint)},
-                          {"$set": {"eval_results": results}})
+                          {"$set": {"eval_results": results, "eval_at": now(),
+                                    "eval_job_id": str(job["_id"])}})
 
 
 def sync_gyms():
