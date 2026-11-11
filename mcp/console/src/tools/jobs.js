@@ -1,8 +1,9 @@
 import { z } from 'zod';
-import { get, list, post, LOG_WS_URL } from '../api.js';
+import path from 'node:path';
+import { get, list, post, LOG_WS_URL, BASE_URL } from '../api.js';
 import { defineTool, confirmArg, requireConfirm, objectIdTime, resolveRow, compact, truncate, robotArg, robotOf, isDuck } from '../util.js';
 import { buildJob, insertJob, ALL_JOB_TYPES, MODEL_TYPES, JOB_STATUSES, COURSES } from '../jobPayload.js';
-import { composeExec, composeLogs } from '../docker.js';
+import { composeExec, composeLogs, REPO_ROOT } from '../docker.js';
 
 const JOB_ROW_KEYS = [
   'status', 'job_type', 'model_type', 'course_type', 'gym_name', 'reward_design_name',
@@ -17,11 +18,41 @@ const DUCK_ROW_KEYS = [
 ];
 const DUCK_EVAL_KEYS = ['episodes', 'falls', 'fall_rate', 'mean_return', 'mean_episode_length', 'num_envs', 'steps'];
 
+const DUCK_LOGS_PREFIX = '/microduck_rl/logs/';
+const DUCK_HOST_ROOT = path.join(REPO_ROOT, '..', 'saved_models', 'microduck');
+
+/** A duck-trainer media path as a dashboard URL and the file on this host. */
+function duckMedia(p) {
+  if (typeof p !== 'string' || !p.startsWith(DUCK_LOGS_PREFIX)) return null;
+  return {
+    url: `${BASE_URL}/duck_media?path=${encodeURIComponent(p)}`,
+    host_path: path.join(DUCK_HOST_ROOT, ...p.slice(DUCK_LOGS_PREFIX.length).split('/')),
+  };
+}
+
+/** Progression video, its GIF and the training clips of a duck job, or null. */
+export function duckJobMedia(j) {
+  const media = {};
+  const video = duckMedia(j.progress_video);
+  const gif = duckMedia(j.progress_gif);
+  if (video) media.progress_video = video;
+  if (gif) media.progress_gif = gif;
+  const clips = (Array.isArray(j.videos) ? j.videos : [])
+    .map((c) => ({ iteration: c && c.iteration, ...duckMedia(c && c.path) }))
+    .filter((c) => c.url);
+  if (clips.length) media.training_clips = clips;
+  return Object.keys(media).length ? media : null;
+}
+
 export function jobRow(j) {
   const duck = isDuck(j);
   const row = { _id: String(j._id), created_at: objectIdTime(j._id), robot: robotOf(j), ...compact(j, duck ? DUCK_ROW_KEYS : JOB_ROW_KEYS) };
   if (typeof row.percent_complete === 'number') row.percent_complete = Math.round(row.percent_complete * 10) / 10;
   if (duck && j.eval_results) row.eval_results = compact(j.eval_results, DUCK_EVAL_KEYS);
+  if (duck) {
+    const media = duckJobMedia(j);
+    if (media) row.media = { ...media, training_clips: media.training_clips && media.training_clips.length };
+  }
   if (j.eval_error) row.eval_error = truncate(j.eval_error, 300);
   return row;
 }
@@ -125,10 +156,15 @@ export function register(server) {
 
   defineTool(server, 'get_job', {
     title: 'Get job',
-    description: 'Full job document by id (or the last 8 characters of it).',
+    description: 'Full job document by id (or the last 8 characters of it). microduck jobs with videos also get media: '
+      + 'dashboard URLs and host file paths for the progression video, its GIF and the training clips.',
     readOnly: true,
     input: { id: z.string() },
-  }, async ({ id }) => resolveRow(await list('/get_jobs'), id, 'job'));
+  }, async ({ id }) => {
+    const job = resolveRow(await list('/get_jobs'), id, 'job');
+    const media = isDuck(job) ? duckJobMedia(job) : null;
+    return media ? { ...job, media } : job;
+  });
 
   defineTool(server, 'create_job', {
     title: 'Create job',

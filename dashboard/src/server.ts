@@ -1656,6 +1656,32 @@ export const createServer = (config): express.Application => {
     }
   });
 
+  // MicroDuck videos and GIFs. The duck worker stores duck-trainer paths
+  // under /microduck_rl/logs, which is saved_models/microduck on the host and
+  // /saved_models/microduck in this container. sendFile answers Range
+  // requests, so videos seek.
+  const DUCK_LOGS_PREFIX = '/microduck_rl/logs/';
+  const DUCK_MEDIA_ROOT = '/saved_models/microduck';
+  app.get('/duck_media', (req, res) => {
+    const stored = String(req.query.path || '');
+    if (!stored.startsWith(DUCK_LOGS_PREFIX)) {
+      res.status(400).json({ error: `path must start with ${DUCK_LOGS_PREFIX}` });
+      return;
+    }
+    const resolved = path.resolve(DUCK_MEDIA_ROOT, stored.slice(DUCK_LOGS_PREFIX.length));
+    if (!resolved.startsWith(DUCK_MEDIA_ROOT + path.sep)) {
+      res.status(400).json({ error: 'path escapes the duck output folder' });
+      return;
+    }
+    if (!['.mp4', '.gif'].includes(path.extname(resolved).toLowerCase())) {
+      res.status(400).json({ error: 'only .mp4 and .gif files are served' });
+      return;
+    }
+    res.sendFile(resolved, { maxAge: '1h' }, (err: any) => {
+      if (err && !res.headersSent) res.status(err.status || 404).json({ error: 'not found' });
+    });
+  });
+
   app.get('/get_models', (req,res) => {
     if(needsUpdate(req, res, modelsChanged, 'models'))
     {

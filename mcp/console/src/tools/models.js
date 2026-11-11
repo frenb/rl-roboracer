@@ -3,6 +3,7 @@ import { get, list, post, BASE_URL } from '../api.js';
 import { defineTool, confirmArg, requireConfirm, resolveRow, compact, robotArg, robotOf, isDuck } from '../util.js';
 import { buildJob, buildDuckJob, insertJob, pickLists, MODEL_TYPES, COURSES, SCRATCH_BUILT_POLICIES, FLY_POLICY_COURSE } from '../jobPayload.js';
 import { summary, compareSamples, round } from '../stats.js';
+import { duckJobMedia } from './jobs.js';
 
 const MODEL_ROW_KEYS = [
   'create_date', 'location', 'model_type', 'course_type', 'training_iterations', 'avg_return',
@@ -109,10 +110,13 @@ export function register(server) {
     const { models, scores } = await modelsAndScores();
     const model = resolveRow(models, id, 'model');
     if (isDuck(model)) {
-      const evals = (await list('/get_jobs'))
+      const jobs = await list('/get_jobs');
+      const evals = jobs
         .filter((j) => isDuck(j) && j.job_type === 'EVAL' && j.checkpoint === model.location)
         .map((j) => ({ job: String(j._id), status: j.status, ended_at: j.ended_at || null, eval_results: j.eval_results || null }));
-      return { model, eval_summary: duckEval(model), eval_jobs: evals };
+      const trainJob = jobs.find((j) => String(j._id) === String(model.job_id));
+      const media = trainJob ? duckJobMedia(trainJob) : null;
+      return { model, eval_summary: duckEval(model), eval_jobs: evals, ...(media ? { media } : {}) };
     }
     const runs = runsFor(model, scores);
     return { model, eval_summary: evalSummary(runs), eval_runs: runs };

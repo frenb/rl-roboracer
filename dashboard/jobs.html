@@ -553,6 +553,33 @@
     </div>
   </div>
 
+  <!-- MicroDuck media modal: the progression video the worker renders when
+       a TRAIN (or VIDEO) job finishes, and the periodic training clips. -->
+  <div data-role="duck-media-modal" aria-hidden="true"
+       class="fixed inset-0 z-[100] modal-blur bg-slate-900/40 dark:bg-slate-950/65
+              flex items-center justify-center p-4
+              opacity-0 transition-opacity duration-200 pointer-events-none">
+    <div role="dialog" aria-modal="true" aria-labelledby="duck-media-title"
+         class="w-full max-w-[960px] max-h-[calc(100vh-2rem)]
+                bg-white dark:bg-slate-900
+                border border-slate-200 dark:border-slate-700
+                rounded-2xl shadow-card-lg flex flex-col
+                opacity-0 -translate-y-3 scale-[0.98]
+                transition duration-200">
+      <div class="px-6 py-5 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3">
+        <h2 id="duck-media-title" class="m-0 text-base font-semibold tracking-tight truncate"
+            data-role="duck-media-title">—</h2>
+        <button data-action="close-duck-media-modal" aria-label="Close"
+                class="px-2 py-1 text-sm rounded-md hover:bg-slate-100
+                       dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400">×</button>
+      </div>
+      <div class="px-6 py-4 overflow-y-auto flex-1 min-h-0 flex flex-col gap-4" data-role="duck-media-body"></div>
+      <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
+        <button data-action="close-duck-media-modal" class="btn-base btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Cache-busted via ?v=... so each edit to components.js is treated
        as a new URL by the browser, which prevents iframes inside the
        GoldenLayout shell from silently serving a stale cached copy
@@ -641,6 +668,11 @@
       };
       const locationFor = (r) => (isDuckRow(r)
         ? (r.duck_checkpoint || r.checkpoint || r.onnx_location || '') : (r.location || ''));
+      // progress_video is true (requested) until the worker swaps in the path.
+      const duckProgressVideo = (r) => (typeof r.progress_video === 'string' ? r.progress_video : '');
+      const duckClips = (r) => (Array.isArray(r.videos) ? r.videos.filter((v) => v && v.path) : []);
+      const hasDuckMedia = (r) => isDuckRow(r) && (!!duckProgressVideo(r) || duckClips(r).length > 0);
+      const duckMediaUrl = (p) => '/duck_media?path=' + encodeURIComponent(p);
       const courseFor = (r) => (isDuckRow(r)
         ? String(r.task_id || r.gym_id || '').replace(/^microduck:/, '')
         : ((r.course_type && r.course_type !== 'trainer default') ? r.course_type : 'donut'));
@@ -731,6 +763,20 @@
           { key: 'percent_complete', label: 'Progress', sortable: true,  filter: false,
             sortValue: (row) => Number(row.percent_complete) || 0,
             render: (v) => formatters.percentBar((Number(v) || 0) / 100) },
+          { key: 'progress_video',   label: 'Video',    sortable: true,  filter: false,
+            sortValue: (r) => (hasDuckMedia(r) ? 1 : 0),
+            render: (_v, row) => {
+              if (!hasDuckMedia(row)) {
+                return isDuckRow(row) && row.progress_video === true && row.status !== 'DONE'
+                  ? mutedCell('after training', 'A progression video is rendered when training finishes.')
+                  : mutedCell('—');
+              }
+              const clips = duckClips(row).length;
+              const label = duckProgressVideo(row) ? '▶ View' : `▶ ${clips} clip${clips === 1 ? '' : 's'}`;
+              return `<button type="button" data-action="view-duck-media" data-job-id="${esc(String(row._id))}" `
+                + 'class="px-2 py-0.5 rounded-md text-xs font-medium border border-emerald-500/40 '
+                + 'text-emerald-300 hover:bg-emerald-500/15">' + label + '</button>';
+            } },
           // Total training iterations the job was configured for. Stamped
           // by the dashboard form at submit time; the trainer reads this
           // to bound its run loop (see rl_agent/robotaxi.py do_job + main).
@@ -1800,10 +1846,59 @@
         b.addEventListener('click', () => _closeModal(rdModal, rdDialogEl)));
       edModal.querySelectorAll('[data-action="close-ed-config-modal"]').forEach((b) =>
         b.addEventListener('click', () => _closeModal(edModal, edDialogEl)));
+      const dmModal    = document.querySelector('[data-role="duck-media-modal"]');
+      const dmDialogEl = dmModal.querySelector('[role="dialog"]');
+      const dmBodyEl   = dmModal.querySelector('[data-role="duck-media-body"]');
+      function closeDuckMedia() {
+        // Detach the media so videos stop playing and the GIF stops decoding.
+        dmBodyEl.innerHTML = '';
+        _closeModal(dmModal, dmDialogEl);
+      }
+      function openDuckMedia(jobId) {
+        const row = (table._rows || []).find((r) => String(r._id) === jobId);
+        if (!row) return;
+        dmModal.querySelector('[data-role="duck-media-title"]').textContent =
+          (row.name || courseFor(row) || 'MicroDuck job') + ' · videos';
+        const parts = [];
+        const progress = duckProgressVideo(row);
+        if (progress) {
+          const gif = typeof row.progress_gif === 'string' ? row.progress_gif : '';
+          parts.push('<section class="flex flex-col gap-2">'
+            + '<h3 class="m-0 text-sm font-semibold">Progression</h3>'
+            + '<p class="m-0 text-xs text-slate-500 dark:text-slate-400">Evenly spaced checkpoints from this '
+            + 'training run, rendered when it finished.</p>'
+            + `<video controls autoplay muted loop playsinline class="w-full max-h-[60vh] object-contain rounded-lg bg-black" src="${esc(duckMediaUrl(progress))}"></video>`
+            + '<div class="flex gap-3 text-xs">'
+            + `<a class="underline" href="${esc(duckMediaUrl(progress))}" target="_blank" rel="noopener">Open MP4</a>`
+            + (gif ? `<a class="underline" href="${esc(duckMediaUrl(gif))}" target="_blank" rel="noopener">Open GIF</a>` : '')
+            + `<span class="font-mono text-slate-500 dark:text-slate-400 truncate" title="${esc(progress)}">${esc(progress)}</span>`
+            + '</div></section>');
+        }
+        const clips = duckClips(row).slice().sort((a, b) => (a.iteration || 0) - (b.iteration || 0));
+        if (clips.length) {
+          parts.push('<section class="flex flex-col gap-2">'
+            + `<h3 class="m-0 text-sm font-semibold">Training clips (${clips.length})</h3>`
+            + '<div class="grid grid-cols-2 md:grid-cols-3 gap-3">'
+            + clips.map((c) => '<figure class="m-0 flex flex-col gap-1">'
+              + `<video controls muted playsinline preload="metadata" class="w-full rounded-md bg-black" src="${esc(duckMediaUrl(c.path))}"></video>`
+              + `<figcaption class="text-[11px] text-slate-500 dark:text-slate-400">iteration ${esc(c.iteration ?? '?')}</figcaption>`
+              + '</figure>').join('')
+            + '</div></section>');
+        }
+        dmBodyEl.innerHTML = parts.join('');
+        _openModal(dmModal, dmDialogEl);
+      }
+      dmModal.addEventListener('click', (ev) => {
+        if (ev.target === dmModal) closeDuckMedia();
+      });
+      dmModal.querySelectorAll('[data-action="close-duck-media-modal"]').forEach((b) =>
+        b.addEventListener('click', closeDuckMedia));
+
       document.addEventListener('keydown', (ev) => {
         if (ev.key !== 'Escape') return;
         if (rdModal.classList.contains('opacity-100')) _closeModal(rdModal, rdDialogEl);
         if (edModal.classList.contains('opacity-100')) _closeModal(edModal, edDialogEl);
+        if (dmModal.classList.contains('opacity-100')) closeDuckMedia();
       });
 
       // Delegated click handler for the row-cell design buttons.
@@ -1824,6 +1919,13 @@
           ev.preventDefault();
           const id = edBtn.dataset.experimentDesignId;
           if (id) openExperimentDesignModal(id);
+          return;
+        }
+        const dmBtn = ev.target.closest('[data-action="view-duck-media"]');
+        if (dmBtn) {
+          ev.stopPropagation();
+          ev.preventDefault();
+          openDuckMedia(dmBtn.dataset.jobId);
           return;
         }
       }, true);

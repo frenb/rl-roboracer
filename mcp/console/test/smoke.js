@@ -121,6 +121,15 @@ if (duckModel) {
     { check: (d) => assert(d.job.checkpoint === duckModel.location, 'duck EXPORT doc') });
 }
 await call('tail_trainer_log', { robot: 'microduck', lines: 5 });
+const withMedia = await call('list_jobs', { robot: 'microduck', limit: 500 });
+const mediaJob = (withMedia.jobs || []).find((j) => j.media && j.media.progress_video);
+if (mediaJob) {
+  const full = await call('get_job', { id: mediaJob._id }, { check: (d) => assert(d.media && d.media.progress_video.url, 'media urls') });
+  const res = await fetch(full.media.progress_video.url, { headers: { Range: 'bytes=0-99' } });
+  results.push({ ok: res.status === 206, name: 'GET /duck_media', why: `HTTP ${res.status}` });
+  const bad = await fetch(full.media.progress_video.url.replace(/path=[^&]+/, 'path=' + encodeURIComponent('/microduck_rl/logs/../../etc/passwd')));
+  results.push({ ok: bad.status === 400, name: 'GET /duck_media outside root', why: `HTTP ${bad.status}` });
+}
 
 // ---- job builder rules (dry runs) ----
 const demoHungry = eds.find((d) => d._id !== 'experiment-default' && (d.fields.bc_pretrain_steps > 0 || d.fields.awac_lambda > 0 || d.fields.demo_prefill_count > 0));
