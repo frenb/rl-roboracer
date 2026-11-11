@@ -78,6 +78,15 @@ export function defined(obj) {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined));
 }
 
+export const ROBOTS = ['roboracer', 'microduck'];
+
+export const robotArg = z.enum(ROBOTS);
+
+/** Car rows predate the robot field, so a missing one means roboracer. */
+export const robotOf = (row) => (row && row.robot) || 'roboracer';
+
+export const isDuck = (row) => robotOf(row) === 'microduck';
+
 export function truncate(s, n) {
   const str = String(s ?? '');
   return str.length > n ? str.slice(0, n) + `… [${str.length - n} more chars]` : str;

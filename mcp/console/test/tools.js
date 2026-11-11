@@ -17,7 +17,7 @@ await client.close();
 
 const names = new Set(tools.map((t) => t.name));
 const required = ['list_jobs', 'create_job', 'get_weakness_map', 'get_difficult_sections',
-  'suggest_start_gates', 'list_models', 'lint_reward_design', 'list_proposals'];
+  'suggest_start_gates', 'list_models', 'lint_reward_design', 'list_proposals', 'get_unity_clients', 'set_unity_clients', 'get_gym', 'get_reward_term_catalog'];
 const missing = required.filter((n) => !names.has(n));
 const undocumented = tools.filter((t) => !t.description).map((t) => t.name);
 

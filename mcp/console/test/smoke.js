@@ -69,7 +69,7 @@ if (withPaths) {
 }
 await call('get_queue_state', {}, { check: (d) => assert(typeof d.paused === 'boolean', 'paused flag') });
 await call('tail_trainer_log', { lines: 5, wait_ms: 1500 });
-const models = await call('list_models', { limit: 5 }, { check: (d) => assert(Array.isArray(d.models), 'models') });
+const models = await call('list_models', { robot: 'roboracer', limit: 5 }, { check: (d) => assert(Array.isArray(d.models), 'models') });
 const anyModel = models.models?.[0];
 if (anyModel) {
   await call('get_model', { id: anyModel._id });
@@ -93,6 +93,34 @@ await call('list_proposals', { limit: 3 });
 await call('get_madscientist_activity', { limit: 3 });
 await call('list_releases', { limit: 3 }, { check: (d) => assert(d.some((r) => r.tagName === 'v0.1'), 'v0.1 release') });
 await call('list_gym_builds', {}, { check: (d) => assert(d.length > 0, 'builds') });
+await call('get_unity_clients', {}, { check: (d) => assert(Array.isArray(d.unity_clients), 'unity_clients') });
+
+// ---- microduck (reads and dry runs) ----
+const duckTask = 'Mjlab-Velocity-Flat-MicroDuck';
+await call('list_jobs', { robot: 'microduck', limit: 3 }, { check: (d) => assert(d.jobs.every((j) => j.robot === 'microduck'), 'duck jobs only') });
+await call('list_gyms', { robot: 'microduck' }, { check: (d) => assert(d.length > 0 && d.every((g) => !g.reward_defaults), 'slim duck gyms') });
+await call('get_gym', { id: duckTask }, { check: (d) => assert(Array.isArray(d.reward_defaults), 'reward_defaults') });
+await call('get_reward_term_catalog', { brief: true }, { check: (d) => assert(d.count > 0, 'library functions') });
+await call('get_experiment_design_schema', { robot: 'microduck', brief: true }, { check: (d) => assert(d.fields.length > 0, 'duck schema') });
+await call('list_reward_designs', { robot: 'microduck' }, { check: (d) => assert(d.every((r) => r.robot === 'microduck'), 'duck designs only') });
+await call('lint_reward_design', { robot: 'microduck', task: duckTask, code: 'TERMS = {"no_such_term": {"weight": 1.0}}\n' },
+  { check: (d) => assert(d.ok === false, 'unknown duck term should fail') });
+const duckModels = await call('list_models', { robot: 'microduck', limit: 5 }, { check: (d) => assert(d.models.every((m) => m.robot === 'microduck'), 'duck models only') });
+await call('get_leaderboard', { robot: 'microduck' });
+await call('create_job', { robot: 'microduck', job_type: 'TRAIN', gym: duckTask, max_iterations: 10, dry_run: true },
+  { check: (d) => assert(d.job.robot === 'microduck' && d.job.task_id === duckTask && d.job.max_iterations === 10, 'duck TRAIN doc') });
+await call('create_job', { job_type: 'TRAIN', gym: duckTask, course_type: 'donut', dry_run: true },
+  { check: (d) => assert(d.job.robot === 'microduck' && d.notes.some((n) => n.startsWith('course_type')), 'duck gym implies robot; car arg noted') });
+await call('create_job', { robot: 'microduck', job_type: 'DEMO', dry_run: true }, { expectError: true });
+await call('create_job', { robot: 'microduck', job_type: 'TRAIN', gym: duckTask, reward_design: 'passthrough-course-default', dry_run: true }, { expectError: true });
+const duckModel = duckModels && duckModels.models && duckModels.models[0];
+if (duckModel) {
+  await call('eval_models', { models: [duckModel._id], eval_steps: 100, dry_run: true },
+    { check: (d) => assert(d.jobs[0].payload.job_type === 'EVAL' && d.jobs[0].payload.checkpoint === duckModel.location, 'duck EVAL doc') });
+  await call('create_job', { robot: 'microduck', job_type: 'EXPORT', model: duckModel._id, dry_run: true },
+    { check: (d) => assert(d.job.checkpoint === duckModel.location, 'duck EXPORT doc') });
+}
+await call('tail_trainer_log', { robot: 'microduck', lines: 5 });
 
 // ---- job builder rules (dry runs) ----
 const demoHungry = eds.find((d) => d._id !== 'experiment-default' && (d.fields.bc_pretrain_steps > 0 || d.fields.awac_lambda > 0 || d.fields.demo_prefill_count > 0));
@@ -119,7 +147,7 @@ await call('lint_reward_design', { code: 'import os\ndef reward_standard(c):\n  
 const rd = await call('create_reward_design', { name: 'mcp-smoke-reward', code, author: 'mcp-smoke' });
 if (rd.created) {
   await call('update_reward_design', { id: rd.created, description: 'updated by smoke test' });
-  await call('get_reward_design', { id: 'mcp-smoke-reward' }, { check: (d) => assert(d.version === 2, 'version bumped') });
+  await call('get_reward_design', { id: rd.created }, { check: (d) => assert(d.version === 2, 'version bumped') });
   await call('set_reward_design_archived', { id: rd.created, archived: true });
 }
 await call('create_experiment_design', { name: 'mcp-smoke-bad', fields: { not_a_field: 1 } }, { expectError: true });

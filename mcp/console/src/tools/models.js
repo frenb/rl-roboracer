@@ -1,13 +1,31 @@
 import { z } from 'zod';
 import { get, list, post, BASE_URL } from '../api.js';
-import { defineTool, confirmArg, requireConfirm, resolveRow, compact } from '../util.js';
-import { buildJob, insertJob, pickLists, MODEL_TYPES, COURSES, SCRATCH_BUILT_POLICIES, FLY_POLICY_COURSE } from '../jobPayload.js';
+import { defineTool, confirmArg, requireConfirm, resolveRow, compact, robotArg, robotOf, isDuck } from '../util.js';
+import { buildJob, buildDuckJob, insertJob, pickLists, MODEL_TYPES, COURSES, SCRATCH_BUILT_POLICIES, FLY_POLICY_COURSE } from '../jobPayload.js';
 import { summary, compareSamples, round } from '../stats.js';
 
 const MODEL_ROW_KEYS = [
   'create_date', 'location', 'model_type', 'course_type', 'training_iterations', 'avg_return',
   'reward_design_name', 'experiment_design_name', 'job_id', 'is_global_best', 'notes',
 ];
+// rl_agent/duck/worker.py upsert_model: one model per TRAIN job, at its latest checkpoint.
+const DUCK_MODEL_KEYS = [
+  'create_date', 'updated_at', 'location', 'onnx_location', 'model_type', 'task_id', 'training_iterations',
+  'avg_return', 'reward_design_name', 'experiment_design_name', 'job_id', 'obs_dim', 'act_dim',
+];
+// A duck EVAL writes one aggregate (rl_agent/duck evaluate script) rather than per-trial arrays.
+const DUCK_METRICS = {
+  mean_return: { better: 'higher' },
+  fall_rate: { better: 'lower' },
+  mean_episode_length: { better: 'higher' },
+  mean_reward_per_step: { better: 'higher' },
+};
+
+function duckEval(m) {
+  const r = m.eval_results;
+  if (!r) return { runs: 0 };
+  return round({ runs: 1, ...compact(r, ['episodes', 'falls', 'fall_rate', 'mean_return', 'mean_episode_length', 'mean_reward_per_step', 'num_envs', 'steps']) });
+}
 
 // Per-trial arrays on a leaderboard_scores row, by metric name.
 const METRICS = {
@@ -36,10 +54,14 @@ function evalSummary(runs) {
 }
 
 function modelRow(m, scores) {
-  const row = { _id: String(m._id), ...compact(m, MODEL_ROW_KEYS) };
+  if (isDuck(m)) return { _id: String(m._id), robot: 'microduck', ...compact(m, DUCK_MODEL_KEYS), eval: duckEval(m) };
+  const row = { _id: String(m._id), robot: 'roboracer', ...compact(m, MODEL_ROW_KEYS) };
   if (scores) row.eval = evalSummary(runsFor(m, scores));
   return row;
 }
+
+/** Sort key for "best first": car mean eval score, duck mean eval return. */
+const bestKey = (row) => (row.robot === 'microduck' ? row.eval.mean_return : row.eval.mean_score) ?? -Infinity;
 
 async function modelsAndScores() {
   const [models, scores] = await Promise.all([list('/get_models'), list('/leaderboard_scores')]);
@@ -49,36 +71,49 @@ async function modelsAndScores() {
 export function register(server) {
   defineTool(server, 'list_models', {
     title: 'List models',
-    description: 'Models tab: saved models, newest first (or best eval score first), each with a summary of its leaderboard evals.',
+    description: 'Models tab: saved models, newest first (or best eval first), each with a summary of its evals. roboracer '
+      + 'models carry leaderboard eval trials; microduck models (one per TRAIN job, at its latest checkpoint) carry the '
+      + 'result of their latest EVAL job (fall rate, mean return).',
     readOnly: true,
     input: {
-      course_type: z.string().optional(),
+      robot: robotArg.optional().describe('Only this robot\'s models.'),
+      course_type: z.string().optional().describe('roboracer course.'),
+      task_id: z.string().optional().describe('microduck mjlab task id (substring match).'),
       model_type: z.string().optional(),
       job_id: z.string().optional().describe('Models written by this training job.'),
-      sort: z.enum(['newest', 'best_score']).optional().describe('Default newest.'),
+      sort: z.enum(['newest', 'best_score']).optional().describe('Default newest. best_score: car mean eval score, duck mean eval return.'),
       limit: z.number().int().min(1).max(500).optional().describe('Default 50.'),
     },
-  }, async ({ course_type, model_type, job_id, sort = 'newest', limit = 50 }) => {
+  }, async ({ robot, course_type, task_id, model_type, job_id, sort = 'newest', limit = 50 }) => {
     const { models, scores } = await modelsAndScores();
     let rows = models
-      .filter((m) => !course_type || m.course_type === course_type)
+      .filter((m) => !robot || robotOf(m) === robot)
+      .filter((m) => !course_type || (!isDuck(m) && m.course_type === course_type))
+      .filter((m) => !task_id || String(m.task_id || '').toLowerCase().includes(task_id.toLowerCase()))
       .filter((m) => !model_type || m.model_type === model_type)
       .filter((m) => !job_id || String(m.job_id || '').endsWith(job_id))
       .map((m) => modelRow(m, scores));
+    const newest = (r) => String(r.updated_at || r.create_date || '');
     rows = sort === 'best_score'
-      ? rows.sort((a, b) => (b.eval.mean_score ?? -Infinity) - (a.eval.mean_score ?? -Infinity))
-      : rows.sort((a, b) => String(b.create_date || '').localeCompare(String(a.create_date || '')));
+      ? rows.sort((a, b) => bestKey(b) - bestKey(a))
+      : rows.sort((a, b) => newest(b).localeCompare(newest(a)));
     return { total_models: models.length, matched: rows.length, models: rows.slice(0, limit) };
   });
 
   defineTool(server, 'get_model', {
     title: 'Get model',
-    description: 'Full model document plus every leaderboard eval run recorded for it.',
+    description: 'Full model document plus every eval recorded for it: leaderboard runs for roboracer, EVAL jobs for microduck.',
     readOnly: true,
     input: { id: z.string() },
   }, async ({ id }) => {
     const { models, scores } = await modelsAndScores();
     const model = resolveRow(models, id, 'model');
+    if (isDuck(model)) {
+      const evals = (await list('/get_jobs'))
+        .filter((j) => isDuck(j) && j.job_type === 'EVAL' && j.checkpoint === model.location)
+        .map((j) => ({ job: String(j._id), status: j.status, ended_at: j.ended_at || null, eval_results: j.eval_results || null }));
+      return { model, eval_summary: duckEval(model), eval_jobs: evals };
+    }
     const runs = runsFor(model, scores);
     return { model, eval_summary: evalSummary(runs), eval_runs: runs };
   });
@@ -96,21 +131,24 @@ export function register(server) {
   defineTool(server, 'delete_model', {
     title: 'Delete model',
     description: 'Models tab "Delete": removes the saved-model files under /saved_models, its leaderboard scores, and the model '
-      + 'document. Requires confirm: true.',
+      + 'document. A microduck model\'s checkpoints live in duck-trainer and are kept; only the document goes. Requires confirm: true.',
     destructive: true,
     input: { id: z.string(), confirm: confirmArg },
   }, async ({ id, confirm }) => {
     const model = resolveRow(await list('/get_models'), id, 'model');
     requireConfirm(confirm, `Deleting model ${model._id} (${model.location || 'no files'})`);
     const res = await post('/delete_model', { _id: String(model._id), location: model.location || '' });
-    return { deleted: modelRow(model), result: res };
+    const out = { deleted: modelRow(model), result: res };
+    if (isDuck(model)) out.note = `checkpoint files kept in duck-trainer: ${model.location}`;
+    return out;
   });
 
   defineTool(server, 'eval_models', {
     title: 'Evaluate models',
-    description: 'Models tab "Eval selected": queue one EVAL job per model. Course, model type and designs follow each model unless '
-      + `overridden. RandomPyPolicy / FlyPyPolicy are rebuilt from scratch, so their jobs carry no location; FlyPyPolicy only `
-      + `runs on ${FLY_POLICY_COURSE}.`,
+    description: 'Models tab "Eval selected": queue one EVAL job per model, for either robot. roboracer: course, model type and '
+      + `designs follow each model unless overridden; RandomPyPolicy / FlyPyPolicy are rebuilt from scratch, so their jobs carry `
+      + `no location; FlyPyPolicy only runs on ${FLY_POLICY_COURSE}. microduck: runs the model's checkpoint on its task under `
+      + 'training conditions (random commands and pushes) and records falls, return and episode length on the job and model.',
     input: {
       models: z.array(z.string()).min(1).describe('Model ids or id suffixes.'),
       num_trials: z.number().int().min(1).max(100).optional().describe('Trials per model. Default 10 (3 smoke, 10 standard, 30 tight CI, 50 publication).'),
@@ -126,11 +164,27 @@ export function register(server) {
       eval_stage_start: z.number().optional(),
       eval_stage_end: z.number().optional(),
       robot_type: z.string().optional(),
+      eval_num_envs: z.number().int().min(1).optional().describe('microduck: robots in parallel (default 512).'),
+      eval_steps: z.number().int().min(1).optional().describe('microduck: control steps at 50 Hz (default 1000 = 20 s).'),
       dry_run: z.boolean().optional(),
     },
   }, async (args) => {
     const models = await list('/get_models');
-    const targets = args.models.map((ref) => {
+    const lists = pickLists();
+    const jobs = [];
+    const carRefs = [];
+    for (const ref of args.models) {
+      const m = resolveRow(models, ref, 'model');
+      if (!isDuck(m)) { carRefs.push(ref); continue; }
+      const { payload, notes } = await buildDuckJob({
+        job_type: 'EVAL', model: String(m._id), eval_num_envs: args.eval_num_envs, eval_steps: args.eval_steps,
+      }, lists);
+      const carOnly = ['num_trials', 'num_eval_episodes', 'gym', 'course_type', 'model_type', 'reward_design',
+        'experiment_design', 'corner_radius_val', 'curvature_difficulty_val', 'eval_all_stages'].filter((k) => args[k] !== undefined);
+      if (carOnly.length) notes.push(`${carOnly.join(', ')} ignored: roboracer only`);
+      jobs.push({ model: String(m._id), payload, notes });
+    }
+    const targets = carRefs.map((ref) => {
       const m = resolveRow(models, ref, 'model');
       const modelType = args.model_type || m.model_type || 'SacAgent';
       return { m, modelType, courseType: args.course_type || m.course_type || '', fromScratch: SCRATCH_BUILT_POLICIES.has(modelType) };
@@ -140,10 +194,9 @@ export function register(server) {
       throw new Error(`FlyPyPolicy can only be evaluated on ${FLY_POLICY_COURSE}; ${wrong.length} of ${targets.length} `
         + `would run on ${[...new Set(wrong.map((t) => t.courseType || '(unset)'))].join(', ')}. Set course_type.`);
     }
-    const lists = pickLists();
-    const jobs = [];
     for (const t of targets) {
       const { payload, notes } = await buildJob({
+        robot: 'roboracer',
         job_type: 'EVAL',
         status: 'NOT_STARTED',
         location: t.fromScratch ? '' : t.m.location,
@@ -192,12 +245,18 @@ export function register(server) {
   }, async ({ runs }) => {
     const [jobs, models] = await Promise.all([list('/get_jobs'), list('/get_models')]);
     const entries = runs.map(({ id, label }) => {
-      let jobId;
-      try { jobId = String(resolveRow(jobs, id, 'job')._id); } catch {
+      let job = null;
+      try { job = resolveRow(jobs, id, 'job'); } catch {
         const m = resolveRow(models, id, 'job or model');
         if (!m.job_id) throw new Error(`model ${m._id} has no job_id`);
-        jobId = String(m.job_id);
+        job = jobs.find((j) => String(j._id) === String(m.job_id)) || { _id: m.job_id, robot: m.robot };
       }
+      if (isDuck(job)) {
+        throw new Error(`job ${job._id} is a microduck run: its TensorBoard events are in duck-trainer under `
+          + `${(job.duck_run_dirs || []).join(', ') || '/microduck_rl/logs/rsl_rl'}, which the car TensorBoard does not read. `
+          + 'Use compare_models or list_jobs (mean_reward) for duck runs.');
+      }
+      const jobId = String(job._id);
       return label ? { jobId, label } : { jobId };
     });
     const res = await post('/set_tb_compare_jobs', { jobs: entries });
@@ -207,16 +266,36 @@ export function register(server) {
 
   defineTool(server, 'get_leaderboard', {
     title: 'Leaderboard',
-    description: 'Leaderboard tab: models ranked by mean eval score pooled over all their eval trials.',
+    description: 'Leaderboard tab: roboracer models ranked by mean eval score pooled over all their eval trials. With robot: '
+      + 'microduck, duck models that have an EVAL result ranked by metric (default mean_return), optionally per task.',
     readOnly: true,
     input: {
-      course_type: z.string().optional(),
-      min_trials: z.number().int().min(1).optional().describe('Only models with at least this many eval trials. Default 1.'),
+      robot: robotArg.optional().describe('Default roboracer.'),
+      course_type: z.string().optional().describe('roboracer course.'),
+      task_id: z.string().optional().describe('microduck mjlab task id (substring match).'),
+      metric: z.enum(Object.keys(DUCK_METRICS)).optional().describe('microduck ranking metric. Default mean_return.'),
+      min_trials: z.number().int().min(1).optional().describe('roboracer: only models with at least this many eval trials. Default 1.'),
       limit: z.number().int().min(1).max(200).optional().describe('Default 20.'),
     },
-  }, async ({ course_type, min_trials = 1, limit = 20 }) => {
+  }, async ({ robot = 'roboracer', course_type, task_id, metric = 'mean_return', min_trials = 1, limit = 20 }) => {
     const { models, scores } = await modelsAndScores();
+    if (robot === 'microduck') {
+      const sign = DUCK_METRICS[metric].better === 'higher' ? -1 : 1;
+      const ranked = models
+        .filter((m) => isDuck(m) && m.eval_results && Number.isFinite(Number(m.eval_results[metric])))
+        .filter((m) => !task_id || String(m.task_id || '').toLowerCase().includes(task_id.toLowerCase()))
+        .sort((a, b) => sign * (Number(a.eval_results[metric]) - Number(b.eval_results[metric])))
+        .slice(0, limit)
+        .map((m, i) => round({
+          rank: i + 1,
+          model: String(m._id),
+          ...compact(m, ['task_id', 'training_iterations', 'reward_design_name', 'experiment_design_name', 'job_id']),
+          eval: duckEval(m),
+        }));
+      return { robot, metric, better: DUCK_METRICS[metric].better, leaderboard: ranked };
+    }
     const ranked = models
+      .filter((m) => !isDuck(m))
       .filter((m) => !course_type || m.course_type === course_type)
       .map((m) => ({ m, runs: runsFor(m, scores) }))
       .map(({ m, runs }) => ({ m, runs, s: summary(pooled(runs, 'score')), goals: summary(pooled(runs, 'goals_per_episode')) }))
@@ -241,14 +320,41 @@ export function register(server) {
   defineTool(server, 'compare_models', {
     title: 'Compare models (Analysis)',
     description: 'Analysis tab: per-model statistics over pooled eval trials, and each model against the first one (baseline) '
-      + 'with Welch\'s t-test and Hedges\' g.',
+      + 'with Welch\'s t-test and Hedges\' g. microduck models (all the same robot) are compared on their EVAL aggregates '
+      + 'with differences from the baseline; a duck EVAL keeps no per-trial samples, so there is no significance test.',
     readOnly: true,
     input: {
       models: z.array(z.string()).min(1).describe('Model ids; the first is the baseline.'),
-      metric: z.enum(Object.keys(METRICS)).optional().describe('Default score.'),
+      metric: z.enum([...Object.keys(METRICS), ...Object.keys(DUCK_METRICS)]).optional()
+        .describe(`roboracer: ${Object.keys(METRICS).join(', ')} (default score). microduck: ${Object.keys(DUCK_METRICS).join(', ')} (default mean_return).`),
     },
-  }, async ({ models: refs, metric = 'score' }) => {
+  }, async ({ models: refs, metric }) => {
     const { models, scores } = await modelsAndScores();
+    const picked = refs.map((ref) => resolveRow(models, ref, 'model'));
+    const ducks = picked.filter(isDuck).length;
+    if (ducks && ducks !== picked.length) throw new Error('compare models of one robot at a time');
+    if (ducks) {
+      const key = metric || 'mean_return';
+      if (!DUCK_METRICS[key]) throw new Error(`microduck metrics: ${Object.keys(DUCK_METRICS).join(', ')}`);
+      const value = (m) => (m.eval_results && Number.isFinite(Number(m.eval_results[key])) ? Number(m.eval_results[key]) : null);
+      const base = value(picked[0]);
+      return round({
+        robot: 'microduck',
+        metric: key,
+        better: DUCK_METRICS[key].better,
+        baseline: String(picked[0]._id),
+        models: picked.map((m, i) => ({
+          model: String(m._id),
+          ...compact(m, ['task_id', 'training_iterations', 'reward_design_name', 'experiment_design_name']),
+          eval: duckEval(m),
+          vs_baseline: i === 0 || base === null || value(m) === null ? null
+            : { diff: value(m) - base, ratio: base ? value(m) / base : null },
+        })),
+        note: picked.some((m) => !m.eval_results) ? 'Models without eval results need an EVAL job first (eval_models).' : undefined,
+      });
+    }
+    metric = metric || 'score';
+    if (!METRICS[metric]) throw new Error(`roboracer metrics: ${Object.keys(METRICS).join(', ')}`);
     const bundles = refs.map((ref) => {
       const m = resolveRow(models, ref, 'model');
       const runs = runsFor(m, scores);

@@ -139,8 +139,9 @@ if ($unities.Count -eq 0) {
 
 # Duck live view: its app window and supervisor run on the host, so they
 # would outlive the containers (and the supervisor would keep relaunching).
+# With -KeepDocker the duck trainer keeps running, so its view stays open.
 $watchDuck = Join-Path $PSScriptRoot 'Watch-Duck.ps1'
-if (Test-Path -LiteralPath $watchDuck) {
+if (-not $KeepDocker -and (Test-Path -LiteralPath $watchDuck)) {
     try { & $watchDuck -Stop } catch { Write-Warning "Duck live view stop failed: $_" }
 }
 

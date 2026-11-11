@@ -335,8 +335,11 @@ export const createServer = (config): express.Application => {
     // Runs once per server start; the {$exists:false} filter makes it a
     // no-op on subsequent boots (and never touches docs that already carry
     // an explicit course_type from the form).
+    // Other robots' jobs (robot set, e.g. microduck) have no course; earlier
+    // versions of this backfill stamped 'donut' on them too, so undo that.
+    const carJob = { $or: [{ robot: { $exists: false } }, { robot: 'roboracer' }] };
     dbo.collection("jobs").updateMany(
-      { course_type: { $exists: false } },
+      { course_type: { $exists: false }, ...carJob },
       { $set: { course_type: "donut" } }
     ).then((r) => {
       if (r && r.modifiedCount) {
@@ -345,6 +348,28 @@ export const createServer = (config): express.Application => {
     }).catch((e) => {
       console.warn("course_type backfill failed:", e && e.message ? e.message : e);
     });
+    dbo.collection("jobs").updateMany(
+      { robot: { $exists: true, $nin: ['roboracer'] }, course_type: { $exists: true } },
+      { $unset: { course_type: "" } }
+    ).then((r) => {
+      if (r && r.modifiedCount) console.log(`course_type: removed from ${r.modifiedCount} non-car job(s)`);
+    }).catch((e) => {
+      console.warn("course_type cleanup failed:", e && e.message ? e.message : e);
+    });
+    // Non-car jobs queued before /add_job stamped gym_name (see stampRobotFromGym).
+    (async () => {
+      const jobs = await dbo.collection("jobs").find(
+        { robot: { $exists: true, $nin: ['roboracer'] }, gym_name: { $exists: false }, task_id: { $exists: true } },
+        { projection: { robot: 1, task_id: 1 } }).toArray();
+      let named = 0;
+      for (const j of jobs) {
+        const gym = await dbo.collection("gyms").findOne({ _id: `${j.robot}:${j.task_id}` }, { projection: { name: 1 } });
+        if (!gym || !gym.name) continue;
+        await dbo.collection("jobs").updateOne({ _id: j._id }, { $set: { gym_name: gym.name } });
+        named++;
+      }
+      if (named) console.log(`gym_name backfill: named the gym on ${named} non-car job(s)`);
+    })().catch((e) => console.warn("gym_name backfill failed:", e && e.message ? e.message : e));
 
     // Index for the Weakness Map (/weakness_map). The logs collection is
     // dominated by per-step "did not fail" rows (no position_history), so
@@ -448,12 +473,17 @@ export const createServer = (config): express.Application => {
   // task_id so the car trainer, which takes every job without a robot,
   // never picks them up.
   async function stampRobotFromGym(job: any) {
-    if (!job || !job.gym_id) return;
+    if (!job) return;
+    // Duck EVAL / EXPORT / VIDEO jobs name a task rather than a gym.
+    const gymId = job.gym_id
+      || (job.robot && job.robot !== 'roboracer' && job.task_id ? `${job.robot}:${job.task_id}` : null);
+    if (!gymId) return;
     const gym = await dbo.collection("gyms").findOne(
-      { _id: String(job.gym_id) }, { projection: { robot: 1, task_id: 1 } });
+      { _id: String(gymId) }, { projection: { robot: 1, task_id: 1, name: 1 } });
     if (!gym || !gym.robot || gym.robot === 'roboracer') return;
     job.robot = gym.robot;
     if (!job.task_id && gym.task_id) job.task_id = gym.task_id;
+    if (!job.gym_name && gym.name) job.gym_name = gym.name;
   }
 
   app.post('/add_job', async (req,res) => {

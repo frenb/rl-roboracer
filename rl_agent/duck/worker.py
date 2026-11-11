@@ -394,8 +394,11 @@ def run_train(job, resume, log):
     prior_videos = list(job.get("videos") or []) if resume else []
     if not resume:
         run_dirs = []
+        # progress_video is the request flag until render_progress replaces it
+        # with the video's path, so a restarted job keeps asking for one.
         update_job(job_id, duck_run_dirs=[], duck_checkpoint=None, duck_iteration=0,
-                   paused_at_step=None, videos=[], progress_video=None, progress_gif=None)
+                   paused_at_step=None, videos=[], progress_video=bool(job.get("progress_video")),
+                   progress_gif=None)
     experiment = job_experiment_design(job, resume)
     experiment_file = None
     if experiment:

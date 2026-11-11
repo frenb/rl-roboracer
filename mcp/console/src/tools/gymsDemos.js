@@ -1,21 +1,45 @@
 import { z } from 'zod';
 import { list, post } from '../api.js';
-import { defineTool, resolveRow, defined, objectIdTime } from '../util.js';
-import { demoLabel } from '../jobPayload.js';
+import { defineTool, resolveRow, defined, objectIdTime, robotArg, robotOf, isDuck } from '../util.js';
+import { demoLabel, resolveGym } from '../jobPayload.js';
+
+// A duck gym carries its task's full reward-term table; get_gym returns it.
+const DUCK_HEAVY_KEYS = new Set(['reward_terms', 'reward_defaults']);
+
+function gymRow(g) {
+  if (!isDuck(g)) return { ...g, robot: 'roboracer' };
+  const row = Object.fromEntries(Object.entries(g).filter(([k]) => !DUCK_HEAVY_KEYS.has(k)));
+  row.reward_term_count = Array.isArray(g.reward_terms) ? g.reward_terms.length : 0;
+  return row;
+}
 
 export function register(server) {
   // ---- gyms ------------------------------------------------------------
 
   defineTool(server, 'list_gyms', {
     title: 'List gyms',
-    description: 'Gyms tab: registered Unity builds jobs can run in, with their default course and designs.',
+    description: 'Gyms tab: where jobs run. roboracer gyms are Unity builds with a default course and designs; microduck gyms '
+      + 'are the mjlab tasks the duck worker registers (task_id, skill, terrain, rollers, backlash). Duck rows leave out '
+      + 'the reward-term table; get_gym has it.',
     readOnly: true,
-    input: { include_archived: z.boolean().optional() },
-  }, async ({ include_archived }) => (await list('/get_gyms')).filter((g) => include_archived || !g.archived));
+    input: { robot: robotArg.optional().describe('Only this robot\'s gyms.'), include_archived: z.boolean().optional() },
+  }, async ({ robot, include_archived }) => (await list('/get_gyms'))
+    .filter((g) => include_archived || !g.archived)
+    .filter((g) => !robot || robotOf(g) === robot)
+    .map(gymRow));
+
+  defineTool(server, 'get_gym', {
+    title: 'Get gym',
+    description: 'One gym in full. For a microduck task this includes reward_defaults: every default reward term with its '
+      + 'function, weight and parameters, which is what a microduck reward design\'s TERMS edits.',
+    readOnly: true,
+    input: { id: z.string().describe('Gym id, id suffix or name; for the microduck also a bare mjlab task id.') },
+  }, async ({ id }) => resolveGym(await list('/get_gyms'), id));
 
   defineTool(server, 'create_gym', {
     title: 'Register gym',
-    description: 'Gyms tab "New": register a Unity build. file_path is the build\'s .exe on the host running the Unity clients.',
+    description: 'Gyms tab "New": register a roboracer Unity build. file_path is the build\'s .exe on the host running the Unity '
+      + 'clients. microduck gyms are registered automatically by the duck worker from its mjlab tasks.',
     input: { name: z.string(), file_path: z.string(), description: z.string().optional() },
   }, async ({ name, file_path, description }) => {
     const res = await post('/add_gym', defined({ name, file_path, description }));
@@ -24,10 +48,10 @@ export function register(server) {
 
   defineTool(server, 'update_gym', {
     title: 'Update gym',
-    description: 'Gyms tab edit: rename, change the build path, or redescribe.',
+    description: 'Gyms tab edit: rename, change the build path, or redescribe. microduck gyms only take a new description.',
     input: { id: z.string(), name: z.string().optional(), file_path: z.string().optional(), description: z.string().optional() },
   }, async ({ id, name, file_path, description }) => {
-    const row = resolveRow(await list('/get_gyms'), id, 'gym');
+    const row = resolveGym(await list('/get_gyms'), id);
     const res = await post('/update_gym', defined({ _id: String(row._id), name, file_path, description }));
     return { updated: String(row._id), matched: res.matchedCount };
   });
@@ -37,7 +61,7 @@ export function register(server) {
     description: 'Archived gyms are hidden from the job pickers.',
     input: { id: z.string(), archived: z.boolean() },
   }, async ({ id, archived }) => {
-    const row = resolveRow(await list('/get_gyms'), id, 'gym');
+    const row = resolveGym(await list('/get_gyms'), id);
     await post(archived ? '/archive_gym' : '/update_gym', { _id: String(row._id), archived });
     return { id: String(row._id), name: row.name, archived };
   });
@@ -46,7 +70,8 @@ export function register(server) {
 
   defineTool(server, 'list_demos', {
     title: 'List demos',
-    description: 'Demos tab: expert-demonstration TFRecords sets, newest first. Pass one as create_job\'s demo.',
+    description: 'Demos tab: roboracer expert-demonstration TFRecords sets, newest first. Pass one as create_job\'s demo. '
+      + '(The microduck trains with PPO and uses no demos.)',
     readOnly: true,
     input: { course: z.string().optional(), include_archived: z.boolean().optional() },
   }, async ({ course, include_archived }) => (await list('/get_demos'))
