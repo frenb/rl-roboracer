@@ -19,12 +19,10 @@ Job fields read here (all optional except ``job_type``):
     checkpoint       model_<N>.pt to EXPORT or EVAL
     eval_num_envs    robots simulated by EVAL
     eval_steps       control steps simulated by EVAL (50 Hz)
-    video            TRAIN: record a clip of robot 0 every ``video_every`` iterations
-    video_every      iterations between training clips
-    video_seconds    length of each training clip
-    progress_video   TRAIN: render a progression video when training finishes
-    video_checkpoints  VIDEO: how many checkpoints, evenly spaced, to show
-    seconds_per_checkpoint  VIDEO: footage per checkpoint
+    video            TRAIN: a clip of each checkpoint, rendered beside training (default on)
+    progress_video   TRAIN: a progression video stitched from clips when training finishes
+    video_checkpoints  how many checkpoints, evenly spaced, the progression video shows
+    seconds_per_checkpoint  length of each checkpoint's clip
 """
 import re
 from pathlib import Path
@@ -36,22 +34,17 @@ DEFAULTS = {
     "save_interval": 50,
     "eval_num_envs": 512,
     "eval_steps": 1000,
-    "video_every": 50,
-    "video_seconds": 6,
+    "video": True,
     "video_checkpoints": 10,
     "seconds_per_checkpoint": 5,
 }
 # Every microduck task collects 24 environment steps per PPO iteration (unless an
-# experiment design changes it) and runs its policy at 50 Hz; mjlab's video
-# trigger counts environment steps.
+# experiment design changes it).
 STEPS_PER_ITERATION = 24
-CONTROL_HZ = 50
-# The task cameras sit 3 m away at 320x240, leaving the 30 cm duck a few
-# pixels tall. Training clips pause training while they render (~80 ms a
-# frame on the WSL2 GPU path), so they stay smaller than progression videos.
+# The task cameras sit 3 m away at 320x240, leaving the 30 cm duck a few pixels tall.
 CAMERA = {"distance": 1.2, "elevation": -15.0}
-TRAIN_CLIP_SIZE = (480, 360)
-PROGRESS_VIDEO_SIZE = (640, 480)
+CLIP_SIZE = (640, 480)
+CLIP_DIR = "clips"
 CFG_HOOK = Path(__file__).resolve().parent / "cfg_hook.py"
 UNITY_TRAIN_SCRIPT = Path(__file__).resolve().parent / "train_unity.py"
 # Tasks the Unity duck server trains, each the C# port of an mjlab task. Their checkpoints
@@ -59,7 +52,6 @@ UNITY_TRAIN_SCRIPT = Path(__file__).resolve().parent / "train_unity.py"
 UNITY_TASKS = {"Unity-Velocity-Flat-MicroDuck": "Mjlab-Velocity-Flat-MicroDuck"}
 
 _CHECKPOINT_RE = re.compile(r"^model_(\d+)\.pt$")
-_VIDEO_RE = re.compile(r"^rl-video-step-(\d+)\.mp4$")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _ITERATION_RE = re.compile(r"Learning iteration\s+(\d+)\s*/\s*(\d+)")
 _MEAN_REWARD_RE = re.compile(r"Mean (?:total )?reward:\s*(-?[\d.]+(?:e-?\d+)?)")
@@ -214,17 +206,6 @@ def train_command(job, attempt, resume_from=None, reward_design_file=None,
             env["MICRODUCK_WARM_START"] = "1"
     if job.get("seed") is not None:
         argv += ["--agent.seed", str(int(job["seed"]))]
-    # The Unity server has no renderer; its jobs still get a progression video from mjlab.
-    if job.get("video") and not is_unity(job):
-        argv += [
-            "--video", "True",
-            "--video-interval", str(positive_int(job, "video_every") * steps_per_iteration(job)),
-            "--video-length", str(positive_int(job, "video_seconds") * CONTROL_HZ),
-            "--env.viewer.width", str(TRAIN_CLIP_SIZE[0]),
-            "--env.viewer.height", str(TRAIN_CLIP_SIZE[1]),
-            "--env.viewer.distance", str(CAMERA["distance"]),
-            "--env.viewer.elevation", str(CAMERA["elevation"]),
-        ]
     return argv + _extra_args(job), env
 
 
@@ -249,21 +230,29 @@ def pick_evenly(items, count):
     return [items[round(i * step)] for i in range(count)]
 
 
-def training_videos(run_dir, start_iteration, steps_per_iter=STEPS_PER_ITERATION):
-    """``(iteration, Path)`` for clips mjlab recorded in one run directory.
+def clip_path(checkpoint):
+    """Where render_progress.py puts the clip of ``model_<N>.pt``: its run's clips/clip_<N>.mp4."""
+    checkpoint = Path(checkpoint)
+    return checkpoint.parent / CLIP_DIR / f"clip_{checkpoint_iteration(checkpoint)}.mp4"
 
-    Clip names count environment steps from the start of that run, so a
-    resumed run is offset by the iteration it resumed from.
-    """
-    folder = Path(run_dir) / "videos" / "train"
-    if not folder.is_dir():
-        return []
+
+def checkpoint_clips(run_dirs):
+    """``{iteration, path, gif}`` for every finished checkpoint clip across ``run_dirs``."""
     clips = []
-    for f in folder.iterdir():
-        match = _VIDEO_RE.match(f.name)
-        if match:
-            clips.append((start_iteration + int(match.group(1)) // steps_per_iter, f))
-    return sorted(clips)
+    for iteration, checkpoint in checkpoints(run_dirs):
+        mp4 = clip_path(checkpoint)
+        if mp4.exists():
+            clips.append({"iteration": iteration, "path": str(mp4), "gif": str(mp4.with_suffix(".gif"))})
+    return clips
+
+
+def clip_watch_command(job, run_dir, script):
+    """render_progress.py clipping each checkpoint ``run_dir`` gets, beside training."""
+    return [
+        "python", str(script), mjlab_task_id(job),
+        "--seconds", str(positive_int(job, "seconds_per_checkpoint")),
+        "--watch", str(run_dir),
+    ]
 
 
 def export_command(job, checkpoint, onnx_path):
@@ -286,17 +275,22 @@ def eval_command(job, checkpoint, out_json, script):
     ]
 
 
-def progress_video_command(job, checkpoint_paths, out_mp4, script):
-    if not checkpoint_paths:
+def video_command(job, script, clips=(), progression=(), out_mp4=None):
+    """render_progress.py making the missing ``clips``, and the ``progression``
+    checkpoints' clips stitched into ``out_mp4``."""
+    if not clips and not progression:
         raise JobSpecError("no checkpoints to render")
-    for path in checkpoint_paths:
+    if progression and not out_mp4:
+        raise JobSpecError("a progression video needs an output path")
+    for path in [*clips, *progression]:
         checkpoint_iteration(path)
-    return [
-        "python", str(script), mjlab_task_id(job),
-        "--seconds", str(positive_int(job, "seconds_per_checkpoint")),
-        "--out", str(out_mp4),
-        "--checkpoints", *[str(p) for p in checkpoint_paths],
-    ]
+    argv = ["python", str(script), mjlab_task_id(job),
+            "--seconds", str(positive_int(job, "seconds_per_checkpoint"))]
+    if clips:
+        argv += ["--checkpoints", *[str(p) for p in clips]]
+    if progression:
+        argv += ["--out", str(out_mp4), "--progression", *[str(p) for p in progression]]
+    return argv
 
 
 def parse_progress(line):

@@ -47,9 +47,6 @@ POLL_S = 5
 STATUS_POLL_S = 2
 PROGRESS_WRITE_S = 5
 STOP_GRACE_S = 30
-# mjlab writes a clip in one go once it has all its frames; skip files that
-# may still be mid-write.
-VIDEO_SETTLE_S = 5
 # Velocity policies deployed on the real duck: 48 proprioception + 13 command
 # inputs -> 14 servo targets. Other tasks have their own shapes.
 DEPLOY_SHAPE = {"Mjlab-Velocity-": (61, 14)}
@@ -391,9 +388,9 @@ def run_train(job, resume, log):
     job_id = job["_id"]
     run_dirs = list(job.get("duck_run_dirs") or [])
     latest = launch.latest_checkpoint(run_dirs) if resume else None
-    prior_videos = list(job.get("videos") or []) if resume else []
     if not resume:
         run_dirs = []
+        job["videos"] = []
         # progress_video is the request flag until render_progress replaces it
         # with the video's path, so a restarted job keeps asking for one.
         update_job(job_id, duck_run_dirs=[], duck_checkpoint=None, duck_iteration=0,
@@ -437,8 +434,10 @@ def run_train(job, resume, log):
         log.write(f"[duck-worker] resuming from {latest[1]} (iteration {latest[0]})\n")
 
     state = {"run_dir": None, "checkpoint": latest, "last_write": 0.0, "progress": {},
-             "videos": len(prior_videos)}
+             "videos": None, "clipper": None}
     name = launch.run_name(job, attempt)
+    render_env = (launch.design_env(experiment_design_file=experiment_file, train=False)
+                  if experiment_file else {})
 
     def on_line(line):
         state["progress"].update(launch.parse_progress(line))
@@ -452,6 +451,8 @@ def run_train(job, resume, log):
             if state["run_dir"] is not None:
                 run_dirs.append(str(state["run_dir"]))
                 update_job(job_id, duck_run_dirs=run_dirs)
+                if launch.setting(job, "video"):
+                    state["clipper"] = start_clipper(job, state["run_dir"], render_env, log)
         progress = state["progress"]
         fields = {}
         if "iteration" in progress:
@@ -467,21 +468,20 @@ def run_train(job, resume, log):
             state["checkpoint"] = newest
             fields["duck_checkpoint"] = str(newest[1])
             upsert_model(job, newest[1], newest[0], avg_return=progress.get("mean_reward"))
-        if state["run_dir"] is not None:
-            clips = [{"iteration": it, "path": str(p)}
-                     for it, p in launch.training_videos(state["run_dir"], start_iteration,
-                                                         launch.steps_per_iteration(job))
-                     if time.time() - p.stat().st_mtime > VIDEO_SETTLE_S]
-            if len(prior_videos) + len(clips) != state["videos"]:
-                state["videos"] = len(prior_videos) + len(clips)
-                fields["videos"] = prior_videos + clips
+        clips = job_videos(job, run_dirs)
+        if clips != state["videos"]:
+            state["videos"] = fields["videos"] = clips
         if fields:
             update_job(job_id, **fields)
 
     if argv is None:
         log.write("[duck-worker] iteration budget already reached\n")
     else:
-        outcome, rc, tail = run_process(job_id, argv, log, extra_env, on_line, on_tick)
+        try:
+            outcome, rc, tail = run_process(job_id, argv, log, extra_env, on_line, on_tick)
+        finally:
+            if state["clipper"] is not None:
+                stop_process(state["clipper"])
         state["last_write"] = 0.0
         on_tick()
         if outcome == "pause":
@@ -511,37 +511,62 @@ def run_train(job, resume, log):
                      obs_dim=report["obs_dim"], act_dim=report["act_dim"],
                      avg_return=state["progress"].get("mean_reward"))
         update_job(job_id, onnx_location=str(onnx_path))
-    if outcome == "finished" and job.get("progress_video"):
-        render_progress(job, job, run_dirs, log)
+    clips, progress = bool(launch.setting(job, "video")), bool(job.get("progress_video"))
+    if outcome == "finished" and (clips or progress):
+        render_videos(job, job, run_dirs, log, every_checkpoint=clips, progression=progress)
 
 
-def render_progress(job, source, run_dirs, log):
-    """Progression video for ``source``'s checkpoints, recorded on both jobs."""
-    picked = launch.pick_evenly(launch.checkpoints(run_dirs),
-                                launch.positive_int(job, "video_checkpoints"))
-    if not picked:
+def job_videos(job, run_dirs):
+    """The job's checkpoint clips, after any clips mjlab recorded during training
+    (jobs from before checkpoint clips), so neither replaces the other."""
+    legacy = [v for v in job.get("videos") or [] if "gif" not in v]
+    return legacy + launch.checkpoint_clips(run_dirs)
+
+
+def start_clipper(job, run_dir, extra_env, log):
+    """render_progress.py --watch beside training, logging to <run dir>/clips/render.log."""
+    argv = launch.clip_watch_command(job, run_dir, RENDER_PROGRESS_SCRIPT)
+    clip_dir = pathlib.Path(run_dir) / launch.CLIP_DIR
+    clip_dir.mkdir(parents=True, exist_ok=True)
+    log.write(f"[duck-worker] checkpoint clips: $ {' '.join(argv)}\n")
+    with open(clip_dir / "render.log", "a") as out:
+        return subprocess.Popen(argv, cwd=WORKDIR, env={**os.environ, **extra_env},
+                                stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+
+
+def render_videos(job, source, run_dirs, log, every_checkpoint, progression):
+    """Clips missing from ``source``'s checkpoints and, with ``progression``, the
+    progression video stitched from evenly spaced ones, recorded on both jobs."""
+    found = launch.checkpoints(run_dirs)
+    if not found:
         raise RuntimeError(f"job {source['_id']} has no checkpoints to render")
-    last_iteration, last_checkpoint = picked[-1]
-    out_mp4 = last_checkpoint.parent / f"progress_{last_iteration}.mp4"
-    argv = launch.progress_video_command(
-        {**job, "task_id": launch.task_id(source)}, [p for _, p in picked], out_mp4,
-        RENDER_PROGRESS_SCRIPT)
-    outcome, rc, tail = run_process(job["_id"], argv, log,
-                                    checkpoint_design_env(job["_id"], last_checkpoint))
-    if outcome == "pause":
-        update_job(job["_id"], status="PAUSED")
-    if outcome != "finished":
-        return
-    if rc != 0 or not out_mp4.exists():
-        raise RuntimeError(f"progress video exited {rc}:\n{tail}")
-    paths = {"progress_video": str(out_mp4), "progress_gif": str(out_mp4.with_suffix(".gif"))}
-    for target in {job["_id"], source["_id"]}:
-        update_job(target, **paths)
+    picked = launch.pick_evenly(found, launch.positive_int(job, "video_checkpoints")) if progression else []
+    missing = [p for _, p in found if every_checkpoint and not launch.clip_path(p).exists()]
+    last_iteration, last_checkpoint = (picked or found)[-1]
+    out_mp4 = last_checkpoint.parent / f"progress_{last_iteration}.mp4" if progression else None
+    if missing or picked:
+        argv = launch.video_command({**job, "task_id": launch.task_id(source)}, RENDER_PROGRESS_SCRIPT,
+                                    clips=missing, progression=[p for _, p in picked], out_mp4=out_mp4)
+        outcome, rc, tail = run_process(job["_id"], argv, log,
+                                        checkpoint_design_env(job["_id"], last_checkpoint))
+        if outcome == "pause":
+            update_job(job["_id"], status="PAUSED")
+        if outcome != "finished":
+            return
+        if rc != 0 or (out_mp4 and not out_mp4.exists()):
+            raise RuntimeError(f"video render exited {rc}:\n{tail}")
+    fields = {"videos": job_videos(source, run_dirs)}
+    if out_mp4:
+        fields.update(progress_video=str(out_mp4), progress_gif=str(out_mp4.with_suffix(".gif")))
+    update_job(source["_id"], **fields)
+    if out_mp4 and job["_id"] != source["_id"]:
+        update_job(job["_id"], progress_video=fields["progress_video"], progress_gif=fields["progress_gif"])
 
 
 def run_video(job, log):
     source = resolve_source_job(job)
-    render_progress(job, source, source.get("duck_run_dirs") or [], log)
+    render_videos(job, source, source.get("duck_run_dirs") or [], log,
+                  every_checkpoint=False, progression=True)
     update_job(job["_id"], percent_complete=100)
 
 

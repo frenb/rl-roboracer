@@ -177,10 +177,11 @@
           <span data-duck="TRAIN" class="text-xs font-medium text-slate-600 dark:text-slate-300">Videos</span>
           <div data-duck="TRAIN" class="flex flex-col gap-1 text-xs text-slate-600 dark:text-slate-300">
             <label class="flex items-center gap-2 cursor-pointer">
-              <input id="d-video" type="checkbox" class="accent-sky-600"> Record a clip every 50 iterations (slows training)
+              <input id="d-video" type="checkbox" class="accent-sky-600" checked
+                     title="Rendered in mjlab by a separate process as each checkpoint is saved (every save interval), for mjlab and Unity jobs alike; training doesn't wait for it."> Clip of each checkpoint, MP4 and GIF
             </label>
             <label class="flex items-center gap-2 cursor-pointer">
-              <input id="d-progress-video" type="checkbox" class="accent-sky-600" checked> Progression video when training finishes
+              <input id="d-progress-video" type="checkbox" class="accent-sky-600" checked> Progression video (clips stitched) when training finishes
             </label>
           </div>
 

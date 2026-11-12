@@ -30,7 +30,7 @@ function duckMedia(p) {
   };
 }
 
-/** Progression video, its GIF and the training clips of a duck job, or null. */
+/** Progression video, its GIF and the checkpoint clips (each with its GIF) of a duck job, or null. */
 export function duckJobMedia(j) {
   const media = {};
   const video = duckMedia(j.progress_video);
@@ -38,7 +38,12 @@ export function duckJobMedia(j) {
   if (video) media.progress_video = video;
   if (gif) media.progress_gif = gif;
   const clips = (Array.isArray(j.videos) ? j.videos : [])
-    .map((c) => ({ iteration: c && c.iteration, ...duckMedia(c && c.path) }))
+    .map((c) => {
+      const clip = { iteration: c && c.iteration, ...duckMedia(c && c.path) };
+      const clipGif = duckMedia(c && c.gif);
+      if (clipGif) clip.gif = clipGif;
+      return clip;
+    })
     .filter((c) => c.url);
   if (clips.length) media.training_clips = clips;
   return Object.keys(media).length ? media : null;
@@ -104,8 +109,8 @@ const jobInput = {
   max_iterations: z.number().int().optional().describe('microduck TRAIN: PPO iterations. Worker default 1000.'),
   save_interval: z.number().int().optional().describe('microduck TRAIN: iterations between checkpoints (default 50; also the most a pause loses).'),
   seed: z.number().int().optional().describe('microduck TRAIN.'),
-  video: z.boolean().optional().describe('microduck TRAIN: record a clip every 50 iterations (slows training). Default false.'),
-  progress_video: z.boolean().optional().describe('microduck TRAIN: progression video when training finishes. Default true.'),
+  video: z.boolean().optional().describe('microduck TRAIN: an MP4 + GIF clip of each checkpoint, rendered in mjlab beside training (mjlab and Unity tasks alike; training does not wait). Default true.'),
+  progress_video: z.boolean().optional().describe('microduck TRAIN: progression video stitched from evenly spaced checkpoint clips when training finishes. Default true.'),
   eval_num_envs: z.number().int().optional().describe('microduck EVAL: robots in parallel (default 512).'),
   eval_steps: z.number().int().optional().describe('microduck EVAL: control steps at 50 Hz (default 1000 = 20 s).'),
 };

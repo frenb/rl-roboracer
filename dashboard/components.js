@@ -520,8 +520,9 @@
    *
    * A MicroDuck TRAIN (or VIDEO) job stores progress_video / progress_gif
    * (paths under /microduck_rl/logs, served by the dashboard's /duck_media
-   * route) and a videos[] list of periodic training clips. progress_video
-   * is a boolean request flag until the worker replaces it with the path.
+   * route) and a videos[] list of checkpoint clips ({iteration, path, gif};
+   * older jobs' mjlab training clips have no gif). progress_video is a
+   * boolean request flag until the worker replaces it with the path.
    * -------------------------------------------------------------- */
   const duckMedia = {
     url: (p) => '/duck_media?path=' + encodeURIComponent(p),
@@ -540,8 +541,8 @@
         const gif = typeof job.progress_gif === 'string' ? job.progress_gif : '';
         parts.push('<section class="flex flex-col gap-2">'
           + '<h3 class="m-0 text-sm font-semibold">Progression</h3>'
-          + '<p class="m-0 text-xs text-slate-500 dark:text-slate-400">Evenly spaced checkpoints from this '
-          + 'training run, rendered when it finished.</p>'
+          + '<p class="m-0 text-xs text-slate-500 dark:text-slate-400">Clips of evenly spaced checkpoints from this '
+          + 'training run, stitched when it finished.</p>'
           + `<video controls autoplay muted loop playsinline class="w-full max-h-[60vh] object-contain rounded-lg bg-black" src="${esc(duckMedia.url(progress))}"></video>`
           + '<div class="flex gap-3 text-xs">'
           + `<a class="underline whitespace-nowrap shrink-0" href="${esc(duckMedia.url(progress))}" target="_blank" rel="noopener">Open MP4</a>`
@@ -552,11 +553,13 @@
       const clips = duckMedia.clips(job).slice().sort((a, b) => (a.iteration || 0) - (b.iteration || 0));
       if (clips.length) {
         parts.push('<section class="flex flex-col gap-2">'
-          + `<h3 class="m-0 text-sm font-semibold">Training clips (${clips.length})</h3>`
+          + `<h3 class="m-0 text-sm font-semibold">Checkpoint clips (${clips.length})</h3>`
           + '<div class="grid grid-cols-2 md:grid-cols-3 gap-3">'
           + clips.map((c) => '<figure class="m-0 flex flex-col gap-1">'
             + `<video controls muted playsinline preload="metadata" class="w-full rounded-md bg-black" src="${esc(duckMedia.url(c.path))}"></video>`
-            + `<figcaption class="text-[11px] text-slate-500 dark:text-slate-400">iteration ${esc(c.iteration ?? '?')}</figcaption>`
+            + `<figcaption class="text-[11px] text-slate-500 dark:text-slate-400">iteration ${esc(c.iteration ?? '?')}`
+            + (c.gif ? ` · <a class="underline" href="${esc(duckMedia.url(c.gif))}" target="_blank" rel="noopener">GIF</a>` : '')
+            + '</figcaption>'
             + '</figure>').join('')
           + '</div></section>');
       }

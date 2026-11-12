@@ -26,11 +26,10 @@ def test_fresh_train_uses_defaults():
 
 
 def test_unity_task_trains_in_the_unity_server_and_exports_its_mjlab_twin():
-    job = {"_id": "abc", "task_id": "Unity-Velocity-Flat-MicroDuck", "video": True}
+    job = {"_id": "abc", "task_id": "Unity-Velocity-Flat-MicroDuck"}
     argv, _ = launch.train_command(job, attempt=0)
     assert argv[:3] == ["python", str(launch.UNITY_TRAIN_SCRIPT), "Unity-Velocity-Flat-MicroDuck"]
     assert launch.UNITY_TRAIN_SCRIPT.exists()
-    assert "--video" not in argv
     assert flag(argv, "--agent.run-name") == "job_abc_0"
     assert launch.export_command(job, f"{RUN}/model_100.pt", "/tmp/p.onnx")[2] == "Mjlab-Velocity-Flat-MicroDuck"
     assert launch.eval_command(job, f"{RUN}/model_100.pt", "/tmp/e.json", "evaluate.py")[2] \
@@ -82,24 +81,37 @@ def test_warm_started_job_resumes_against_its_offset_budget():
     assert flag(argv, "--agent.max-iterations") == "300"
 
 
-def test_training_video_flags_convert_iterations_to_env_steps():
-    argv, _ = launch.train_command({"_id": "abc", "video": True, "video_every": 100}, attempt=0)
-    assert flag(argv, "--video") == "True"
-    assert flag(argv, "--video-interval") == str(100 * launch.STEPS_PER_ITERATION)
-    assert flag(argv, "--video-length") == str(launch.DEFAULTS["video_seconds"] * launch.CONTROL_HZ)
-    assert flag(argv, "--env.viewer.distance") == str(launch.CAMERA["distance"])
-    argv, _ = launch.train_command({"_id": "abc"}, attempt=0)
-    assert "--video" not in argv
+def test_training_never_records_video_itself():
+    for job in ({"_id": "abc", "video": True}, {"_id": "abc", "task_id": "Unity-Velocity-Flat-MicroDuck"}):
+        argv, _ = launch.train_command(job, attempt=0)
+        assert "--video" not in argv
+    assert launch.setting({}, "video") is True
+    assert launch.setting({"video": False}, "video") is False
 
 
-def test_training_videos_are_offset_by_the_resume_iteration(tmp_path):
-    clips = tmp_path / "videos" / "train"
-    clips.mkdir(parents=True)
-    (clips / "rl-video-step-0.mp4").touch()
-    (clips / f"rl-video-step-{50 * launch.STEPS_PER_ITERATION}.mp4").touch()
-    (clips / "notes.txt").touch()
-    assert [it for it, _ in launch.training_videos(tmp_path, 200)] == [200, 250]
-    assert launch.training_videos(tmp_path / "missing", 0) == []
+def test_checkpoint_clips_cover_every_run_directory(tmp_path):
+    first, second = tmp_path / "run_0", tmp_path / "run_1"
+    for run, its in ((first, (0, 50)), (second, (100,))):
+        (run / launch.CLIP_DIR).mkdir(parents=True)
+        for it in its:
+            (run / f"model_{it}.pt").touch()
+    assert launch.clip_path(first / "model_50.pt") == first / "clips" / "clip_50.mp4"
+    (first / "clips" / "clip_0.mp4").touch()
+    (second / "clips" / "clip_100.mp4").touch()
+    (first / "clips" / "clip_50.part.mp4").touch()
+    assert launch.checkpoint_clips([first, second, tmp_path / "missing"]) == [
+        {"iteration": 0, "path": str(first / "clips" / "clip_0.mp4"),
+         "gif": str(first / "clips" / "clip_0.gif")},
+        {"iteration": 100, "path": str(second / "clips" / "clip_100.mp4"),
+         "gif": str(second / "clips" / "clip_100.gif")},
+    ]
+
+
+def test_clip_watch_command_renders_the_mjlab_twin():
+    argv = launch.clip_watch_command({"task_id": "Unity-Velocity-Flat-MicroDuck"}, RUN, "r.py")
+    assert argv[:3] == ["python", "r.py", "Mjlab-Velocity-Flat-MicroDuck"]
+    assert flag(argv, "--watch") == RUN
+    assert flag(argv, "--seconds") == "5"
 
 
 def test_pick_evenly_keeps_first_and_last():
@@ -109,14 +121,19 @@ def test_pick_evenly_keeps_first_and_last():
     assert launch.pick_evenly([], 5) == []
 
 
-def test_progress_video_command():
-    argv = launch.progress_video_command(
-        {"task_id": "T"}, [f"{RUN}/model_0.pt", f"{RUN}/model_50.pt"], "/o/p.mp4", "r.py")
+def test_video_command():
+    a, b, c = f"{RUN}/model_0.pt", f"{RUN}/model_50.pt", f"{RUN}/model_100.pt"
+    argv = launch.video_command({"task_id": "T"}, "r.py", clips=[b], progression=[a, c], out_mp4="/o/p.mp4")
     assert argv[:3] == ["python", "r.py", "T"]
     assert flag(argv, "--seconds") == "5"
-    assert argv[argv.index("--checkpoints") + 1:] == [f"{RUN}/model_0.pt", f"{RUN}/model_50.pt"]
+    assert argv[argv.index("--checkpoints") + 1:argv.index("--out")] == [b]
+    assert flag(argv, "--out") == "/o/p.mp4"
+    assert argv[argv.index("--progression") + 1:] == [a, c]
+    assert "--out" not in launch.video_command({"task_id": "T"}, "r.py", clips=[b])
     with pytest.raises(launch.JobSpecError):
-        launch.progress_video_command({}, [], "/o/p.mp4", "r.py")
+        launch.video_command({}, "r.py")
+    with pytest.raises(launch.JobSpecError):
+        launch.video_command({}, "r.py", progression=[a])
 
 
 def test_seed_task_and_extra_args():

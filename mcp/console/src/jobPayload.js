@@ -156,7 +156,7 @@ export async function buildDuckJob(o, lists = pickLists()) {
       if (n !== undefined) payload[k] = n;
     }
     if (o.seed !== undefined && o.seed !== null && o.seed !== '') payload.seed = Number(o.seed);
-    payload.video = !!o.video;
+    payload.video = o.video !== false;
     payload.progress_video = o.progress_video !== false;
     for (const k of ['model', 'eval_num_envs', 'eval_steps']) {
       if (o[k] !== undefined) notes.push(`${k} ignored: not used by TRAIN jobs`);
