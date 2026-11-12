@@ -1,0 +1,1009 @@
+{
+ "task": "Mjlab-Velocity-Flat-MicroDuck",
+ "decimation": 4,
+ "physics_dt": 0.005,
+ "episode_length_s": 20.0,
+ "scale_rewards_by_dt": true,
+ "joint_names": [
+  "left_hip_yaw",
+  "left_hip_roll",
+  "left_hip_pitch",
+  "left_knee",
+  "left_ankle",
+  "neck_pitch",
+  "head_pitch",
+  "head_yaw",
+  "head_roll",
+  "right_hip_yaw",
+  "right_hip_roll",
+  "right_hip_pitch",
+  "right_knee",
+  "right_ankle"
+ ],
+ "default_joint_pos": [
+  0.0,
+  -0.0873,
+  -0.4579,
+  -0.0049,
+  0.453,
+  0.3491,
+  0.3491,
+  0.0,
+  0.0,
+  0.0,
+  0.0873,
+  0.4579,
+  0.0049,
+  -0.453
+ ],
+ "soft_limit_lo": [
+  -0.38833575856873837,
+  -0.34557519189482394,
+  -1.4137166941154593,
+  -1.4137166941154087,
+  -1.4137166941154167,
+  -1.4398966328953229,
+  -1.413716694115407,
+  -2.6703537555513255,
+  -0.392699081698725,
+  -0.47560222116845297,
+  -0.34557519189487546,
+  -1.4137166941154504,
+  -1.4137166941154442,
+  -1.4137166941154131
+ ],
+ "soft_limit_hi": [
+  0.47560222116845474,
+  0.3455751918949305,
+  1.4137166941153545,
+  1.4137166941154051,
+  1.4137166941153971,
+  0.9162978572970221,
+  1.413716694115407,
+  2.6703537555513237,
+  0.39269908169872325,
+  0.38833575856874014,
+  0.345575191894879,
+  1.4137166941153634,
+  1.4137166941153696,
+  1.4137166941154007
+ ],
+ "neck_joints": [
+  "neck_pitch",
+  "head_pitch",
+  "head_yaw",
+  "head_roll"
+ ],
+ "foot_sites": [
+  "left_foot",
+  "right_foot"
+ ],
+ "foot_height_max_distance": 1.0,
+ "imu_misalign_deg": 6.0,
+ "actuator": {
+  "model": "m6",
+  "friction_dr": true,
+  "kt": 0.36601349688984386,
+  "R": 2.8113923539223227,
+  "friction_base": 0.004771183165566,
+  "friction_stribeck": 0.004676345799486616,
+  "load_friction_motor": 0.2667860954283698,
+  "load_friction_external": 8.515871897059342e-06,
+  "load_friction_motor_stribeck": 1.0722918395099123e-05,
+  "load_friction_external_stribeck": 0.08077928978935671,
+  "load_friction_motor_quad": 0.009972471242139415,
+  "load_friction_external_quad": 0.004902565732332559,
+  "dtheta_stribeck": 2.890372094130307,
+  "alpha": 8.683259907618984,
+  "friction_viscous": 0.005359668274599504,
+  "kp": 200.0,
+  "error_gain": 0.0028773775022263564,
+  "max_pwm": 1.0,
+  "max_current": 1.75,
+  "vin_range": [
+   6.5,
+   8.2
+  ],
+  "vin_drop_gain_range": [
+   0.0,
+   0.2
+  ],
+  "vin_min": 6.0,
+  "delay": {
+   "min_lag": 3,
+   "max_lag": 6,
+   "hold_prob": 0.0,
+   "update_period": 0,
+   "per_env_phase": true
+  }
+ },
+ "twist": {
+  "resampling_time": [
+   3.0,
+   8.0
+  ],
+  "lin_vel_x": [
+   -0.4,
+   0.4
+  ],
+  "lin_vel_y": [
+   -0.3,
+   0.3
+  ],
+  "ang_vel_z": [
+   -1.0,
+   1.0
+  ],
+  "rel_standing_envs": 0.02,
+  "rel_forward_envs": 0.2,
+  "rel_turn_in_place_envs": 0.15,
+  "turn_in_place_min_frac": 0.4
+ },
+ "head_pose": {
+  "resampling_time": [
+   2.0,
+   5.0
+  ],
+  "lo": [
+   -0.05,
+   -0.05,
+   -0.07,
+   -0.015
+  ],
+  "hi": [
+   0.05,
+   0.05,
+   0.07,
+   0.015
+  ],
+  "zero_command_prob": 0.0
+ },
+ "body_pose": {
+  "resampling_time": [
+   2.0,
+   5.0
+  ],
+  "lo": [
+   -0.005,
+   -0.005,
+   -0.005,
+   -0.05,
+   -0.05,
+   -0.05
+  ],
+  "hi": [
+   0.005,
+   0.005,
+   0.005,
+   0.05,
+   0.05,
+   0.05
+  ],
+  "zero_command_prob": 0.0
+ },
+ "actor": [
+  {
+   "name": "base_ang_vel",
+   "kind": "imu_gyro",
+   "biased": false,
+   "noise": [
+    -0.03,
+    0.03
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 1,
+    "hold_prob": 0.0,
+    "update_period": 64,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "projected_gravity",
+   "kind": "imu_gravity",
+   "biased": false,
+   "noise": [
+    -0.01,
+    0.01
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 1,
+    "hold_prob": 0.0,
+    "update_period": 64,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "joint_pos",
+   "kind": "joint_pos",
+   "biased": true,
+   "noise": [
+    -0.001,
+    0.001
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "joint_vel",
+   "kind": "joint_vel",
+   "biased": false,
+   "noise": [
+    -0.25,
+    0.25
+   ],
+   "delay": {
+    "min_lag": 1,
+    "max_lag": 1,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "actions",
+   "kind": "last_action",
+   "biased": false,
+   "noise": [
+    0.0,
+    0.0
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "command",
+   "kind": "twist_command",
+   "biased": false,
+   "noise": [
+    0.0,
+    0.0
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "head_command",
+   "kind": "head_command",
+   "biased": false,
+   "noise": [
+    0.0,
+    0.0
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "body_command",
+   "kind": "body_command",
+   "biased": false,
+   "noise": [
+    0.0,
+    0.0
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  }
+ ],
+ "critic": [
+  {
+   "name": "base_lin_vel",
+   "kind": "base_lin_vel",
+   "biased": false,
+   "noise": [
+    0.0,
+    0.0
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "base_ang_vel",
+   "kind": "gyro",
+   "biased": false,
+   "noise": [
+    0.0,
+    0.0
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "projected_gravity",
+   "kind": "gravity",
+   "biased": false,
+   "noise": [
+    0.0,
+    0.0
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "joint_pos",
+   "kind": "joint_pos",
+   "biased": false,
+   "noise": [
+    0.0,
+    0.0
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "joint_vel",
+   "kind": "joint_vel",
+   "biased": false,
+   "noise": [
+    0.0,
+    0.0
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "actions",
+   "kind": "last_action",
+   "biased": false,
+   "noise": [
+    0.0,
+    0.0
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "command",
+   "kind": "twist_command",
+   "biased": false,
+   "noise": [
+    0.0,
+    0.0
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "foot_height",
+   "kind": "foot_height",
+   "biased": false,
+   "noise": [
+    0.0,
+    0.0
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "foot_air_time",
+   "kind": "foot_air_time",
+   "biased": false,
+   "noise": [
+    0.0,
+    0.0
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "foot_contact",
+   "kind": "foot_contact",
+   "biased": false,
+   "noise": [
+    0.0,
+    0.0
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "foot_contact_forces",
+   "kind": "foot_contact_forces",
+   "biased": false,
+   "noise": [
+    0.0,
+    0.0
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "head_command",
+   "kind": "head_command",
+   "biased": false,
+   "noise": [
+    0.0,
+    0.0
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  },
+  {
+   "name": "body_command",
+   "kind": "body_command",
+   "biased": false,
+   "noise": [
+    0.0,
+    0.0
+   ],
+   "delay": {
+    "min_lag": 0,
+    "max_lag": 0,
+    "hold_prob": 0.0,
+    "update_period": 0,
+    "per_env_phase": true
+   }
+  }
+ ],
+ "rewards": [
+  {
+   "name": "track_linear_velocity",
+   "kind": "track_linear_velocity",
+   "weight": 2.0,
+   "std": 0.31622776601683794
+  },
+  {
+   "name": "track_angular_velocity",
+   "kind": "track_angular_velocity",
+   "weight": 2.0,
+   "std": 0.7071067811865476
+  },
+  {
+   "name": "upright",
+   "kind": "upright",
+   "weight": 2.0,
+   "std": 0.22360679774997896
+  },
+  {
+   "name": "pose",
+   "kind": "variable_posture",
+   "weight": 1.0,
+   "walking_threshold": 0.01,
+   "running_threshold": 1.5,
+   "joint_mask": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "std_standing": [
+    0.1,
+    0.05,
+    0.15,
+    0.15,
+    0.1,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    0.1,
+    0.05,
+    0.15,
+    0.15,
+    0.1
+   ],
+   "std_walking": [
+    0.3,
+    0.05,
+    0.4,
+    0.4,
+    0.25,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    0.3,
+    0.05,
+    0.4,
+    0.4,
+    0.25
+   ],
+   "std_running": [
+    0.3,
+    0.05,
+    0.4,
+    0.4,
+    0.25,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    0.3,
+    0.05,
+    0.4,
+    0.4,
+    0.25
+   ]
+  },
+  {
+   "name": "body_ang_vel",
+   "kind": "body_ang_vel",
+   "weight": -0.05
+  },
+  {
+   "name": "angular_momentum",
+   "kind": "angular_momentum",
+   "weight": -0.02
+  },
+  {
+   "name": "dof_pos_limits",
+   "kind": "joint_pos_limits",
+   "weight": -1.0
+  },
+  {
+   "name": "action_rate_l2",
+   "kind": "action_rate_l2",
+   "weight": -0.1
+  },
+  {
+   "name": "air_time",
+   "kind": "feet_air_time",
+   "weight": 3.0,
+   "threshold_min": 0.125,
+   "threshold_max": 0.3,
+   "command_threshold": 0.01
+  },
+  {
+   "name": "foot_clearance",
+   "kind": "feet_clearance",
+   "weight": -2.0,
+   "command_threshold": 0.01,
+   "target_height": 0.02
+  },
+  {
+   "name": "foot_swing_height",
+   "kind": "feet_swing_height",
+   "weight": -0.25,
+   "command_threshold": 0.01,
+   "target_height": 0.02
+  },
+  {
+   "name": "foot_slip",
+   "kind": "feet_slip",
+   "weight": -0.1,
+   "command_threshold": 0.01
+  },
+  {
+   "name": "self_collisions",
+   "kind": "self_collisions",
+   "weight": -1.0
+  },
+  {
+   "name": "head_pose_tracking",
+   "kind": "head_pose_tracking",
+   "weight": 2.0,
+   "std": 0.5
+  },
+  {
+   "name": "body_pose_tracking",
+   "kind": "disabled",
+   "weight": 0.0
+  },
+  {
+   "name": "head_pose_bias",
+   "kind": "head_pose_bias",
+   "weight": 0.0,
+   "tau_s": 1.0
+  }
+ ],
+ "terminations": [
+  {
+   "name": "time_out",
+   "kind": "time_out",
+   "time_out": true
+  },
+  {
+   "name": "fell_over",
+   "kind": "bad_orientation",
+   "time_out": false,
+   "limit_angle": 1.2217304763960306
+  },
+  {
+   "name": "nan_state",
+   "kind": "nan_state",
+   "time_out": false
+  }
+ ],
+ "events": {
+  "reset_base": {
+   "x": [
+    -0.5,
+    0.5
+   ],
+   "y": [
+    -0.5,
+    0.5
+   ],
+   "z": [
+    0.12,
+    0.13
+   ],
+   "roll": [
+    0.0,
+    0.0
+   ],
+   "pitch": [
+    0.0,
+    0.0
+   ],
+   "yaw": [
+    -3.14,
+    3.14
+   ]
+  },
+  "reset_joints": {
+   "position_range": [
+    0.0,
+    0.0
+   ],
+   "velocity_range": [
+    0.0,
+    0.0
+   ]
+  },
+  "push": {
+   "interval": [
+    3.0,
+    6.0
+   ],
+   "x": [
+    -0.3,
+    0.3
+   ],
+   "y": [
+    -0.3,
+    0.3
+   ]
+  },
+  "foot_friction": {
+   "geoms": [
+    "left_foot_collision",
+    "right_foot_collision"
+   ],
+   "range": [
+    0.7,
+    1.3
+   ],
+   "shared": true,
+   "mode": "startup"
+  },
+  "encoder_bias": {
+   "range": [
+    -0.015,
+    0.015
+   ],
+   "mode": "startup"
+  },
+  "com": [
+   {
+    "name": "randomize_com",
+    "bodies": [
+     "trunk_base"
+    ],
+    "range": [
+     -0.003,
+     0.003
+    ],
+    "mode": "reset"
+   },
+   {
+    "name": "randomize_head_com",
+    "bodies": [
+     "neck",
+     "neck_pitch",
+     "yaw_roll_motion",
+     "jaw_soft",
+     "bearing_roll"
+    ],
+    "range": [
+     -0.003,
+     0.003
+    ],
+    "mode": "reset"
+   }
+  ],
+  "mass_inertia": {
+   "bodies": [
+    "trunk_base"
+   ],
+   "alpha": [
+    -0.02564664719377529,
+    0.024395082084716024
+   ],
+   "mode": "startup"
+  },
+  "bam_friction": {
+   "range": [
+    0.9,
+    1.1
+   ],
+   "mode": "reset"
+  },
+  "armature": {
+   "range": [
+    0.9,
+    1.1
+   ],
+   "mode": "reset"
+  }
+ },
+ "curriculum": [
+  {
+   "name": "action_rate_weight",
+   "kind": "reward_weight",
+   "target": "action_rate_l2",
+   "steps": [
+    0,
+    12000,
+    18000,
+    24000,
+    30000,
+    36000
+   ],
+   "values": [
+    -0.1,
+    -0.2,
+    -0.4,
+    -0.6,
+    -0.8,
+    -1.0
+   ],
+   "width": 1,
+   "inclusive": false
+  },
+  {
+   "name": "standing_envs",
+   "kind": "standing_envs",
+   "target": "twist",
+   "steps": [
+    0,
+    12000,
+    18000,
+    24000,
+    36000,
+    48000
+   ],
+   "values": [
+    0.02,
+    0.05,
+    0.1,
+    0.15,
+    0.2,
+    0.25
+   ],
+   "width": 1,
+   "inclusive": false
+  },
+  {
+   "name": "head_pose_range",
+   "kind": "pose_range",
+   "target": "head_pose",
+   "steps": [
+    0,
+    12000,
+    24000,
+    36000,
+    48000
+   ],
+   "values": [
+    -0.05,
+    0.05,
+    -0.05,
+    0.05,
+    -0.07,
+    0.07,
+    -0.015,
+    0.015,
+    -0.17,
+    0.17,
+    -0.17,
+    0.17,
+    -0.21,
+    0.21,
+    -0.047,
+    0.047,
+    -0.39,
+    0.39,
+    -0.39,
+    0.39,
+    -0.49,
+    0.49,
+    -0.11,
+    0.11,
+    -0.72,
+    0.72,
+    -0.72,
+    0.72,
+    -0.91,
+    0.91,
+    -0.2,
+    0.2,
+    -1.1,
+    1.1,
+    -1.1,
+    1.1,
+    -1.4,
+    1.4,
+    -0.31,
+    0.31
+   ],
+   "width": 8,
+   "inclusive": true
+  },
+  {
+   "name": "body_pose_range",
+   "kind": "pose_range",
+   "target": "body_pose",
+   "steps": [
+    0
+   ],
+   "values": [
+    -0.005,
+    0.005,
+    -0.005,
+    0.005,
+    -0.005,
+    0.005,
+    -0.05,
+    0.05,
+    -0.05,
+    0.05,
+    -0.05,
+    0.05
+   ],
+   "width": 12,
+   "inclusive": true
+  },
+  {
+   "name": "com_range",
+   "kind": "com_range",
+   "target": "randomize_com",
+   "steps": [
+    0,
+    12000,
+    24000,
+    36000
+   ],
+   "values": [
+    0.003,
+    0.005,
+    0.01,
+    0.015
+   ],
+   "width": 1,
+   "inclusive": false
+  },
+  {
+   "name": "head_com_range",
+   "kind": "com_range",
+   "target": "randomize_head_com",
+   "steps": [
+    0,
+    12000,
+    24000
+   ],
+   "values": [
+    0.003,
+    0.005,
+    0.01
+   ],
+   "width": 1,
+   "inclusive": false
+  },
+  {
+   "name": "head_pose_bias_weight",
+   "kind": "reward_weight",
+   "target": "head_pose_bias",
+   "steps": [
+    0,
+    14400,
+    24000,
+    36000
+   ],
+   "values": [
+    0.0,
+    1.0,
+    2.0,
+    3.0
+   ],
+   "width": 1,
+   "inclusive": false
+  }
+ ]
+}

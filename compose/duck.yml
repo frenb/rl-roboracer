@@ -57,6 +57,14 @@ services:
       - type: bind
         source: ./rl_agent
         target: /python_ws/src
+      # Linux build of the Unity duck env server (duck/unity_env.py copies it to local disk
+      # to run it). Built from the MicroDuck Unity project with DuckBuild.BuildServerLinux.
+      - type: bind
+        source: ${DUCK_UNITY_SERVER_BUILD:-../spikes/unity-duck/build/DuckServerLinux}
+        target: /unity_builds/duck_server
+        read_only: true
+        bind:
+          create_host_path: true
       # The car stack's /tmp volume; the worker writes duck_trainer.log
       # there for the dashboard, next to the car's trainer.log.
       - type: volume

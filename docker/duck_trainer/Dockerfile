@@ -55,10 +55,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project
 
 COPY . .
-# pymongo is for the rl-roboracer job worker (rl_agent/duck), not microduck_rl.
+# pymongo is for the rl-roboracer job worker (rl_agent/duck), not microduck_rl; pytest runs
+# its tests (rl_agent/duck/test_*.py).
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen \
-    && uv pip install --python /opt/venv/bin/python "pymongo~=4.7"
+    && uv pip install --python /opt/venv/bin/python "pymongo~=4.7" pytest
 
 # Speed patches for installed packages, from the `patches` build context
 # (docker/duck_trainer/patches). --fuzz=0 so a dependency bump that moves the
