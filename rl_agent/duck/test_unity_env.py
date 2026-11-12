@@ -224,6 +224,68 @@ def test_episode_lengths_can_be_set():
         np.testing.assert_array_equal(out["episode_length"], [1, 4, 9, 10])
 
 
+def read_exactly(sock, n):
+    buf = b""
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        assert chunk, "viewer feed closed"
+        buf += chunk
+    return buf
+
+
+def read_viewer_frame(sock, nq):
+    """One DuckViewerFeed frame as (global_step, mean_reward, {index: duck fields})."""
+    (length,) = struct.unpack("<i", read_exactly(sock, 4))
+    body = read_exactly(sock, length)
+    step, count, mean_reward, _ = struct.unpack_from("<qifi", body, 0)
+    off, ducks = 20, {}
+    for _ in range(count):
+        index, ep_len, reward, ret, last_ret, last_len, flags = struct.unpack_from("<iifffiB", body, off)
+        off += 25
+        twist = struct.unpack_from("<3f", body, off)
+        head = struct.unpack_from("<4f", body, off + 12)
+        qpos = np.frombuffer(body, np.float64, nq, off + 28)
+        off += 28 + 8 * nq
+        ducks[index] = {"episode_length": ep_len, "reward": reward, "return": ret, "flags": flags,
+                        "twist": twist, "head": head, "qpos": qpos.copy()}
+    assert off == len(body)
+    return step, mean_reward, ducks
+
+
+@needs_build
+def test_viewer_feed_mirrors_the_watched_ducks():
+    port = 7790
+    with unity_env.DuckServer(num_envs=8, seed=1, extra_args=["-viewer-port", str(port)]) as env:
+        env.reset()
+        viewer = socket.create_connection(("127.0.0.1", port), timeout=30)
+        magic, version, length = struct.unpack("<4sii", read_exactly(viewer, 12))
+        info = json.loads(read_exactly(viewer, length))
+        assert magic == b"DKVW" and version == 1
+        assert info["num_envs"] == 8 and info["nq"] == 21
+        viewer.sendall(struct.pack("<3i", 2, 5, 6))
+        rng = np.random.default_rng(0)
+        frames = []
+        for _ in range(40):
+            out = env.step(rng.normal(0, 0.2, (8, 14)).astype(np.float32))
+            expected = (out["reward"].copy(), out["episode_length"].copy(), out["terminated"] | out["truncated"])
+            while True:
+                step, mean_reward, ducks = read_viewer_frame(viewer, info["nq"])
+                if sorted(ducks) == [5, 6] or step >= 40:
+                    break
+            frames.append((step, ducks, expected, mean_reward))
+        viewer.close()
+    # Frames follow the env step by step once the watch request has landed.
+    watched = [f for f in frames if sorted(f[1]) == [5, 6]]
+    assert len(watched) >= 30
+    for step, ducks, (reward, ep_len, done), mean_reward in watched:
+        assert mean_reward == pytest.approx(float(reward.mean()), abs=1e-5)
+        for i, d in ducks.items():
+            assert d["reward"] == pytest.approx(float(reward[i]), abs=1e-6)
+            assert d["episode_length"] == (0 if done[i] else ep_len[i])
+    a, b = watched[0][1][5]["qpos"], watched[-1][1][5]["qpos"]
+    assert np.all(np.isfinite(b)) and not np.allclose(a, b)
+
+
 @needs_build
 def test_server_exits_when_the_client_disconnects():
     env = unity_env.DuckServer(num_envs=2, seed=1)

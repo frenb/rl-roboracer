@@ -12,6 +12,8 @@ mjlab (anything the C# task doesn't implement fails the export). The run directo
 params/unity_task.json and unity_server.log.
 
 DUCK_UNITY_THREADS caps the server's worker threads (default: all CPUs).
+DUCK_UNITY_VIEWER_PORT serves the live viewer feed there (the windowed MicroDuck player's
+-attach, scripts/Play-Duck.ps1 -Attach); compose/duck.yml sets and publishes it.
 """
 import json
 import os
@@ -41,9 +43,11 @@ def install(train):
         with open(log_dir / "params" / "unity_task.json", "w") as f:
             json.dump(spec, f, indent=1)
         threads = int(os.environ.get("DUCK_UNITY_THREADS", "0")) or None
+        viewer_port = os.environ.get("DUCK_UNITY_VIEWER_PORT")
         server = unity_env.DuckServer(num_envs=cfg.scene.num_envs, seed=max(int(cfg.seed or 0), 0),
                                       threads=threads, task=spec,
-                                      log_file=str((log_dir / "unity_server.log").resolve()))
+                                      log_file=str((log_dir / "unity_server.log").resolve()),
+                                      extra_args=["-viewer-port", viewer_port] if viewer_port else ())
         print(f"[INFO] Unity duck server: {server.num_envs} ducks on {server.header['threads']} threads, "
               f"task {spec['task']}, {len(server.reward_names)} reward terms")
         return unity_vec_env.UnityVecEnv(server, cfg, device)

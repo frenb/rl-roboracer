@@ -24,6 +24,18 @@
     Keep running: when a newer compatible model appears, restart the player
     with it. Checks every -PollSeconds.
 
+.PARAMETER Attach
+    Watch a running Unity training job (task Unity-*) live instead of playing
+    a model: the player attaches read-only to the duck server's viewer feed
+    (-ViewerAddress) and shows a few of the ducks being trained, with their
+    commands and rewards. Between jobs it waits for the next one.
+
+.PARAMETER ViewerAddress
+    host:port of the viewer feed. Default 127.0.0.1:7710 (compose/duck.yml).
+
+.PARAMETER Watch
+    With -Attach: duck indices to show, e.g. 0,1,2,3 (at most 16).
+
 .PARAMETER List
     Print the compatible models and exit.
 
@@ -51,11 +63,16 @@
     .\scripts\Play-Duck.ps1 -Follow
 .EXAMPLE
     .\scripts\Play-Duck.ps1 -List
+.EXAMPLE
+    .\scripts\Play-Duck.ps1 -Attach -Watch 0,1,2,3,4,5
 #>
 param(
     [string]$Model,
     [switch]$Follow,
     [int]$PollSeconds = 30,
+    [switch]$Attach,
+    [string]$ViewerAddress = '127.0.0.1:7710',
+    [int[]]$Watch,
     [switch]$List,
     [int]$Width = 1280,
     [int]$Height = 720,
@@ -69,6 +86,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if ($Follow -and $Model) { throw '-Follow plays the newest model; it cannot be combined with -Model.' }
+if ($Attach -and ($Follow -or $Model -or $List)) { throw '-Attach watches a training job; it cannot be combined with -Model, -Follow or -List.' }
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Workspace = Split-Path -Parent $RepoRoot
 # compose/duck.yml binds ../saved_models/microduck (from the repo root) to this.
@@ -152,6 +170,16 @@ function Start-Player($m) {
 
 if ($List) {
     Get-DuckModels | Format-Table Id, Task, Iterations, Updated, Onnx -AutoSize
+    return
+}
+
+if ($Attach) {
+    $playerArgs = @('-attach', $ViewerAddress,
+                    '-screen-width', $Width, '-screen-height', $Height,
+                    '-screen-fullscreen', $(if ($Fullscreen) { 1 } else { 0 }))
+    if ($Watch) { $playerArgs += @('-watch', ($Watch -join ',')) }
+    Write-Host "MicroDuck: watching Unity training at $ViewerAddress"
+    Start-Process $Exe -ArgumentList $playerArgs | Out-Null
     return
 }
 

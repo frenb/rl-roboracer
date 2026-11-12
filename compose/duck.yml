@@ -32,6 +32,8 @@ services:
       - GALLIUM_DRIVER=d3d12
       - MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
       - LD_LIBRARY_PATH=/usr/lib/wsl/lib
+      # Live viewer feed of Unity training jobs (duck/train_unity.py); published below.
+      - DUCK_UNITY_VIEWER_PORT=7710
     deploy:
       resources:
         reservations:
@@ -78,6 +80,9 @@ services:
     # scripts/Watch-Duck.ps1. Host 8080 is the dashboard's log socket.
     ports:
       - "8090:8080"
+      # Unity duck server's viewer feed: MicroDuck.exe -attach 127.0.0.1:7710
+      # (scripts/Play-Duck.ps1 -Attach).
+      - "7710:7710"
     shm_size: 8gb
 
 volumes:
