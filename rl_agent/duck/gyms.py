@@ -7,7 +7,8 @@ field; nothing here touches them.
 
 Task ids follow ``Mjlab-<Skill>-<Flat|Rough|Swizzle>[-Backlash]-MicroDuck[-Rollers]``.
 Terrain comes from the task's config rather than its name: RollerSlope is
-named Flat but trains on generated slopes.
+named Flat but trains on generated slopes. ``Unity-...`` tasks are the same
+tasks trained in the Unity duck server (launch.UNITY_TASKS).
 
 Pure functions apart from ``sync`` so the parsing runs in CPU-only CI.
 """
@@ -17,7 +18,7 @@ import re
 ROBOT = "microduck"
 ID_PREFIX = f"{ROBOT}:"
 _TASK_RE = re.compile(
-    r"^Mjlab-(?P<skill>[A-Za-z]+)-(?P<variant>[A-Za-z]+)(?P<backlash>-Backlash)?"
+    r"^(?P<engine>Mjlab|Unity)-(?P<skill>[A-Za-z]+)-(?P<variant>[A-Za-z]+)(?P<backlash>-Backlash)?"
     r"-MicroDuck(?P<rollers>-Rollers)?$")
 # Skill names as the fork spells them -> what the dashboard shows.
 SKILL_LABELS = {
@@ -40,11 +41,12 @@ def gym_id(task_id):
 
 
 def parse_task_id(task_id):
-    """``{skill, variant, backlash, rollers}`` for a microduck task id, else None."""
+    """``{engine, skill, variant, backlash, rollers}`` for a microduck task id, else None."""
     m = _TASK_RE.match(task_id)
     if not m:
         return None
     return {
+        "engine": m["engine"].lower(),
         "skill": m["skill"],
         "variant": m["variant"].lower(),
         "backlash": bool(m["backlash"]),
@@ -73,10 +75,17 @@ def gym_doc(task):
         extras.append("backlash")
     if parsed["rollers"]:
         extras.append("rollers")
+    unity = parsed["engine"] == "unity"
+    if unity:
+        extras.append("Unity")
+        description = f"Unity duck server running a C# port of mjlab task {task.get('mjlab_task_id')}"
+    else:
+        description = f"mjlab task {task['task_id']}"
     return {
         "robot": ROBOT,
         "task_id": task["task_id"],
         "name": f"MicroDuck · {skill} · {', '.join(extras)}",
+        "engine": parsed["engine"],
         "skill": parsed["skill"],
         "terrain": terrain,
         "backlash": parsed["backlash"],
@@ -85,7 +94,7 @@ def gym_doc(task):
         "reward_terms": task.get("reward_terms") or [],
         "reward_defaults": task.get("reward_defaults") or [],
         "file_path": "",
-        "description": f"mjlab task {task['task_id']}",
+        "description": description,
         "managed_by": "duck-worker",
     }
 

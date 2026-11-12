@@ -33,7 +33,7 @@ def fake_server(path, num_envs=2, act_dim=2, version=unity_env.PROTOCOL_VERSION)
     def run():
         conn, _ = listener.accept()
         header = json.dumps({"num_envs": num_envs, "act_dim": act_dim, "control_dt": 0.02,
-                             "fields": FIELDS}).encode()
+                             "episode_steps": 500, "fields": FIELDS}).encode()
         conn.sendall(b"DUCK" + struct.pack("<ii", version, len(header)) + header)
         steps = 0
         while True:
@@ -146,8 +146,10 @@ def test_header_and_reply_layout():
     with unity_env.DuckServer(num_envs=4, seed=1) as env:
         assert env.act_dim == 14 and env.control_dt == pytest.approx(0.02)
         assert env.fields == {"obs/policy": 61, "obs/critic": 76, "reward": 1, "terminated": 1,
-                              "truncated": 1, "episode_length": 1, "reward_terms": 16}
+                              "truncated": 1, "episode_length": 1, "reward_terms": 16,
+                              "terminations": len(spec["terminations"])}
         assert env.reward_names == [r["name"] for r in spec["rewards"]]
+        assert env.termination_names == [t["name"] for t in spec["terminations"]]
         assert [t[0] for t in env.header["actor_terms"]] == [t["name"] for t in spec["actor"]]
         out = env.reset()
         # Standing at reset: gravity points down the trunk z axis (the actor's copy is seen
@@ -202,8 +204,24 @@ def test_episodes_truncate_and_reset():
         out = env.step(zeros)
         assert out["truncated"].all() and not out["terminated"].any()
         assert (out["episode_length"] == 10).all()
+        time_out = env.termination_names.index("time_out")
+        assert out["terminations"][:, time_out].all() and out["terminations"].sum() == 4
         out = env.step(zeros)
-        assert (out["episode_length"] == 1).all()
+        assert (out["episode_length"] == 1).all() and not out["terminations"].any()
+
+
+@needs_build
+def test_episode_lengths_can_be_set():
+    spec = unity_env.load_task_spec()
+    spec["episode_length_s"] = 10 * 0.02
+    spec["terminations"] = [t for t in spec["terminations"] if t["kind"] != "bad_orientation"]
+    with unity_env.DuckServer(num_envs=4, seed=1, task=spec) as env:
+        env.reset()
+        out = env.set_episode_lengths([0, 3, 8, 9])
+        np.testing.assert_array_equal(out["episode_length"], [0, 3, 8, 9])
+        out = env.step(np.zeros((4, 14), np.float32))
+        np.testing.assert_array_equal(out["truncated"], [0, 0, 0, 1])
+        np.testing.assert_array_equal(out["episode_length"], [1, 4, 9, 10])
 
 
 @needs_build

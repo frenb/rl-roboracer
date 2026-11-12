@@ -25,6 +25,18 @@ def test_fresh_train_uses_defaults():
     assert env == {}
 
 
+def test_unity_task_trains_in_the_unity_server_and_exports_its_mjlab_twin():
+    job = {"_id": "abc", "task_id": "Unity-Velocity-Flat-MicroDuck", "video": True}
+    argv, _ = launch.train_command(job, attempt=0)
+    assert argv[:3] == ["python", str(launch.UNITY_TRAIN_SCRIPT), "Unity-Velocity-Flat-MicroDuck"]
+    assert launch.UNITY_TRAIN_SCRIPT.exists()
+    assert "--video" not in argv
+    assert flag(argv, "--agent.run-name") == "job_abc_0"
+    assert launch.export_command(job, f"{RUN}/model_100.pt", "/tmp/p.onnx")[2] == "Mjlab-Velocity-Flat-MicroDuck"
+    assert launch.eval_command(job, f"{RUN}/model_100.pt", "/tmp/e.json", "evaluate.py")[2] \
+        == "Mjlab-Velocity-Flat-MicroDuck"
+
+
 def test_resume_requests_only_remaining_iterations():
     job = {"_id": "abc", "max_iterations": 300}
     argv, _ = launch.train_command(job, attempt=1, resume_from=f"{RUN}/model_100.pt")

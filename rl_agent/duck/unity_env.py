@@ -1,4 +1,4 @@
-"""Client and launcher for the Unity duck env server (DuckEnvServer.cs, protocol v3).
+"""Client and launcher for the Unity duck env server (DuckEnvServer.cs, protocol v4).
 
 The server is the MicroDuck Linux player run headless with ``-server``: N MuJoCo ducks
 running the mjlab Velocity-Flat task, stepped across CPU threads, one binary request/reply
@@ -10,6 +10,7 @@ connects over a Unix socket::
         out = env.step(actions)          # float32 [num_envs, act_dim]
         out["obs/policy"], out["obs/critic"], out["reward"], out["terminated"], out["truncated"]
         out["reward_terms"]              # [num_envs, len(env.reward_names)]
+        out["terminations"]              # [num_envs, len(env.termination_names)], 0/1
 
 The task is the JSON written by export_task_spec.py (flat_task_spec.json next to this file,
 also shipped inside the build); pass ``task=`` to run a modified copy (see load_task_spec).
@@ -30,8 +31,8 @@ import time
 
 import numpy as np
 
-PROTOCOL_VERSION = 3
-STEP, RESET, ECHO, CLOSE, GLOBAL_STEP, EVAL = 1, 2, 3, 4, 5, 6
+PROTOCOL_VERSION = 4
+STEP, RESET, ECHO, CLOSE, GLOBAL_STEP, EVAL, EPISODE_LENGTH = 1, 2, 3, 4, 5, 6, 7
 DTYPES = {"f32": np.float32, "u8": np.uint8, "i32": np.int32}
 TASK_SPEC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flat_task_spec.json")
 
@@ -75,6 +76,8 @@ class DuckClient:
         self.act_dim = self.header["act_dim"]
         self.control_dt = self.header["control_dt"]
         self.reward_names = self.header.get("reward_names", [])
+        self.termination_names = self.header.get("termination_names", [])
+        self.episode_steps = self.header["episode_steps"]
 
         self._layout = []
         offset = 0
@@ -128,6 +131,11 @@ class DuckClient:
     def set_global_step(self, step):
         """Set the curriculum's global step counter (mjlab's common_step_counter), to resume."""
         return self._call(bytes([GLOBAL_STEP]) + struct.pack("<q", step))
+
+    def set_episode_lengths(self, lengths):
+        """Set every duck's episode step counter (rsl_rl's init_at_random_ep_len)."""
+        a = np.ascontiguousarray(lengths, dtype=np.int32).reshape(self.num_envs)
+        return self._call(bytes([EPISODE_LENGTH]) + a.tobytes())
 
     @property
     def eval_layout(self):

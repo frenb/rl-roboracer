@@ -33,7 +33,16 @@ def task(task_id, terrain_type="plane"):
      {"skill": "Velocity", "variant": "swizzle", "backlash": False, "rollers": False}),
 ])
 def test_parse_task_id(task_id, expected):
-    assert gyms.parse_task_id(task_id) == expected
+    assert gyms.parse_task_id(task_id) == {"engine": "mjlab", **expected}
+
+
+def test_unity_task_gym():
+    assert gyms.parse_task_id("Unity-Velocity-Flat-MicroDuck")["engine"] == "unity"
+    doc = gyms.gym_doc({**task("Unity-Velocity-Flat-MicroDuck"),
+                        "mjlab_task_id": "Mjlab-Velocity-Flat-MicroDuck"})
+    assert doc["name"] == "MicroDuck · Walk (velocity tracking) · flat, Unity"
+    assert doc["engine"] == "unity"
+    assert "Mjlab-Velocity-Flat-MicroDuck" in doc["description"]
 
 
 @pytest.mark.parametrize("task_id", ["Mjlab-Velocity-Flat-Unitree-G1", "Velocity-Flat-MicroDuck", ""])

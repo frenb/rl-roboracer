@@ -13,6 +13,7 @@ import mjlab.tasks  # noqa: F401 - registers mjlab's and the fork's tasks
 from mjlab.tasks.registry import list_tasks, load_env_cfg
 
 import reward_design
+from launch import UNITY_TASKS
 
 
 def jsonable(value):
@@ -73,6 +74,10 @@ def describe_function(name, func):
 
 def main():
     tasks = [describe(t) for t in sorted(list_tasks()) if "MicroDuck" in t]
+    # A Unity task has the rewards and episode of the mjlab task it ports.
+    by_id = {t["task_id"]: t for t in tasks}
+    tasks += [{**by_id[mjlab], "task_id": unity, "mjlab_task_id": mjlab}
+              for unity, mjlab in UNITY_TASKS.items() if mjlab in by_id]
     used = {d["func"] for t in tasks for d in t["reward_defaults"]}
     functions = [
         describe_function(name, func)

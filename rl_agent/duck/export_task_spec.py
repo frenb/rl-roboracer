@@ -63,13 +63,25 @@ def stages(entries: list[dict], key: str) -> tuple[list[int], list[float]]:
     return steps, vals
 
 
-def export(out_path: str) -> dict:
+def export(out_path: str, cfg=None) -> dict:
+    """Write the task spec for ``cfg`` (default: the registered Velocity-Flat env cfg)."""
+    spec = task_spec(cfg)
+    with open(out_path, "w") as f:
+        json.dump(spec, f, indent=1)
+    return spec
+
+
+def task_spec(cfg=None) -> dict:
+    """The task spec dict for an mjlab env cfg, e.g. one load_env_cfg() returned after the
+    reward / experiment design hooks edited it."""
+    import copy
+
     import mujoco
     from bam.model import load_model
     from mjlab.scene import Scene
     from mjlab_microduck.tasks.microduck_velocity_env_cfg import make_microduck_velocity_env_cfg
 
-    cfg = make_microduck_velocity_env_cfg()
+    cfg = make_microduck_velocity_env_cfg() if cfg is None else copy.deepcopy(cfg)
     cfg.scene.num_envs = 1
     robot_cfg = cfg.scene.entities["robot"]
     scene = Scene(cfg.scene, device="cpu")
@@ -443,8 +455,6 @@ def export(out_path: str) -> dict:
         "events": ev,
         "curriculum": curriculum,
     }
-    with open(out_path, "w") as f:
-        json.dump(spec, f, indent=1)
     return spec
 
 

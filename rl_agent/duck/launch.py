@@ -5,7 +5,8 @@ CPU-only CI runner.
 
 Job fields read here (all optional except ``job_type``):
 
-    task_id          mjlab task, e.g. "Mjlab-Velocity-Flat-Backlash-MicroDuck"
+    task_id          mjlab task, e.g. "Mjlab-Velocity-Flat-Backlash-MicroDuck", or a Unity
+                     task (UNITY_TASKS) trained in the Unity duck server by train_unity.py
     num_envs         parallel simulated robots
     max_iterations   total PPO iterations for the job, including resumed ones
     save_interval    iterations between checkpoints; bounds the work lost on pause
@@ -52,6 +53,10 @@ CAMERA = {"distance": 1.2, "elevation": -15.0}
 TRAIN_CLIP_SIZE = (480, 360)
 PROGRESS_VIDEO_SIZE = (640, 480)
 CFG_HOOK = Path(__file__).resolve().parent / "cfg_hook.py"
+UNITY_TRAIN_SCRIPT = Path(__file__).resolve().parent / "train_unity.py"
+# Tasks the Unity duck server trains, each the C# port of an mjlab task. Their checkpoints
+# are that task's network, so export, eval and videos run the mjlab task.
+UNITY_TASKS = {"Unity-Velocity-Flat-MicroDuck": "Mjlab-Velocity-Flat-MicroDuck"}
 
 _CHECKPOINT_RE = re.compile(r"^model_(\d+)\.pt$")
 _VIDEO_RE = re.compile(r"^rl-video-step-(\d+)\.mp4$")
@@ -75,6 +80,15 @@ def setting(job, key):
 
 def task_id(job):
     return job.get("task_id") or DEFAULT_TASK
+
+
+def is_unity(job):
+    return task_id(job) in UNITY_TASKS
+
+
+def mjlab_task_id(job):
+    """The mjlab task behind the job's task: itself, or the one a Unity task ports."""
+    return UNITY_TASKS.get(task_id(job), task_id(job))
 
 
 def steps_per_iteration(job):
@@ -179,8 +193,9 @@ def train_command(job, attempt, resume_from=None, reward_design_file=None,
     that ``cfg_hook.py`` applies inside the trainer.
     """
     total = iteration_offset(job) + positive_int(job, "max_iterations")
-    argv = [
-        "train", task_id(job),
+    trainer = ["python", str(UNITY_TRAIN_SCRIPT)] if is_unity(job) else ["train"]
+    argv = trainer + [
+        task_id(job),
         "--env.scene.num-envs", str(positive_int(job, "num_envs")),
         "--agent.save-interval", str(positive_int(job, "save_interval")),
         "--agent.logger", "tensorboard",
@@ -199,7 +214,8 @@ def train_command(job, attempt, resume_from=None, reward_design_file=None,
             env["MICRODUCK_WARM_START"] = "1"
     if job.get("seed") is not None:
         argv += ["--agent.seed", str(int(job["seed"]))]
-    if job.get("video"):
+    # The Unity server has no renderer; its jobs still get a progression video from mjlab.
+    if job.get("video") and not is_unity(job):
         argv += [
             "--video", "True",
             "--video-interval", str(positive_int(job, "video_every") * steps_per_iteration(job)),
@@ -253,7 +269,7 @@ def training_videos(run_dir, start_iteration, steps_per_iter=STEPS_PER_ITERATION
 def export_command(job, checkpoint, onnx_path):
     checkpoint_iteration(checkpoint)
     return [
-        "python", "scripts/export.py", task_id(job),
+        "python", "scripts/export.py", mjlab_task_id(job),
         "--checkpoint-file", str(checkpoint),
         "--onnx-file", str(onnx_path),
     ]
@@ -262,7 +278,7 @@ def export_command(job, checkpoint, onnx_path):
 def eval_command(job, checkpoint, out_json, script):
     checkpoint_iteration(checkpoint)
     return [
-        "python", str(script), task_id(job),
+        "python", str(script), mjlab_task_id(job),
         "--checkpoint", str(checkpoint),
         "--num-envs", str(positive_int(job, "eval_num_envs")),
         "--steps", str(positive_int(job, "eval_steps")),
@@ -276,7 +292,7 @@ def progress_video_command(job, checkpoint_paths, out_mp4, script):
     for path in checkpoint_paths:
         checkpoint_iteration(path)
     return [
-        "python", str(script), task_id(job),
+        "python", str(script), mjlab_task_id(job),
         "--seconds", str(positive_int(job, "seconds_per_checkpoint")),
         "--out", str(out_mp4),
         "--checkpoints", *[str(p) for p in checkpoint_paths],

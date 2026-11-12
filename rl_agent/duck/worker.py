@@ -380,7 +380,7 @@ def export_checkpoint(job, checkpoint, log):
         return outcome, None
     if rc != 0 or not onnx_path.exists():
         raise RuntimeError(f"export exited {rc}:\n{tail}")
-    report = validate_onnx(launch.task_id(job), onnx_path)
+    report = validate_onnx(launch.mjlab_task_id(job), onnx_path)
     log.write(f"[duck-worker] ONNX check: {json.dumps({k: v for k, v in report.items() if k != 'metadata'})}\n")
     if not report["ok"]:
         raise RuntimeError(f"exported ONNX failed validation: {report['problems']}")

@@ -241,7 +241,7 @@ def run(num_envs=NUM_ENVS, steps=STEPS, seed=SEED, verbose=True):
 
             flags["terminated"] += int((out["terminated"] != (r["terminated"] > 0)).sum())
             unity_timeout = out["truncated"] > 0
-            flags["time_out"] += int((unity_timeout != ((r["time_out"] > 0) & ~(r["terminated"] > 0))).sum())
+            flags["time_out"] += int((unity_timeout != (r["time_out"] > 0)).sum())
             if prev_site_height is not None:
                 flags["height_lag"].append(np.abs(r["foot_height"] - prev_site_height).max())
             prev_site_height = r["site_height"]
