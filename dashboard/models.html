@@ -429,7 +429,7 @@
   <script src="/components.js?v=20261110-duck-media"></script>
   <script>
     (function () {
-      const { TableView, formatters, showToast, confirmDialog, duckMedia } = window.RoboracerUI;
+      const { TableView, formatters, showToast, confirmDialog, trainingMedia } = window.RoboracerUI;
 
       // MicroDuck models (rl_agent/duck/worker.py upsert_model) carry task_id,
       // onnx_location, obs_dim / act_dim and eval_results from their latest
@@ -576,10 +576,11 @@
             // useful either way).
             sortValue: (r) => r.last_eval_at == null ? null : Number(r.last_eval_at),
             render: renderLastEvalCell },
-          // MicroDuck progression video / training clips, from the TRAIN job.
+          // Progression video / training clips, from the TRAIN job. Car
+          // models have them when the trainer stamped the model's own clip.
           { key: 'video',               label: 'Video',      sortable: false, filter: false,
-            render: (_v, row) => (isDuckRow(row) && row.job_id
-              ? `<button type="button" data-action="view-duck-media" data-job-id="${esc(row.job_id)}" `
+            render: (_v, row) => (row.job_id && (isDuckRow(row) || row.clip)
+              ? `<button type="button" data-action="view-training-media" data-job-id="${esc(row.job_id)}" `
                 + 'class="px-2 py-0.5 rounded-md text-xs font-medium border border-emerald-500/40 '
                 + 'text-emerald-300 hover:bg-emerald-500/15">▶ View</button>'
               : mutedCell('—')) },
@@ -1631,15 +1632,15 @@
           return;
         }
 
-        const mediaTrigger = ev.target.closest('[data-action="view-duck-media"]');
+        const mediaTrigger = ev.target.closest('[data-action="view-training-media"]');
         if (mediaTrigger) {
           ev.stopPropagation();
           ev.preventDefault();
           const jobId = mediaTrigger.dataset.jobId;
           fetch('/get_job/' + encodeURIComponent(jobId))
             .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-            .then((job) => duckMedia.open(job,
-              (job.name || String(job.task_id || '').replace(/^Mjlab-/, '') || 'MicroDuck job') + ' · videos'))
+            .then((job) => trainingMedia.open(job,
+              (job.name || String(job.task_id || '').replace(/^Mjlab-/, '') || job.course_type || 'Training job') + ' · videos'))
             .catch((e) => showToast({ type: 'error', message: `Could not load training job ${jobId}: ${e.message || e}` }));
           return;
         }

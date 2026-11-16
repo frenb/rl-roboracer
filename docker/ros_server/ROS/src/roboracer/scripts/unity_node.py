@@ -31,6 +31,11 @@ def main():
         # heartbeat so a Unity client that connects late still gets it.
         'fly_brain_geometry': RosSubscriber('fly_brain_geometry', String, tcp_server),
         'fly_brain_activity': RosSubscriber('fly_brain_activity', String, tcp_server),
+        # Training clips (see rl_agent/media.py): the trainer turns recording
+        # on and off with a JSON std_msgs/String on `clip_control`, and Unity's
+        # ClipRecorder answers with JPEG overhead-camera frames.
+        'clip_control': RosSubscriber('clip_control', String, tcp_server),
+        'camera/overhead': RosPublisher('camera/overhead', Camera),
     })
     
     rospy.spin()

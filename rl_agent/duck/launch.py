@@ -27,6 +27,8 @@ Job fields read here (all optional except ``job_type``):
 import re
 from pathlib import Path
 
+from media import pick_evenly  # noqa: F401  (re-exported for the worker)
+
 DEFAULT_TASK = "Mjlab-Velocity-Flat-MicroDuck"
 DEFAULTS = {
     "num_envs": 2048,
@@ -220,14 +222,6 @@ def checkpoints(run_dirs):
                 if match:
                     found[int(match.group(1))] = f
     return sorted(found.items())
-
-
-def pick_evenly(items, count):
-    """Up to ``count`` items spread evenly, always keeping the first and last."""
-    if count <= 1 or len(items) <= count:
-        return list(items) if count > 1 else list(items[-1:])
-    step = (len(items) - 1) / (count - 1)
-    return [items[round(i * step)] for i in range(count)]
 
 
 def clip_path(checkpoint):

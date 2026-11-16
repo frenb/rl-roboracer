@@ -47,6 +47,7 @@ POLL_S = 5
 STATUS_POLL_S = 2
 PROGRESS_WRITE_S = 5
 STOP_GRACE_S = 30
+STOPPING = threading.Event()
 # Velocity policies deployed on the real duck: 48 proprioception + 13 command
 # inputs -> 14 servo targets. Other tasks have their own shapes.
 DEPLOY_SHAPE = {"Mjlab-Velocity-": (61, 14)}
@@ -160,6 +161,10 @@ def run_process(job_id, argv, log, extra_env=None, on_line=None, on_tick=None):
         drain()
         if on_tick:
             on_tick()
+        if STOPPING.is_set():
+            log.write("[duck-worker] shutting down; stopping training, job stays IN_PROGRESS to resume\n")
+            stop_process(proc)
+            sys.exit(0)
         if time.time() >= next_status_check:
             next_status_check = time.time() + STATUS_POLL_S
             status = job_status(job_id)
@@ -665,27 +670,31 @@ def do_job(job):
 
 
 def main():
+    # PID 1 in the container, where an unhandled SIGTERM is ignored and Docker
+    # SIGKILLs after the grace period - long enough to claim the next job.
+    signal.signal(signal.SIGTERM, lambda *_: STOPPING.set())
     job_queue.start_heartbeat(db, ROBOT)
     sync_gyms()
     print(f"[duck-worker] polling for {ROBOT} jobs", flush=True)
     waiting_reason = None
-    while True:
+    while not STOPPING.is_set():
         if is_queue_paused():
-            time.sleep(POLL_S)
+            STOPPING.wait(POLL_S)
             continue
         allowed, reason = job_queue.may_claim(db, ROBOT)
         if not allowed:
             if reason != waiting_reason:
                 print(f"[duck-worker] waiting for shared queue: {reason}", flush=True)
                 waiting_reason = reason
-            time.sleep(POLL_S)
+            STOPPING.wait(POLL_S)
             continue
         waiting_reason = None
         job = next_job()
         if job is None:
-            time.sleep(POLL_S)
+            STOPPING.wait(POLL_S)
             continue
         do_job(job)
+    print("[duck-worker] SIGTERM: exiting without claiming more jobs", flush=True)
 
 
 if __name__ == "__main__":

@@ -943,7 +943,7 @@ export const createServer = (config): express.Application => {
   // it POSTs to /set_desired_gym with the gym's file_path. Each
   // RunClientWrapper.ps1 supervisor polls /get_desired_gym?index=N
   // and restarts the Unity process with the new binary if the path
-  // has changed.
+  // has changed, or in or out of -batchmode if `headless` has.
   //
   // State is in-memory (keyed by actor index or '*' for all actors).
   // It does not survive a dashboard container restart, which is
@@ -971,10 +971,11 @@ export const createServer = (config): express.Application => {
       gym_id:    String(body.gym_id   || ''),
       gym_name:  String(body.gym_name || ''),
       file_path: String(body.file_path),
+      headless:  body.headless === true,
       set_at:    new Date().toISOString(),
     };
     desiredGymState.set(idx, state);
-    console.log(`[desired-gym] index=${idx} -> ${state.file_path}`);
+    console.log(`[desired-gym] index=${idx} -> ${state.file_path}${state.headless ? ' (headless)' : ''}`);
     res.json({ ok: true, index: idx, state });
   });
 
@@ -1656,12 +1657,15 @@ export const createServer = (config): express.Application => {
     }
   });
 
-  // MicroDuck videos and GIFs. The duck worker stores duck-trainer paths
-  // under /microduck_rl/logs, which is saved_models/microduck on the host and
-  // /saved_models/microduck in this container. sendFile answers Range
-  // requests, so videos seek.
-  const DUCK_LOGS_PREFIX = '/microduck_rl/logs/';
-  const DUCK_MEDIA_ROOT = '/saved_models/microduck';
+  // Training videos and GIFs (rl_agent/media.py), stored on jobs as the
+  // trainer's own paths: the duck worker's under /microduck_rl/logs
+  // (saved_models/microduck on the host), the car trainer's under
+  // /saved_models. Both map into this container's /saved_models. sendFile
+  // answers Range requests, so videos seek.
+  const MEDIA_ROOTS: Array<[string, string]> = [
+    ['/microduck_rl/logs/', '/saved_models/microduck'],
+    ['/saved_models/', '/saved_models'],
+  ];
 
   // One job by id, for tabs that don't hold the whole job list (the Models
   // tab's MicroDuck video button).
@@ -1684,15 +1688,18 @@ export const createServer = (config): express.Application => {
     }
   });
 
-  app.get('/duck_media', (req, res) => {
+  // /duck_media is the old name, still in links shared before the car had videos.
+  app.get(['/media', '/duck_media'], (req, res) => {
     const stored = String(req.query.path || '');
-    if (!stored.startsWith(DUCK_LOGS_PREFIX)) {
-      res.status(400).json({ error: `path must start with ${DUCK_LOGS_PREFIX}` });
+    const match = MEDIA_ROOTS.find(([prefix]) => stored.startsWith(prefix));
+    if (!match) {
+      res.status(400).json({ error: `path must start with ${MEDIA_ROOTS.map(([p]) => p).join(' or ')}` });
       return;
     }
-    const resolved = path.resolve(DUCK_MEDIA_ROOT, stored.slice(DUCK_LOGS_PREFIX.length));
-    if (!resolved.startsWith(DUCK_MEDIA_ROOT + path.sep)) {
-      res.status(400).json({ error: 'path escapes the duck output folder' });
+    const [prefix, root] = match;
+    const resolved = path.resolve(root, stored.slice(prefix.length));
+    if (!resolved.startsWith(root + path.sep)) {
+      res.status(400).json({ error: 'path escapes the training output folder' });
       return;
     }
     if (!['.mp4', '.gif'].includes(path.extname(resolved).toLowerCase())) {

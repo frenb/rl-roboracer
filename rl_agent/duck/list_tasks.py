@@ -8,12 +8,15 @@ import inspect
 import json
 import math
 import sys
+from pathlib import Path
 
 import mjlab.tasks  # noqa: F401 - registers mjlab's and the fork's tasks
 from mjlab.tasks.registry import list_tasks, load_env_cfg
 
 import reward_design
-from launch import UNITY_TASKS
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+from launch import UNITY_TASKS  # noqa: E402
 
 
 def jsonable(value):

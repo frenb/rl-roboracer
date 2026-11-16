@@ -18,11 +18,14 @@ DUCK_UNITY_VIEWER_PORT serves the live viewer feed there (the windowed MicroDuck
 import json
 import os
 import sys
+from pathlib import Path
 
 import export_task_spec
 import unity_env
 import unity_vec_env
-from launch import UNITY_TASKS
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+from launch import UNITY_TASKS  # noqa: E402
 
 
 def install(train):

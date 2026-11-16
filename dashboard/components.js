@@ -24,7 +24,7 @@
  *
  *   showToast({type, message, duration})  -> renders a transient toast
  *   confirmDialog({title, message, ...})  -> Promise<boolean>
- *   duckMedia.open(job, title)            -> MicroDuck progression video + clips modal
+ *   trainingMedia.open(job, title)        -> progression video + clips modal, either robot
  *
  *   jobOptions                            -> option lists for the job dialogs
  *                                            (statuses, job/model/robot types,
@@ -516,57 +516,73 @@
     });
   }
 
-  /* ---------- MicroDuck media ----------------------------------- *
+  /* ---------- Training media ------------------------------------ *
    *
-   * A MicroDuck TRAIN (or VIDEO) job stores progress_video / progress_gif
-   * (paths under /microduck_rl/logs, served by the dashboard's /duck_media
-   * route) and a videos[] list of checkpoint clips ({iteration, path, gif};
-   * older jobs' mjlab training clips have no gif). progress_video is a
-   * boolean request flag until the worker replaces it with the path.
+   * A TRAIN job of either robot (or a MicroDuck VIDEO job) stores
+   * progress_video / progress_gif and a videos[] list of checkpoint clips
+   * ({iteration, path, gif}; older duck jobs' mjlab training clips have no
+   * gif), all trainer paths served by the dashboard's /media route; see
+   * rl_agent/media.py. progress_video is a boolean request flag until the
+   * trainer replaces it with the path. A car clip's iteration is the train
+   * step of the model it saved.
    * -------------------------------------------------------------- */
-  const duckMedia = {
-    url: (p) => '/duck_media?path=' + encodeURIComponent(p),
+  const trainingMedia = {
+    url: (p) => '/media?path=' + encodeURIComponent(p),
     progressVideo: (job) => (job && typeof job.progress_video === 'string' ? job.progress_video : ''),
     clips: (job) => (job && Array.isArray(job.videos) ? job.videos.filter((v) => v && v.path) : []),
     has(job) {
-      return !!duckMedia.progressVideo(job) || duckMedia.clips(job).length > 0;
+      return !!trainingMedia.progressVideo(job) || trainingMedia.clips(job).length > 0;
+    },
+    /** Progression video requested and not made yet. */
+    pending(job) {
+      if (!job || job.job_type !== 'TRAIN' || trainingMedia.progressVideo(job)) return false;
+      if (['DONE', 'FAILED', 'CANCELLED', 'CANCELED'].includes(job.status)) return false;
+      // Duck jobs ask for one explicitly; car jobs make one unless told not to.
+      return job.robot === 'microduck' ? job.progress_video === true : job.progress_video !== false;
     },
 
     open(job, title) {
       const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
         .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      const isDuck = job && job.robot === 'microduck';
       const parts = [];
-      const progress = duckMedia.progressVideo(job);
+      const progress = trainingMedia.progressVideo(job);
       if (progress) {
         const gif = typeof job.progress_gif === 'string' ? job.progress_gif : '';
         parts.push('<section class="flex flex-col gap-2">'
           + '<h3 class="m-0 text-sm font-semibold">Progression</h3>'
           + '<p class="m-0 text-xs text-slate-500 dark:text-slate-400">Clips of evenly spaced checkpoints from this '
           + 'training run, stitched when it finished.</p>'
-          + `<video controls autoplay muted loop playsinline class="w-full max-h-[60vh] object-contain rounded-lg bg-black" src="${esc(duckMedia.url(progress))}"></video>`
+          + `<video controls autoplay muted loop playsinline class="w-full max-h-[60vh] object-contain rounded-lg bg-black" src="${esc(trainingMedia.url(progress))}"></video>`
           + '<div class="flex gap-3 text-xs">'
-          + `<a class="underline whitespace-nowrap shrink-0" href="${esc(duckMedia.url(progress))}" target="_blank" rel="noopener">Open MP4</a>`
-          + (gif ? `<a class="underline whitespace-nowrap shrink-0" href="${esc(duckMedia.url(gif))}" target="_blank" rel="noopener">Open GIF</a>` : '')
+          + `<a class="underline whitespace-nowrap shrink-0" href="${esc(trainingMedia.url(progress))}" target="_blank" rel="noopener">Open MP4</a>`
+          + (gif ? `<a class="underline whitespace-nowrap shrink-0" href="${esc(trainingMedia.url(gif))}" target="_blank" rel="noopener">Open GIF</a>` : '')
           + `<span class="font-mono text-slate-500 dark:text-slate-400 truncate min-w-0" title="${esc(progress)}">${esc(progress)}</span>`
           + '</div></section>');
       }
-      const clips = duckMedia.clips(job).slice().sort((a, b) => (a.iteration || 0) - (b.iteration || 0));
+      const clips = trainingMedia.clips(job).slice().sort((a, b) => (a.iteration || 0) - (b.iteration || 0));
       if (clips.length) {
         parts.push('<section class="flex flex-col gap-2">'
-          + `<h3 class="m-0 text-sm font-semibold">Checkpoint clips (${clips.length})</h3>`
+          + `<h3 class="m-0 text-sm font-semibold">${isDuck ? 'Checkpoint' : 'Saved model'} clips (${clips.length})</h3>`
+          + (isDuck ? '' : '<p class="m-0 text-xs text-slate-500 dark:text-slate-400">The start of the eval that '
+            + 'saved each best model, from the eval client\'s overhead camera.</p>')
           + '<div class="grid grid-cols-2 md:grid-cols-3 gap-3">'
           + clips.map((c) => '<figure class="m-0 flex flex-col gap-1">'
-            + `<video controls muted playsinline preload="metadata" class="w-full rounded-md bg-black" src="${esc(duckMedia.url(c.path))}"></video>`
-            + `<figcaption class="text-[11px] text-slate-500 dark:text-slate-400">iteration ${esc(c.iteration ?? '?')}`
-            + (c.gif ? ` · <a class="underline" href="${esc(duckMedia.url(c.gif))}" target="_blank" rel="noopener">GIF</a>` : '')
+            + `<video controls muted playsinline preload="metadata" class="w-full rounded-md bg-black" src="${esc(trainingMedia.url(c.path))}"></video>`
+            + `<figcaption class="text-[11px] text-slate-500 dark:text-slate-400">${isDuck ? 'iteration' : 'step'} ${esc(c.iteration ?? '?')}`
+            + (c.gif ? ` · <a class="underline" href="${esc(trainingMedia.url(c.gif))}" target="_blank" rel="noopener">GIF</a>` : '')
             + '</figcaption>'
             + '</figure>').join('')
           + '</div></section>');
       }
       if (!parts.length) {
         parts.push('<p class="m-0 text-sm text-slate-500 dark:text-slate-400">This training job has no videos yet. '
-          + 'The progression video is rendered when a TRAIN job with progress_video set finishes; '
-          + "select the model on the Models tab and click 'Render video' to make one.</p>");
+          + (isDuck
+            ? 'The progression video is rendered when a TRAIN job with progress_video set finishes; '
+              + "select the model on the Models tab and click 'Render video' to make one."
+            : 'A clip is recorded each time an eval saves a new best model, and the progression video when '
+              + 'training finishes. Jobs on gyms built before training clips get none.')
+          + '</p>');
       }
 
       const backdrop = document.createElement('div');
@@ -592,7 +608,7 @@
             <button data-action="close" class="btn-base btn-secondary">Close</button>
           </div>
         </div>`;
-      backdrop.querySelector('h2').textContent = title || 'MicroDuck videos';
+      backdrop.querySelector('h2').textContent = title || 'Training videos';
       const dialog = backdrop.querySelector('[role="dialog"]');
 
       function close() {
@@ -2059,6 +2075,11 @@
     // TRAIN-only, and omitted when off so legacy documents stay
     // bit-identical (do_job treats missing as false).
     if (o.skip_first_eval && jobType === 'TRAIN') payload.skip_first_eval = true;
+    // Training clips (rl_agent/car_clips.py); the trainer treats missing as on.
+    if (jobType === 'TRAIN' && o.video !== undefined) {
+      payload.video = !!o.video;
+      payload.progress_video = !!o.progress_video;
+    }
 
     if (course && course !== jobOptions.courseDefault) payload.course_type = course;
 
@@ -2125,7 +2146,8 @@
     formatters,
     showToast,
     confirmDialog,
-    duckMedia,
+    trainingMedia,
+    duckMedia: trainingMedia,
     TableView,
     FreshnessIndicator,
     DataWebSocket,

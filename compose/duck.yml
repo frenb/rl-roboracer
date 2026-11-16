@@ -21,6 +21,8 @@ services:
         patches: ./docker/duck_trainer/patches
     restart: unless-stopped
     command: python -u /python_ws/src/duck/worker.py
+    # Covers worker.py's SIGTERM path: STOP_GRACE_S of SIGINT, then SIGKILL, on the training run.
+    stop_grace_period: 60s
     environment:
       - ROBOT_TYPE=microduck
       - DATABASE_NAME=robotaxi
