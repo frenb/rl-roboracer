@@ -25,13 +25,22 @@ async function unityClients() {
   }).sort((a, b) => (a.instance ?? 99) - (b.instance ?? 99));
 }
 
-/** robotaxi.py processes in sim-controller (not the bash/tee wrappers around them). */
+/**
+ * Top-level robotaxi.py processes in sim-controller (not the bash/tee wrappers
+ * around them). A running job forks one env worker per client with the same
+ * command line; those are children of a trainer and are counted, not listed.
+ */
 async function trainers() {
-  const out = await sim(['-T', 'sim-controller', 'ps', '-eo', 'pid,etimes,args']);
-  return out.split('\n').map((l) => /^\s*(\d+)\s+(\d+)\s+(\S*python\S*\s.*robotaxi\.py.*)$/.exec(l)).filter(Boolean).map((m) => {
-    const n = /--num-envs[ =](\d+)/.exec(m[3]);
-    return { pid: Number(m[1]), uptime_min: Math.round(Number(m[2]) / 60), num_envs: n ? Number(n[1]) : 1, cmd: m[3].trim() };
+  const out = await sim(['-T', 'sim-controller', 'ps', '-eo', 'pid,ppid,etimes,args']);
+  const procs = out.split('\n').map((l) => /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S*python\S*\s.*robotaxi\.py.*)$/.exec(l)).filter(Boolean).map((m) => {
+    const n = /--num-envs[ =](\d+)/.exec(m[4]);
+    return { pid: Number(m[1]), ppid: Number(m[2]), uptime_min: Math.round(Number(m[3]) / 60), num_envs: n ? Number(n[1]) : 1, cmd: m[4].trim() };
   });
+  const pids = new Set(procs.map((p) => p.pid));
+  return procs.filter((p) => !pids.has(p.ppid)).map(({ ppid, ...p }) => ({
+    ...p,
+    env_workers: procs.filter((c) => c.ppid === p.pid).length,
+  }));
 }
 
 async function activeCarJobs() {

@@ -12,7 +12,7 @@
   "scripts": {
     "start": "node src/index.js",
     "smoke": "node test/smoke.js",
-    "test": "node test/tools.js"
+    "test": "node test/jobDecisions.js && node test/tools.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

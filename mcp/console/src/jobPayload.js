@@ -55,6 +55,9 @@ export function pickLists() {
     demos: () => load('demos', '/get_demos'),
     rewardDesigns: () => load('rd', '/get_reward_designs'),
     experimentDesigns: () => load('ed', '/get_experiment_designs'),
+    jobs: () => load('jobs', '/get_jobs'),
+    models: () => load('models', '/get_models'),
+    scores: () => load('scores', '/leaderboard_scores'),
     // /get_models carries every car model; the duck's come from their own endpoint.
     duckModels: () => (cache.dm ||= list('/get_robot_models?robot=microduck')),
   };
@@ -95,11 +98,12 @@ const CAR_ONLY_ARGS = [
   'model_type', 'robot_type', 'course_type', 'demo', 'demo_job_id', 'allow_no_demos', 'num_iterations',
   'training_steps', 'skip_first_eval', 'corner_radius_val', 'curvature_difficulty_val', 'demo_step_budget',
   'num_trials', 'num_eval_episodes', 'location', 'eval_all_stages', 'eval_stage_start', 'eval_stage_end',
+  'headless',
 ];
 // Duck-only arguments, reported when a car job is given them.
 const DUCK_ONLY_ARGS = [
-  'name', 'init_from', 'model', 'num_envs', 'max_iterations', 'save_interval', 'seed', 'video',
-  'progress_video', 'eval_num_envs', 'eval_steps',
+  'name', 'init_from', 'model', 'num_envs', 'max_iterations', 'save_interval', 'seed',
+  'eval_num_envs', 'eval_steps',
 ];
 
 function positiveInt(v, label) {
@@ -238,6 +242,8 @@ export async function buildJob(o, lists = pickLists()) {
     eval_stage_start: isEval,
     eval_stage_end: isEval,
     skip_first_eval: jobType === 'TRAIN',
+    video: jobType === 'TRAIN',
+    progress_video: jobType === 'TRAIN',
   };
   for (const [k, ok] of Object.entries(typeOnly)) {
     if (!ok && o[k] !== undefined && o[k] !== false && o[k] !== '') notes.push(`${k} ignored: not used by ${jobType} jobs`);
@@ -257,6 +263,17 @@ export async function buildJob(o, lists = pickLists()) {
     if (n !== undefined) payload[k] = n;
   }
   if (o.skip_first_eval && jobType === 'TRAIN') payload.skip_first_eval = true;
+  // Training clips (rl_agent/car_clips.py), on unless turned off, as in the New Job dialog.
+  if (jobType === 'TRAIN') {
+    payload.video = o.video !== false;
+    payload.progress_video = o.progress_video !== false;
+  }
+  // The Unity supervisors relaunch on the gym switch at job start, so a job
+  // without a gym can't change how its clients run.
+  if (o.headless) {
+    if (!gym) throw new Error('headless needs a gym: the clients are relaunched headless when the job switches to its gym');
+    payload.headless = true;
+  }
   if (course) payload.course_type = course;
   if (isEval && o.location) payload.location = String(o.location);
 

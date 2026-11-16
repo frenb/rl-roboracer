@@ -2,7 +2,8 @@ import { z } from 'zod';
 import path from 'node:path';
 import { get, list, post, LOG_WS_URL, BASE_URL } from '../api.js';
 import { defineTool, confirmArg, requireConfirm, objectIdTime, resolveRow, compact, truncate, robotArg, robotOf, isDuck } from '../util.js';
-import { buildJob, insertJob, ALL_JOB_TYPES, MODEL_TYPES, JOB_STATUSES, COURSES } from '../jobPayload.js';
+import { buildJob, insertJob, pickLists, ALL_JOB_TYPES, MODEL_TYPES, JOB_STATUSES, COURSES } from '../jobPayload.js';
+import { planJob, loadPlanData, DEFAULTABLE } from '../jobDecisions.js';
 import { composeExec, composeLogs, REPO_ROOT } from '../docker.js';
 
 const JOB_ROW_KEYS = [
@@ -18,29 +19,36 @@ const DUCK_ROW_KEYS = [
 ];
 const DUCK_EVAL_KEYS = ['episodes', 'falls', 'fall_rate', 'mean_return', 'mean_episode_length', 'num_envs', 'steps'];
 
-const DUCK_LOGS_PREFIX = '/microduck_rl/logs/';
-const DUCK_HOST_ROOT = path.join(REPO_ROOT, '..', 'saved_models', 'microduck');
+// Trainer paths of training videos (rl_agent/media.py) and where they are on
+// this host; the dashboard's /media route serves the same two roots.
+const SAVED_MODELS_HOST = path.join(REPO_ROOT, '..', 'saved_models');
+const MEDIA_ROOTS = [
+  ['/microduck_rl/logs/', path.join(SAVED_MODELS_HOST, 'microduck')],
+  ['/saved_models/', SAVED_MODELS_HOST],
+];
 
-/** A duck-trainer media path as a dashboard URL and the file on this host. */
-function duckMedia(p) {
-  if (typeof p !== 'string' || !p.startsWith(DUCK_LOGS_PREFIX)) return null;
+/** A trainer media path as a dashboard URL and the file on this host. */
+function mediaFile(p) {
+  const root = typeof p === 'string' && MEDIA_ROOTS.find(([prefix]) => p.startsWith(prefix));
+  if (!root) return null;
   return {
-    url: `${BASE_URL}/duck_media?path=${encodeURIComponent(p)}`,
-    host_path: path.join(DUCK_HOST_ROOT, ...p.slice(DUCK_LOGS_PREFIX.length).split('/')),
+    url: `${BASE_URL}/media?path=${encodeURIComponent(p)}`,
+    host_path: path.join(root[1], ...p.slice(root[0].length).split('/')),
   };
 }
 
-/** Progression video, its GIF and the checkpoint clips (each with its GIF) of a duck job, or null. */
-export function duckJobMedia(j) {
+/** Progression video, its GIF and the checkpoint clips (each with its GIF) of a training job, or null.
+ * A car clip's iteration is the train step of the eval it recorded. */
+export function jobMedia(j) {
   const media = {};
-  const video = duckMedia(j.progress_video);
-  const gif = duckMedia(j.progress_gif);
+  const video = mediaFile(j.progress_video);
+  const gif = mediaFile(j.progress_gif);
   if (video) media.progress_video = video;
   if (gif) media.progress_gif = gif;
   const clips = (Array.isArray(j.videos) ? j.videos : [])
     .map((c) => {
-      const clip = { iteration: c && c.iteration, ...duckMedia(c && c.path) };
-      const clipGif = duckMedia(c && c.gif);
+      const clip = { iteration: c && c.iteration, ...mediaFile(c && c.path) };
+      const clipGif = mediaFile(c && c.gif);
       if (clipGif) clip.gif = clipGif;
       return clip;
     })
@@ -54,10 +62,8 @@ export function jobRow(j) {
   const row = { _id: String(j._id), created_at: objectIdTime(j._id), robot: robotOf(j), ...compact(j, duck ? DUCK_ROW_KEYS : JOB_ROW_KEYS) };
   if (typeof row.percent_complete === 'number') row.percent_complete = Math.round(row.percent_complete * 10) / 10;
   if (duck && j.eval_results) row.eval_results = compact(j.eval_results, DUCK_EVAL_KEYS);
-  if (duck) {
-    const media = duckJobMedia(j);
-    if (media) row.media = { ...media, training_clips: media.training_clips && media.training_clips.length };
-  }
+  const media = jobMedia(j);
+  if (media) row.media = { ...media, training_clips: media.training_clips && media.training_clips.length };
   if (j.eval_error) row.eval_error = truncate(j.eval_error, 300);
   return row;
 }
@@ -109,8 +115,12 @@ const jobInput = {
   max_iterations: z.number().int().optional().describe('microduck TRAIN: PPO iterations. Worker default 1000.'),
   save_interval: z.number().int().optional().describe('microduck TRAIN: iterations between checkpoints (default 50; also the most a pause loses).'),
   seed: z.number().int().optional().describe('microduck TRAIN.'),
-  video: z.boolean().optional().describe('microduck TRAIN: an MP4 + GIF clip of each checkpoint, rendered in mjlab beside training (mjlab and Unity tasks alike; training does not wait). Default true.'),
-  progress_video: z.boolean().optional().describe('microduck TRAIN: progression video stitched from evenly spaced checkpoint clips when training finishes. Default true.'),
+  video: z.boolean().optional().describe('TRAIN, both robots: an MP4 + GIF clip of each checkpoint; training does not wait for it. '
+    + 'microduck: rendered in mjlab beside training (mjlab and Unity tasks alike). roboracer: one per eval, its first episode (up to 2 min) '
+    + 'from the eval client\'s follow camera, also linked from the best model it saves (gyms built before training clips send none). Default true.'),
+  progress_video: z.boolean().optional().describe('TRAIN, both robots: progression video stitched from evenly spaced checkpoint clips when training finishes. Default true.'),
+  headless: z.boolean().optional().describe('roboracer, needs gym: run the Unity car clients without windows (-batchmode) for this job; they still render on the GPU, '
+    + 'so camera courses and clips work. The clients are relaunched when the job starts, and again windowed by the next job without it. Default false.'),
   eval_num_envs: z.number().int().optional().describe('microduck EVAL: robots in parallel (default 512).'),
   eval_steps: z.number().int().optional().describe('microduck EVAL: control steps at 50 Hz (default 1000 = 20 s).'),
 };
@@ -161,13 +171,14 @@ export function register(server) {
 
   defineTool(server, 'get_job', {
     title: 'Get job',
-    description: 'Full job document by id (or the last 8 characters of it). microduck jobs with videos also get media: '
-      + 'dashboard URLs and host file paths for the progression video, its GIF and the training clips.',
+    description: 'Full job document by id (or the last 8 characters of it). Training jobs with videos also get media: '
+      + 'dashboard URLs and host file paths for the progression video, its GIF and the training clips '
+      + '(a roboracer clip\'s iteration is the train step of the model it saved).',
     readOnly: true,
     input: { id: z.string() },
   }, async ({ id }) => {
     const job = resolveRow(await list('/get_jobs'), id, 'job');
-    const media = isDuck(job) ? duckJobMedia(job) : null;
+    const media = jobMedia(job);
     return media ? { ...job, media } : job;
   });
 
@@ -177,11 +188,38 @@ export function register(server) {
       + 'refuses a TRAIN job whose experiment design needs demos the course lacks, unless demo or allow_no_demos is given. '
       + 'microduck (mjlab + PPO): TRAIN on a gym (task), or EVAL / EXPORT / VIDEO of a model. Builds the same document as '
       + 'the dialog (blank fields omitted so the worker applies its defaults); arguments for the other robot are dropped '
-      + 'with a note. Use dry_run to preview the document.',
-    input: { ...jobInput, dry_run: z.boolean().optional().describe('Return the document without queueing it.') },
+      + 'with a note. Use dry_run to preview the document. '
+      + 'TRAIN jobs (and BC_TRAINING_ONLY, for demos) are not queued while the expert demos, iterations, reward design or '
+      + 'experiment design are left open: the reply is needs_decision with a question per open setting, each with options '
+      + '(recommended first, with reasons from the leaderboard, recent jobs and gym defaults). Put those questions to the '
+      + 'user, then call again with the chosen values, or name the setting in use_defaults when they chose its default. '
+      + 'Demos are matched to the course and gym: the only set recorded on the job\'s gym is picked by itself, several '
+      + 'or none are asked about, and a camera/flat mismatch is refused.',
+    input: {
+      ...jobInput,
+      use_defaults: z.array(z.enum(DEFAULTABLE)).optional().describe('Settings the user chose to leave at their default '
+        + '(gym, course or trainer default) rather than be asked about. Only list a setting the user chose this way.'),
+      dry_run: z.boolean().optional().describe('Return the document, and any open questions, without queueing it.'),
+    },
   }, async (args) => {
-    const { payload, notes } = await buildJob(args);
-    if (args.dry_run) return { dry_run: true, job: payload, notes };
+    const lists = pickLists();
+    const plan = planJob(args, await loadPlanData(lists));
+    const merged = { ...args, ...plan.resolved };
+    const { payload, notes } = await buildJob(merged, lists);
+    notes.unshift(...plan.notes);
+    if (args.dry_run) return { dry_run: true, job: payload, notes, questions: plan.questions };
+    if (plan.questions.length) {
+      return {
+        needs_decision: true,
+        queued: false,
+        ask_user: 'Nothing was queued. Ask the user each question below, showing its options with the recommended one '
+          + 'first and its reason; don\'t answer them yourself unless the user already said so. Then call create_job '
+          + 'again with the same arguments plus each choice: the option\'s value as that setting, or the setting '
+          + 'added to use_defaults for an option marked use_default.',
+        questions: plan.questions,
+        notes,
+      };
+    }
     const id = await insertJob(payload);
     return { created: id, job: payload, notes };
   });

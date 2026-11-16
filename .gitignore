@@ -117,3 +117,8 @@ unity/Assets/drosophila.unity*
 # Frames from the watermarked Envato stock preview, used only as a flight-path
 # reference for the fly animation. Not ours to redistribute.
 docs/video/plane-ref/
+
+# Unity IDE / crash-recovery dirs
+unity/.vscode/
+unity6.6/Assets/_Recovery*
+

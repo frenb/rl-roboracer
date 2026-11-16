@@ -25,7 +25,10 @@ export function createServer() {
         + 'Unity car clients on this host. Two robots share the queue: roboracer (car, Unity + SAC; the default) and '
         + 'microduck (mjlab + PPO, run by the duck worker). Jobs, models, gyms, reward and experiment designs and logs take '
         + 'a robot argument; the weakness map, demos, releases and Unity tools are roboracer only. '
-        + 'Ids may be given in full or as the last 8 characters the dashboard shows; designs and gyms also by name.',
+        + 'Ids may be given in full or as the last 8 characters the dashboard shows; designs and gyms also by name. '
+        + 'Creating training jobs: pass only the settings the user gave. create_job answers needs_decision when the expert '
+        + 'demos, iterations, reward design or experiment design are open or ambiguous; ask the user those questions, '
+        + 'options with the recommended one first, and call again with their answers. Don\'t fill them in yourself.',
     },
   );
   for (const group of [jobs, weakness, models, designs, gymsDemos, madscientist, releases, unity]) group.register(server);

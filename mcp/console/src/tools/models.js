@@ -3,7 +3,8 @@ import { get, list, post, BASE_URL } from '../api.js';
 import { defineTool, confirmArg, requireConfirm, resolveRow, compact, robotArg, robotOf, isDuck } from '../util.js';
 import { buildJob, buildDuckJob, insertJob, pickLists, MODEL_TYPES, COURSES, SCRATCH_BUILT_POLICIES, FLY_POLICY_COURSE } from '../jobPayload.js';
 import { summary, compareSamples, round } from '../stats.js';
-import { duckJobMedia } from './jobs.js';
+import { METRICS, runsFor, pooled } from '../scores.js';
+import { jobMedia } from './jobs.js';
 
 const MODEL_ROW_KEYS = [
   'create_date', 'location', 'model_type', 'course_type', 'training_iterations', 'avg_return',
@@ -26,25 +27,6 @@ function duckEval(m) {
   const r = m.eval_results;
   if (!r) return { runs: 0 };
   return round({ runs: 1, ...compact(r, ['episodes', 'falls', 'fall_rate', 'mean_return', 'mean_episode_length', 'mean_reward_per_step', 'num_envs', 'steps']) });
-}
-
-// Per-trial arrays on a leaderboard_scores row, by metric name.
-const METRICS = {
-  score: 'scores',
-  goals_per_episode: 'avg_goals_per_episode',
-  speed: 'avg_speeds',
-  episode_length: 'episode_lengths',
-};
-
-/** Eval runs for a model: linked by model_id, or by path for rows older than that link. */
-function runsFor(model, scores) {
-  const id = String(model._id);
-  return scores.filter((s) => String(s.model_id || '') === id || (!s.model_id && model.location && s.path === model.location));
-}
-
-function pooled(runs, metric) {
-  const key = METRICS[metric];
-  return runs.flatMap((r) => (Array.isArray(r[key]) ? r[key] : [])).map(Number).filter(Number.isFinite);
 }
 
 function evalSummary(runs) {
@@ -115,11 +97,15 @@ export function register(server) {
         .filter((j) => isDuck(j) && j.job_type === 'EVAL' && j.checkpoint === model.location)
         .map((j) => ({ job: String(j._id), status: j.status, ended_at: j.ended_at || null, eval_results: j.eval_results || null }));
       const trainJob = jobs.find((j) => String(j._id) === String(model.job_id));
-      const media = trainJob ? duckJobMedia(trainJob) : null;
+      const media = trainJob ? jobMedia(trainJob) : null;
       return { model, eval_summary: duckEval(model), eval_jobs: evals, ...(media ? { media } : {}) };
     }
     const runs = runsFor(model, scores);
-    return { model, eval_summary: evalSummary(runs), eval_runs: runs };
+    // A car model with its own clip: its training job's videos.
+    const trainJob = model.clip && model.job_id
+      ? (await list('/get_jobs')).find((j) => String(j._id) === String(model.job_id)) : null;
+    const media = trainJob ? jobMedia(trainJob) : null;
+    return { model, eval_summary: evalSummary(runs), eval_runs: runs, ...(media ? { media } : {}) };
   });
 
   defineTool(server, 'get_model_reward_source', {

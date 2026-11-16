@@ -126,9 +126,11 @@ const mediaJob = (withMedia.jobs || []).find((j) => j.media && j.media.progress_
 if (mediaJob) {
   const full = await call('get_job', { id: mediaJob._id }, { check: (d) => assert(d.media && d.media.progress_video.url, 'media urls') });
   const res = await fetch(full.media.progress_video.url, { headers: { Range: 'bytes=0-99' } });
-  results.push({ ok: res.status === 206, name: 'GET /duck_media', why: `HTTP ${res.status}` });
-  const bad = await fetch(full.media.progress_video.url.replace(/path=[^&]+/, 'path=' + encodeURIComponent('/microduck_rl/logs/../../etc/passwd')));
-  results.push({ ok: bad.status === 400, name: 'GET /duck_media outside root', why: `HTTP ${bad.status}` });
+  results.push({ ok: res.status === 206, name: 'GET /media', why: `HTTP ${res.status}` });
+  for (const escape of ['/microduck_rl/logs/../../etc/passwd', '/saved_models/../etc/passwd']) {
+    const bad = await fetch(full.media.progress_video.url.replace(/path=[^&]+/, 'path=' + encodeURIComponent(escape)));
+    results.push({ ok: bad.status === 400, name: `GET /media ${escape}`, why: `HTTP ${bad.status}` });
+  }
 }
 
 // ---- job builder rules (dry runs) ----
