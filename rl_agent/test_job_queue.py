@@ -77,18 +77,34 @@ def test_running_job_blocks_other_robot_even_if_its_job_is_older(db):
     assert not claim(db, "microduck")
 
 
-def test_dead_worker_does_not_block(db):
+def test_dead_workers_running_job_still_blocks(db):
+    alive(db, "roboracer")
+    alive(db, "microduck", age_s=job_queue.HEARTBEAT_TTL_S + 1)
+    add_job(db, 1, status="IN_PROGRESS", robot="microduck")
+    add_job(db, 2)
+    allowed, reason = job_queue.may_claim(db, "roboracer", now=NOW)
+    assert not allowed
+    assert "microduck worker is offline" in reason
+
+
+def test_dead_workers_queued_job_keeps_its_place(db):
     alive(db, "roboracer")
     alive(db, "microduck", age_s=job_queue.HEARTBEAT_TTL_S + 1)
     add_job(db, 1, robot="microduck")
-    add_job(db, 2, status="IN_PROGRESS", robot="microduck")
-    add_job(db, 3)
-    assert claim(db, "roboracer")
+    add_job(db, 2)
+    assert not claim(db, "roboracer")
 
 
-def test_unknown_worker_does_not_block(db):
+def test_unknown_workers_queued_job_keeps_its_place(db):
     alive(db, "roboracer")
     add_job(db, 1, robot="microduck")
+    add_job(db, 2)
+    assert not claim(db, "roboracer")
+
+
+def test_cancelled_jobs_do_not_hold_the_queue(db):
+    alive(db, "roboracer")
+    add_job(db, 1, status="CANCELLED", robot="microduck")
     add_job(db, 2)
     assert claim(db, "roboracer")
 

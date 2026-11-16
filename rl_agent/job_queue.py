@@ -5,9 +5,10 @@ same ``jobs`` collection. They share one GPU, so the queue is drained
 strictly first-come-first-served across robots: a worker only claims work
 when the oldest queued job is its own and no other robot's job is running.
 
-Workers publish a heartbeat to ``db.workers``. Jobs for a robot with no live
-worker never block the others; otherwise queuing a duck job while the duck
-container is down would stall the car queue forever.
+A job keeps its place until it is DONE, FAILED, CANCELLED or PAUSED, even
+while its robot's worker is down: the queue waits for that worker rather
+than run later jobs first. Workers publish a heartbeat to ``db.workers`` so
+the wait reason can say the blocking robot's worker is offline.
 
 Jobs without a ``robot`` field predate multi-robot support and belong to
 ``roboracer``.
@@ -104,25 +105,25 @@ def may_claim(db, robot, now=None):
     """Return ``(allowed, reason)`` for ``robot``'s worker picking up work.
 
     Allowed when the robot already has a job IN_PROGRESS (resume after a
-    restart), or when nothing else is running and the oldest NOT_STARTED job
-    among robots with a live worker is this robot's.
+    restart), or when no other robot's job is running and the oldest
+    NOT_STARTED job is this robot's.
     """
-    live = live_robots(db, now) | {robot}
-    others = [r for r in live if r != robot]
-    other_values = [v for r in others for v in robot_values(r)]
+    mine = robot_filter(robot)
+    running = db.jobs.find_one({"status": "IN_PROGRESS", "robot": {"$nin": robot_values(robot)}},
+                               {"robot": 1})
+    if running is not None:
+        return False, _blocked(db, running, "is running", now)
 
-    if other_values:
-        running = db.jobs.find_one(
-            {"status": "IN_PROGRESS", "robot": {"$in": other_values}},
-            {"robot": 1})
-        if running is not None:
-            return False, f"{job_robot(running)} job {running['_id']} is running"
-
-    if db.jobs.find_one({"status": "IN_PROGRESS", **robot_filter(robot)}, {"_id": 1}):
+    if db.jobs.find_one({"status": "IN_PROGRESS", **mine}, {"_id": 1}):
         return True, "own job in progress"
 
-    live_values = robot_values(robot) + other_values
-    head = oldest(db, {"status": "NOT_STARTED", "robot": {"$in": live_values}}, {"robot": 1})
+    head = oldest(db, {"status": "NOT_STARTED"}, {"robot": 1})
     if head is None or job_robot(head) == robot:
         return True, "head of queue"
-    return False, f"{job_robot(head)} job {head['_id']} is ahead in the queue"
+    return False, _blocked(db, head, "is ahead in the queue", now)
+
+
+def _blocked(db, job, what, now):
+    owner = job_robot(job)
+    offline = "" if owner in live_robots(db, now) else f" ({owner} worker is offline)"
+    return f"{owner} job {job['_id']} {what}{offline}"

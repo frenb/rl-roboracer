@@ -109,11 +109,11 @@ CAMERA_VECTOR_WIDTHS = {
     "donut_camera": 31,
     "donut_camera_no_rays": 2,
 }
-# First camera corpus. Reverb holds float32 images, so a 50,000-step
-# prefill is about 4 GB on top of the online buffer. Keep a smaller
-# experiment-design cap; never exceed this until one BC+AWAC run has
-# finished without swapping.
-CAMERA_PREFILL_CAP = 10000
+# Reverb holds camera images as uint8 (~21 KB a step, see
+# replay.store_images_uint8), so 100,000 demos are about 2.1 GB. A job
+# resumed from a float32 Reverb checkpoint stores ~85 KB a step; its
+# design's demo_prefill_count must stay at 50,000 or less to fit WSL2.
+CAMERA_PREFILL_CAP = 100000
 # Bounded shuffle so the stream mixes rows without stacking every image.
 CAMERA_SHUFFLE_BUFFER = 10000
 COURSES_WITHOUT_DEMOS = frozenset({

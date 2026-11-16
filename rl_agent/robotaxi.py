@@ -135,6 +135,7 @@ from tf_agents.agents.sac import sac_agent
 from tf_agents.agents.sac import tanh_normal_projection_network
 from tf_agents.metrics import py_metrics
 from tf_agents.networks import actor_distribution_network
+from tf_agents.policies import actor_policy
 from tf_agents.policies import greedy_policy
 from tf_agents.policies import py_tf_eager_policy
 from tf_agents.policies import random_py_policy
@@ -160,7 +161,8 @@ from pymongo import MongoClient
 
 from environments.courses import donut_course,simple_course
 from envs import make_env
-from replay import make_local_replay
+from replay import (make_local_replay, has_image_observation,
+                    checkpoint_allows_uint8_images)
 import collect_training_data
 import demos_registry
 from rollout_viz import get_viz
@@ -1389,6 +1391,9 @@ def main(
     # with a BC-fitted actor and a random critic whose Q-gradients pull the
     # actor off the clone before the critic has learned anything. 0 = off.
     critic_warmup_steps_val=0,
+    # Jump-Start RL guide/learner handoff stages (see jsrl.py). 0 = off.
+    jsrl_stages_val=0,
+    jsrl_tolerance_val=0.9,
     batch_size_val=256,
     critic_learning_rate_val=3e-5,
     actor_learning_rate_val=3e-5,
@@ -2014,24 +2019,30 @@ def main(
                 kernel_initializer='glorot_uniform',
                 last_kernel_initializer='glorot_uniform')
     
-    # Actor network.
-    with strategy.scope():
+    # Actor network. A factory rather than Network.copy(): copy() reuses the
+    # camera preprocessing layer objects, so the copy would share their
+    # weights. The JSRL guide needs a fully separate actor.
+    def _make_actor_net(name="ActorDistributionNetwork"):
         if _dict_obs_course:
-            actor_net = actor_distribution_network.ActorDistributionNetwork(
+            return actor_distribution_network.ActorDistributionNetwork(
                 observation_spec,
                 action_spec,
                 preprocessing_layers=camera_preprocessing_layers(),
                 preprocessing_combiner=camera_preprocessing_combiner(),
                 fc_layer_params=actor_fc_layer_params,
                 continuous_projection_net=(
-                    tanh_normal_projection_network.TanhNormalProjectionNetwork))
-        else:
-            actor_net = actor_distribution_network.ActorDistributionNetwork(
-                observation_spec,
-                action_spec,
-                fc_layer_params=actor_fc_layer_params,
-                continuous_projection_net=(
-                    tanh_normal_projection_network.TanhNormalProjectionNetwork))
+                    tanh_normal_projection_network.TanhNormalProjectionNetwork),
+                name=name)
+        return actor_distribution_network.ActorDistributionNetwork(
+            observation_spec,
+            action_spec,
+            fc_layer_params=actor_fc_layer_params,
+            continuous_projection_net=(
+                tanh_normal_projection_network.TanhNormalProjectionNetwork),
+            name=name)
+
+    with strategy.scope():
+        actor_net = _make_actor_net()
 
     trajectory_dataset = None
     _dataset_with_source = None
@@ -2394,6 +2405,11 @@ def main(
     # eval's duration - a 20-minute eval froze the bar for 3 hours of
     # healthy training. ~2 minutes at fly_donut's 0.65 s/step.
     PROGRESS_UPDATE_INTERVAL = 200
+    _store_images_uint8 = (
+        has_image_observation(tf_agent.collect_data_spec)
+        and checkpoint_allows_uint8_images(_reverb_ckpt_dir))
+    print(f"main: replay image storage = "
+          f"{'uint8' if _store_images_uint8 else 'float32'}", flush=True)
     (reverb_server, reverb_replay, dataset,
      rb_observer, expert_observer,
      demo_replay, demo_observer) = make_local_replay(
@@ -2408,7 +2424,8 @@ def main(
         # behavior bit-identical (demo prefill into the online table).
         demo_capacity=demo_min_keep,
         demo_sample_ratio=demo_sample_ratio,
-        checkpointing_dir=_reverb_ckpt_dir)
+        checkpointing_dir=_reverb_ckpt_dir,
+        store_images_uint8=_store_images_uint8)
     table_name = 'uniform_table'
     experience_dataset_fn = lambda: dataset
     # AWAC: attach a demo-only iterator so the agent can sample expert
@@ -2619,6 +2636,36 @@ def main(
             f"shortly).",
             flush=True)
 
+    # Jump-Start RL guide: a frozen copy of the BC actor, saved beside the
+    # Learner checkpoint because on resume actor_net holds the learner.
+    _jsrl_curriculum = None
+    _jsrl_guide_policy = None
+    if int(jsrl_stages_val or 0) > 0:
+        import jsrl
+        if not is_resume_val and _bc_steps <= 0:
+            raise ValueError(
+                "jsrl_stages > 0 needs a BC guide: set bc_pretrain_steps > 0 "
+                "and give the job expert demos")
+        _guide_net = _make_actor_net(name="JsrlGuideActor")
+        _guide_tf_policy = greedy_policy.GreedyPolicy(actor_policy.ActorPolicy(
+            time_step_spec, action_spec, actor_network=_guide_net,
+            training=False))
+        if is_resume_val:
+            if not jsrl.load_guide(learner_dir, _guide_net):
+                raise ValueError(
+                    f"JSRL resume: no {jsrl.GUIDE_WEIGHTS_FILE} in {learner_dir}")
+        else:
+            _guide_net.set_weights(actor_net.get_weights())
+            jsrl.save_guide(learner_dir, _guide_net)
+        _jsrl_guide_policy = py_tf_eager_policy.PyTFEagerPolicy(
+            _guide_tf_policy, use_tf_function=True)
+        _jsrl_curriculum = jsrl.JsrlCurriculum(
+            jsrl_stages_val, jsrl_tolerance_val)
+        print(f"main: JSRL ENABLED (stages={int(jsrl_stages_val)}, "
+              f"tolerance={float(jsrl_tolerance_val)}, guide="
+              f"{'restored' if is_resume_val else 'BC actor copy'})",
+              flush=True)
+
     # ---- Reverb table restore (resume path) --------------------------------
     # On a clean pause the trainer calls reverb_server.localhost_client()
     # .checkpoint() which writes the full online table to _reverb_ckpt_dir.
@@ -2727,9 +2774,12 @@ def main(
 
     env_step_metric = py_metrics.EnvironmentSteps()
     print("number of steps: " + str(env_step_metric.result()))
+    _jsrl_collect_policy = None
+    if _jsrl_curriculum is not None:
+        _jsrl_collect_policy = jsrl.JsrlPolicy(_jsrl_guide_policy, collect_policy)
     collect_actor = actor.Actor(
         env,
-        collect_policy,
+        _jsrl_collect_policy or collect_policy,
         train_step,
         steps_per_run=1,
         metrics=actor.collect_metrics(10),
@@ -2745,12 +2795,16 @@ def main(
                               num_envs=num_envs, env_step_metric=env_step_metric)
 
     _phase("learner+eval_actor build")
+    # Overhead-camera clip of each eval's first episode.
+    from car_clips import CarClips
+    car_clips = CarClips(eval_env, job_id, db)
     eval_actor = actor.Actor(
         eval_env,
         eval_policy,
         train_step,
         episodes_per_run=num_eval_episodes,
         metrics=actor.eval_metrics(num_eval_episodes),
+        observers=[car_clips.observe],
         summary_dir=eval_dir,
         # Plot EVERY eval. tf-agents' Actor.run() only writes summaries when
         # `train_step - last_summary >= summary_interval`, and the default
@@ -2766,7 +2820,49 @@ def main(
         # run() call; 0 would disable summaries entirely (the guard is
         # `summary_interval > 0`), so do not "turn it off" with 0.
         summary_interval=1)
-    
+
+    # JSRL gate evals (guide alone, then guide+learner) get their own actor
+    # and TensorBoard run so they never mix into the learner's eval curve.
+    _jsrl_eval_policy = None
+    _jsrl_eval_actor = None
+    if _jsrl_curriculum is not None:
+        _jsrl_eval_policy = jsrl.JsrlPolicy(_jsrl_guide_policy, eval_policy)
+        _jsrl_eval_actor = actor.Actor(
+            eval_env,
+            _jsrl_eval_policy,
+            train_step,
+            episodes_per_run=num_eval_episodes,
+            metrics=actor.eval_metrics(num_eval_episodes),
+            summary_dir=os.path.join(os.path.dirname(eval_dir), "jsrl_eval"),
+            summary_interval=1)
+
+    def _run_jsrl_eval(guide_steps):
+        """(AverageReturn, AverageEpisodeLength) with the guide on for guide_steps."""
+        _jsrl_eval_policy.guide_steps = int(guide_steps)
+        set_immediate_reset_on_failure(eval_env, False)
+        try:
+            _jsrl_eval_actor.run()
+        finally:
+            set_immediate_reset_on_failure(eval_env, True)
+        res = {m.name: float(m.result()) for m in _jsrl_eval_actor.metrics}
+        return res["AverageReturn"], res["AverageEpisodeLength"]
+
+    def _jsrl_set_guide_steps():
+        _jsrl_collect_policy.guide_steps = _jsrl_curriculum.guide_steps
+        jsrl.save_state(learner_dir, _jsrl_curriculum)
+
+    if _jsrl_curriculum is not None:
+        if is_resume_val and jsrl.load_state(learner_dir, _jsrl_curriculum):
+            print(f"main: JSRL RESUME {_jsrl_curriculum.to_dict()}", flush=True)
+        else:
+            _g_ret, _g_len = _run_jsrl_eval(10 ** 9)
+            _jsrl_curriculum.start(_g_len, _g_ret)
+            print(f"main: JSRL guide alone: AverageReturn={_g_ret:.3f} "
+                  f"AverageEpisodeLength={_g_len:.1f} -> horizon="
+                  f"{_jsrl_curriculum.horizon} steps, stage threshold="
+                  f"{_jsrl_curriculum.threshold:.3f}", flush=True)
+        _jsrl_set_guide_steps()
+
     # Triggers to save the agent's policy checkpoints.
     learning_triggers = [
         triggers.PolicySavedModelTrigger(
@@ -2811,7 +2907,7 @@ def main(
     _emergency_state["learner"] = agent_learner
     _emergency_state["train_step"] = train_step
     _emergency_state["job_id"] = job_id
-    
+
     def get_eval_metrics():
         # Pull the NumberOfEpisodes counter out of the eval_actor's
         # metrics list so we can measure episodes-completed-during-this-
@@ -2869,9 +2965,11 @@ def main(
         # enough when there's no learner delay between steps. Toggle it on the
         # eval env (the single-gym eval client in multi-env runs).
         set_immediate_reset_on_failure(eval_env, False)
+        car_clips.start()
         try:
             eval_actor.run()
         finally:
+            car_clips.stop()
             set_immediate_reset_on_failure(eval_env, True)
             _eval_viz_stop.set()
             _eval_viz_thread.join(timeout=1.0)
@@ -2912,6 +3010,69 @@ def main(
         _append_eval_curve(job_id, eval_step, avg_return, avg_ep_len)
         return results
 
+    def _save_best_model(step, metrics):
+        # Export the GREEDY policy (tf_eval_policy = GreedyPolicy(agent
+        # .policy)) so the deployed best model takes the distribution's
+        # MODE (tanh(mean)) instead of sampling. A deployed SAC actor
+        # should drive deterministically; saving the raw stochastic
+        # policy would ship the exploration noise into production. This
+        # matches the greedy eval used to SELECT this best model, so the
+        # exported artifact behaves like what was measured.
+        tf_policy_saver = policy_saver.PolicySaver(tf_eval_policy)
+        save_dir_name=get_save_dir_name(tf_agent)+ "_step_" + str(step)
+        tf_policy_saver.save(save_dir_name)
+        robot_type = os.getenv('ROBOT_TYPE')
+        model_type=get_policy_type_name(tf_agent)
+        training_iterations=num_iterations
+        # Stamp the current env's specs onto the model record
+        # so the Models-tab "Compat" column can flag rows that
+        # were trained against a different observation/action
+        # shape than the live env. observation_spec and
+        # action_spec are the unbatched per-step specs already
+        # in scope from spec_utils.get_tensor_specs(env) above.
+        add_model(
+            save_dir_name,
+            robot_type,
+            model_type,
+            training_iterations,
+            avg_return=metrics["AverageReturn"],
+            observation_spec=observation_spec,
+            action_spec=action_spec,
+            # Capture which reward design produced this
+            # checkpoint so the Models tab can label it and
+            # the Analysis tab can group/compare by design.
+            # None when training used the course default.
+            reward_design=reward_design,
+            # Capture which experiment design (training-loop
+            # hyperparameters) produced this checkpoint. None
+            # means the trainer's hardcoded defaults were used.
+            experiment_design=experiment_design,
+            # Stamp the training job id so the Models tab can
+            # link each row back to its TensorBoard run for
+            # the multi-model TB comparison flow.
+            job_id=job_id,
+            # Stamp the resolved course so the Models tab (and any
+            # downstream EVAL) knows which course/observation this
+            # checkpoint was trained against (donut vs donut_no_hint).
+            course_type=_course_type)
+        car_clips.save_best(step, float(metrics["AverageReturn"]), save_dir_name)
+
+    def _save_if_new_best(metrics):
+        """New-best gate for the evals that run before the training loop.
+
+        On a resume these evaluate the restored weights, which may beat
+        every model saved so far; the in-loop gate never sees them.
+        """
+        nonlocal max_avg_return
+        avg = float(metrics["AverageReturn"])
+        if avg + 1e-5 <= max_avg_return:
+            return
+        max_avg_return = avg
+        step = int(agent_learner.train_step_numpy)
+        _save_best_model(step, metrics)
+        print(f"main: pre-loop eval is a new best ({avg:.4f}) - "
+              f"saved model at train_step={step}", flush=True)
+
     _phase("first_eval")
     if skip_first_eval:
         print(
@@ -2921,6 +3082,7 @@ def main(
         metrics = {"AverageReturn": 0.0, "AverageEpisodeLength": 0.0}
     else:
         metrics = get_eval_metrics()
+        _save_if_new_best(metrics)
 
     def log_eval_metrics(step, metrics):
         eval_results = (', ').join(
@@ -3023,7 +3185,9 @@ def main(
     if skip_first_eval:
         avg_return = metrics["AverageReturn"]
     else:
-        avg_return = get_eval_metrics()["AverageReturn"]
+        pre_train_metrics = get_eval_metrics()
+        _save_if_new_best(pre_train_metrics)
+        avg_return = pre_train_metrics["AverageReturn"]
     returns = [avg_return]
     curr_iteration=0
     print("Num iterations: " + str(num_iterations), flush=True)
@@ -3481,6 +3645,30 @@ def main(
             for name, value in timeout_counts.items():
                 tf.summary.scalar('timeouts/' + name, data=value, step=step)
             log_eval_metrics(step, metrics)
+            if _jsrl_curriculum is not None:
+                _h = _jsrl_curriculum.guide_steps
+                if _h > 0:
+                    _mix_ret, _ = _run_jsrl_eval(_h)
+                else:
+                    _mix_ret = float(metrics["AverageReturn"])
+                _advanced = _jsrl_curriculum.update(_mix_ret)
+                if _advanced:
+                    _jsrl_set_guide_steps()
+                tf.summary.scalar('jsrl/guide_steps', data=_h, step=step)
+                tf.summary.scalar('jsrl/stage', data=_jsrl_curriculum.stage,
+                                  step=step)
+                tf.summary.scalar('jsrl/mix_return', data=_mix_ret, step=step)
+                tf.summary.scalar('jsrl/threshold',
+                                  data=_jsrl_curriculum.threshold, step=step)
+                print(f"JSRL gate: train_step={step} guide_steps={_h} "
+                      f"mix_return={_mix_ret:.3f} "
+                      f"threshold={_jsrl_curriculum.threshold:.3f} "
+                      f"hits={_jsrl_curriculum.hits}/"
+                      f"{_jsrl_curriculum.consecutive} "
+                      f"stage={_jsrl_curriculum.stage}/"
+                      f"{_jsrl_curriculum.stages}"
+                      f"{' ADVANCED -> guide_steps=' + str(_jsrl_curriculum.guide_steps) if _advanced else ''}",
+                      flush=True)
             current_avg_return = metrics["AverageReturn"]
             avg_return_arr.append(current_avg_return)
             avg_return_arr = avg_return_arr[-100:]
@@ -3490,50 +3678,7 @@ def main(
 
             saved_checkpoint = False
             if step >= min_write_step and is_new_max_avg: # step % write_policy_interval == 0
-                # Export the GREEDY policy (tf_eval_policy = GreedyPolicy(agent
-                # .policy)) so the deployed best model takes the distribution's
-                # MODE (tanh(mean)) instead of sampling. A deployed SAC actor
-                # should drive deterministically; saving the raw stochastic
-                # policy would ship the exploration noise into production. This
-                # matches the greedy eval used to SELECT this best model, so the
-                # exported artifact behaves like what was measured.
-                tf_policy_saver = policy_saver.PolicySaver(tf_eval_policy)
-                save_dir_name=get_save_dir_name(tf_agent)+ "_step_" + str(step)
-                tf_policy_saver.save(save_dir_name)
-                robot_type = os.getenv('ROBOT_TYPE')
-                model_type=get_policy_type_name(tf_agent)
-                training_iterations=num_iterations
-                # Stamp the current env's specs onto the model record
-                # so the Models-tab "Compat" column can flag rows that
-                # were trained against a different observation/action
-                # shape than the live env. observation_spec and
-                # action_spec are the unbatched per-step specs already
-                # in scope from spec_utils.get_tensor_specs(env) above.
-                add_model(
-                    save_dir_name,
-                    robot_type,
-                    model_type,
-                    training_iterations,
-                    avg_return=metrics["AverageReturn"],
-                    observation_spec=observation_spec,
-                    action_spec=action_spec,
-                    # Capture which reward design produced this
-                    # checkpoint so the Models tab can label it and
-                    # the Analysis tab can group/compare by design.
-                    # None when training used the course default.
-                    reward_design=reward_design,
-                    # Capture which experiment design (training-loop
-                    # hyperparameters) produced this checkpoint. None
-                    # means the trainer's hardcoded defaults were used.
-                    experiment_design=experiment_design,
-                    # Stamp the training job id so the Models tab can
-                    # link each row back to its TensorBoard run for
-                    # the multi-model TB comparison flow.
-                    job_id=job_id,
-                    # Stamp the resolved course so the Models tab (and any
-                    # downstream EVAL) knows which course/observation this
-                    # checkpoint was trained against (donut vs donut_no_hint).
-                    course_type=_course_type)
+                _save_best_model(step, metrics)
                 saved_checkpoint = True
 
             eval_cycle_elapsed = time.time() - eval_cycle_start
@@ -3564,6 +3709,7 @@ def main(
             update_job(job_id, 100.0, "percent_complete")
         except Exception as _e:  # noqa: BLE001
             print(f"main: final percent_complete=100 write failed: {_e}", flush=True)
+        car_clips.finish()
     rb_observer.close()
     # In multi-env mode rb_observer is the fan-out wrapper; expert_observer
     # is a separate writer into the same table that we have to close on
@@ -4896,6 +5042,9 @@ def _signal_gym_switch(job):
             "gym_id":    str(job.get("gym_id", "")),
             "gym_name":  str(job.get("gym_name", "")),
             "file_path": gym_file_path,
+            # The supervisors relaunch Unity with -batchmode (no window,
+            # still GPU-rendered) when this differs from how it's running.
+            "headless":  bool(job.get("headless")),
         }).encode()
         req = urllib.request.Request(
             "http://dashboard/set_desired_gym",
@@ -4906,7 +5055,8 @@ def _signal_gym_switch(job):
         with urllib.request.urlopen(req, timeout=5) as resp:
             print(
                 f"do_job: gym switch signalled to dashboard "
-                f"({resp.status}): {gym_file_path!r}",
+                f"({resp.status}): {gym_file_path!r}"
+                f"{' headless' if job.get('headless') else ''}",
                 flush=True,
             )
     except Exception as e:
@@ -5130,6 +5280,9 @@ def do_job(job, num_envs=1):
             Returns True if any gym stopped because the job was cancelled.
             """
             _gym_frac = [0.0] * len(_demo_envs)
+            # The real2sim fence track needs the wall-follower expert at the
+            # 17-degree steering limit (see _WallFollower).
+            _wall_follow = "real2sim" in str(job.get("gym_name") or "").lower()
 
             def _on_progress(_gi, _frac):
                 _gym_frac[_gi] = _frac
@@ -5143,7 +5296,7 @@ def do_job(job, num_envs=1):
                     batch_number=batch_number, stage=stage,
                     num_stages=num_stages, goal_budget=goal_budget,
                     gym_index=0, step_budget=step_budget,
-                    on_progress=_on_progress)
+                    on_progress=_on_progress, wall_follow=_wall_follow)
             _cancelled = [False] * len(_demo_envs)
 
             def _run(_gi, _gym_env):
@@ -5152,7 +5305,7 @@ def do_job(job, num_envs=1):
                     batch_number=batch_number, stage=stage,
                     num_stages=num_stages, goal_budget=goal_budget,
                     gym_index=_gi, step_budget=step_budget,
-                    on_progress=_on_progress)
+                    on_progress=_on_progress, wall_follow=_wall_follow)
 
             _threads = [
                 threading.Thread(
@@ -6678,11 +6831,139 @@ def create_traj(
     )
     return traj
 
+
+class _WallFollower:
+    """Lidar wall-follower expert for the real2sim fence track at the 17-degree lock.
+
+    At 17 degrees the full-lock circle (~9.7 sim units at the rear axle) is
+    wider than the ~8.8-unit lane, so a 90-degree corner is only possible
+    from the outer wall with the turn started inside a ~3-unit window; a
+    pure-pursuit or heading-to-goal controller ramps the steering in too
+    gradually to hit it. This drives like a person would: on the straights
+    hold GAP from the outer wall (wall angle from the side and 60-degree
+    rays, F1TENTH-style), and when the forward ray says the far wall is
+    TRIGGER away go to full lock until the car has turned EXIT_TURN degrees.
+    The trigger comes in by TRIGGER_SLOPE per unit the car is further from
+    the outer wall than GAP, since that narrows the window. Tuned offline
+    against the fence layout (car 3.52 x 4.68, wheelbase 2.975, lidar at the
+    car origin 1.75 ahead of the rear axle): once on the line the car laps
+    indefinitely; only spawns in the middle of a corner can't recover.
+    """
+
+    GAP = 3.3            # sim units from the lidar origin to the outer wall on the straights
+    TRIGGER = 13.5       # forward-ray distance (sim units) at which to turn in
+    TRIGGER_SLOPE = 0.5
+    KP = 0.4             # steer command per sim unit of predicted wall-gap error
+    LOOK = 5.0           # sim units ahead at which the wall gap is predicted
+    # Degrees turned before handing back to wall following. The heading comes
+    # from the lidar origin's motion, which leads the rear axle's by ~10
+    # degrees at full lock, so this reads ~90 when the car has turned ~80.
+    EXIT_TURN = 90.0
+    EXIT_FWD = 20.0      # also stop turning once the road ahead is this open (a slow car barely updates its heading)
+    # While turning, ease off the lock if the inner barrier's corner comes
+    # within INNER_CLEAR of the car's flank: the turn-in window is too narrow
+    # for a fixed full-lock arc once the radius varies with speed (9.7-10.9).
+    INNER_CLEAR = 0.6
+    INNER_MIN_LOCK = 0.3
+    # Lidar origin to the car body's edge along the turn-side rays (collider
+    # 3.52 x 4.68, origin 2.33 behind the front): 90, 60 and 30 degrees.
+    BODY_EXTENT = {"side": 1.76, "side60": 1.76 / np.sin(np.radians(60.0)), "side30": 2.33 / np.cos(np.radians(30.0))}
+    BRAKE_FROM = 15.0    # sim units beyond TRIGGER at which slowing for the corner starts
+    CRUISE_SPEED = 2.0   # straight-line target speed
+    MIN_MOVE = 0.02      # per-step displacement below which the heading is held
+
+    def __init__(self, outer_left=True):
+        # The home track runs clockwise, so every corner is a right turn and
+        # the outer wall is on the left; outer_left=False mirrors everything.
+        self.side = 1.0 if outer_left else -1.0
+        self.reset_episode()
+
+    def reset_episode(self):
+        overrides = os.environ.get("WALL_FOLLOW_PARAMS")
+        if overrides and os.path.exists(overrides):
+            try:
+                with open(overrides, encoding="utf-8-sig") as f:
+                    params = {k: float(v) for k, v in json.load(f).items()}
+                if params != getattr(self, "_overrides", None):
+                    print(f"WALL_FOLLOW_PARAMS applied: {params}", flush=True)
+                for k, v in params.items():
+                    setattr(self, k, v)
+                self._overrides = params
+            except (OSError, ValueError) as e:
+                print(f"WALL_FOLLOW_PARAMS ignored: {e}", flush=True)
+        self.turning = False
+        self.turned = 0.0
+        self.fwd = None
+        self._prev_xz = None
+        self._heading = None
+
+    def _turn_lock(self, car):
+        """Fraction of full lock to use mid-turn, from the inner barrier's clearance."""
+        rays = ("right", "forward_right_right", "forward_right") if self.side > 0 else \
+               ("left", "forward_left_left", "forward_left")
+        clear = np.inf
+        for key, extent in zip(rays, (self.BODY_EXTENT["side"], self.BODY_EXTENT["side60"], self.BODY_EXTENT["side30"])):
+            try:
+                clear = min(clear, float(car[key]) - extent)
+            except (KeyError, TypeError, ValueError):
+                pass
+        if not np.isfinite(clear):
+            return 1.0
+        return float(np.clip(clear / self.INNER_CLEAR, self.INNER_MIN_LOCK, 1.0))
+
+    def corner_speed_frac(self):
+        """0 at (and inside) a corner, rising to 1 when the wall ahead is BRAKE_FROM beyond the trigger."""
+        if self.turning:
+            return 0.0
+        if self.fwd is None:
+            return 1.0
+        return float(np.clip((self.fwd - self.TRIGGER) / self.BRAKE_FROM, 0.0, 1.0))
+
+    def steer(self, car):
+        """Steering command in [-1, 1] (+ = right), or None if the rays are missing."""
+        outer, outer60 = ("left", "forward_left_left") if self.side > 0 else ("right", "forward_right_right")
+        try:
+            side = float(car[outer])
+            side60 = float(car[outer60])
+            fwd = float(car["forward"])
+            xz = np.array([float(car["location_x"]), float(car["location_z"])])
+        except (KeyError, TypeError, ValueError):
+            return None
+
+        dyaw = 0.0
+        if self._prev_xz is not None:
+            d = xz - self._prev_xz
+            if np.hypot(*d) > self.MIN_MOVE:
+                heading = np.degrees(np.arctan2(d[0], d[1]))
+                if self._heading is not None:
+                    dyaw = (heading - self._heading + 180.0) % 360.0 - 180.0
+                self._heading = heading
+        self._prev_xz = xz
+
+        self.fwd = fwd
+        if self.turning:
+            self.turned += dyaw * self.side
+            if self.turned < self.EXIT_TURN and fwd < self.EXIT_FWD:
+                return self.side * self._turn_lock(car)
+            self.turning = False
+        if fwd < self.TRIGGER - self.TRIGGER_SLOPE * max(0.0, side - self.GAP):
+            self.turning, self.turned = True, 0.0
+            return self.side * self._turn_lock(car)
+
+        th = np.radians(30.0)
+        alpha = np.arctan2(side60 * np.cos(th) - side, side60 * np.sin(th))
+        gap_ahead = side * np.cos(alpha) + self.LOOK * np.sin(alpha)
+        return float(np.clip(-self.side * self.KP * (gap_ahead - self.GAP), -1.0, 1.0))
+
+
 def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
                          stage=None, num_stages=None, goal_budget=None,
                          flush_every_n_steps=5000, gym_index=0,
-                         step_budget=None, on_progress=None):
+                         step_budget=None, on_progress=None, wall_follow=False):
     """Collects expert demonstrations and returns a dataset of trajectories.
+
+    ``wall_follow`` steers with _WallFollower (the real2sim fence track)
+    instead of the heading-to-goal P-controller.
 
     ``batch_number`` picks the output filename prefix
     (``<batch_number zero-padded>_<sub-batch zero-padded>trajectories.tfrecord``
@@ -6831,7 +7112,14 @@ def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
     # collection jobs; existing tfrecords are unchanged and must be re-
     # collected for this to take effect. 0.2 is >= the action_spec minimum
     # (0.05) so the _DEMO_MIN_ACCEL load filter drops 0 of these rows.
-    min_force=0.2
+    #
+    # Lowered 0.2 -> 0.05 (2026-11-13) for the 17-degree steering limit:
+    # with a 0.2 floor the collector could not shed speed, entered corners
+    # at 2-2.8 m/s against a 0.8-1.6 target and crashed at full lock on
+    # nearly every turn. 0.05 is the action_spec minimum, so the
+    # _DEMO_MIN_ACCEL load filter still keeps every row; the floor is only
+    # reached while braking into a corner, not as a cruise setting.
+    min_force=0.05
     # Simple curvature-scaled heuristic (2026-07-18 rewrite, replacing the
     # previous corner_urgency/clearance-cone/curvature-asymmetry/force-cap
     # system - see git history for that version). That system's extra
@@ -6881,10 +7169,10 @@ def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
     # (e.g. hairpins, right after a reset) and the resulting scaled value can
     # now exceed the [-1,1] action range.
     K_STEERING = 4.0           # proportional gain: heading-error -> steer command (compensates the 180 vs 45 degree normalization mismatch above)
-    MAX_SPEED = 3.5            # m/s target when steering command ~ 0 (straight) - 2.0 -> 5.0 -> 3.5 (2026-07-19): 5.0 let the car overshoot up to 5.8 m/s on long straights (video+log cross-reference via scripts/analyze_video.py) faster than the goal-proximity brake below could react; 3.5 leaves less speed to shed per corner in the first place. Still not a hard cap - see base_force/ClampAccelerationForStandstill (CarController.cs) for the actual physical limits.
-    MIN_SPEED = 0.8            # m/s target at full-lock steering command (unchanged - this is the tight-corner floor and was already working)
+    MAX_SPEED = 2.0            # m/s target when steering command ~ 0 (straight) - 2.0 -> 5.0 -> 3.5 (2026-07-19): 5.0 let the car overshoot up to 5.8 m/s on long straights (video+log cross-reference via scripts/analyze_video.py) faster than the goal-proximity brake below could react; 3.5 leaves less speed to shed per corner in the first place. 3.5 -> 2.0 (2026-11-13): at the 17-degree steering limit the turning circle is ~2.6x wider than at 45 degrees, so corners have to be entered much slower. Still not a hard cap - see base_force/ClampAccelerationForStandstill (CarController.cs) for the actual physical limits.
+    MIN_SPEED = 0.5            # m/s target at full-lock steering command - 0.8 -> 0.5 (2026-11-13) for the 17-degree steering limit
     ACCEL_STEP = 4e-3          # per-step force increase toward target speed (unchanged - braking authority matters more for safety than acceleration authority)
-    DECEL_STEP = 2e-2          # per-step force decrease toward target speed - raised from 8e-3 (2026-07-19): more speed to shed per corner now (up to 4.2 m/s vs 1.2 m/s before), needs more braking authority to actually shed it in time
+    DECEL_STEP = 1e-1          # per-step force decrease toward target speed - 8e-3 -> 2e-2 (2026-07-19) -> 1e-1 (2026-11-13): at 2e-2 the car was still 1-1.5 m/s over target when it reached full lock; 1e-1 takes the force from base_force to min_force in ~5 steps
     # GOAL-PROXIMITY BRAKING (added 2026-07-19): the curvature-based target_speed
     # above only reacts to the CURRENT heading error, which is a purely reactive,
     # zero-lookahead signal - on a long straight it stays ~0 the whole way (there's
@@ -6937,6 +7225,7 @@ def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
     _course = getattr(environment, 'course', None)
     _goals_at_call_start = getattr(_course, 'goals_per_episode_total', 0)
     episode_idx = 0
+    wall_follower = _WallFollower() if wall_follow else None
     # Episodes can run thousands of steps, so the dashboard's DONE/cancel is
     # polled mid-episode. A pause has no resume path for DEMO, so it stops too.
     cancelled = False
@@ -6975,6 +7264,8 @@ def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
             break
         episode_idx += 1
         environment.reset()
+        if wall_follower is not None:
+            wall_follower.reset_episode()
         action_apply_force = 0.2
         # Neutral start value; overwritten unconditionally by obs[0] the
         # instant the first step() call returns an observation below, so
@@ -7027,6 +7318,16 @@ def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
             # now legitimately overshoot the raw action range and must be
             # capped at full lock rather than sent through uncapped.
             action_steering_angle = max(-1.0, min(1.0, K_STEERING * raw_steer))
+            wall_steer = wall_follower.steer(_car) if wall_follower is not None else None
+            if wall_steer is not None:
+                action_steering_angle = wall_steer
+                if os.environ.get("WALL_FOLLOW_TRACE") and wall_follower.corner_speed_frac() < 1.0:
+                    print(f"[wf] step={num_trajectories} x={_car.get('location_x', 0.0):.3f} "
+                          f"z={_car.get('location_z', 0.0):.3f} steer={wall_steer:+.2f} "
+                          f"turning={int(wall_follower.turning)} turned={wall_follower.turned:.1f} "
+                          f"fwd={_car.get('forward', 0.0):.2f} left={_car.get('left', 0.0):.2f} "
+                          f"right={_car.get('right', 0.0):.2f} frr={_car.get('forward_right_right', 0.0):.2f} "
+                          f"speed={speed:.2f}", flush=True)
 
             # Velocity: curvature-scaled directly off THIS step's own
             # steering command magnitude - no separate clearance/asymmetry
@@ -7050,6 +7351,10 @@ def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
             proximity_target_speed = MIN_SPEED + (MAX_SPEED - MIN_SPEED) * (1.0 - proximity_frac) ** 2
 
             target_speed = min(curvature_target_speed, proximity_target_speed)
+            if wall_follower is not None:
+                cruise = min(MAX_SPEED, wall_follower.CRUISE_SPEED)
+                target_speed = min(target_speed, MIN_SPEED + (cruise - MIN_SPEED)
+                                   * wall_follower.corner_speed_frac() ** 2)
             if speed < target_speed:
                 action_apply_force = min(base_force, action_apply_force + ACCEL_STEP)
             else:
@@ -7076,7 +7381,13 @@ def collect_expert_demos(environment, num_episodes, job_id=0, batch_number=0,
                     f"action_force={float(action_apply_force):.4f} "
                     f"speed={speed:.3f} target_speed={target_speed:.3f} "
                     f"(curv={curvature_target_speed:.3f} prox={proximity_target_speed:.3f} "
-                    f"dist_from_goal={dist_from_goal:.2f})",
+                    f"dist_from_goal={dist_from_goal:.2f}) "
+                    + (f"wall(turning={wall_follower.turning} "
+                       f"left={_car.get('left', float('nan')):.2f} "
+                       f"fll={_car.get('forward_left_left', float('nan')):.2f} "
+                       f"fwd={_car.get('forward', float('nan')):.2f}) "
+                       if wall_follower is not None else "")
+                    + f"x={_car.get('location_x', 0.0):.2f} z={_car.get('location_z', 0.0):.2f}",
                     flush=True)
 
             # Keep the Unity HUD's "DEMO" indicator + "stage: X/N" readout

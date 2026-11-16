@@ -105,14 +105,14 @@ def _settings_checks():
             and scratch["demo_sample_ratio"] == 0.0
             and scratch["awac_lambda"] == 0.0)
     kept = ctd.camera_train_settings(
-        "donut_camera", ["/tfrecords/job_x"], 5000, 50000, 0.25, 1.0)
+        "donut_camera", ["/tfrecords/job_x"], 5000, 150000, 0.25, 1.0)
     _expect("a demo source keeps BC, ratio, and awac",
             lambda: kept["uses_demos"] is True
             and kept["bc_pretrain_steps"] == 5000
             and kept["demo_sample_ratio"] == 0.25
             and kept["awac_lambda"] == 1.0)
-    _expect("prefill above the cap becomes 10000",
-            lambda: kept["demo_prefill_count"] == 10000)
+    _expect("prefill above the cap becomes the cap",
+            lambda: kept["demo_prefill_count"] == ctd.CAMERA_PREFILL_CAP)
     small = ctd.camera_train_settings(
         "donut_camera_no_rays", ["/tmp/d"], 100, 2000, 0.1, 0.5)
     _expect("a smaller prefill cap is kept",
@@ -212,6 +212,41 @@ def _bc_and_reverb(cam_dir, narrow_dir, flat_dir):
     demo_size = demo_replay.py_client.server_info()["demo_table"].current_size
     _expect("Reverb demo table accepted streamed frames",
             lambda: added == 4 and demo_size > 0, "size=%s" % demo_size)
+
+    import replay as replay_mod
+    with tempfile.TemporaryDirectory() as ckpt:
+        (_s8, online8, mixed8, _c8, _e8,
+         demo8, demo_obs8) = make_local_replay(
+             spec, capacity=8, sample_batch_size=2, sequence_length=2,
+             num_envs=1, demo_capacity=8, demo_sample_ratio=0.5,
+             checkpointing_dir=ckpt, store_images_uint8=True)
+        originals = []
+        for traj, _sid in tagged.take(4):
+            originals.append(traj.observation["image"].numpy())
+            demo_obs8(traj)
+        demo_obs8.flush()
+        _expect("uint8 tables store the image as uint8",
+                lambda: demo8.data_spec.observation["image"].dtype == tf.uint8
+                and online8.data_spec.observation["image"].dtype == tf.uint8)
+        sampled, _info = next(iter(demo8.as_dataset(
+            sample_batch_size=2, num_steps=2)))
+        got = sampled.observation["image"].numpy()
+        nearest = min(
+            float(np.max(np.abs(got[0, 0] - o))) for o in originals)
+        _expect("uint8 sample comes back float32 within 1/255",
+                lambda: got.dtype == np.float32
+                and nearest <= (1.0 / 255.0) + 1e-6,
+                "dtype=%s err=%s" % (got.dtype, nearest))
+        _expect("uint8 server writes the checkpoint marker",
+                lambda: os.path.exists(replay_mod._uint8_marker_path(ckpt)))
+    with tempfile.TemporaryDirectory() as old_ckpt:
+        os.makedirs(os.path.join(old_ckpt, "2026-11-15T00:00:00"))
+        _expect("a float32 Reverb checkpoint keeps float32 storage",
+                lambda: not replay_mod.checkpoint_allows_uint8_images(
+                    old_ckpt))
+    _expect("an empty checkpoint dir allows uint8",
+            lambda: replay_mod.checkpoint_allows_uint8_images(
+                os.path.join(tempfile.gettempdir(), "no_such_reverb_dir")))
 
     from awac_sac_agent import AwacSacAgent
     from vision.camera_networks import DictObsCriticNetwork
