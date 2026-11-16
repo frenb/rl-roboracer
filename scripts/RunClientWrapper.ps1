@@ -78,6 +78,12 @@
     want N tiny clients tiling the screen rather than N normal windows.
     Implies a 320x240 default if -WindowWidth/-WindowHeight aren't set.
 
+.PARAMETER Headless
+    Launch Unity with -batchmode: no window, but still rendering on the GPU,
+    so camera observations and training clips keep working. Only the
+    starting mode: each job that switches gym sets it from its own
+    `headless` flag (see GymPollSeconds).
+
 .PARAMETER LogFile
     Path forwarded to Unity's -logfile flag. By default each client writes
     to <exe-dir>/Player.log so multi-instance runs don't overwrite each
@@ -101,7 +107,8 @@
 
 .PARAMETER GymPollSeconds
     How often (seconds) to check whether the dashboard has requested
-    a different Unity binary (gym hot-swap). Default 10. Set to 0
+    a different Unity binary (gym hot-swap), or a switch in or out of
+    headless mode. Default 10. Set to 0
     to disable gym polling entirely (useful when the gym is fixed for
     the whole session).
 
@@ -138,6 +145,7 @@ param(
     [int]$WindowHeight = 0,
     [string]$WindowQuality = 'Fastest',
     [switch]$Popup,
+    [switch]$Headless,
     [int]$IdleFps = 0,
     [string]$LogFile,
     [int]$GymPollSeconds = 10,
@@ -220,6 +228,7 @@ $script:ActiveGymSource = $GymSource
 # binary. Nothing reports this - the job just runs against a stale build
 # and every change appears to have had no effect.
 $script:ActiveGymStamp = $null
+$script:ActiveHeadless = [bool]$Headless
 
 function Set-ActiveExePath {
     param([string]$NewPath)
@@ -246,10 +255,18 @@ function Set-ActiveExePath {
         '--idle-fps',   $IdleFps,
         '-screen-width',    $WindowWidth,
         '-screen-height',   $WindowHeight,
+        # Unity 6 players default to full screen and remember the last mode.
+        '-screen-fullscreen', '0',
         '-screen-quality',  $WindowQuality,
         '-logfile',     $logFileName
     )
-    if ($Popup) { $script:ActiveExeArgs += '-popupwindow' }
+    if ($script:ActiveHeadless) {
+        # Not -nographics: that swaps the GPU for a null device, and the
+        # front camera and clip recorder then read back blank frames.
+        $script:ActiveExeArgs += '-batchmode'
+    } elseif ($Popup) {
+        $script:ActiveExeArgs += '-popupwindow'
+    }
 }
 
 # Initialise with the resolved path from the parameter block above.
@@ -290,9 +307,9 @@ function Get-GymSourceStamp {
     return $null
 }
 
-function Get-DesiredGymPath {
-    # Ask the dashboard for the file_path the current job wants.
-    # Falls back to '' on any error so the caller can treat a missing
+function Get-DesiredGym {
+    # Ask the dashboard for the gym the current job wants: @{ Path; Headless }.
+    # Path is '' on any error so the caller can treat a missing
     # or unreachable dashboard as "no switch needed".
     #
     # We use a raw HttpWebRequest with Proxy=$null rather than
@@ -301,7 +318,8 @@ function Get-DesiredGymPath {
     # (which Docker Desktop doesn't bind) makes it time out. The explicit
     # request below, paired with the IPv4 DashboardUrl default, connects
     # immediately.
-    if ($GymPollSeconds -le 0) { return '' }
+    $none = @{ Path = ''; Headless = $false }
+    if ($GymPollSeconds -le 0) { return $none }
     try {
         $uri = "${DashboardUrl}/get_desired_gym?index=${Index}"
         $req = [System.Net.HttpWebRequest]::Create($uri)
@@ -325,10 +343,10 @@ function Get-DesiredGymPath {
         if ($p.Length -ge 2 -and $p[0] -eq $p[-1] -and ($p[0] -eq '"' -or $p[0] -eq "'")) {
             $p = $p.Substring(1, $p.Length - 2).Trim()
         }
-        return $p
+        return @{ Path = $p; Headless = ($obj.headless -eq $true) }
     } catch {
         # Dashboard not reachable / no gym set yet — not an error.
-        return ''
+        return $none
     }
 }
 
@@ -461,6 +479,23 @@ function Wait-ForClientWindow {
     return $false
 }
 
+function Wait-ForClientDevice {
+    # A -batchmode client has no window to wait for; its log names the GPU
+    # once the graphics device exists.
+    param([int]$ProcessId, [DateTime]$LaunchedAt, [int]$TimeoutSec = 30)
+    $log = Join-Path $script:ActiveCwd ($script:ActiveExeArgs[[array]::IndexOf($script:ActiveExeArgs, '-logfile') + 1])
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) { return $false }
+        if ((Test-Path -LiteralPath $log) -and (Get-Item -LiteralPath $log).LastWriteTime -ge $LaunchedAt `
+                -and (Select-String -LiteralPath $log -Pattern '^\s*Renderer:' -Quiet)) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+
 function Start-Client {
     # Serialize device creation across ALL actors: only one Unity client
     # creates its D3D device at a time, so a respawn can't collide with a
@@ -470,6 +505,7 @@ function Start-Client {
         Write-Host "[$Index] launch slot wait timed out; launching anyway."
     }
     try {
+        $launchedAt = Get-Date
         $p = Start-Process `
                 -FilePath        $script:ActivePath `
                 -ArgumentList    $script:ActiveExeArgs `
@@ -479,15 +515,21 @@ function Start-Client {
         # created) appears, so the next actor's launch starts only after
         # this one is past the contended GfxDevice phase. A wedged client
         # that never makes a window releases the slot after the timeout.
-        $up = Wait-ForClientWindow -ProcessId $p.Id -TimeoutSec $LaunchSettleSec
+        if ($script:ActiveHeadless) {
+            $up = Wait-ForClientDevice -ProcessId $p.Id -LaunchedAt $launchedAt -TimeoutSec $LaunchSettleSec
+        } else {
+            $up = Wait-ForClientWindow -ProcessId $p.Id -TimeoutSec $LaunchSettleSec
+        }
         if (-not $up) {
-            Write-Host "[$Index] window not up within ${LaunchSettleSec}s of launch (may still be initializing or wedged)."
+            Write-Host "[$Index] graphics device not up within ${LaunchSettleSec}s of launch (may still be initializing or wedged)."
         }
     }
     finally {
         Exit-LaunchSlot
     }
-    Move-ProcessWindowToGrid -ProcessId $p.Id -Index $Index -Cols $GridCols -Rows $GridRows
+    if (-not $script:ActiveHeadless) {
+        Move-ProcessWindowToGrid -ProcessId $p.Id -Index $Index -Cols $GridCols -Rows $GridRows
+    }
     return $p
 }
 
@@ -501,7 +543,7 @@ Register-Supervisor -ProcessId $PID -Index $Index -Exe $script:ActivePath
 
 try {
     $proc = Start-Client
-    $mode = if ($Popup) { 'popup' } else { 'windowed' }
+    $mode = if ($script:ActiveHeadless) { 'headless' } elseif ($Popup) { 'popup' } else { 'windowed' }
     Write-Host ("[{0}] started PID={1}, ROS endpoint {2}:{3} <-> unityPort {4}, {5} {6}x{7} {8}" -f `
         $Index, $proc.Id, $RosIp, $RosPort, $UnityPort, $mode, $WindowWidth, $WindowHeight, $WindowQuality)
     Write-Host "[$Index] log: $LogFile"
@@ -525,18 +567,23 @@ try {
             $now = [DateTime]::UtcNow
             if (($now - $gymLastChecked).TotalSeconds -ge $GymPollSeconds) {
                 $gymLastChecked = $now
-                $desiredSource = Get-DesiredGymPath
+                $desired       = Get-DesiredGym
+                $desiredSource = $desired.Path
                 $desiredStamp  = Get-GymSourceStamp $desiredSource
                 $rebuiltInPlace = ($desiredSource -eq $script:ActiveGymSource) `
                                   -and ($null -ne $desiredStamp) `
                                   -and ($desiredStamp -ne $script:ActiveGymStamp)
-                if ($desiredSource -and
-                    (($desiredSource -ne $script:ActiveGymSource) -or $rebuiltInPlace)) {
+                $newBuild = ($desiredSource -ne $script:ActiveGymSource) -or $rebuiltInPlace
+                $modeChanged = $desired.Headless -ne $script:ActiveHeadless
+                if ($desiredSource -and ($newBuild -or $modeChanged)) {
                     if (Test-Path -LiteralPath $desiredSource) {
-                        if ($rebuiltInPlace) {
-                            Write-Host ("[$Index] GYM REBUILT IN PLACE: {0} (built {1:u})" -f $desiredSource, $desiredStamp)
+                        $modeName = if ($desired.Headless) { 'headless' } else { 'windowed' }
+                        if (-not $newBuild) {
+                            Write-Host "[$Index] MODE SWITCH: relaunching $modeName"
+                        } elseif ($rebuiltInPlace) {
+                            Write-Host ("[$Index] GYM REBUILT IN PLACE: {0} (built {1:u}), {2}" -f $desiredSource, $desiredStamp, $modeName)
                         } else {
-                            Write-Host ("[$Index] GYM SWITCH: {0} -> {1}" -f $script:ActiveGymSource, $desiredSource)
+                            Write-Host ("[$Index] GYM SWITCH: {0} -> {1}, {2}" -f $script:ActiveGymSource, $desiredSource, $modeName)
                         }
                         # Kill the running Unity process cleanly before switching.
                         $current = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
@@ -551,7 +598,12 @@ try {
                         # Mirror the new build into instances/<Index>/ and
                         # restart from the per-index copy.
                         try {
-                            Switch-ToGym -SourceExePath $desiredSource
+                            $script:ActiveHeadless = $desired.Headless
+                            if ($newBuild) {
+                                Switch-ToGym -SourceExePath $desiredSource
+                            } else {
+                                Set-ActiveExePath -NewPath $script:ActivePath
+                            }
                             $proc = Start-Client
                             Write-Host "[$Index] gym switch complete. New PID=$($proc.Id) -> $($script:ActivePath)"
                         } catch {

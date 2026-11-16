@@ -1312,10 +1312,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   layoutJson: {fileID: 4900000, guid: 1a98ea7f43af3e94dab2c5c9ff539aa4, type: 3}
   matTexture: {fileID: 2800000, guid: e9fc0989516901a408262137adbcebd8, type: 3}
-  scaleToCar: 1
-  realCarSize: {x: 0.212, y: 0.12, z: 0.32}
+  scaleToCar: 0
+  realCarSize: {x: 0.195, y: 0.148, z: 0.243}
   carPrefab: {fileID: 0}
-  scale: 16.603773
+  scale: 17.6
   trackY: 0
   wallLayerName: Default
   wallThickness: 0.2
@@ -1323,7 +1323,10 @@ MonoBehaviour:
   showBarriers: 1
   wallColor: {r: 0.62, g: 0.62, b: 0.6, a: 1}
   floorColor: {r: 0.72, g: 0.62, b: 0.5, a: 1}
-  innerBarrierInset: 0.05
+  innerBarrierSource: 1
+  innerBarrierInset: 0.0381
+  innerBarrierRect: {x: 0.5375, y: 0.5375, z: 2.6625, w: 2.2625}
+  innerBarrierScale: 1
   centerlineFromFences: 1
   innerBarrierEdgeMargin: 0.15
   goalSpacing: 0.3

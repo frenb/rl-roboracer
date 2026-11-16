@@ -33,8 +33,8 @@ public class Real2SimCourse : MonoBehaviour
     [Tooltip("Size the course to the sim car: scale = the car prefab's collider width / realCarSize.x, " +
              "so the car has the same room between the fences as the real one. Off: use scale as set.")]
     public bool scaleToCar = true;
-    [Tooltip("The real car, meters (width, height, length). Waveshare JetRacer Pro: 212 x 120 x 320 mm.")]
-    public Vector3 realCarSize = new Vector3(0.212f, 0.12f, 0.32f);
+    [Tooltip("The real car, meters (width, height, length). Waveshare JetRacer ROS AI Kit, measured: 200 mm across the rear tyres, 148 mm to the lidar top, 243 mm long (robots/jetracer/jetracer.urdf).")]
+    public Vector3 realCarSize = new Vector3(0.200f, 0.148f, 0.243f);
     [Tooltip("The car to size the course to. Empty: SimController's carPrefab.")]
     public GameObject carPrefab;
     [Tooltip("Sim units per real meter. Computed from the car when scaleToCar is on.")]

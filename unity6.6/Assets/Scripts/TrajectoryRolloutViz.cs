@@ -207,30 +207,29 @@ public class TrajectoryRolloutViz : MonoBehaviour
             }
             Debug.Log($"[TrajectoryRolloutViz] fan {( _vizEnabled ? "ON" : "OFF")}");
         }
-        if (!_vizEnabled)
-        {
-            // Drain any pending payload so we don't draw a stale burst on re-enable.
-            lock (_lock) { _pending = null; }
-            return;
-        }
-
         // Pull any newly-arrived payload into the active cache. We keep the
         // latest actions and re-simulate them from the car's CURRENT pose on a
         // fixed cadence below, rather than drawing once when it arrives.
+        // Mode/stage must update even while the fan is hidden: HudOverlay reads them.
         RolloutPayload fresh = null;
         lock (_lock) { if (_pending != null) { fresh = _pending; _pending = null; } }
         if (fresh != null)
         {
-            _active = fresh;
-            _lastDataTime = Time.time;
             _lastMode = fresh.mode ?? "";
             _lastStage = fresh.stage;
             _lastNumStages = fresh.numStages;
             _lastModeTime = Time.time;
-            Debug.Log($"[TrajectoryRolloutViz] new payload step={fresh.step} "
-                      + $"K={fresh.k} H={fresh.horizon} "
-                      + $"accelLen={(fresh.accel == null ? -1 : fresh.accel.Length)}");
+            if (_vizEnabled)
+            {
+                _active = fresh;
+                _lastDataTime = Time.time;
+                Debug.Log($"[TrajectoryRolloutViz] new payload step={fresh.step} "
+                          + $"K={fresh.k} H={fresh.horizon} "
+                          + $"accelLen={(fresh.accel == null ? -1 : fresh.accel.Length)}");
+            }
         }
+
+        if (!_vizEnabled) return;
 
         // No data for a while -> hide the fan (training stopped).
         if (_active == null || Time.time - _lastDataTime > staleTimeoutSeconds)

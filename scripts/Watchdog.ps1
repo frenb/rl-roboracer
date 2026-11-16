@@ -13,9 +13,14 @@
          checkpoint (falls through if the trainer is fully hung; the Learner
          auto-checkpoints every 100 steps so crash-recovery still resumes).
       2. Force-kill the trainer process in the container.
-      3. .\scripts\Restart-Stack.ps1  (recreate containers + fresh Unity gyms).
+      3. Restart the ros-server containers and the Unity clients (Mongo, the
+         dashboard and duck training are left running).
       4. Set the job back to NOT_STARTED (resume signal).
-      5. Relaunch the trainer (viz-off) in a new window.
+      5. Relaunch the trainer in the background (docker compose exec -d).
+
+    Every poll also probes each ROS host port (10000 + actor index). A port
+    whose WSL relay has stopped accepting connections triggers the same
+    recovery, logged as ros_ports_wedged=<ports>.
 
     Every detection appends a signature line to scripts/watchdog.log so the
     accumulated data can later drive a real root-cause fix.
@@ -107,8 +112,18 @@ param(
     [int]$TailLines = 600,
     [int]$NumEnvs = 2,
     [int]$MaxAutoResumesPerJob = 2,
+    [int]$RosBasePort = 10000,
+    [int]$PortProbeAttempts = 6,
+    [int]$PortProbeTimeoutMs = 1500,
+    [int]$PortFailPolls = 3,
     [switch]$DryRun
 )
+
+$mutex = New-Object System.Threading.Mutex($false, 'Global\rl-roboracer-watchdog')
+if (-not $mutex.WaitOne(0)) {
+    Write-Host 'Another Watchdog.ps1 is already running; exiting.'
+    exit 0
+}
 
 $ErrorActionPreference = 'Continue'
 $RepoRoot = Split-Path $PSScriptRoot -Parent
@@ -133,8 +148,14 @@ function Invoke-Mongo([string]$evalJs) {
         --authenticationDatabase admin robotaxi --eval $evalJs 2>$null
 }
 
+# Car jobs only (robot roboracer, or missing on older jobs). This watchdog
+# reads the car trainer's log, which goes quiet while a microduck job holds
+# the shared queue; matching a duck job made it pause that job and restart
+# the stack out from under the duck worker.
+$CarJobFilter = "robot:{`$in:[null,'roboracer']}"
+
 function Get-RunningJobId {
-    (Invoke-Mongo "var j=db.jobs.findOne({status:'IN_PROGRESS'}); print(j?String(j._id):'')").Trim()
+    (Invoke-Mongo "var j=db.jobs.findOne({status:'IN_PROGRESS', $CarJobFilter}); print(j?String(j._id):'')").Trim()
 }
 
 function Get-LatestCheckpointStep([string]$jobId) {
@@ -161,10 +182,10 @@ function Invoke-FailedJobAutoResume {
     # exception path from a worker-subprocess segfault) rather than a
     # currently-IN_PROGRESS wedge. See DESCRIPTION for the full rationale
     # and the paused_at_step gotcha this must get right.
-    $raw = Invoke-Mongo @'
-db.jobs.find({status:'FAILED', job_type:'TRAIN'}, {_id:1, watchdog_resume_count:1})
+    $raw = Invoke-Mongo @"
+db.jobs.find({status:'FAILED', job_type:'TRAIN', $CarJobFilter}, {_id:1, watchdog_resume_count:1})
   .forEach(j => print(String(j._id) + '|' + (j.watchdog_resume_count || 0)));
-'@
+"@
     foreach ($line in ($raw -split "`n")) {
         $line = $line.Trim()
         if (-not $line -or $line -notmatch '\|') { continue }
@@ -226,6 +247,64 @@ function Test-Wedged([string]$tail) {
     return [pscustomobject]@{ Wedged = $wedged; A0 = $a0; A1 = $a1; Slow = $slow }
 }
 
+# Unity opens a new TCP connection to its ros-server for every message, and
+# after hours of that the WSL (mirrored networking) relay for a host port can
+# leak connections until its accept queue fills: connects to that one port
+# time out while the others are fine, and its actor times out on every step.
+# Returns the host ports that fail most of a few quick connection attempts.
+function Get-WedgedRosPorts {
+    $bad = @()
+    for ($i = 0; $i -lt $NumEnvs; $i++) {
+        $port = $RosBasePort + $i
+        $ok = 0
+        for ($k = 0; $k -lt $PortProbeAttempts; $k++) {
+            $c = New-Object Net.Sockets.TcpClient
+            try {
+                $t = $c.ConnectAsync('127.0.0.1', $port)
+                if ($t.Wait($PortProbeTimeoutMs) -and $c.Connected) { $ok++ }
+            } catch { } finally { $c.Close() }
+        }
+        if ($ok -lt $PortProbeAttempts - 1) { $bad += "$port"; $script:PortProbeDetail += "$port=$ok/$PortProbeAttempts " }
+    }
+    return $bad
+}
+
+# A real relay wedge lasts for hours, but a single probe round can fail
+# for a few seconds while both relays are healthy (seen 2026-11-14, a
+# false positive that restarted a fine job), so act only on a streak.
+function Get-PersistentlyWedgedRosPorts {
+    $script:PortProbeDetail = ''
+    $bad = @(Get-WedgedRosPorts)
+    if (-not $bad.Count) { $script:PortFailStreak = 0; return @() }
+    $script:PortFailStreak++
+    Write-WdLog "ROS port probe failed ($script:PortFailStreak/$PortFailPolls): $script:PortProbeDetail"
+    if ($script:PortFailStreak -lt $PortFailPolls) { return @() }
+    $script:PortFailStreak = 0
+    return $bad
+}
+
+function Get-RosServerContainers {
+    @(docker ps --format '{{.Names}}' 2>$null | Where-Object { $_ -match 'ros-server' })
+}
+
+# Restarting a ros-server container drops its host-port relay along with
+# every connection the relay was holding, and cuts the trainer's gRPC
+# subscriptions to it, so the trainer and the Unity clients restart too.
+function Restart-RosAndClients {
+    & docker @ComposeArgs exec -T sim-controller bash -c "pkill -9 -f 'robotaxi[.]py'" 2>$null
+    Start-Sleep -Seconds 3
+    $containers = Get-RosServerContainers
+    Write-WdLog "  restarting $($containers -join ', ')"
+    if ($containers) { docker restart @containers | Out-Null }
+    Start-Sleep -Seconds 8
+    & powershell -NoProfile -File (Join-Path $PSScriptRoot 'Stop-Clients.ps1') | Out-Null
+    & powershell -NoProfile -File (Join-Path $PSScriptRoot 'Start-Clients.ps1') -N $NumEnvs -StaggerSeconds 15 | Out-Null
+}
+
+function Start-Trainer {
+    & docker @ComposeArgs exec -d sim-controller bash -c "cd /python_ws/src && python -u robotaxi.py --num-envs $NumEnvs 2>&1 | tee /tmp/trainer.log" | Out-Null
+}
+
 function Invoke-Recovery([string]$jobId, [string]$sig) {
     # --- circuit breaker ---
     $cutoff = (Get-Date).AddHours(-1)
@@ -247,21 +326,18 @@ function Invoke-Recovery([string]$jobId, [string]$sig) {
     if ($st -match 'PAUSED') { Write-WdLog "  job PAUSED (clean checkpoint)." }
     else { Write-WdLog "  pause not confirmed in 60s (trainer hung?); proceeding - crash-recovery will resume from the last auto-checkpoint." }
 
-    # 2. force-kill the trainer in the container
-    & docker @ComposeArgs exec -T sim-controller bash -c "pkill -9 -f 'robotaxi[.]py'" 2>$null
-    Start-Sleep -Seconds 3
-
-    # 3. full stack restart (recreate containers + fresh Unity gyms)
-    Write-WdLog "  running Restart-Stack.ps1 ..."
-    & (Join-Path $PSScriptRoot 'Restart-Stack.ps1') -N $NumEnvs
+    # 2-3. stop the trainer, restart the ros-servers and Unity clients. Not
+    # Restart-Stack.ps1: its full compose down also took Mongo, the dashboard
+    # and duck training down, and the watchdog never logged past it.
+    Restart-RosAndClients
 
     # 4. resume the job
     Invoke-Mongo "db.jobs.updateOne({_id:ObjectId('$jobId')},{`$set:{status:'NOT_STARTED'}})" | Out-Null
 
-    # 5. relaunch the trainer (viz-off) in a new window
-    $trainerCmd = "docker compose -f docker-compose.yml -f compose/scale.yml exec sim-controller bash -c 'cd /python_ws/src && python -u robotaxi.py --num-envs $NumEnvs 2>&1 | tee /tmp/trainer.log'"
-    Start-Process powershell -WorkingDirectory $RepoRoot -ArgumentList '-NoExit', '-Command', $trainerCmd
-    Write-WdLog "  trainer relaunched; job set NOT_STARTED to resume."
+    # 5. relaunch the trainer in the background
+    Start-Trainer
+    $still = Get-WedgedRosPorts
+    Write-WdLog "  trainer relaunched; job set NOT_STARTED to resume. Ports still failing after recovery: $(if ($still) { $still -join ',' } else { 'none' })"
 
     $script:RestartTimes += (Get-Date)
     $script:LastRestart = Get-Date
@@ -270,6 +346,8 @@ function Invoke-Recovery([string]$jobId, [string]$sig) {
 # --- main loop ----------------------------------------------------------
 $script:RestartTimes = @()
 $script:LastRestart = [DateTime]::MinValue
+$script:PortFailStreak = 0
+$script:PortProbeDetail = ''
 $prevTail = ''
 $silentCount = 0
 
@@ -287,8 +365,22 @@ while ($true) {
 
     if (((Get-Date) - $script:LastRestart).TotalSeconds -lt $CooldownSeconds) { continue }
 
+    $badPorts = @(Get-PersistentlyWedgedRosPorts)
     $jobId = Get-RunningJobId
-    if (-not $jobId) { $silentCount = 0; $prevTail = ''; continue }   # nothing training; idle
+    if (-not $jobId) {
+        $silentCount = 0; $prevTail = ''
+        if ($badPorts.Count) {
+            Write-WdLog "ROS port(s) $($badPorts -join ',') not accepting connections with no job running$(if ($DryRun) { '; DRYRUN, not restarting' } else { '; restarting ros-servers and clients' })"
+            if (-not $DryRun) { Restart-RosAndClients; $script:LastRestart = Get-Date }
+        }
+        continue
+    }
+    if ($badPorts.Count) {
+        $sig = "ros_ports_wedged=$($badPorts -join ',')"
+        if ($DryRun) { Write-WdLog "DRYRUN would recover: job=$jobId $sig" }
+        else { Invoke-Recovery $jobId $sig; $silentCount = 0; $prevTail = '' }
+        continue
+    }
 
     $tail = Get-Tail
     if (-not $tail) { continue }

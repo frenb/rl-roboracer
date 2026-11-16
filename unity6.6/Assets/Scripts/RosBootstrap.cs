@@ -33,8 +33,9 @@ using System.Runtime.InteropServices;
 ///
 /// Also drops to the lowest QualitySettings level and uncaps the frame
 /// rate so per-instance rendering is cheaper when several actors share
-/// one GPU. (Cannot run with -nographics: physics + raycasting depend on
-/// the renderer being active in this project.)
+/// one GPU. Runs windowless with -batchmode (RunClientWrapper.ps1 -Headless),
+/// still rendering on the GPU. Not with -nographics: its null graphics device
+/// reads back blank front-camera and clip frames.
 ///
 /// On Windows standalone builds the player window is forced resizable at
 /// runtime via Win32 (WS_THICKFRAME + min/max box). That bypasses the

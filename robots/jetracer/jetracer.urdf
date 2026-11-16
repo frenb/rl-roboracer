@@ -1,0 +1,232 @@
+<?xml version="1.0"?>
+<!--
+  Waveshare JetRacer ROS AI Kit (Jetson Nano, RP2040, RPLIDAR A1, IMX219-160).
+
+  Measured on the car: wheelbase 6 in, front track 6 in (tread centre to
+  tread centre), rear track 170 mm (tread centre to tread centre), tyres
+  65 mm diameter x 25 mm wide, so 195 mm across the rear tyres.
+  Waveshare drawing: 242.9 x 192.2 x 147.58 mm (to the lidar top); its
+  192.2 mm width is under the measured 195 mm.
+  Waveshare spec: 1.646 kg without batteries; 3 x 18650 cells add about 0.14 kg.
+  Steering is parallel, not Ackermann: one servo drives both knuckles through
+  a tie rod, and both front wheels turn the same angle (confirmed on the car).
+  Full lock is 17 deg per wheel, from Waveshare's teb_local_planner_params.yaml
+  (min_turning_radius 0.5 m with this wheelbase). The right knuckle mimics the
+  left one. Drive and servo effort/velocity limits are estimates.
+
+  Frames: x forward, y left, z up. base_link is the middle of the rear axle.
+-->
+<robot name="jetracer">
+
+  <material name="chassis_green"><color rgba="0.35 0.75 0.30 1"/></material>
+  <material name="tyre_black"><color rgba="0.05 0.05 0.05 1"/></material>
+  <material name="sensor_black"><color rgba="0.12 0.12 0.12 1"/></material>
+
+  <link name="base_link"/>
+
+  <!-- Body: plate, batteries, boards and Jetson as one box between the wheels,
+       25 mm ground clearance, from the rear tyre to the front bumper. -->
+  <link name="chassis_link">
+    <inertial>
+      <origin xyz="0.070 0 0.010"/>
+      <mass value="1.37"/>
+      <inertia ixx="0.00265" ixy="0" ixz="0" iyy="0.00715" iyz="0" izz="0.00897"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.085 0 0.023"/>
+      <geometry><box size="0.243 0.100 0.060"/></geometry>
+      <material name="chassis_green"/>
+    </visual>
+    <collision>
+      <origin xyz="0.085 0 0.023"/>
+      <geometry><box size="0.243 0.100 0.060"/></geometry>
+    </collision>
+  </link>
+  <joint name="chassis_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="chassis_link"/>
+  </joint>
+
+  <!-- Rear wheels, driven (two encoder gearmotors, 1:30, 333 rpm no load). -->
+  <link name="rear_left_wheel_link">
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="0.0000153" ixy="0" ixz="0" iyy="0.0000252" iyz="0" izz="0.0000153"/>
+    </inertial>
+    <visual>
+      <origin rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.0325" length="0.025"/></geometry>
+      <material name="tyre_black"/>
+    </visual>
+    <collision>
+      <origin rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.0325" length="0.025"/></geometry>
+    </collision>
+  </link>
+  <joint name="rear_left_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rear_left_wheel_link"/>
+    <origin xyz="0 0.085 0"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="1.0" velocity="35.0"/>
+  </joint>
+
+  <link name="rear_right_wheel_link">
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="0.0000153" ixy="0" ixz="0" iyy="0.0000252" iyz="0" izz="0.0000153"/>
+    </inertial>
+    <visual>
+      <origin rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.0325" length="0.025"/></geometry>
+      <material name="tyre_black"/>
+    </visual>
+    <collision>
+      <origin rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.0325" length="0.025"/></geometry>
+    </collision>
+  </link>
+  <joint name="rear_right_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rear_right_wheel_link"/>
+    <origin xyz="0 -0.085 0"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="1.0" velocity="35.0"/>
+  </joint>
+
+  <!-- Front steering knuckles (MG996R servo: about 0.9 N m, 6 rad/s). -->
+  <link name="front_left_steering_link">
+    <inertial>
+      <mass value="0.02"/>
+      <inertia ixx="0.000002" ixy="0" ixz="0" iyy="0.000002" iyz="0" izz="0.000002"/>
+    </inertial>
+  </link>
+  <joint name="front_left_steering_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="front_left_steering_link"/>
+    <origin xyz="0.1524 0.0762 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-0.2967" upper="0.2967" effort="0.9" velocity="6.0"/>
+  </joint>
+
+  <link name="front_right_steering_link">
+    <inertial>
+      <mass value="0.02"/>
+      <inertia ixx="0.000002" ixy="0" ixz="0" iyy="0.000002" iyz="0" izz="0.000002"/>
+    </inertial>
+  </link>
+  <joint name="front_right_steering_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="front_right_steering_link"/>
+    <origin xyz="0.1524 -0.0762 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-0.2967" upper="0.2967" effort="0.9" velocity="6.0"/>
+    <mimic joint="front_left_steering_joint" multiplier="1" offset="0"/>
+  </joint>
+
+  <!-- Front wheels, free-rolling. -->
+  <link name="front_left_wheel_link">
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="0.0000153" ixy="0" ixz="0" iyy="0.0000252" iyz="0" izz="0.0000153"/>
+    </inertial>
+    <visual>
+      <origin rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.0325" length="0.025"/></geometry>
+      <material name="tyre_black"/>
+    </visual>
+    <collision>
+      <origin rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.0325" length="0.025"/></geometry>
+    </collision>
+  </link>
+  <joint name="front_left_wheel_joint" type="continuous">
+    <parent link="front_left_steering_link"/>
+    <child link="front_left_wheel_link"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <link name="front_right_wheel_link">
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="0.0000153" ixy="0" ixz="0" iyy="0.0000252" iyz="0" izz="0.0000153"/>
+    </inertial>
+    <visual>
+      <origin rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.0325" length="0.025"/></geometry>
+      <material name="tyre_black"/>
+    </visual>
+    <collision>
+      <origin rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.0325" length="0.025"/></geometry>
+    </collision>
+  </link>
+  <joint name="front_right_wheel_joint" type="continuous">
+    <parent link="front_right_steering_link"/>
+    <child link="front_right_wheel_link"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <!-- RPLIDAR A1: laser_link is the scan plane, 0.1376 m above the ground
+       (scan window 45 mm above the A1's leg bottoms).
+       The A1 (55 mm leg bottom to head top, Slamtec drawing) stands on the
+       acrylic platform over the Jetson fan; its top is the 147.6 mm on
+       Waveshare's drawing. The A1 is mounted motor-to-the-
+       rear and its yaw is 0: scan angle 0 is the nose. Waveshare's stock lidar.launch yaw of 3.14 swaps front and rear
+       (docs/hardware/jetson.md). -->
+  <link name="laser_link">
+    <inertial>
+      <mass value="0.17"/>
+      <inertia ixx="0.000075" ixy="0" ixz="0" iyy="0.000075" iyz="0" izz="0.000104"/>
+    </inertial>
+    <visual>
+      <geometry><cylinder radius="0.035" length="0.040"/></geometry>
+      <material name="sensor_black"/>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.035" length="0.040"/></geometry>
+    </collision>
+  </link>
+  <joint name="laser_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="laser_link"/>
+    <origin xyz="0.0966 0 0.1051"/>
+  </joint>
+
+  <!-- IMX219-160 CSI camera hinged at the top of the flat, vertical 70 mm
+       stand ahead of the front axle. The stand's base plate is 25 mm above
+       the bottom of the chassis plate (whose top is 20 mm off the ground), so
+       the stand top is about 115 mm up and the lens centre about 0.108 m. It
+       looks 9.8 deg down. -->
+  <link name="camera_link">
+    <inertial>
+      <mass value="0.02"/>
+      <inertia ixx="0.000002" ixy="0" ixz="0" iyy="0.000002" iyz="0" izz="0.000002"/>
+    </inertial>
+    <visual>
+      <geometry><box size="0.015 0.025 0.025"/></geometry>
+      <material name="sensor_black"/>
+    </visual>
+  </link>
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <origin xyz="0.1701 0 0.0755" rpy="0 0.171 0"/>
+  </joint>
+
+  <!-- ROS optical frame: z forward, x right, y down. -->
+  <link name="camera_optical_link"/>
+  <joint name="camera_optical_joint" type="fixed">
+    <parent link="camera_link"/>
+    <child link="camera_optical_link"/>
+    <origin rpy="-1.5708 0 -1.5708"/>
+  </joint>
+
+  <!-- ICM20948 / MPU9250 on the expansion board. -->
+  <link name="imu_link"/>
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="0.060 0 0.020"/>
+  </joint>
+</robot>
