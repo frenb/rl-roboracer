@@ -24,6 +24,7 @@
  *
  *   showToast({type, message, duration})  -> renders a transient toast
  *   confirmDialog({title, message, ...})  -> Promise<boolean>
+ *   trainingMedia.open(job, title)        -> progression video + clips modal, either robot
  *
  *   jobOptions                            -> option lists for the job dialogs
  *                                            (statuses, job/model/robot types,
@@ -514,6 +515,125 @@
       });
     });
   }
+
+  /* ---------- Training media ------------------------------------ *
+   *
+   * A TRAIN job of either robot (or a MicroDuck VIDEO job) stores
+   * progress_video / progress_gif and a videos[] list of checkpoint clips
+   * ({iteration, path, gif}; older duck jobs' mjlab training clips have no
+   * gif), all trainer paths served by the dashboard's /media route; see
+   * rl_agent/media.py. progress_video is a boolean request flag until the
+   * trainer replaces it with the path. A car clip's iteration is the train
+   * step of the model it saved.
+   * -------------------------------------------------------------- */
+  const trainingMedia = {
+    url: (p) => '/media?path=' + encodeURIComponent(p),
+    progressVideo: (job) => (job && typeof job.progress_video === 'string' ? job.progress_video : ''),
+    clips: (job) => (job && Array.isArray(job.videos) ? job.videos.filter((v) => v && v.path) : []),
+    has(job) {
+      return !!trainingMedia.progressVideo(job) || trainingMedia.clips(job).length > 0;
+    },
+    /** Progression video requested and not made yet. */
+    pending(job) {
+      if (!job || job.job_type !== 'TRAIN' || trainingMedia.progressVideo(job)) return false;
+      if (['DONE', 'FAILED', 'CANCELLED', 'CANCELED'].includes(job.status)) return false;
+      // Duck jobs ask for one explicitly; car jobs make one unless told not to.
+      return job.robot === 'microduck' ? job.progress_video === true : job.progress_video !== false;
+    },
+
+    open(job, title) {
+      const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      const isDuck = job && job.robot === 'microduck';
+      const parts = [];
+      const progress = trainingMedia.progressVideo(job);
+      if (progress) {
+        const gif = typeof job.progress_gif === 'string' ? job.progress_gif : '';
+        parts.push('<section class="flex flex-col gap-2">'
+          + '<h3 class="m-0 text-sm font-semibold">Progression</h3>'
+          + '<p class="m-0 text-xs text-slate-500 dark:text-slate-400">Clips of evenly spaced checkpoints from this '
+          + 'training run, stitched when it finished.</p>'
+          + `<video controls autoplay muted loop playsinline class="w-full max-h-[60vh] object-contain rounded-lg bg-black" src="${esc(trainingMedia.url(progress))}"></video>`
+          + '<div class="flex gap-3 text-xs">'
+          + `<a class="underline whitespace-nowrap shrink-0" href="${esc(trainingMedia.url(progress))}" target="_blank" rel="noopener">Open MP4</a>`
+          + (gif ? `<a class="underline whitespace-nowrap shrink-0" href="${esc(trainingMedia.url(gif))}" target="_blank" rel="noopener">Open GIF</a>` : '')
+          + `<span class="font-mono text-slate-500 dark:text-slate-400 truncate min-w-0" title="${esc(progress)}">${esc(progress)}</span>`
+          + '</div></section>');
+      }
+      const clips = trainingMedia.clips(job).slice().sort((a, b) => (a.iteration || 0) - (b.iteration || 0));
+      if (clips.length) {
+        parts.push('<section class="flex flex-col gap-2">'
+          + `<h3 class="m-0 text-sm font-semibold">${isDuck ? 'Checkpoint' : 'Saved model'} clips (${clips.length})</h3>`
+          + (isDuck ? '' : '<p class="m-0 text-xs text-slate-500 dark:text-slate-400">The start of the eval that '
+            + 'saved each best model, from the eval client\'s overhead camera.</p>')
+          + '<div class="grid grid-cols-2 md:grid-cols-3 gap-3">'
+          + clips.map((c) => '<figure class="m-0 flex flex-col gap-1">'
+            + `<video controls muted playsinline preload="metadata" class="w-full rounded-md bg-black" src="${esc(trainingMedia.url(c.path))}"></video>`
+            + `<figcaption class="text-[11px] text-slate-500 dark:text-slate-400">${isDuck ? 'iteration' : 'step'} ${esc(c.iteration ?? '?')}`
+            + (c.gif ? ` · <a class="underline" href="${esc(trainingMedia.url(c.gif))}" target="_blank" rel="noopener">GIF</a>` : '')
+            + '</figcaption>'
+            + '</figure>').join('')
+          + '</div></section>');
+      }
+      if (!parts.length) {
+        parts.push('<p class="m-0 text-sm text-slate-500 dark:text-slate-400">This training job has no videos yet. '
+          + (isDuck
+            ? 'The progression video is rendered when a TRAIN job with progress_video set finishes; '
+              + "select the model on the Models tab and click 'Render video' to make one."
+            : 'A clip is recorded each time an eval saves a new best model, and the progression video when '
+              + 'training finishes. Jobs on gyms built before training clips get none.')
+          + '</p>');
+      }
+
+      const backdrop = document.createElement('div');
+      backdrop.className =
+        'fixed inset-0 z-[100] modal-blur bg-slate-900/40 dark:bg-slate-950/65 ' +
+        'flex items-center justify-center p-4 ' +
+        'opacity-0 transition-opacity duration-200 pointer-events-none';
+      backdrop.innerHTML = `
+        <div role="dialog" aria-modal="true"
+             class="w-full max-w-[960px] max-h-[calc(100vh-2rem)]
+                    bg-white dark:bg-slate-900
+                    border border-slate-200 dark:border-slate-700
+                    rounded-2xl shadow-card-lg flex flex-col
+                    opacity-0 -translate-y-3 scale-[0.98]
+                    transition duration-200">
+          <div class="px-6 py-5 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3">
+            <h2 class="m-0 text-base font-semibold tracking-tight truncate text-slate-900 dark:text-slate-100"></h2>
+            <button data-action="close" aria-label="Close"
+                    class="px-2 py-1 text-sm rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400">×</button>
+          </div>
+          <div class="px-6 py-4 overflow-y-auto flex-1 min-h-0 flex flex-col gap-4">${parts.join('')}</div>
+          <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
+            <button data-action="close" class="btn-base btn-secondary">Close</button>
+          </div>
+        </div>`;
+      backdrop.querySelector('h2').textContent = title || 'Training videos';
+      const dialog = backdrop.querySelector('[role="dialog"]');
+
+      function close() {
+        // Detach the media right away so videos stop playing during the fade.
+        backdrop.querySelectorAll('video').forEach((v) => { v.pause(); v.removeAttribute('src'); v.load(); });
+        backdrop.classList.add('opacity-0', 'pointer-events-none');
+        dialog.classList.add('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        setTimeout(() => backdrop.remove(), 250);
+        document.removeEventListener('keydown', onKey);
+      }
+      function onKey(ev) {
+        if (ev.key === 'Escape') close();
+      }
+      backdrop.addEventListener('click', (ev) => { if (ev.target === backdrop) close(); });
+      backdrop.querySelectorAll('[data-action="close"]').forEach((b) => b.addEventListener('click', close));
+      document.addEventListener('keydown', onKey);
+      document.body.appendChild(backdrop);
+      requestAnimationFrame(() => {
+        backdrop.classList.remove('opacity-0', 'pointer-events-none');
+        backdrop.classList.add('opacity-100', 'pointer-events-auto');
+        dialog.classList.remove('opacity-0', '-translate-y-3', 'scale-[0.98]');
+        dialog.classList.add('opacity-100', 'translate-y-0', 'scale-100');
+      });
+    },
+  };
 
   /* ---------- typed-filter constants ---------------------------- *
    *
@@ -1663,6 +1783,11 @@
     reward_designs: { url: '/get_reward_designs', pinned: 'passthrough-course-default' },
     experiment_designs: { url: '/get_experiment_designs', pinned: 'experiment-default' },
   };
+  const ROBOT_SCOPED_LISTS = new Set(['gyms', 'reward_designs', 'experiment_designs']);
+  // Seeded designs pinned first for non-car robots (rl_agent/duck/reward_design.py
+  // and experiment_design.py).
+  const ROBOT_PINNED = { reward_designs: 'microduck-passthrough',
+                         experiment_designs: 'microduck-experiment-default' };
   const JOB_LIST_TTL_MS = 30000;
   const _jobListCache = new Map();
 
@@ -1710,18 +1835,22 @@
    * no gym" value which selects the trainer's legacy code path, so
    * wiping it would change what an untouched form submits.
    */
-  async function loadJobListIntoSelect(kind, sel, { force = true } = {}) {
+  async function loadJobListIntoSelect(kind, sel, { force = true, robot = 'roboracer' } = {}) {
     if (!sel) return;
     const src = JOB_LIST_SOURCES[kind];
+    const pinned = robot === 'roboracer' ? src.pinned : ROBOT_PINNED[kind];
     const rows = await fetchJobList(kind, { force });
     while (sel.options.length > 1) sel.remove(1);
     const visible = rows
       .filter((r) => !r.archived)
+      // Gyms and designs belong to one robot; car rows predate the
+      // field. The car job/eval forms and the microduck form each list their own.
+      .filter((r) => !ROBOT_SCOPED_LISTS.has(kind) || (r.robot || 'roboracer') === robot)
       .sort((a, b) => {
         // Demos have no name; newest first is the useful order.
         if (kind === 'demos') return demoTime(b).localeCompare(demoTime(a));
-        const aCan = src.pinned && String(a._id || '') === src.pinned;
-        const bCan = src.pinned && String(b._id || '') === src.pinned;
+        const aCan = pinned && String(a._id || '') === pinned;
+        const bCan = pinned && String(b._id || '') === pinned;
         if (aCan && !bCan) return -1;
         if (bCan && !aCan) return 1;
         return String(a.name || '').localeCompare(String(b.name || ''));
@@ -1946,6 +2075,11 @@
     // TRAIN-only, and omitted when off so legacy documents stay
     // bit-identical (do_job treats missing as false).
     if (o.skip_first_eval && jobType === 'TRAIN') payload.skip_first_eval = true;
+    // Training clips (rl_agent/car_clips.py); the trainer treats missing as on.
+    if (jobType === 'TRAIN' && o.video !== undefined) {
+      payload.video = !!o.video;
+      payload.progress_video = !!o.progress_video;
+    }
 
     if (course && course !== jobOptions.courseDefault) payload.course_type = course;
 
@@ -2012,6 +2146,8 @@
     formatters,
     showToast,
     confirmDialog,
+    trainingMedia,
+    duckMedia: trainingMedia,
     TableView,
     FreshnessIndicator,
     DataWebSocket,

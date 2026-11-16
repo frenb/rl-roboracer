@@ -1,0 +1,7 @@
+.git
+.venv
+logs
+outputs
+wandb
+media
+**/__pycache__

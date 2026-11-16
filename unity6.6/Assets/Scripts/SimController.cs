@@ -58,6 +58,14 @@ public class SimController : MonoBehaviour
 
     private int applyForceCommandId;
 
+    // Lockstep stepping (see Lockstep.cs). Engaged by the first trainer
+    // command, so a client opened to drive by hand still runs in real time.
+    private bool lockstepActive = false;
+    private int stepTicksLeft = 0;
+    private bool stepDone = false;
+    private bool restartDone = false;
+    private ApplyForce stepAf;
+
     // Start is called before the first frame update
     void Start()
     {
@@ -90,6 +98,8 @@ public class SimController : MonoBehaviour
         gameObject.AddComponent(typeof(CameraViewSwitcher));
         // One CSI frame per cmd_id on camera/front (Phase 1).
         gameObject.AddComponent(typeof(CsiFramePublisher));
+        // Overhead-camera frames for training clips, on the trainer's request.
+        gameObject.AddComponent(typeof(ClipRecorder));
         // Auto-attach the fly-connectome overlay. It self-subscribes to
         // fly_brain_geometry/fly_brain_activity and stays hidden until a fly
         // policy is actually driving. Toggle with the B key.
@@ -99,6 +109,9 @@ public class SimController : MonoBehaviour
         // drives that camera's transform. Display only - the policy's camera
         // input comes from JetRacerCsiCamera via its own RenderTexture.
         AttachOverheadFit();
+        // Drop to a few fps when no trainer has sent a command for a minute,
+        // so an idle client does not compete with other robots' jobs for the GPU.
+        gameObject.AddComponent(typeof(IdleThrottle));
         Debug.Log("ros.rosIPAddress=" + ros.rosIPAddress);
         Debug.Log("ros.overrideUnityIP=" + ros.overrideUnityIP);
         ros.Subscribe<SimCommand>(simCommandTopic, onCommand);
@@ -285,6 +298,8 @@ public class SimController : MonoBehaviour
 
     private void onCommand(SimCommand cmd)
     {
+        IdleThrottle.Wake();
+        if (Lockstep.Enabled) lockstepActive = true;
         ApplyForce af = (ApplyForce) cmd.ApplyForce;
         switch ((Command) cmd.cmd )
         {
@@ -292,9 +307,19 @@ public class SimController : MonoBehaviour
                 Debug.Log("RESTARTING");
                 Restart(af);
                 command = 0;
+                stepTicksLeft = 0;
+                stepDone = false;
+                restartDone = false;
+                // The settle frames before RESTARTED need the sim running.
+                if (lockstepActive) Lockstep.Run();
                 break;
             case Command.APPLY_FORCE:
                 Debug.Log("APPLY FORCE MESSAGE");
+                if (lockstepActive)
+                {
+                    BeginStep(af);
+                    break;
+                }
                 ApplyForce(af);
                 command = 1;
                 applyForceCommandId = af.cmd_id;
@@ -368,6 +393,47 @@ public class SimController : MonoBehaviour
         currentWait = WAIT_FRAMES;
     }
 
+    /// <summary>
+    /// Lockstep APPLY_FORCE: set the controls and run Lockstep.Ticks physics
+    /// ticks. The car's cmd_id is stamped only when the step ends (Update), so
+    /// no scene data published mid-step can answer the trainer's wait.
+    /// </summary>
+    private void BeginStep(ApplyForce af)
+    {
+        if (car == null) return;
+        CarController cc = car.GetComponent<CarController>();
+        StartCoroutine(cc.ApplyForce((float) af.steering_angle, (float) af.acceleration));
+        cc.numObstacles = (int) af.num_obstacles;
+        stepAf = af;
+        stepTicksLeft = Lockstep.Ticks;
+        stepDone = false;
+        Lockstep.Run();
+    }
+
+    void Update()
+    {
+        // Runs after the frame's physics, so the last tick is in. Time is
+        // frozen from here on, so the 10 Hz scene_data loop will not publish
+        // again: this publish must already carry the command's cmd_id.
+        if (restartDone)
+        {
+            restartDone = false;
+            sceneDataPublisher.UpdateWorldRefs();
+            ros.Send(simStatusTopic, new SimStatus((int)Status.RESTARTED));
+        }
+        if (!stepDone) return;
+        stepDone = false;
+        if (car == null) return;
+        CarController cc = car.GetComponent<CarController>();
+        // The rays were cast before the last tick's physics; recast at the
+        // pose the observation reports.
+        cc.SetDirections();
+        cc.GetIntersectionDistance();
+        cc.cmd_id = stepAf.cmd_id;
+        sceneDataPublisher.UpdateWorldRefs(stepAf);
+        ros.Send(simStatusTopic, new SimStatus((int)Status.FORCE_APPLIED));
+    }
+
     // Update is called once per frame
     //TODO: change back to void Update() if broken
     void FixedUpdate()
@@ -378,13 +444,27 @@ public class SimController : MonoBehaviour
             sentStarted = true;
         }
 
+        if (lockstepActive && stepTicksLeft > 0 && --stepTicksLeft == 0)
+        {
+            // This tick's physics still runs after FixedUpdate; Lockstep.Run
+            // allows at most one tick per frame, so it is the last one.
+            Lockstep.Freeze();
+            stepDone = true;
+        }
+
         if (currentWait > 0)
         {
             currentWait--;
             if (currentWait == 0 && command == 0)
             {
-                ros.Send(simStatusTopic, new SimStatus((int)Status.RESTARTED));
                 command = -1;
+                if (lockstepActive)
+                {
+                    Lockstep.Freeze();
+                    restartDone = true;
+                    return;
+                }
+                ros.Send(simStatusTopic, new SimStatus((int)Status.RESTARTED));
                 return;
             }
             // if (currentWait == 0 
@@ -396,7 +476,8 @@ public class SimController : MonoBehaviour
             // }
         }
          
-        if ( command == 1 
+        if ( !lockstepActive
+                && command == 1 
                 && car.GetComponent<CarController>().applyForceDone
                 && applyForceCommandId
                     == car.GetComponent<CarController>().cmd_id){

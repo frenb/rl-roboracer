@@ -1114,7 +1114,7 @@ MonoBehaviour:
     motor: 1
     steering: 0
   maxMotorTorque: 300
-  maxSteeringAngle: 45
+  maxSteeringAngle: 17
   spherePrefab: {fileID: 2964540799174209130, guid: db5833446367a5f46b26f99298e414a9, type: 3}
   statsCanvas: {fileID: 4767143561688556368, guid: 4bab11f30cd00da4080c3c5a3a942d0f, type: 3}
   statsCanvasPrefab: {fileID: 0}

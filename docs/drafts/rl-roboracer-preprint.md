@@ -1,5 +1,7 @@
 # Learning to Race: Reward Design and Demonstration-Guided Reinforcement Learning for Autonomous Navigation
 
+> **Working draft, not peer reviewed.** Results and wording may change.
+
 **Abstract**
 
 We present a study of reward design and demonstration-guided reinforcement learning (RL) for an autonomous racing task in a simulated donut-course environment. Starting from a speed-reward baseline that achieves 4.16 goals/episode, we systematically ablate reward shaping, demonstration-replay architecture, and policy regularisation. Our best configuration — Soft Actor-Critic (SAC) with Advantage-Weighted Actor-Critic (AWAC) regularisation, demo-protected replay, and a goal-count reward scaled by quickness — achieves **209.22 ± 125.51 goals/episode** at **2.83 m/s**, a **50× improvement** over the baseline. We find that (1) eliminating Behavioural Cloning (BC) pre-training in favour of a demo-seeded replay buffer substantially improves final performance, (2) reward calibration between progress-shaping and goal-count objectives has a first-order effect on convergence to fast driving, and (3) AWAC regularisation consistently increases both goal throughput and driving speed relative to unconstrained SAC.

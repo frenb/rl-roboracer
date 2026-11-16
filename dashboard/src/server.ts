@@ -335,8 +335,11 @@ export const createServer = (config): express.Application => {
     // Runs once per server start; the {$exists:false} filter makes it a
     // no-op on subsequent boots (and never touches docs that already carry
     // an explicit course_type from the form).
+    // Other robots' jobs (robot set, e.g. microduck) have no course; earlier
+    // versions of this backfill stamped 'donut' on them too, so undo that.
+    const carJob = { $or: [{ robot: { $exists: false } }, { robot: 'roboracer' }] };
     dbo.collection("jobs").updateMany(
-      { course_type: { $exists: false } },
+      { course_type: { $exists: false }, ...carJob },
       { $set: { course_type: "donut" } }
     ).then((r) => {
       if (r && r.modifiedCount) {
@@ -345,6 +348,28 @@ export const createServer = (config): express.Application => {
     }).catch((e) => {
       console.warn("course_type backfill failed:", e && e.message ? e.message : e);
     });
+    dbo.collection("jobs").updateMany(
+      { robot: { $exists: true, $nin: ['roboracer'] }, course_type: { $exists: true } },
+      { $unset: { course_type: "" } }
+    ).then((r) => {
+      if (r && r.modifiedCount) console.log(`course_type: removed from ${r.modifiedCount} non-car job(s)`);
+    }).catch((e) => {
+      console.warn("course_type cleanup failed:", e && e.message ? e.message : e);
+    });
+    // Non-car jobs queued before /add_job stamped gym_name (see stampRobotFromGym).
+    (async () => {
+      const jobs = await dbo.collection("jobs").find(
+        { robot: { $exists: true, $nin: ['roboracer'] }, gym_name: { $exists: false }, task_id: { $exists: true } },
+        { projection: { robot: 1, task_id: 1 } }).toArray();
+      let named = 0;
+      for (const j of jobs) {
+        const gym = await dbo.collection("gyms").findOne({ _id: `${j.robot}:${j.task_id}` }, { projection: { name: 1 } });
+        if (!gym || !gym.name) continue;
+        await dbo.collection("jobs").updateOne({ _id: j._id }, { $set: { gym_name: gym.name } });
+        named++;
+      }
+      if (named) console.log(`gym_name backfill: named the gym on ${named} non-car job(s)`);
+    })().catch((e) => console.warn("gym_name backfill failed:", e && e.message ? e.message : e));
 
     // Index for the Weakness Map (/weakness_map). The logs collection is
     // dominated by per-step "did not fail" rows (no position_history), so
@@ -443,8 +468,33 @@ export const createServer = (config): express.Application => {
     // });
 
   })
-  app.post('/add_job', (req,res) => {
+  // A job's gym decides which worker claims it: duck gyms
+  // (robot: "microduck", from rl_agent/duck/gyms.py) stamp robot and
+  // task_id so the car trainer, which takes every job without a robot,
+  // never picks them up.
+  async function stampRobotFromGym(job: any) {
+    if (!job) return;
+    // Duck EVAL / EXPORT / VIDEO jobs name a task rather than a gym.
+    const gymId = job.gym_id
+      || (job.robot && job.robot !== 'roboracer' && job.task_id ? `${job.robot}:${job.task_id}` : null);
+    if (!gymId) return;
+    const gym = await dbo.collection("gyms").findOne(
+      { _id: String(gymId) }, { projection: { robot: 1, task_id: 1, name: 1 } });
+    if (!gym || !gym.robot || gym.robot === 'roboracer') return;
+    job.robot = gym.robot;
+    if (!job.task_id && gym.task_id) job.task_id = gym.task_id;
+    if (!job.gym_name && gym.name) job.gym_name = gym.name;
+  }
+
+  app.post('/add_job', async (req,res) => {
     console.log("add_job: " + JSON.stringify(req.body));
+    try {
+      await stampRobotFromGym(req.body);
+    } catch (err) {
+      console.error('add_job gym lookup failed:', err);
+      res.status(500).json({ error: String(err && ((err as any).message || err)) });
+      return;
+    }
     dbo.collection("jobs").insertOne(req.body,function(err, result) {
       if (err) { console.error('add_job failed:', err); res.status(500).json({ error: String(err && (err.message || err)) }); return; }
       res.json(result)
@@ -616,6 +666,63 @@ export const createServer = (config): express.Application => {
           extent: { xmin, xmax, ymin, ymax }, nx, ny, cells,
         });
       });
+  });
+
+  // ----------------------------------------------------------------
+  // Difficulty by goal gate. The same segment-end logs as /weakness_map
+  // (one doc per stretch the car drove toward a gate, ending in "has
+  // succeeded" or "has failed - reward"), grouped by the gate it was
+  // heading for (extra_data.car.current_goal, "Goal-N"). Gates are where
+  // SimController spawns the car on reset, so this is the unit a
+  // start-position curriculum would pick from.
+  //
+  // Gate numbering is per track layout: a curriculum stage that rebuilds
+  // the track renumbers the gates, so a job spanning stages mixes layouts.
+  // ----------------------------------------------------------------
+  app.get('/weakness_by_gate', (req, res) => {
+    const jobId = String(req.query.job_id || '');
+    const limit = Math.max(1, Math.min(20000, parseInt(String(req.query.limit || '2000'), 10) || 2000));
+    if (!jobId) { res.status(400).json({ ok: false, error: 'job_id required' }); return; }
+    const jobOr: any[] = [{ job_id: jobId }];
+    try { jobOr.push({ job_id: new ObjectID(jobId) }); } catch (e) { /* not a valid ObjectId */ }
+
+    dbo.collection('logs').aggregate([
+      { $match: { $and: [{ $or: jobOr }, { position_history: { $ne: null } }] } },
+      { $sort: { _id: -1 } },
+      { $limit: limit },
+      { $project: {
+          gate: '$extra_data.car.current_goal',
+          failed: { $regexMatch: { input: { $ifNull: ['$type', ''] }, regex: 'fail' } },
+          steps: { $size: { $regexFindAll: { input: '$position_history', regex: '\\[' } } },
+          x: '$extra_data.car.location_x',
+          z: '$extra_data.car.location_z',
+          at: { $toDate: '$_id' },
+      } },
+      { $group: {
+          _id: '$gate',
+          attempts: { $sum: 1 },
+          crashes: { $sum: { $cond: ['$failed', 1, 0] } },
+          mean_steps: { $avg: '$steps' },
+          mean_steps_success: { $avg: { $cond: ['$failed', null, '$steps'] } },
+          reach_x: { $avg: { $cond: ['$failed', null, '$x'] } },
+          reach_z: { $avg: { $cond: ['$failed', null, '$z'] } },
+          crash_x: { $avg: { $cond: ['$failed', '$x', null] } },
+          crash_z: { $avg: { $cond: ['$failed', '$z', null] } },
+          last_seen: { $max: '$at' },
+      } },
+    ], { maxTimeMS: 20000 }).toArray(function (err, rows) {
+      if (err) { res.status(500).json({ ok: false, error: String(err) }); return; }
+      const gates = (rows || []).map((r: any) => {
+        const m = /(\d+)$/.exec(String(r._id || ''));
+        return { gate: r._id || null, index: m ? parseInt(m[1], 10) : null, ...r, _id: undefined };
+      }).sort((a: any, b: any) => (a.index ?? 1e9) - (b.index ?? 1e9));
+      res.json({
+        ok: true,
+        job_id: jobId,
+        segments: gates.reduce((s: number, g: any) => s + g.attempts, 0),
+        gates,
+      });
+    });
   });
 
   app.get('/jobs', (req, res) => {
@@ -836,7 +943,7 @@ export const createServer = (config): express.Application => {
   // it POSTs to /set_desired_gym with the gym's file_path. Each
   // RunClientWrapper.ps1 supervisor polls /get_desired_gym?index=N
   // and restarts the Unity process with the new binary if the path
-  // has changed.
+  // has changed, or in or out of -batchmode if `headless` has.
   //
   // State is in-memory (keyed by actor index or '*' for all actors).
   // It does not survive a dashboard container restart, which is
@@ -864,10 +971,11 @@ export const createServer = (config): express.Application => {
       gym_id:    String(body.gym_id   || ''),
       gym_name:  String(body.gym_name || ''),
       file_path: String(body.file_path),
+      headless:  body.headless === true,
       set_at:    new Date().toISOString(),
     };
     desiredGymState.set(idx, state);
-    console.log(`[desired-gym] index=${idx} -> ${state.file_path}`);
+    console.log(`[desired-gym] index=${idx} -> ${state.file_path}${state.headless ? ' (headless)' : ''}`);
     res.json({ ok: true, index: idx, state });
   });
 
@@ -1528,6 +1636,81 @@ export const createServer = (config): express.Application => {
         });
       });
   });
+  // One robot's models for pickers (the microduck job form), newest first;
+  // /get_models carries every car model and is too heavy for that.
+  app.get('/get_robot_models', async (req, res) => {
+    try {
+      const robot = String(req.query.robot || '');
+      if (!robot || robot === 'roboracer') {
+        res.status(400).json({ error: "robot is required (not roboracer)" });
+        return;
+      }
+      const rows = await dbo.collection("models").find(
+        { robot },
+        { projection: { job_id: 1, location: 1, task_id: 1, training_iterations: 1, onnx_location: 1,
+                        avg_return: 1, reward_design_name: 1, experiment_design_name: 1,
+                      updated_at: 1, create_date: 1 } })
+        .sort({ updated_at: -1 }).limit(200).toArray();
+      res.json(rows);
+    } catch (err) {
+      res.status(500).json({ error: String(err && ((err as any).message || err)) });
+    }
+  });
+
+  // Training videos and GIFs (rl_agent/media.py), stored on jobs as the
+  // trainer's own paths: the duck worker's under /microduck_rl/logs
+  // (saved_models/microduck on the host), the car trainer's under
+  // /saved_models. Both map into this container's /saved_models. sendFile
+  // answers Range requests, so videos seek.
+  const MEDIA_ROOTS: Array<[string, string]> = [
+    ['/microduck_rl/logs/', '/saved_models/microduck'],
+    ['/saved_models/', '/saved_models'],
+  ];
+
+  // One job by id, for tabs that don't hold the whole job list (the Models
+  // tab's MicroDuck video button).
+  app.get('/get_job/:id', async (req, res) => {
+    let filter;
+    try {
+      filter = { _id: ObjectID(req.params.id) };
+    } catch (e) {
+      filter = { _id: String(req.params.id) };
+    }
+    try {
+      const job = await dbo.collection("jobs").findOne(filter);
+      if (!job) {
+        res.status(404).json({ error: `no job ${req.params.id}` });
+        return;
+      }
+      res.json(job);
+    } catch (e) {
+      res.status(500).json({ error: String((e as Error).message || e) });
+    }
+  });
+
+  // /duck_media is the old name, still in links shared before the car had videos.
+  app.get(['/media', '/duck_media'], (req, res) => {
+    const stored = String(req.query.path || '');
+    const match = MEDIA_ROOTS.find(([prefix]) => stored.startsWith(prefix));
+    if (!match) {
+      res.status(400).json({ error: `path must start with ${MEDIA_ROOTS.map(([p]) => p).join(' or ')}` });
+      return;
+    }
+    const [prefix, root] = match;
+    const resolved = path.resolve(root, stored.slice(prefix.length));
+    if (!resolved.startsWith(root + path.sep)) {
+      res.status(400).json({ error: 'path escapes the training output folder' });
+      return;
+    }
+    if (!['.mp4', '.gif'].includes(path.extname(resolved).toLowerCase())) {
+      res.status(400).json({ error: 'only .mp4 and .gif files are served' });
+      return;
+    }
+    res.sendFile(resolved, { maxAge: '1h' }, (err: any) => {
+      if (err && !res.headersSent) res.status(err.status || 404).json({ error: 'not found' });
+    });
+  });
+
   app.get('/get_models', (req,res) => {
     if(needsUpdate(req, res, modelsChanged, 'models'))
     {
@@ -1661,7 +1844,7 @@ export const createServer = (config): express.Application => {
       return;
     }
     const now = new Date();
-    const doc = {
+    const doc: any = {
       name: String(body.name),
       description: String(body.description || ''),
       code: String(body.code),
@@ -1671,6 +1854,10 @@ export const createServer = (config): express.Application => {
       created_at: now,
       updated_at: now,
     };
+    // Car designs carry no robot field; duck designs (a top-level TERMS dict)
+    // are stamped so the duck worker accepts them and car jobs can't pick them.
+    const robot = body.robot || (/(^|\n)TERMS\s*=/.test(doc.code) ? 'microduck' : null);
+    if (robot && robot !== 'roboracer') doc.robot = String(robot);
     dbo.collection("reward_designs").insertOne(doc, function(err, result) {
       if (err) {
         console.error('add_reward_design failed:', err);
@@ -1712,12 +1899,18 @@ export const createServer = (config): express.Application => {
     if (body.description !== undefined) update["$set"].description = String(body.description);
     if (body.code        !== undefined) update["$set"].code        = String(body.code);
     if (body.archived    !== undefined) update["$set"].archived    = !!body.archived;
+    // Designs compiled from a spec change only through the spec.
+    if (body.code !== undefined) (idFilter as any).spec_id = { $exists: false };
     dbo.collection("reward_designs").updateOne(
       idFilter, update, { upsert: false },
       function(err, result) {
         if (err) {
           console.error('update_reward_design failed:', err);
           res.status(500).json({ error: String(err.message || err) });
+          return;
+        }
+        if (body.code !== undefined && result && result.matchedCount === 0) {
+          res.status(409).json({ error: "no such design, or it is compiled from a reward spec: edit the spec on the Reward Specs tab" });
           return;
         }
         console.log('reward_design updated', body._id, result);
@@ -1756,6 +1949,233 @@ export const createServer = (config): express.Application => {
         res.json(result);
       });
   });
+
+  // ---- design_specs: robot-agnostic reward specs -------------------- *
+  //
+  // A spec is Markdown prose (rl_agent/specs/spec.py) that Mad Scientist's
+  // spec_compiler turns into each robot's reward code. Compiles land as
+  // compile.<robot>.result with state "pending"; accepting one writes the code
+  // into the spec text and publishes it as the reward design
+  // "spec:<spec id>:<robot>", which jobs pick like any other. The published
+  // design carries spec_status (fresh / edited / stale) and the workers refuse
+  // stale ones, and edited ones in strict mode.
+  const SPEC_CLI = '/python_ws/src/specs/cli.py';
+  const SPEC_SETTINGS_ID = 'design_specs';
+
+  function specIdFilter(id: any): any {
+    try { return { _id: ObjectID(String(id)) }; } catch (e) { return { _id: String(id) }; }
+  }
+
+  async function specSettings(): Promise<{ strict_generated: boolean }> {
+    const doc = await dbo.collection('settings').findOne({ _id: SPEC_SETTINGS_ID } as any);
+    return { strict_generated: !!(doc && doc.strict_generated) };
+  }
+
+  async function lintSpecCode(robot: string, code: string, taskId: string): Promise<string[]> {
+    let gym: any = null;
+    let library: any[] = [];
+    if (robot === 'microduck') {
+      gym = await dbo.collection('gyms').findOne({ _id: 'microduck:' + taskId } as any,
+        { projection: { reward_defaults: 1 } });
+      const catalog = await dbo.collection('reward_term_catalog').findOne({ _id: 'microduck' } as any);
+      library = (catalog && catalog.functions) || [];
+    }
+    const r = await runDuckScript(SPEC_CLI, { op: 'lint', robot, code, gym, library });
+    return r.ok ? r.problems : [r.error];
+  }
+
+  // Mirror a spec's compiled code into reward_designs, one design per robot.
+  async function publishSpec(specId: any, summary: any): Promise<void> {
+    const now = new Date();
+    const designs = dbo.collection('reward_designs');
+    for (const robot of ['roboracer', 'microduck']) {
+      const _id = `spec:${String(specId)}:${robot}`;
+      const compiled = summary.compiled[robot];
+      if (!compiled || !summary.robots.includes(robot)) {
+        await designs.updateOne({ _id } as any, { $set: { archived: true, updated_at: now } });
+        continue;
+      }
+      const set: any = {
+        name: summary.name,
+        description: summary.description || String(summary.goal || '').split('\n\n')[0].replace(/\s+/g, ' ').trim(),
+        code: compiled.code,
+        author: 'reward spec',
+        archived: false,
+        spec_id: String(specId),
+        spec_status: summary.statuses[robot],
+        spec_inputs_sha: compiled.meta.inputs_sha || null,
+        updated_at: now,
+      };
+      if (robot !== 'roboracer') set.robot = robot;
+      const existing = await designs.findOne({ _id } as any, { projection: { code: 1 } });
+      const update: any = { $set: set, $setOnInsert: { created_at: now } };
+      if (!existing) update.$setOnInsert.version = 1;
+      else if (existing.code !== compiled.code) update.$inc = { version: 1 };
+      await designs.updateOne({ _id } as any, update, { upsert: true });
+    }
+    rewardDesignsChanged = true;
+  }
+
+  // Store new spec text (already checked) and republish.
+  async function storeSpecText(filter: any, text: string, summary: any, extra: any = {}): Promise<void> {
+    await dbo.collection('design_specs').updateOne(filter, {
+      $set: {
+        text, name: summary.name, robots: summary.robots, statuses: summary.statuses,
+        updated_at: new Date(), ...extra,
+      },
+      $inc: { version: 1 },
+    });
+    await publishSpec(filter._id, summary);
+  }
+
+  function specRoute(handler: (req: any, res: any) => Promise<void>) {
+    return (req: any, res: any) => {
+      handler(req, res).catch((err: any) => {
+        console.error(`${req.path} failed:`, err);
+        res.status(500).json({ error: String(err && (err.message || err)) });
+      });
+    };
+  }
+
+  app.get('/get_design_specs', specRoute(async (req, res) => {
+    const docs = await dbo.collection('design_specs').find({}).sort({ updated_at: -1 }).toArray();
+    for (const d of docs) {
+      const s = await runDuckScript(SPEC_CLI, { op: 'parse', text: d.text });
+      d.summary = s.ok ? s : null;
+      d.parse_error = s.ok ? null : s.error;
+    }
+    res.json({ specs: docs, settings: await specSettings() });
+  }));
+
+  app.get('/design_spec_template', specRoute(async (req, res) => {
+    res.json(await runDuckScript(SPEC_CLI, { op: 'template' }));
+  }));
+
+  app.post('/save_design_spec', specRoute(async (req, res) => {
+    const body = req.body || {};
+    const text = String(body.text || '');
+    const summary = await runDuckScript(SPEC_CLI, { op: 'parse', text });
+    if (!summary.ok) { res.status(400).json({ error: summary.error }); return; }
+    const specs = dbo.collection('design_specs');
+    const old = body._id ? await specs.findOne(specIdFilter(body._id)) : null;
+    if (body._id && !old) { res.status(404).json({ error: 'no such spec' }); return; }
+    const edited = await runDuckScript(SPEC_CLI, { op: 'edited', old_text: old ? old.text : '', text });
+    if (!edited.ok) { res.status(400).json({ error: edited.error }); return; }
+    if (edited.robots.length) {
+      if ((await specSettings()).strict_generated) {
+        res.status(400).json({
+          error: `strict mode: compiled code is generated only, but this save edits it for ${edited.robots.join(', ')}. ` +
+                 'Change the prose and recompile, or turn strict mode off.' });
+        return;
+      }
+      for (const robot of edited.robots) {
+        const problems = await lintSpecCode(robot, summary.compiled[robot].code, summary.microduck_task);
+        if (problems.length) {
+          res.status(400).json({ error: `hand-edited ${robot} code does not load: ${problems.join('; ')}` });
+          return;
+        }
+      }
+    }
+    let filter: any;
+    if (old) {
+      filter = { _id: old._id };
+    } else {
+      const now = new Date();
+      const ins = await specs.insertOne({ text, created_at: now, compile: {}, archived: false, version: 0 } as any);
+      filter = { _id: ins.insertedId };
+    }
+    await storeSpecText(filter, text, summary);
+    res.json({ ok: true, _id: filter._id, summary, hand_edited: edited.robots });
+  }));
+
+  app.post('/compile_design_spec', specRoute(async (req, res) => {
+    const body = req.body || {};
+    const doc = await dbo.collection('design_specs').findOne(specIdFilter(body._id));
+    if (!doc) { res.status(404).json({ error: 'no such spec; save it first' }); return; }
+    const summary = await runDuckScript(SPEC_CLI, { op: 'parse', text: doc.text });
+    if (!summary.ok) { res.status(400).json({ error: summary.error }); return; }
+    const robots: string[] = Array.isArray(body.robots) && body.robots.length ? body.robots : summary.robots;
+    const set: any = {};
+    for (const robot of robots) {
+      if (!summary.robots.includes(robot)) { res.status(400).json({ error: `${robot} is not in this spec's robots` }); return; }
+      const state = doc.compile && doc.compile[robot] && doc.compile[robot].state;
+      if (state === 'queued' || state === 'running') { res.status(409).json({ error: `${robot} is already compiling` }); return; }
+      set[`compile.${robot}`] = { state: 'queued', requested_at: new Date(), inputs_sha: summary.inputs_sha[robot] };
+    }
+    await dbo.collection('design_specs').updateOne({ _id: doc._id }, { $set: set });
+    res.json({ ok: true, queued: robots });
+  }));
+
+  app.post('/accept_design_spec_compile', specRoute(async (req, res) => {
+    const body = req.body || {};
+    const robot = String(body.robot || '');
+    const doc = await dbo.collection('design_specs').findOne(specIdFilter(body._id));
+    const c = doc && doc.compile && doc.compile[robot];
+    if (!c || c.state !== 'pending' || !c.result) { res.status(409).json({ error: `no compiled ${robot} code is waiting for review` }); return; }
+    const summary = await runDuckScript(SPEC_CLI, { op: 'parse', text: doc.text });
+    if (!summary.ok) { res.status(400).json({ error: summary.error }); return; }
+    if (summary.inputs_sha[robot] !== c.result.inputs_sha) {
+      res.status(409).json({ error: 'the spec changed after this compile started; compile again' });
+      return;
+    }
+    const set = await runDuckScript(SPEC_CLI, { op: 'set_compiled', text: doc.text, robot, code: c.result.code, model: c.result.model });
+    if (!set.ok) { res.status(400).json({ error: set.error }); return; }
+    const after = await runDuckScript(SPEC_CLI, { op: 'parse', text: set.text });
+    await storeSpecText({ _id: doc._id }, set.text, after, {
+      [`compile.${robot}.state`]: 'accepted', [`compile.${robot}.accepted_at`]: new Date() });
+    res.json({ ok: true, summary: after });
+  }));
+
+  app.post('/discard_design_spec_compile', specRoute(async (req, res) => {
+    const body = req.body || {};
+    const robot = String(body.robot || '');
+    const r = await dbo.collection('design_specs').updateOne(
+      { ...specIdFilter(body._id), [`compile.${robot}.state`]: { $in: ['pending', 'failed'] } },
+      { $set: { [`compile.${robot}.state`]: 'discarded' } });
+    if (!r.matchedCount) { res.status(409).json({ error: `nothing to discard for ${robot}` }); return; }
+    res.json({ ok: true });
+  }));
+
+  // Keep a robot's current (usually hand-edited) code for the current prose.
+  app.post('/repin_design_spec', specRoute(async (req, res) => {
+    const body = req.body || {};
+    const robot = String(body.robot || '');
+    if ((await specSettings()).strict_generated) {
+      res.status(400).json({ error: 'strict mode: stale code has to be recompiled' });
+      return;
+    }
+    const doc = await dbo.collection('design_specs').findOne(specIdFilter(body._id));
+    if (!doc) { res.status(404).json({ error: 'no such spec' }); return; }
+    const pinned = await runDuckScript(SPEC_CLI, { op: 'repin', text: doc.text, robot });
+    if (!pinned.ok) { res.status(400).json({ error: pinned.error }); return; }
+    const summary = await runDuckScript(SPEC_CLI, { op: 'parse', text: pinned.text });
+    const problems = await lintSpecCode(robot, summary.compiled[robot].code, summary.microduck_task);
+    if (problems.length) { res.status(400).json({ error: `${robot} code does not load: ${problems.join('; ')}` }); return; }
+    await storeSpecText({ _id: doc._id }, pinned.text, summary);
+    res.json({ ok: true, summary });
+  }));
+
+  app.post('/archive_design_spec', specRoute(async (req, res) => {
+    const body = req.body || {};
+    const filter = specIdFilter(body._id);
+    await dbo.collection('design_specs').updateOne(filter, { $set: { archived: body.archived !== false, updated_at: new Date() } });
+    if (body.archived !== false) {
+      await dbo.collection('reward_designs').updateMany({ spec_id: String(filter._id) }, { $set: { archived: true } });
+      rewardDesignsChanged = true;
+    } else {
+      const doc = await dbo.collection('design_specs').findOne(filter);
+      const summary = doc && await runDuckScript(SPEC_CLI, { op: 'parse', text: doc.text });
+      if (summary && summary.ok) await publishSpec(filter._id, summary);
+    }
+    res.json({ ok: true });
+  }));
+
+  app.post('/design_spec_settings', specRoute(async (req, res) => {
+    const strict = !!(req.body || {}).strict_generated;
+    await dbo.collection('settings').updateOne({ _id: SPEC_SETTINGS_ID } as any,
+      { $set: { strict_generated: strict, updated_at: new Date() } }, { upsert: true });
+    res.json({ ok: true, settings: { strict_generated: strict } });
+  }));
 
   // ---- experiment_designs CRUD + schema -------------------------- *
   //
@@ -1851,11 +2271,18 @@ export const createServer = (config): express.Application => {
   // constant, a field the trainer had just added would be rendered by
   // the form, posted back by the user, and then rejected as an unknown
   // key by the same server that advertised it.
+  //
+  // Other robots publish their own list (the duck worker writes
+  // schema_registry/experiment_design:microduck, see
+  // rl_agent/duck/experiment_design.py) and have no fallback: with nothing
+  // published the list is empty and every field is rejected as unknown.
   function withExperimentDesignSchema(
     cb: (fields: any[], source: string) => void,
+    robot: string = 'roboracer',
   ): void {
+    const car = robot === 'roboracer';
     dbo.collection('schema_registry').findOne(
-      { _id: 'experiment_design' } as any,
+      { _id: car ? 'experiment_design' : `experiment_design:${robot}` } as any,
       (err: any, doc: any) => {
         if (err) {
           console.error('schema_registry read failed; using built-in fallback:', err);
@@ -1863,7 +2290,7 @@ export const createServer = (config): express.Application => {
           cb(doc.fields, 'trainer');
           return;
         }
-        cb(EXPERIMENT_DESIGN_SCHEMA, 'fallback');
+        cb(car ? EXPERIMENT_DESIGN_SCHEMA : [], car ? 'fallback' : 'missing');
       });
   }
 
@@ -1878,9 +2305,10 @@ export const createServer = (config): express.Application => {
     // running trainer published it, 'fallback' means this build's
     // built-in copy, which may be older than the trainer. Surfacing it
     // here is what turns a silent drift back into a visible one.
+    const robot = String(req.query.robot || 'roboracer');
     withExperimentDesignSchema((fields, source) => {
-      res.json({ fields, source });
-    });
+      res.json({ fields, source, robot });
+    }, robot);
   });
 
   app.get('/get_experiment_designs', (req, res) => {
@@ -1904,7 +2332,7 @@ export const createServer = (config): express.Application => {
   // tweak it, POST it back) isn't rejected for echoing them.
   const EXPERIMENT_DESIGN_META_KEYS = new Set([
     '_id', 'name', 'description', 'author', 'archived', 'fields',
-    'version', 'created_at', 'updated_at',
+    'version', 'created_at', 'updated_at', 'robot',
   ]);
 
   // Body keys that are neither metadata nor a known field. The copy
@@ -1966,6 +2394,7 @@ export const createServer = (config): express.Application => {
     // Validate and copy against the SAME field list the GET endpoint
     // serves, so the form can never offer a field this handler would
     // reject or drop.
+    const robot = String(body.robot || 'roboracer');
     withExperimentDesignSchema((schemaFields) => {
       if (rejectUnknownKeys(body, res, schemaFields)) return;
       const now = new Date();
@@ -1978,6 +2407,7 @@ export const createServer = (config): express.Application => {
         created_at: now,
         updated_at: now,
       };
+      if (robot !== 'roboracer') doc.robot = robot;
       // Allow callers to omit the field-override block entirely (= all
       // nulls = trainer defaults), or pass them as a flat top-level
       // spread. We accept both shapes for ergonomics.
@@ -1989,17 +2419,28 @@ export const createServer = (config): express.Application => {
         const name = entry.name;
         if (fieldOverrides[name] !== undefined) doc[name] = fieldOverrides[name];
       }
-      dbo.collection("experiment_designs").insertOne(doc, function(err, result) {
-        if (err) {
-          console.error('add_experiment_design failed:', err);
-          res.status(500).json({ error: String(err.message || err) });
-          return;
-        }
-        console.log('experiment_design inserted', result.insertedId);
-        res.json(result);
+      checkExperimentDesign(robot, doc).then((check) => {
+        if (!check.ok) { res.status(400).json({ error: check.error }); return; }
+        dbo.collection("experiment_designs").insertOne(doc, function(err, result) {
+          if (err) {
+            console.error('add_experiment_design failed:', err);
+            res.status(500).json({ error: String(err.message || err) });
+            return;
+          }
+          console.log('experiment_design inserted', result.insertedId);
+          res.json(result);
+        });
       });
-    });
+    }, robot);
   });
+
+  // Car designs are clamped by the trainer at job start; duck designs are
+  // checked here with the same rl_agent/duck/experiment_design.validate the
+  // worker runs, so a bad value fails on Save instead of minutes into a job.
+  function checkExperimentDesign(robot: string, doc: any): Promise<any> {
+    if (robot !== 'microduck') return Promise.resolve({ ok: true });
+    return runDuckScript(DUCK_EXPERIMENT_CHECK_SCRIPT, doc);
+  }
 
   app.post('/update_experiment_design', (req, res) => {
     // Body shape: { _id, name?, description?, archived?, ...field_overrides }
@@ -2010,16 +2451,19 @@ export const createServer = (config): express.Application => {
       res.status(400).json({ error: "_id is required" });
       return;
     }
+    let idFilter: any;
+    try {
+      idFilter = { "_id": ObjectID(body._id) };
+    } catch (e) {
+      idFilter = { "_id": String(body._id) };  // canonical "Default" uses string _id
+    }
     // Same resolved field list as the GET endpoint - see the comment
-    // on withExperimentDesignSchema.
+    // on withExperimentDesignSchema - for the robot the design belongs to.
+    dbo.collection("experiment_designs").findOne(idFilter, (findErr: any, existing: any) => {
+    if (findErr) { res.status(500).json({ error: String(findErr.message || findErr) }); return; }
+    if (!existing) { res.status(404).json({ error: `experiment design ${body._id} not found` }); return; }
     withExperimentDesignSchema((schemaFields) => {
       if (rejectUnknownKeys(body, res, schemaFields)) return;
-      let idFilter;
-      try {
-        idFilter = { "_id": ObjectID(body._id) };
-      } catch (e) {
-        idFilter = { "_id": String(body._id) };  // canonical "Default" uses string _id
-      }
       const update: any = {
         "$set": { updated_at: new Date() },
         "$inc": { version: 1 },
@@ -2035,17 +2479,22 @@ export const createServer = (config): express.Application => {
         const name = entry.name;
         if (fieldOverrides[name] !== undefined) update["$set"][name] = fieldOverrides[name];
       }
-      dbo.collection("experiment_designs").updateOne(
-        idFilter, update, { upsert: false },
-        function(err, result) {
-          if (err) {
-            console.error('update_experiment_design failed:', err);
-            res.status(500).json({ error: String(err.message || err) });
-            return;
-          }
-          console.log('experiment_design updated', body._id, result);
-          res.json(result);
-        });
+      const robot = existing.robot || 'roboracer';
+      checkExperimentDesign(robot, { ...existing, ...update["$set"] }).then((check) => {
+        if (!check.ok) { res.status(400).json({ error: check.error }); return; }
+        dbo.collection("experiment_designs").updateOne(
+          idFilter, update, { upsert: false },
+          function(err, result) {
+            if (err) {
+              console.error('update_experiment_design failed:', err);
+              res.status(500).json({ error: String(err.message || err) });
+              return;
+            }
+            console.log('experiment_design updated', body._id, result);
+            res.json(result);
+          });
+      });
+    }, existing.robot || 'roboracer');
     });
   });
 
@@ -2154,6 +2603,11 @@ export const createServer = (config): express.Application => {
     let idFilter;
     try { idFilter = { "_id": ObjectID(body._id) }; }
     catch (e) { idFilter = { "_id": String(body._id) }; }
+    if (String(body._id).startsWith('microduck:')
+        && (body.name !== undefined || body.file_path !== undefined)) {
+      res.status(400).json({ error: "microduck gyms are registered by the duck worker; only description and archived can change" });
+      return;
+    }
     const setFields: any = { updated_at: new Date() };
     if (body.name        !== undefined) setFields.name        = String(body.name);
     if (body.file_path   !== undefined) setFields.file_path   = stripQuotes(body.file_path);
@@ -2307,6 +2761,70 @@ export const createServer = (config): express.Application => {
       });
   });
 
+  // Task-aware lint for a duck design: the task's default term names (from its
+  // gym) and the addable library (reward_term_catalog) go to
+  // rl_agent/duck/lint_design.py, which needs nothing but python3.
+  const DUCK_LINT_SCRIPT = '/python_ws/src/duck/lint_design.py';
+  const DUCK_EXPERIMENT_CHECK_SCRIPT = '/python_ws/src/duck/check_experiment_design.py';
+  const DUCK_SCRIPT_TIMEOUT_MS = 10000;
+
+  // Run one of rl_agent/duck's stdin->stdout JSON checkers with the dashboard's python3.
+  function runDuckScript(script: string, input: any): Promise<any> {
+    return new Promise((resolve) => {
+      const proc = spawn('python3', [script]);
+      let out = '';
+      let err = '';
+      const timer = setTimeout(() => proc.kill('SIGKILL'), DUCK_SCRIPT_TIMEOUT_MS);
+      proc.stdout.on('data', (d: Buffer) => { out += d.toString(); });
+      proc.stderr.on('data', (d: Buffer) => { err += d.toString(); });
+      proc.on('error', (e: Error) => {
+        clearTimeout(timer);
+        resolve({ ok: false, error: `check could not run: ${e.message}` });
+      });
+      proc.on('close', (codeExit: number | null, signal: string | null) => {
+        clearTimeout(timer);
+        if (signal) {
+          resolve({ ok: false, error: `check timed out after ${DUCK_SCRIPT_TIMEOUT_MS / 1000}s (module-level code runs at load)` });
+          return;
+        }
+        try {
+          resolve(JSON.parse(out));
+        } catch (_e) {
+          resolve({ ok: false, error: `check exited ${codeExit}: ${err.trim().split('\n').slice(-3).join(' ')}` });
+        }
+      });
+      proc.stdin.end(JSON.stringify(input));
+    });
+  }
+
+  async function lintDuckDesign(code: string, taskId: string | null): Promise<any> {
+    let defaultTerms: string[] | null = null;
+    if (taskId) {
+      const gym = await dbo.collection("gyms").findOne(
+        { _id: taskId.startsWith('microduck:') ? taskId : 'microduck:' + taskId },
+        { projection: { reward_terms: 1 } });
+      if (gym && Array.isArray(gym.reward_terms)) defaultTerms = gym.reward_terms;
+    }
+    const catalog = await dbo.collection("reward_term_catalog").findOne(
+      { _id: 'microduck' }, { projection: { 'functions.name': 1 } });
+    const library = catalog && Array.isArray(catalog.functions)
+      ? catalog.functions.map((f: any) => f.name) : null;
+    const result = await runDuckScript(DUCK_LINT_SCRIPT, { code, default_terms: defaultTerms, library });
+    return { funcs: [], ...result, task_checked: defaultTerms !== null };
+  }
+
+  // Default terms per task live on the microduck gyms; this is the library of
+  // reward functions a duck design can add ("func": name).
+  app.get('/get_reward_term_catalog', async (req, res) => {
+    try {
+      const robot = String(req.query.robot || 'microduck');
+      const doc = await dbo.collection("reward_term_catalog").findOne({ _id: robot });
+      res.json(doc || { _id: robot, functions: [] });
+    } catch (err) {
+      res.status(500).json({ error: String(err && ((err as any).message || err)) });
+    }
+  });
+
   app.post('/lint_reward_design', (req, res) => {
     // Cheap structural lint of a candidate reward-design code string.
     //
@@ -2334,6 +2852,16 @@ export const createServer = (config): express.Application => {
     const code: string = body.code;
     if (!code.trim()) {
       res.json({ ok: false, error: "code is empty", funcs: [] });
+      return;
+    }
+    // MicroDuck designs (rl_agent/duck/reward_design.py) edit the task's reward
+    // terms through a top-level TERMS dict plus optional term_<name>() functions.
+    // They are linted by the same Python the duck worker runs at job start, so
+    // a pass here means the design applies to the chosen task.
+    if (body.robot === 'microduck' || /(^|\n)TERMS\s*=/.test(code)) {
+      lintDuckDesign(code, body.task_id ? String(body.task_id) : null)
+        .then((result) => res.json(result))
+        .catch((err) => res.json({ ok: false, error: String(err && (err.message || err)), funcs: [] }));
       return;
     }
     const allowedFuncs = ['reward_standard', 'reward_success', 'reward_failure'];

@@ -33,8 +33,9 @@ public class Real2SimCourse : MonoBehaviour
     [Tooltip("Size the course to the sim car: scale = the car prefab's collider width / realCarSize.x, " +
              "so the car has the same room between the fences as the real one. Off: use scale as set.")]
     public bool scaleToCar = true;
-    [Tooltip("The real car, meters (width, height, length). Waveshare JetRacer Pro: 212 x 120 x 320 mm.")]
-    public Vector3 realCarSize = new Vector3(0.212f, 0.12f, 0.32f);
+    [Tooltip("The real car, meters (width, height, length). Waveshare JetRacer ROS AI Kit, measured: 195 mm across the rear tyres, 148 mm to the lidar top, 243 mm long (robots/jetracer/jetracer.urdf). " +
+             "Only used with scaleToCar; the home-track scene pins scale at 17.6, the value JetRacerPhysicsToReal sizes the car with.")]
+    public Vector3 realCarSize = new Vector3(0.200f, 0.148f, 0.243f);
     [Tooltip("The car to size the course to. Empty: SimController's carPrefab.")]
     public GameObject carPrefab;
     [Tooltip("Sim units per real meter. Computed from the car when scaleToCar is on.")]
@@ -53,10 +54,23 @@ public class Real2SimCourse : MonoBehaviour
     public Color wallColor = new Color(0.62f, 0.62f, 0.6f);
     public Color floorColor = new Color(0.72f, 0.62f, 0.5f);
 
+    public enum InnerBarrierSource { Layout, YellowLines, Explicit }
+
     [Header("Lane")]
-    [Tooltip("Real meters to pull each side of the inner barrier ring toward its centre. The ring stays a " +
-             "square-cornered rectangle; this only widens the lane so the sim car has room to turn.")]
-    public float innerBarrierInset = 0.05f;
+    [Tooltip("Where the inner barrier ring goes. Layout: the layout's fence panels, pulled in by " +
+             "YellowLines: the outer face of the ring on the inner edge of the yellow outlines of the islands " +
+             "inside it. Explicit: innerBarrierRect. innerBarrierInset and innerBarrierScale then apply. Panel heights never change. " +
+             "Launch override: --inner-barrier=layout|yellow|xMin,yMin,xMax,yMax (real meters).")]
+    public InnerBarrierSource innerBarrierSource = InnerBarrierSource.YellowLines;
+    [Tooltip("Real meters to pull each side of the ring toward its centre, after the source and before the " +
+             "scale. Keeps the ring's corners off the road. Launch override: --inner-barrier-inset=0.0381")]
+    public float innerBarrierInset = 0.0381f;
+    [Tooltip("Explicit source: the ring's bounds in real meters (xMin, yMin, xMax, yMax), mat corner at the origin.")]
+    public Vector4 innerBarrierRect = new Vector4(0.5375f, 0.5375f, 2.6625f, 2.2625f);
+    [Tooltip("Then scale the ring about its centre by this factor (1 = unchanged). " +
+             "Launch override: --inner-barrier-scale=0.85")]
+    [Range(0.5f, 1.2f)]
+    public float innerBarrierScale = 1f;
     [Tooltip("Replace the layout's centerline (traced from the printed lane markings) with one derived from " +
              "the fences: mid-lane on each side, and around each inner barrier corner a quarter ellipse " +
              "centred on that corner, so the line keeps half the lane width from the post. Needs an outer " +
@@ -88,14 +102,73 @@ public class Real2SimCourse : MonoBehaviour
     [Serializable] public class Road { public float width; public bool closed = true; public Pt[] centerline; }
     [Serializable] public class Panel { public float x1, y1, x2, y2, height; }
     [Serializable] public class Pose { public float x, y, heading_deg; }
-    [Serializable] public class Layout { public string name; public Mat mat; public Road road; public Panel[] fence_panels; public Pose start; }
+    [Serializable] public class Line { public string color; public float width; public bool closed; public Pt[] points; }
+    [Serializable] public class Layout { public string name; public Mat mat; public Road road; public Panel[] fence_panels; public Pose start; public Line[] edge_lines; }
 
     private static MaterialPropertyBlock _mpb;
     private Material _matMaterial;
 
     void Awake()
     {
+        ApplyCommandLine();
         if (generateOnAwake) Generate();
+    }
+
+    private void ApplyCommandLine()
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        foreach (var arg in Environment.GetCommandLineArgs())
+        {
+            if (arg.StartsWith("--inner-barrier-inset="))
+            {
+                if (float.TryParse(arg.Substring("--inner-barrier-inset=".Length), System.Globalization.NumberStyles.Float, inv, out float d))
+                    innerBarrierInset = d;
+                else Debug.LogWarning($"[Real2SimCourse] ignoring {arg}");
+            }
+            else if (arg.StartsWith("--inner-barrier-scale="))
+            {
+                if (float.TryParse(arg.Substring("--inner-barrier-scale=".Length), System.Globalization.NumberStyles.Float, inv, out float s) && s > 0f)
+                    innerBarrierScale = s;
+                else Debug.LogWarning($"[Real2SimCourse] ignoring {arg}");
+            }
+            else if (arg.StartsWith("--inner-barrier="))
+            {
+                string v = arg.Substring("--inner-barrier=".Length).Trim().ToLowerInvariant();
+                if (v == "layout") innerBarrierSource = InnerBarrierSource.Layout;
+                else if (v == "yellow") innerBarrierSource = InnerBarrierSource.YellowLines;
+                else
+                {
+                    var parts = v.Split(',');
+                    var f = new float[4];
+                    bool ok = parts.Length == 4;
+                    for (int i = 0; ok && i < 4; i++)
+                        ok = float.TryParse(parts[i], System.Globalization.NumberStyles.Float, inv, out f[i]);
+                    if (ok && f[2] > f[0] && f[3] > f[1])
+                    {
+                        innerBarrierRect = new Vector4(f[0], f[1], f[2], f[3]);
+                        innerBarrierSource = InnerBarrierSource.Explicit;
+                    }
+                    else Debug.LogWarning($"[Real2SimCourse] ignoring {arg} (want layout, yellow or xMin,yMin,xMax,yMax)");
+                }
+            }
+        }
+    }
+
+    /// <summary>Moves the inner barrier ring to rect (real meters: xMin, yMin, xMax, yMax) and rebuilds the track.</summary>
+    public void SetInnerBarrier(Vector4 rect, float scaleFactor = 1f)
+    {
+        innerBarrierSource = InnerBarrierSource.Explicit;
+        innerBarrierRect = rect;
+        innerBarrierScale = scaleFactor;
+        Generate();
+    }
+
+    /// <summary>Picks the inner barrier source and scale, then rebuilds the track.</summary>
+    public void SetInnerBarrier(InnerBarrierSource source, float scaleFactor = 1f)
+    {
+        innerBarrierSource = source;
+        innerBarrierScale = scaleFactor;
+        Generate();
     }
 
 #if UNITY_EDITOR
@@ -223,19 +296,28 @@ public class Real2SimCourse : MonoBehaviour
         if (inner.Count == 0 || outer.Count == 0) return;
 
         Rect ib = Bounds(inner);
-        if (innerBarrierInset > 0f && innerBarrierInset * 2f < Mathf.Min(ib.width, ib.height))
+        Rect target = InnerBarrierTarget(layout, ib, Inside);
+        float inset = innerBarrierInset * 2f < Mathf.Min(target.width, target.height) ? innerBarrierInset : 0f;
+        target = Rect.MinMaxRect(target.xMin + inset, target.yMin + inset, target.xMax - inset, target.yMax - inset);
+        if (innerBarrierScale > 0f && !Mathf.Approximately(innerBarrierScale, 1f))
         {
-            const float tol = 0.02f;
-            float Pull(float v, float lo, float hi) =>
-                Mathf.Abs(v - lo) < tol ? v + innerBarrierInset
-                : Mathf.Abs(v - hi) < tol ? v - innerBarrierInset : v;
+            Vector2 c = target.center, half = target.size * (0.5f * innerBarrierScale);
+            target = Rect.MinMaxRect(c.x - half.x, c.y - half.y, c.x + half.x, c.y + half.y);
+        }
+        // Map every inner panel from the layout's ring onto target, so the
+        // ring keeps its panel count and shape (heights are untouched).
+        if (target.width > 0.05f && target.height > 0.05f && ib.width > 0f && ib.height > 0f)
+        {
+            float X(float x) => target.xMin + (x - ib.xMin) * target.width / ib.width;
+            float Y(float y) => target.yMin + (y - ib.yMin) * target.height / ib.height;
             foreach (var p in inner)
             {
-                p.x1 = Pull(p.x1, ib.xMin, ib.xMax); p.x2 = Pull(p.x2, ib.xMin, ib.xMax);
-                p.y1 = Pull(p.y1, ib.yMin, ib.yMax); p.y2 = Pull(p.y2, ib.yMin, ib.yMax);
+                p.x1 = X(p.x1); p.x2 = X(p.x2);
+                p.y1 = Y(p.y1); p.y2 = Y(p.y2);
             }
             ib = Bounds(inner);
         }
+        else Debug.LogWarning($"[Real2SimCourse] inner barrier target {target} is degenerate; keeping the layout's ring.");
 
         if (!centerlineFromFences) return;
         Rect ob = Bounds(outer);
@@ -271,8 +353,49 @@ public class Real2SimCourse : MonoBehaviour
         layout.road.centerline = pts.ToArray();
         layout.road.closed = true;
         Debug.Log($"[Real2SimCourse] lane from fences: inner barrier {ib.width:0.###} x {ib.height:0.###} m " +
-                  $"(inset {innerBarrierInset} m), lane {ib.xMin - ob.xMin:0.###}/{ob.xMax - ib.xMax:0.###}/" +
+                  $"at x {ib.xMin:0.####}..{ib.xMax:0.####} y {ib.yMin:0.####}..{ib.yMax:0.####} " +
+                  $"(source {innerBarrierSource}, inset {innerBarrierInset} m, scale {innerBarrierScale}), lane {ib.xMin - ob.xMin:0.###}/{ob.xMax - ib.xMax:0.###}/" +
                   $"{ib.yMin - ob.yMin:0.###}/{ob.yMax - ib.yMax:0.###} m wide (L/R/B/T).");
+    }
+
+    /// <summary>The inner ring's bounds (real meters) for innerBarrierSource, before innerBarrierScale.</summary>
+    private Rect InnerBarrierTarget(Layout layout, Rect layoutRing, Func<float, float, bool> inside)
+    {
+        switch (innerBarrierSource)
+        {
+            case InnerBarrierSource.Explicit:
+                return Rect.MinMaxRect(innerBarrierRect.x, innerBarrierRect.y, innerBarrierRect.z, innerBarrierRect.w);
+            case InnerBarrierSource.YellowLines:
+            {
+                // The islands' outlines are the edge lines entirely inside the
+                // mat margin. Each line's inner edge is half its width in from
+                // its centre; the ring's outer face (half a wall in from the
+                // panel line) sits on it.
+                float x0 = float.MaxValue, y0 = float.MaxValue, x1 = float.MinValue, y1 = float.MinValue;
+                foreach (var line in layout.edge_lines ?? new Line[0])
+                {
+                    if (line.points == null || line.points.Length == 0) continue;
+                    bool all = true;
+                    foreach (var p in line.points) all &= inside(p.x, p.y);
+                    if (!all) continue;
+                    float h = line.width * 0.5f;
+                    foreach (var p in line.points)
+                    {
+                        x0 = Mathf.Min(x0, p.x + h); x1 = Mathf.Max(x1, p.x - h);
+                        y0 = Mathf.Min(y0, p.y + h); y1 = Mathf.Max(y1, p.y - h);
+                    }
+                }
+                if (x1 <= x0 || y1 <= y0)
+                {
+                    Debug.LogWarning("[Real2SimCourse] no island edge lines inside the inner barrier; using the layout's ring.");
+                    return layoutRing;
+                }
+                float face = scale > 0f ? wallThickness * 0.5f / scale : 0f;
+                return Rect.MinMaxRect(x0 + face, y0 + face, x1 - face, y1 - face);
+            }
+            default:
+                return layoutRing;
+        }
     }
 
     private static Rect Bounds(List<Panel> panels)

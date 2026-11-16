@@ -7,12 +7,12 @@ base, LiDAR, camera, and the bridge the dashboard / Foxglove talk to.
 ## Access
 
 ```bash
-ssh jetson            # alias in ~/.ssh/config -> jetson@192.168.86.210
-# HostName 192.168.86.210, User jetson, key auth (id_ed25519)
+ssh jetson            # alias in ~/.ssh/config -> jetson@<car's IP address>
+# Host jetson / HostName <car's IP> / User jetson, key auth
 ```
 
-Default credentials are `jetson` / `jetson` (key auth is set up so no password is
-needed from this machine). Consider changing the password if it stays on Wi-Fi.
+The kit's image ships with a default `jetson` user and password; set up key
+auth and change the password before putting the car on a shared network.
 
 ## Bringing everything up
 
@@ -455,9 +455,9 @@ rosrun map_server map_server ~/maps/explore_map.yaml
 
 The Unity CSI **stand-in** (640×480 `JetRacerCsiCamera`, P-view, Road-layer
 culling, mount/FOV) is already in the gym. That changelog is
-[README → Sim2real](README.md#sim2real). The implementation plan for
+[Sim2real](../sim2real.md). The implementation plan for
 publishing those frames as `camera/front` and training a vision course is
-[`docs/csi-camera-observation-guide.md`](docs/csi-camera-observation-guide.md).
+[`docs/csi-camera-observation-guide.md`](../csi-camera-observation-guide.md).
 This section keeps the Nano camera contract; it does **not** implement
 those nodes.
 

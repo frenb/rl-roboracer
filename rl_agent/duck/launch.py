@@ -1,0 +1,304 @@
+"""Builds microduck_rl command lines from job documents.
+
+Pure functions only (no Mongo, no mjlab import) so they are unit-testable on a
+CPU-only CI runner.
+
+Job fields read here (all optional except ``job_type``):
+
+    task_id          mjlab task, e.g. "Mjlab-Velocity-Flat-Backlash-MicroDuck", or a Unity
+                     task (UNITY_TASKS) trained in the Unity duck server by train_unity.py
+    num_envs         parallel simulated robots
+    max_iterations   total PPO iterations for the job, including resumed ones
+    save_interval    iterations between checkpoints; bounds the work lost on pause
+    seed             PPO seed
+    init_checkpoint  model_<N>.pt to warm-start a fresh TRAIN job from
+    reward_design_id reward_designs document to apply (see reward_design.py)
+    experiment_design_id  experiment_designs document to apply (see experiment_design.py)
+    num_steps_per_env  steps per robot per iteration, when an experiment design changes it
+    train_args       extra tyro flags, e.g. ["--agent.algorithm.entropy-coef", "0.005"]
+    checkpoint       model_<N>.pt to EXPORT or EVAL
+    eval_num_envs    robots simulated by EVAL
+    eval_steps       control steps simulated by EVAL (50 Hz)
+    video            TRAIN: a clip of each checkpoint, rendered beside training (default on)
+    progress_video   TRAIN: a progression video stitched from clips when training finishes
+    video_checkpoints  how many checkpoints, evenly spaced, the progression video shows
+    seconds_per_checkpoint  length of each checkpoint's clip
+"""
+import re
+from pathlib import Path
+
+from media import pick_evenly  # noqa: F401  (re-exported for the worker)
+
+DEFAULT_TASK = "Mjlab-Velocity-Flat-MicroDuck"
+DEFAULTS = {
+    "num_envs": 2048,
+    "max_iterations": 1000,
+    "save_interval": 50,
+    "eval_num_envs": 512,
+    "eval_steps": 1000,
+    "video": True,
+    "video_checkpoints": 10,
+    "seconds_per_checkpoint": 5,
+}
+# Every microduck task collects 24 environment steps per PPO iteration (unless an
+# experiment design changes it).
+STEPS_PER_ITERATION = 24
+# The task cameras sit 3 m away at 320x240, leaving the 30 cm duck a few pixels tall.
+CAMERA = {"distance": 1.2, "elevation": -15.0}
+CLIP_SIZE = (640, 480)
+CLIP_DIR = "clips"
+CFG_HOOK = Path(__file__).resolve().parent / "cfg_hook.py"
+UNITY_TRAIN_SCRIPT = Path(__file__).resolve().parent / "train_unity.py"
+# Tasks the Unity duck server trains, each the C# port of an mjlab task. Their checkpoints
+# are that task's network, so export, eval and videos run the mjlab task.
+UNITY_TASKS = {"Unity-Velocity-Flat-MicroDuck": "Mjlab-Velocity-Flat-MicroDuck"}
+
+_CHECKPOINT_RE = re.compile(r"^model_(\d+)\.pt$")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_ITERATION_RE = re.compile(r"Learning iteration\s+(\d+)\s*/\s*(\d+)")
+_MEAN_REWARD_RE = re.compile(r"Mean (?:total )?reward:\s*(-?[\d.]+(?:e-?\d+)?)")
+_EPISODE_LENGTH_RE = re.compile(r"Mean episode length:\s*(-?[\d.]+)")
+# tyro flags are --dotted.kebab-case; anything else could smuggle a positional
+# argument (e.g. a different task id) into the command line.
+_FLAG_RE = re.compile(r"^--[a-z][a-z0-9_.-]*$")
+
+
+class JobSpecError(ValueError):
+    """The job document cannot be turned into a valid command."""
+
+
+def setting(job, key):
+    value = job.get(key)
+    return DEFAULTS[key] if value is None else value
+
+
+def task_id(job):
+    return job.get("task_id") or DEFAULT_TASK
+
+
+def is_unity(job):
+    return task_id(job) in UNITY_TASKS
+
+
+def mjlab_task_id(job):
+    """The mjlab task behind the job's task: itself, or the one a Unity task ports."""
+    return UNITY_TASKS.get(task_id(job), task_id(job))
+
+
+def steps_per_iteration(job):
+    return job.get("num_steps_per_env") or STEPS_PER_ITERATION
+
+
+def design_env(reward_design_file=None, experiment_design_file=None, train=True):
+    """Hook variables for a subprocess. Only training edits the env cfg; anything that
+    loads a checkpoint needs the agent hook so the runner matches the trained network."""
+    env = {}
+    if experiment_design_file is not None:
+        env["MICRODUCK_RL_CFG_HOOK"] = f"{CFG_HOOK}:apply_agent"
+        env["MICRODUCK_EXPERIMENT_DESIGN"] = str(experiment_design_file)
+    if train and reward_design_file is not None:
+        env["MICRODUCK_REWARD_DESIGN"] = str(reward_design_file)
+    if train and (reward_design_file is not None or experiment_design_file is not None):
+        env["MICRODUCK_CFG_HOOK"] = f"{CFG_HOOK}:apply"
+    return env
+
+
+def match_training_intervals(play_cfg, train_cfg):
+    """Give a play config the training config's interval-event timing.
+
+    microduck's play configs push the robot every 0.5-1 s instead of every
+    3-6 s, so a policy that walks fine in training is shown falling over.
+    """
+    for name, term in (play_cfg.events or {}).items():
+        trained = (train_cfg.events or {}).get(name)
+        if term is not None and trained is not None and hasattr(term, "interval_range_s"):
+            term.interval_range_s = trained.interval_range_s
+
+
+def positive_int(job, key):
+    value = setting(job, key)
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise JobSpecError(f"{key} must be a positive integer, got {value!r}")
+    return value
+
+
+def _extra_args(job):
+    extra = job.get("train_args") or []
+    if not isinstance(extra, list) or not all(isinstance(a, str) for a in extra):
+        raise JobSpecError("train_args must be a list of strings")
+    flags = [a for a in extra if a.startswith("--")]
+    for flag in flags:
+        name = flag.split("=", 1)[0]
+        if not _FLAG_RE.match(name):
+            raise JobSpecError(f"train_args: bad flag {flag!r}")
+    if extra and not extra[0].startswith("--"):
+        raise JobSpecError(f"train_args must start with a flag, got {extra[0]!r}")
+    return list(extra)
+
+
+def checkpoint_iteration(path):
+    match = _CHECKPOINT_RE.match(Path(path).name)
+    if not match:
+        raise JobSpecError(f"not a model_<N>.pt checkpoint: {path}")
+    return int(match.group(1))
+
+
+def latest_checkpoint(run_dirs):
+    """Highest-iteration ``model_<N>.pt`` across ``run_dirs`` as ``(iteration, Path)``."""
+    found = checkpoints(run_dirs)
+    return found[-1] if found else None
+
+
+def run_name(job, attempt):
+    """Suffix mjlab appends to the timestamped run directory name."""
+    return f"job_{job['_id']}_{attempt}"
+
+
+def _load_flags(checkpoint):
+    checkpoint = Path(checkpoint)
+    # mjlab resolves --agent.load-run / --agent.load-checkpoint as regexes
+    # under logs/rsl_rl/<experiment>/, so anchor them to exact names.
+    return [
+        "--agent.resume", "True",
+        "--agent.load-run", re.escape(checkpoint.parent.name) + "$",
+        "--agent.load-checkpoint", re.escape(checkpoint.name) + "$",
+    ]
+
+
+def iteration_offset(job):
+    """Iteration the job's counter starts at.
+
+    rsl_rl restores the iteration counter from any loaded checkpoint, so a job
+    warm-started from ``model_900.pt`` counts 900, 901, ...
+    """
+    return checkpoint_iteration(job["init_checkpoint"]) if job.get("init_checkpoint") else 0
+
+
+def train_command(job, attempt, resume_from=None, reward_design_file=None,
+                  experiment_design_file=None):
+    """``(argv, env)`` for one TRAIN attempt.
+
+    ``resume_from`` is this job's own latest checkpoint after a pause or
+    crash; only the remaining iterations are requested. ``init_checkpoint``
+    instead warm-starts a fresh job from another run with the full budget.
+    ``reward_design_file`` / ``experiment_design_file`` are design JSON files
+    that ``cfg_hook.py`` applies inside the trainer.
+    """
+    total = iteration_offset(job) + positive_int(job, "max_iterations")
+    trainer = ["python", str(UNITY_TRAIN_SCRIPT)] if is_unity(job) else ["train"]
+    argv = trainer + [
+        task_id(job),
+        "--env.scene.num-envs", str(positive_int(job, "num_envs")),
+        "--agent.save-interval", str(positive_int(job, "save_interval")),
+        "--agent.logger", "tensorboard",
+        "--agent.run-name", run_name(job, attempt),
+    ]
+    env = design_env(reward_design_file, experiment_design_file)
+    if resume_from is not None:
+        remaining = total - checkpoint_iteration(resume_from)
+        if remaining <= 0:
+            return None, env
+        argv += ["--agent.max-iterations", str(remaining)] + _load_flags(resume_from)
+    else:
+        argv += ["--agent.max-iterations", str(positive_int(job, "max_iterations"))]
+        if job.get("init_checkpoint"):
+            argv += _load_flags(job["init_checkpoint"])
+            env["MICRODUCK_WARM_START"] = "1"
+    if job.get("seed") is not None:
+        argv += ["--agent.seed", str(int(job["seed"]))]
+    return argv + _extra_args(job), env
+
+
+def checkpoints(run_dirs):
+    """Every ``(iteration, Path)`` checkpoint across ``run_dirs``, oldest first."""
+    found = {}
+    for run_dir in run_dirs:
+        run_dir = Path(run_dir)
+        if run_dir.is_dir():
+            for f in run_dir.iterdir():
+                match = _CHECKPOINT_RE.match(f.name)
+                if match:
+                    found[int(match.group(1))] = f
+    return sorted(found.items())
+
+
+def clip_path(checkpoint):
+    """Where render_progress.py puts the clip of ``model_<N>.pt``: its run's clips/clip_<N>.mp4."""
+    checkpoint = Path(checkpoint)
+    return checkpoint.parent / CLIP_DIR / f"clip_{checkpoint_iteration(checkpoint)}.mp4"
+
+
+def checkpoint_clips(run_dirs):
+    """``{iteration, path, gif}`` for every finished checkpoint clip across ``run_dirs``."""
+    clips = []
+    for iteration, checkpoint in checkpoints(run_dirs):
+        mp4 = clip_path(checkpoint)
+        if mp4.exists():
+            clips.append({"iteration": iteration, "path": str(mp4), "gif": str(mp4.with_suffix(".gif"))})
+    return clips
+
+
+def clip_watch_command(job, run_dir, script):
+    """render_progress.py clipping each checkpoint ``run_dir`` gets, beside training."""
+    return [
+        "python", str(script), mjlab_task_id(job),
+        "--seconds", str(positive_int(job, "seconds_per_checkpoint")),
+        "--watch", str(run_dir),
+    ]
+
+
+def export_command(job, checkpoint, onnx_path):
+    checkpoint_iteration(checkpoint)
+    return [
+        "python", "scripts/export.py", mjlab_task_id(job),
+        "--checkpoint-file", str(checkpoint),
+        "--onnx-file", str(onnx_path),
+    ]
+
+
+def eval_command(job, checkpoint, out_json, script):
+    checkpoint_iteration(checkpoint)
+    return [
+        "python", str(script), mjlab_task_id(job),
+        "--checkpoint", str(checkpoint),
+        "--num-envs", str(positive_int(job, "eval_num_envs")),
+        "--steps", str(positive_int(job, "eval_steps")),
+        "--out", str(out_json),
+    ]
+
+
+def video_command(job, script, clips=(), progression=(), out_mp4=None):
+    """render_progress.py making the missing ``clips``, and the ``progression``
+    checkpoints' clips stitched into ``out_mp4``."""
+    if not clips and not progression:
+        raise JobSpecError("no checkpoints to render")
+    if progression and not out_mp4:
+        raise JobSpecError("a progression video needs an output path")
+    for path in [*clips, *progression]:
+        checkpoint_iteration(path)
+    argv = ["python", str(script), mjlab_task_id(job),
+            "--seconds", str(positive_int(job, "seconds_per_checkpoint"))]
+    if clips:
+        argv += ["--checkpoints", *[str(p) for p in clips]]
+    if progression:
+        argv += ["--out", str(out_mp4), "--progression", *[str(p) for p in progression]]
+    return argv
+
+
+def parse_progress(line):
+    """Fields found in one line of rsl_rl console output."""
+    line = _ANSI_RE.sub("", line)
+    found = {}
+    match = _ITERATION_RE.search(line)
+    if match:
+        found["iteration"] = int(match.group(1))
+        found["tot_iter"] = int(match.group(2))
+    match = _MEAN_REWARD_RE.search(line)
+    if match:
+        found["mean_reward"] = float(match.group(1))
+    match = _EPISODE_LENGTH_RE.search(line)
+    if match:
+        found["mean_episode_length"] = float(match.group(1))
+    return found

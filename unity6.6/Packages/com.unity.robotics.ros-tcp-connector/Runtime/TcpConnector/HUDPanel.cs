@@ -125,6 +125,8 @@ public class HUDPanel : MonoBehaviour
     const float UiReferenceHeight = 1080f;
     const float UiMinScale = 0.55f;
     const float UiMaxScale = 3.0f;
+    const float UiLegibleScale = 0.8f;
+    const float UiMinLogicalHeight = 432f;
 
     static float UiScale
     {
@@ -132,7 +134,9 @@ public class HUDPanel : MonoBehaviour
         {
             float h = Screen.height;
             if (h < 1f) return 1f;
-            return Mathf.Clamp(h / UiReferenceHeight, UiMinScale, UiMaxScale);
+            float dpiScale = Screen.dpi > 0f ? Screen.dpi / 96f : 1f;
+            float floor = Mathf.Max(UiMinScale, Mathf.Min(UiLegibleScale * dpiScale, h / UiMinLogicalHeight));
+            return Mathf.Clamp(h / UiReferenceHeight, floor, UiMaxScale);
         }
     }
 

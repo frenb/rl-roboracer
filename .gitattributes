@@ -4,3 +4,5 @@
 # reads like the file is missing. Keep them LF on checkout whatever the
 # local core.autocrlf is set to.
 *.sh text eol=lf
+# Applied with `patch --fuzz=0` in Linux image builds.
+*.patch text eol=lf

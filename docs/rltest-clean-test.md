@@ -27,7 +27,7 @@ account type > Administrator.
 ## 1. Stage the current version (your account)
 
 ```powershell
-cd C:\Users\benja\Documents\agents\robots\LATEST\rl-roboracer
+cd <your clone>\rl-roboracer
 powershell -ExecutionPolicy Bypass -File scripts\install\Prepare-RlTest.ps1
 ```
 

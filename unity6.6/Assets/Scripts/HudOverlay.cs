@@ -18,7 +18,7 @@ public class HudOverlay : MonoBehaviour
     [Header("Placement / size (top-middle)")]
     public float topMargin = 10f;
     public float wheelSize = 96f;
-    public float panelWidth = 190f;
+    public float panelWidth = 240f;
 
     [Header("Steering wheel")]
     [Tooltip("Full steer command (|angle|=1) maps to this many degrees of wheel "
@@ -227,6 +227,9 @@ public class HudOverlay : MonoBehaviour
             alignment = TextAnchor.MiddleCenter,
             fontSize = 15,
             fontStyle = FontStyle.Bold,
+            // One line always: wrapped, the second line is clipped by the 20 px rect.
+            wordWrap = false,
+            clipping = TextClipping.Overflow,
         };
         _headerStyle.normal.textColor = new Color(0.6f, 0.85f, 1f);
 

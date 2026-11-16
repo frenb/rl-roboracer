@@ -209,7 +209,7 @@ Do **not**:
 - Run the `ros-server` container on the Nano as the car’s ROS master.
 - Expect Unity `cmd_id` handshake. The real loop is async; you pick a rate (start 10 Hz).
 
-Hardware signs, lidar TF, and `/cmd_vel` ownership are in `jetson.md`. The rest of this guide is the **vector and Twist contracts** the adapter must honor.
+Hardware signs, lidar TF, and `/cmd_vel` ownership are in [`jetson.md`](hardware/jetson.md). The rest of this guide is the **vector and Twist contracts** the adapter must honor.
 
 ---
 
@@ -248,7 +248,7 @@ Notes that will bite you if ignored:
 | Index | Policy | Range | Unity meaning (`ApplyForce` fields) |
 |---|---|---|---|
 | 0 | `acceleration` | **`[0.05, 1.0]`** | `SimCommand.ApplyForce.acceleration` — normalized motor torque (always a little forward) |
-| 1 | `steering_angle` | **`[-1, 1]`** | `SimCommand.ApplyForce.steering_angle` — fraction of **`maxSteeringAngle` (45°)** on the donut prefab |
+| 1 | `steering_angle` | **`[-1, 1]`** | `SimCommand.ApplyForce.steering_angle` — fraction of **`maxSteeringAngle` (17°, the real car's full lock; 45° before Nov 2026)** on the donut prefab |
 
 The motor board does **not** take normalized torque. `jetracer` sends mm/s + steer on the serial packet; ROS tools think in **`/cmd_vel`**.
 
@@ -442,7 +442,7 @@ The gym will still go Unity → ROS-TCP → `ros-server` → gRPC → trainer. T
 
 ### 6.2 Dynamics: stop training a different vehicle
 
-8. **Match wheelbase (~0.24 m), max steer, and turning radius (~0.40 m)** to `teb_local_planner_params.yaml` / the real Ackermann, not the Waymo-ish `maxMotorTorque=300` / arcade feel.
+8. **Match wheelbase (0.152 m), max steer (17° on both front wheels: the steering is parallel, not Ackermann), and turning radius (~0.5 m)** to the real car (`robots/jetracer/jetracer.urdf`, measured on the car), not the Waymo-ish `maxMotorTorque=300` / arcade feel. The `wheelbase: 0.24` in Waveshare's `teb_local_planner_params.yaml` is wrong for this kit.
 9. **Action = something you can send on `/cmd_vel`.** Best long-term: change the gym action to **`[v, steer]`** in SI units (or the same Twist the car uses), with `v ≥ 0`. Today’s normalized torque on `sim_command` is the largest silent gap.
 10. Until then, **identify a static map** (bench): record Unity `ApplyForce(a, s)` vs resulting vx, yaw rate; fit `accel_scale` / `steer_scale` from data, not guesswork.
 11. **Delay the action 50–150 ms** in the env (sensor + Wi-Fi + Nano inference). The real loop is not a blocking `DoApplyForce`.
@@ -494,7 +494,7 @@ The gym will still go Unity → ROS-TCP → `ros-server` → gRPC → trainer. T
 | Unity rays / steer / ApplyForce | `unity/Assets/CarController.cs` |
 | Unity obs publish | `unity/Assets/Scripts/SceneDataPublisher.cs` |
 | Unity sim_status / command loop | `unity/Assets/Scripts/SimController.cs` |
-| Jetson ROS reality | `jetson.md` |
+| Jetson ROS reality | [`docs/hardware/jetson.md`](hardware/jetson.md) |
 | Motor / steer sign | `invert_linear` in `jetracer.launch`; `motor_direction_test.py`, `steer_direction_test.py` |
 
 ---

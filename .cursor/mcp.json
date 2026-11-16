@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "roboracer-console": {
+      "command": "node",
+      "args": ["${workspaceFolder}/mcp/console/src/index.js"],
+      "env": {
+        "ROBORACER_DASHBOARD_URL": "http://localhost"
+      }
+    }
+  }
+}

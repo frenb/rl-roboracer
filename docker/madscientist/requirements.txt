@@ -6,6 +6,10 @@
 # ranges (~= for safety) rather than exact == so security patches still
 # flow through.
 
+# The spec compiler runs compiled car reward functions on synthetic steps
+# (rl_agent/specs/targets.py), and car designs use np.
+numpy~=1.26
+
 # Mongo client. Match the trainer's pymongo major to avoid driver-version
 # mismatches when running against the same db.
 pymongo~=4.7

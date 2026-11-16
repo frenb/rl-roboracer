@@ -34,13 +34,24 @@ public static class OverlayUi
     public const float MinScale = 0.55f;
     public const float MaxScale = 3.0f;
 
+    // Window pixels alone undersize the overlays on a high-DPI display: the
+    // clients launch at 960x540 pixels, which on a 200% display is a
+    // 480x270 window, where h / ReferenceHeight puts 12 px labels at ~3 pt.
+    // So the floor is at least LegibleScale times the display's scaling,
+    // limited so the 1080-reference layout never needs more than
+    // MinLogicalHeight of height, i.e. the overlays still fit small windows.
+    public const float LegibleScale = 0.8f;
+    public const float MinLogicalHeight = 432f;
+
     public static float Scale
     {
         get
         {
             float h = Screen.height;
             if (h < 1f) return 1f;
-            return Mathf.Clamp(h / ReferenceHeight, MinScale, MaxScale);
+            float dpiScale = Screen.dpi > 0f ? Screen.dpi / 96f : 1f;
+            float floor = Mathf.Max(MinScale, Mathf.Min(LegibleScale * dpiScale, h / MinLogicalHeight));
+            return Mathf.Clamp(h / ReferenceHeight, floor, MaxScale);
         }
     }
 

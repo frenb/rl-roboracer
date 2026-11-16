@@ -161,6 +161,28 @@ SCHEMA = {
         "paper_ref": None,
         "kwarg": "critic_warmup_steps_val",
     },
+    "jsrl_stages": {
+        "type": "int",
+        "default": 0,
+        "min": 0, "max": 100,
+        "doc": ("Jump-Start RL: a frozen copy of the BC-pretrained actor (the guide) drives the first part of "
+                "every collect episode and the learning actor the rest. The guide's share starts at its own "
+                "eval episode length and drops to 0 in this many equal stages. 0 = off. Requires "
+                "bc_pretrain_steps > 0. Evals still score the learner alone; a second eval of the guide+learner "
+                "mix gates each stage (TensorBoard run 'jsrl_eval', scalars jsrl/*)."),
+        "paper_ref": "2204.02372",
+        "kwarg": "jsrl_stages_val",
+    },
+    "jsrl_tolerance": {
+        "type": "float",
+        "default": 0.9,
+        "min": 0.0, "max": 1.0,
+        "doc": ("Jump-Start RL stage gate: hand the learner more of the episode once the guide+learner mix "
+                "scores at least this fraction of the guide-alone eval return, two evals in a row. Only used "
+                "when jsrl_stages > 0."),
+        "paper_ref": "2204.02372",
+        "kwarg": "jsrl_tolerance_val",
+    },
 
     "_section_replay": "Replay buffer",
     "replay_buffer_capacity": {

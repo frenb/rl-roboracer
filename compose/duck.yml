@@ -1,0 +1,91 @@
+# Microduck overlay: adds the duck-trainer service (mjlab + rsl_rl PPO on
+# MuJoCo Warp) next to the roboracer stack. Opt-in:
+#
+#   docker compose -f docker-compose.yml -f compose/scale.yml -f compose/duck.yml up -d
+#
+# or `.\scripts\Start-Stack.ps1 -Duck`. Paths are relative to the repo root
+# (the first compose file's directory), as in compose/scale.yml.
+#
+# The container runs the duck job worker (rl_agent/duck/worker.py), which
+# claims robot="microduck" jobs from the shared queue. Checkpoints land in
+# ../saved_models/microduck/rsl_rl/<experiment>/<run>/ and per-job logs in
+# ../saved_models/microduck/jobs/.
+
+services:
+  duck-trainer:
+    image: ${IMAGE_PREFIX:-}duck_trainer:latest
+    build:
+      context: ./third_party/microduck_rl
+      dockerfile: ../../docker/duck_trainer/Dockerfile
+      additional_contexts:
+        patches: ./docker/duck_trainer/patches
+    restart: unless-stopped
+    command: python -u /python_ws/src/duck/worker.py
+    # Covers worker.py's SIGTERM path: STOP_GRACE_S of SIGINT, then SIGKILL, on the training run.
+    stop_grace_period: 60s
+    environment:
+      - ROBOT_TYPE=microduck
+      - DATABASE_NAME=robotaxi
+      - MONGO_URL=${MONGO_URL:-mongodb://root:${MONGO_ROOT_PASSWORD:-example}@mongo:27017/}
+      - WANDB_MODE=disabled
+      # GPU OpenGL for MuJoCo's offscreen renderer (videos, viewer) under
+      # Docker Desktop's WSL2 backend: Mesa's d3d12 driver over /dev/dxg.
+      # Without it Mesa falls back to llvmpipe on the CPU.
+      - GALLIUM_DRIVER=d3d12
+      - MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
+      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
+      # Live viewer feed of Unity training jobs (duck/train_unity.py); published below.
+      - DUCK_UNITY_VIEWER_PORT=7710
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    devices:
+      - /dev/dxg
+    volumes:
+      # WSL's D3D12 user-mode libraries, from Docker Desktop's VM (see
+      # GALLIUM_DRIVER above).
+      - type: bind
+        source: /usr/lib/wsl
+        target: /usr/lib/wsl
+        read_only: true
+      # mjlab writes runs under <cwd>/logs; keep them with the other models.
+      - type: bind
+        source: ../saved_models/microduck
+        target: /microduck_rl/logs
+      # rl-roboracer side of the integration (the duck job worker lands in
+      # rl_agent/duck); mounted like sim-controller's /python_ws/src.
+      - type: bind
+        source: ./rl_agent
+        target: /python_ws/src
+      # Linux build of the Unity duck env server (duck/unity_env.py copies it to local disk
+      # to run it). Built from the MicroDuck Unity project with DuckBuild.BuildServerLinux.
+      - type: bind
+        source: ${DUCK_UNITY_SERVER_BUILD:-../spikes/unity-duck/build/DuckServerLinux}
+        target: /unity_builds/duck_server
+        read_only: true
+        bind:
+          create_host_path: true
+      # The car stack's /tmp volume; the worker writes duck_trainer.log
+      # there for the dashboard, next to the car's trainer.log.
+      - type: volume
+        source: tmpdata
+        target: /shared_tmp
+      # Compiled Warp kernels (several minutes to build on first run).
+      - type: volume
+        source: duck_warp_cache
+        target: /root/.cache/warp
+    # mjlab's browser viewer (viser), started on demand by
+    # scripts/Watch-Duck.ps1. Host 8080 is the dashboard's log socket.
+    ports:
+      - "8090:8080"
+      # Unity duck server's viewer feed: MicroDuck.exe -attach 127.0.0.1:7710
+      # (scripts/Play-Duck.ps1 -Attach).
+      - "7710:7710"
+    shm_size: 8gb
+
+volumes:
+  duck_warp_cache:

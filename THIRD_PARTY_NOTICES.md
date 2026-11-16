@@ -16,6 +16,22 @@ which take precedence for those files.
 The C# message classes under `unity/Assets/RosMessages` are generated from the
 message definitions above.
 
+### Git submodules
+
+These are separate repositories pinned as submodules (forks of the upstream
+projects), not files of this repository. Their own licence files apply.
+
+| Component | Path | Licence | Source |
+|---|---|---|---|
+| microduck_rl (Microduck RL training environments) | `third_party/microduck_rl` | Apache 2.0, except the STL meshes (below) | [pollen-robotics/microduck_rl](https://github.com/pollen-robotics/microduck_rl) |
+| microduck (Microduck robot runtime) | `third_party/microduck` | Apache 2.0 | [pollen-robotics/microduck](https://github.com/pollen-robotics/microduck) |
+
+The Microduck STL meshes (`third_party/microduck_rl/src/mjlab_microduck/robot/*/assets/*.stl`)
+are © Pollen Robotics under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/):
+non-commercial use only, with attribution, and adaptations under the same
+licence. See that repository's `LICENSE-MODELS.md`. They are not included in
+this project's release archives.
+
 ## Unity Asset Store content
 
 These files come from Unity Asset Store packages and are governed by the

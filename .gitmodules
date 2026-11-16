@@ -1,0 +1,7 @@
+[submodule "third_party/microduck_rl"]
+	path = third_party/microduck_rl
+	url = https://github.com/frenb/microduck_rl.git
+	branch = develop
+[submodule "third_party/microduck"]
+	path = third_party/microduck
+	url = https://github.com/frenb/microduck.git

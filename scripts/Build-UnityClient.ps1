@@ -34,6 +34,11 @@
     .exe at the top level of the zip). Player.log and Unity's
     *_DoNotShip debug folders are left out.
 
+.PARAMETER UnityProject
+    Which Unity project to build: unity (Unity 2020.3, the default) or
+    unity6.6 (Unity 6.6, which the real2sim fences gyms come from). Builds
+    land under that project's Builds/ folder.
+
 .PARAMETER UnityExe
     Path to Unity.exe. Default: the Unity Hub install of the project's
     editor version.
@@ -48,6 +53,8 @@ param(
     [string]$Name = (Get-Date -Format 'yyyy.MM.dd-HHmm'),
     [switch]$Promote,
     [switch]$Zip,
+    [ValidateSet('unity', 'unity6.6')]
+    [string]$UnityProject = 'unity',
     [string]$UnityExe = '',
     [int]$TimeoutMinutes = 60
 )
@@ -56,7 +63,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $repoRoot   = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$project    = Join-Path $repoRoot 'unity'
+$project    = Join-Path $repoRoot $UnityProject
 $buildsDir  = Join-Path $project 'Builds'
 $outDir     = Join-Path $buildsDir $Name
 $latestDir  = Join-Path $buildsDir 'latest'

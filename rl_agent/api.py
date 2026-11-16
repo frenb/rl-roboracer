@@ -24,6 +24,8 @@ FRONT_CAMERA_FRAME_CACHE = 16
 # reset wait. Trainer then applies force while Unity is still
 # rebuilding, which cascades into apply/scene/camera timeouts.
 RESET_WAIT_S = 20.0
+# Overhead frames kept per recording (Unity's ClipRecorder stops at max_s).
+CLIP_MAX_FRAMES = 1200
 
 
 def _front_camera_cmd_id(frame):
@@ -175,6 +177,8 @@ class RobotApi:
         self.front_camera_events = {}
         self.last_apply_force_cmd_id = None
         self._front_camera_logged = False
+        # [(arrival time, JPEG bytes)] while a clip is recording, else None.
+        self._clip_frames = None
 
         # Timeout counters. Incremented in each `except asyncio.TimeoutError`
         # branch below. Exposed via get_timeout_counts() so the trainer
@@ -232,6 +236,48 @@ class RobotApi:
         self.loop.create_task(self.rpc_client.Subscribe('car_scene_data', 'roboracer/CarSceneData', self._on_car_scene_data))
         self.loop.create_task(self.rpc_client.Subscribe('sim_status', 'roboracer/SimStatus', self._on_sim_status))
         self.loop.create_task(self.rpc_client.Subscribe('camera/front', 'roboracer/Camera', self._on_front_camera_frame))
+        self.loop.create_task(self.rpc_client.Subscribe('camera/overhead', 'roboracer/Camera', self._on_overhead_frame))
+
+    def _on_overhead_frame(self, frame):
+        # Several RobotApis can share a client (the eval env and collect
+        # actor 0 both use ros-server-0); only the one recording keeps frames.
+        if self._clip_frames is None or len(self._clip_frames) >= CLIP_MAX_FRAMES:
+            return
+        try:
+            img = frame['frame']
+            data = img['data']
+            jpeg = base64.b64decode(data) if isinstance(data, str) else bytes(data)
+        except (KeyError, TypeError, ValueError):
+            return
+        if img.get('encoding') == 'jpeg' and jpeg:
+            self._clip_frames.append((time.monotonic(), jpeg))
+
+    async def StartClip(self, fps, width, max_s):
+        """Ask Unity's ClipRecorder for overhead frames until StopClip or max_s."""
+        self._clip_frames = []
+        await self._publish_clip_control(
+            {'record': True, 'fps': fps, 'width': width, 'max_s': max_s})
+
+    async def StopClip(self):
+        """The recording's [(arrival time, JPEG bytes)]; empty if Unity sent none."""
+        frames, self._clip_frames = self._clip_frames or [], None
+        await self._publish_clip_control({'record': False})
+        return frames
+
+    async def _publish_clip_control(self, control):
+        try:
+            await self.rpc_client.Publish(
+                'clip_control', 'std_msgs/String', {'data': json.dumps(control)})
+        except aio.AioRpcError as e:
+            self.publish_timeouts += 1
+            print(f'clip_control publish RPC error {e.code()}: {e.details()}', flush=True)
+
+    def StartClipBlocking(self, fps, width, max_s):
+        asyncio.run_coroutine_threadsafe(
+            self.StartClip(fps, width, max_s), self.loop).result(timeout=5.0)
+
+    def StopClipBlocking(self):
+        return asyncio.run_coroutine_threadsafe(self.StopClip(), self.loop).result(timeout=5.0)
 
     def _on_sim_status(self, sim_status):
         #print("sim_status: " + str(sim_status))

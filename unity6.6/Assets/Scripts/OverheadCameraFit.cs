@@ -1,7 +1,13 @@
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 /// <summary>
 /// Frames the whole course in the top-down view, at any window shape.
+///
+/// Mouse: the wheel zooms toward the point under the cursor, holding the right
+/// button and dragging orbits around the point the camera looks at, and a
+/// middle click goes back to the fitted view. Until the mouse is used the
+/// camera keeps fitting itself, so unattended training clients are unchanged.
 ///
 /// The overhead camera is a plain perspective camera with a fixed 60 degree
 /// vertical field of view, so the world height it shows is fixed and the width
@@ -34,6 +40,19 @@ public class OverheadCameraFit : MonoBehaviour
 
     [Tooltip("Turn off to go back to the camera's authored transform.")]
     public bool enableFit = true;
+
+    [Tooltip("Zoom per wheel notch, as a fraction of the distance.")]
+    public float zoomStep = 0.12f;
+    [Tooltip("Degrees of orbit per pixel of right-drag.")]
+    public float orbitSpeed = 0.25f;
+    [Tooltip("Lowest the orbit may tilt, in degrees above the horizon.")]
+    public float minPitch = 5f;
+
+    // Mouse-driven view: orbit pivot, distance from it, and angles.
+    bool _userView;
+    Vector3 _pivot;
+    float _userDist, _yaw, _pitch;
+    float _fitDist;
 
     Camera _cam;
     float _nextFit;
@@ -130,6 +149,7 @@ public class OverheadCameraFit : MonoBehaviour
             _haveBounds = TryMeasureCourse(out _bounds);
         }
         ApplyGutter();
+        if (HandleMouse()) return;
         if (!_haveBounds)
         {
             // Nothing measured means nothing to align to. Say so rather than
@@ -268,6 +288,7 @@ public class OverheadCameraFit : MonoBehaviour
 
         // Pulled back past the box's own depth as well, so the near side of a
         // course with height does not end up behind the camera.
+        _fitDist = dist + halfFwd;
         _cam.transform.rotation = rot;
         _cam.transform.position = b.center - fwd * (dist + halfFwd);
 
@@ -275,6 +296,73 @@ public class OverheadCameraFit : MonoBehaviour
         // back clips against a far plane that was fine when authored.
         _cam.nearClipPlane = Mathf.Max(0.1f, dist * 0.01f);
         _cam.farClipPlane = dist + halfFwd * 2f + 100f;
+    }
+
+    /// <summary>
+    /// Wheel zoom, right-drag orbit and middle-click reset. Returns true while
+    /// the mouse owns the camera, so Fit() leaves it alone.
+    /// </summary>
+    bool HandleMouse()
+    {
+        var mouse = Mouse.current;
+        if (mouse == null || !Application.isFocused || CameraViewSwitcher.CarCameraOn)
+            return _userView;
+
+        if (_userView && mouse.middleButton.wasPressedThisFrame)
+        {
+            _userView = false;
+            return false;
+        }
+
+        float scroll = mouse.scroll.ReadValue().y;
+        bool orbiting = mouse.rightButton.isPressed;
+        Vector2 cursor = mouse.position.ReadValue();
+        if (!_userView && (scroll != 0f || mouse.rightButton.wasPressedThisFrame)
+            && _cam.pixelRect.Contains(cursor))
+            BeginUserView();
+        if (!_userView) return false;
+
+        if (orbiting)
+        {
+            Vector2 d = mouse.delta.ReadValue();
+            _yaw += d.x * orbitSpeed;
+            _pitch = Mathf.Clamp(_pitch - d.y * orbitSpeed, minPitch, 90f);
+        }
+        if (scroll != 0f)
+        {
+            // Older Input System versions report 120 per wheel notch on Windows, newer ones 1.
+            float notches = Mathf.Abs(scroll) >= 20f ? scroll / 120f : scroll;
+            float newDist = Mathf.Clamp(_userDist * Mathf.Pow(1f - zoomStep, notches),
+                                        0.5f, Mathf.Max(_fitDist, minHeight) * 3f);
+            float f = newDist / _userDist;
+            // Scaling about the ground point under the cursor keeps that point under the cursor.
+            var plane = new Plane(Vector3.up, _pivot);
+            Ray ray = _cam.ScreenPointToRay(cursor);
+            if (plane.Raycast(ray, out float enter))
+                _pivot += (ray.GetPoint(enter) - _pivot) * (1f - f);
+            _userDist = newDist;
+        }
+
+        Quaternion rot = Quaternion.Euler(_pitch, _yaw, 0f);
+        _cam.transform.SetPositionAndRotation(_pivot - rot * Vector3.forward * _userDist, rot);
+        _cam.nearClipPlane = Mathf.Max(0.05f, _userDist * 0.005f);
+        _cam.farClipPlane = Mathf.Max(_fitDist * 3f, _userDist) + 200f;
+        TrackScreenHeight = 0f;
+        TrackScreenLeft = 0f;
+        return true;
+    }
+
+    void BeginUserView()
+    {
+        Transform t = _cam.transform;
+        _pivot = _haveBounds ? _bounds.center : t.position + t.forward * 10f;
+        _userDist = Mathf.Max(0.5f, Vector3.Distance(t.position, _pivot));
+        if (_fitDist <= 0f) _fitDist = _userDist;
+        Vector3 fwd = t.forward;
+        _pitch = Mathf.Clamp(Mathf.Asin(Mathf.Clamp(-fwd.y, -1f, 1f)) * Mathf.Rad2Deg, minPitch, 90f);
+        Vector3 heading = Mathf.Abs(fwd.y) > 0.99f ? t.up : fwd;
+        _yaw = Mathf.Atan2(heading.x, heading.z) * Mathf.Rad2Deg;
+        _userView = true;
     }
 
     /// <summary>

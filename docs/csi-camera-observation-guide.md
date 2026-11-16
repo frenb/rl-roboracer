@@ -9,9 +9,9 @@ nodes.
 Sibling docs:
 
 - Gym visual / physics stand-in that already exists:
-  [README → Sim2real](../README.md#sim2real).
+  [README → Sim2real](sim2real.md).
 - On-car bringup and leftover camera notes:
-  [`jetson.md`](../jetson.md#sim-camera-mirror-the-jetracer-csi-feed-into-unity-gyms-and-the-model).
+  [`jetson.md`](hardware/jetson.md#sim-camera-mirror-the-jetracer-csi-feed-into-unity-gyms-and-the-model).
 - SavedModel → Melodic `/cmd_vel` (vector policy, no pixels):
   [`tf-model-jetson-deployment-guide.md`](tf-model-jetson-deployment-guide.md).
 

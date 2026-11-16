@@ -137,16 +137,26 @@ if ($unities.Count -eq 0) {
     }
 }
 
+# Duck live view: its app window and supervisor run on the host, so they
+# would outlive the containers (and the supervisor would keep relaunching).
+# With -KeepDocker the duck trainer keeps running, so its view stays open.
+$watchDuck = Join-Path $PSScriptRoot 'Watch-Duck.ps1'
+if (-not $KeepDocker -and (Test-Path -LiteralPath $watchDuck)) {
+    try { & $watchDuck -Stop } catch { Write-Warning "Duck live view stop failed: $_" }
+}
+
 # 3. Docker compose stack. Pass BOTH compose files so the scale-overlay
 # ros-server-{1..3} services come down too - plain ``docker compose
 # down`` only knows about docker-compose.yml's services and would leave
 # the overlay containers running, blocking the network from being
 # removed (we hit this footgun earlier this session).
+# compose/duck.yml is always included for the same reason: a duck-trainer
+# started with Start-Stack -Duck would otherwise outlive the stack.
 if (-not $KeepDocker) {
-    Write-Host "Stopping docker compose stack (with scale overlay)..."
+    Write-Host "Stopping docker compose stack (with scale and duck overlays)..."
     Push-Location $repoRoot
     try {
-        docker compose -f docker-compose.yml -f compose/scale.yml down
+        docker compose -f docker-compose.yml -f compose/scale.yml -f compose/duck.yml down
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "docker compose down exited with code $LASTEXITCODE; check output above."
         }

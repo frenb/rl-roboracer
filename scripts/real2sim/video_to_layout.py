@@ -42,8 +42,8 @@ REPO = Path(__file__).resolve().parents[2]
 KEY_VARS = ("GOOGLE_GEMINI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY")
 
 LAYOUT_PROMPT = """\
-This video walks around a small indoor track for a 1/10-scale autonomous RC car
-(a JetRacer, wheelbase about 0.24 m). The track is a printed road mat on the
+This video walks around a small indoor track for a small (about 1/18-scale) autonomous RC car
+(a JetRacer: 0.24 m long, 0.19 m wide, wheelbase 0.15 m). The track is a printed road mat on the
 floor, enclosed and divided by modular fence panels. Build a measured
 top-down map of it for a simulator.
 

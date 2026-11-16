@@ -100,3 +100,7 @@ RUN ln -s /usr/local/cuda-11.0/targets/x86_64-linux/lib/libcusolver.so.10 /usr/l
 # 31/32-D MLP jobs never call cuDNN, so they kept working.
 RUN apt-get install -y --allow-downgrades libcudnn8=8.1.1.33-1+cuda11.2
 ENV LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:/usr/local/cuda/lib:/usr/local/cuda/lib64
+
+# Training clips (rl_agent/media.py): imageio-ffmpeg bundles the ffmpeg that
+# writes browser-playable H.264 MP4s. numpy is pinned above; keep it.
+RUN pip3 install imageio imageio-ffmpeg "numpy==1.23.1"

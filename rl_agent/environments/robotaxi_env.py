@@ -213,6 +213,14 @@ class RobotaxiEnv(py_environment.PyEnvironment):
         except Exception as e:  # noqa: BLE001
             print(f"publish_rollouts skipped: {e}", flush=True)
 
+    def start_clip(self, fps, width, max_s):
+        """Start recording this env's Unity client's overhead camera (see rl_agent/media.py)."""
+        self._api.StartClipBlocking(fps, width, max_s)
+
+    def stop_clip(self):
+        """Stop recording; [(arrival time, JPEG bytes)], empty from a client without ClipRecorder."""
+        return self._api.StopClipBlocking()
+
     def install_reward_design(self, name, code):
         """Compile a reward-design module and patch it onto our course.
 
