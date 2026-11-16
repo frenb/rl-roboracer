@@ -2,57 +2,48 @@
 #
 #   irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/install.ps1 | iex
 #
-# With installer options (Get-Help on the downloaded Install.ps1 lists them):
+# With installzero install options (installzero install --help lists them):
 #
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/install.ps1))) -Doctor xai
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/install.ps1))) --model google
 #
-# Downloads scripts/install/Install.ps1, its requirements, the project's failure catalog entries and
-# installzero.json (the pinned InstallZero engine, which Install.ps1 downloads and verifies) into
-# %LOCALAPPDATA%\rl-roboracer-install and runs it in Windows PowerShell,
-# passing the options through. RL_INSTALL_BRANCH picks another branch.
+# Downloads the InstallZero CLI (the version below, checked against the
+# release's SHA256SUMS) into %LOCALAPPDATA%\installzero\bin and runs
+# installzero install frenb/rl-roboracer, which gets the repo into
+# %USERPROFILE%\rl-roboracer\rl-roboracer (git clone, or GitHub's archive when
+# Git is not installed yet; install.md installs it) and follows its install.md.
+# The same CLI is attached to each release as installzero.exe, which does this
+# when opened. RL_INSTALL_BRANCH picks another branch, INSTALLZERO_VERSION
+# another InstallZero release (or latest).
 
 & {
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-    $repo = 'frenb/rl-roboracer'
-    $branch = if ($env:RL_INSTALL_BRANCH) { $env:RL_INSTALL_BRANCH } else { 'main' }
-    $raw = "https://raw.githubusercontent.com/$repo/$branch"
-    $dir = Join-Path $env:LOCALAPPDATA 'rl-roboracer-install'
+    $project = 'frenb/rl-roboracer'
+    if ($env:RL_INSTALL_BRANCH) { $project += "@$env:RL_INSTALL_BRANCH" }
+    $version = if ($env:INSTALLZERO_VERSION) { $env:INSTALLZERO_VERSION } else { 'v0.1.9' }
 
-    Write-Host "InstallZero: downloading the rl-roboracer installer ($branch) to $dir ..."
-    New-Item -ItemType Directory -Force $dir | Out-Null
-    Invoke-WebRequest -UseBasicParsing "$raw/scripts/install/Install.ps1" -OutFile (Join-Path $dir 'Install.ps1')
-    Invoke-WebRequest -UseBasicParsing "$raw/scripts/install/requirements.json" -OutFile (Join-Path $dir 'requirements.json')
-    Invoke-WebRequest -UseBasicParsing "$raw/scripts/install/installzero.json" -OutFile (Join-Path $dir 'installzero.json')
+    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') { 'arm64' } else { 'amd64' }
+    $asset = "installzero-windows-$arch.exe"
+    $release = if ($version -eq 'latest') { 'https://github.com/InstallZero/installzero/releases/latest/download' } else { "https://github.com/InstallZero/installzero/releases/download/$version" }
+    $binDir = Join-Path $env:LOCALAPPDATA 'installzero\bin'
+    $bin = Join-Path $binDir 'installzero.exe'
 
-    function Get-RepoFiles([string]$Path) {
-        # Assigned first: Windows PowerShell 5.1 emits the JSON array as one object.
-        $entries = Invoke-RestMethod -UseBasicParsing "https://api.github.com/repos/$repo/contents/${Path}?ref=$branch"
-        foreach ($e in $entries) {
-            if ($e.type -eq 'dir' -and $e.name -notin 'eval', 'assets') { Get-RepoFiles $e.path }
-            elseif ($e.type -eq 'file') { $e.path }
-        }
+    Write-Host "InstallZero: downloading installzero $version ($asset) ..."
+    New-Item -ItemType Directory -Force $binDir | Out-Null
+    $tmp = Join-Path $binDir "installzero.$PID.download"
+    Invoke-WebRequest -UseBasicParsing "$release/$asset" -OutFile $tmp
+    $sums = (Invoke-WebRequest -UseBasicParsing "$release/SHA256SUMS").Content
+    if ($sums -is [byte[]]) { $sums = [Text.Encoding]::ASCII.GetString($sums) }
+    $want = ($sums -split "`n" | Where-Object { $_ -match "^([0-9a-f]{64})\s+\*?$([regex]::Escape($asset))\s*$" } | ForEach-Object { $Matches[1] }) | Select-Object -First 1
+    $got = (Get-FileHash -Algorithm SHA256 $tmp).Hash.ToLower()
+    if (-not $want -or $got -ne $want) {
+        Remove-Item $tmp -Force
+        throw "installzero $version ($asset): sha256 $got does not match the release's SHA256SUMS ($want)"
     }
-    function Save-RepoFolder([string]$Path, [string]$Dest) {
-        $files = @(Get-RepoFiles $Path)
-        if (Test-Path $Dest) { Remove-Item $Dest -Recurse -Force }
-        foreach ($f in $files) {
-            $to = Join-Path $Dest (($f.Substring($Path.Length + 1)) -replace '/', '\')
-            New-Item -ItemType Directory -Force (Split-Path $to) | Out-Null
-            Invoke-WebRequest -UseBasicParsing "$raw/$f" -OutFile $to
-        }
-    }
+    Move-Item -Force $tmp $bin
 
-    # The project's own failure catalog entries, for failures before the repo
-    # is cloned. Without them the install still runs.
-    try { Save-RepoFolder 'scripts/install/catalog' (Join-Path $dir 'catalog') }
-    catch { Write-Host "The project's failure catalog could not be downloaded ($($_.Exception.Message)); its entries are recognised once the repo is cloned." -ForegroundColor Yellow }
-    Remove-Item (Join-Path $dir 'doctor') -Recurse -Force -ErrorAction SilentlyContinue
-
-    $pass = @($args)
-    if (-not ($pass | Where-Object { $_ -match '^-Branch(:|$)' })) { $pass += @('-Branch', $branch) }
-    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    & $ps -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir 'Install.ps1') @pass
+    & $bin install $project @args
+    Write-Host "installzero is in $bin; run it again with the same arguments to resume, or $bin uninstall rl-roboracer to remove what it installed."
 } @args

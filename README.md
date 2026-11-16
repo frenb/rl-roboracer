@@ -48,13 +48,17 @@ Unity simulators run on the Windows host, one to four in parallel. Each talks RO
 
 **Requirements:** Windows 10 or 11, an NVIDIA GPU with a current driver, about 60 GB free disk, and 30-60 minutes for the first build. Linux and macOS are not supported yet.
 
-In PowerShell (not as administrator):
+The installer is [InstallZero](https://github.com/InstallZero/installzero), an agentic installer that diagnoses its own failures. Download [installzero.exe](https://github.com/frenb/rl-roboracer/releases/latest/download/installzero.exe) from the latest release and open it (until InstallZero is code-signed, Windows asks you to confirm: *More info*, then *Run anyway*).
+
+Or, in PowerShell (not as administrator):
 
 ```powershell
 irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/install.ps1 | iex
 ```
 
-The installer sets up WSL 2, Git and Docker Desktop if they are missing, clones the repo to `%USERPROFILE%\rl-roboracer`, builds the Docker images, downloads the prebuilt Unity gyms and expert demonstrations from the [v0.1 release](https://github.com/frenb/rl-roboracer/releases/tag/v0.1), starts the stack and a Unity client, and queues a short first training job. It may ask for a restart and then continues by itself. If a step fails it matches the failure against a catalog of known problems and, optionally, asks an LLM of your choice to diagnose it.
+Either way, InstallZero asks before it starts, keeps itself in `%LOCALAPPDATA%\installzero\bin`, gets the repo into `%USERPROFILE%\rl-roboracer\rl-roboracer`, and follows [install.md](install.md): WSL 2, Git and Docker Desktop if missing, the Docker images, the Unity gyms and expert demonstrations, the stack, one Unity client and a short first training job. Installing WSL needs a restart of Windows; after restarting, InstallZero resumes where it left off.
+
+If a step fails and the failure catalog has no fix, it asks which model (local, or hosted with your API key kept in Windows Credential Manager via `installzero key status` / `installzero key remove <provider>`) should diagnose it.
 
 When it finishes:
 
@@ -63,8 +67,8 @@ When it finishes:
 
 More:
 
-- Options: run with `-DryRun` to see what would change; `-Doctor` picks the diagnosing model. Full list: `Get-Help $env:LOCALAPPDATA\rl-roboracer-install\Install.ps1 -Detailed`.
-- Uninstall: `irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/uninstall.ps1 | iex` (asks before removing anything).
+- Options: `& ([scriptblock]::Create((irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/install.ps1))) --model google --skip firstjob`. `--plan` previews steps without changing anything, `--agent <model>` lets a model run [install.md](install.md), and `--report <file>` writes timings (`installzero compare`). Re-run `%LOCALAPPDATA%\installzero\bin\installzero.exe install` from the repo folder to resume or repair, or use `scripts/install/Install.ps1` (`-Clients N`, `-DryRun`).
+- Uninstall: `installzero uninstall rl-roboracer` (`--keep-packages`, `--data`), or `irm https://raw.githubusercontent.com/frenb/rl-roboracer/main/uninstall.ps1 | iex`.
 - Manual developer setup: [docs/setup.md](docs/setup.md). With the InstallZero CLI, `installzero install` at the repo root follows [install.md](install.md).
 - Day-to-day start, stop and multi-actor runs: [docs/operations.md](docs/operations.md).
 
