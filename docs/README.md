@@ -37,6 +37,7 @@ Start with the [project README](../README.md). Guides describe what exists; desi
 | [csi-camera-observation-guide.md](csi-camera-observation-guide.md) | Putting the CSI camera on the learning loop |
 | [real2sim-fence-colliders-plan.md](real2sim-fence-colliders-plan.md) | Collidable fences on the real2sim track model |
 | [madscientist-autonomous-codegen.md](madscientist-autonomous-codegen.md) | Letting the Mad Scientist write the code its experiments need |
+| [robot-ingestion-and-openbeni-plan.md](robot-ingestion-and-openbeni-plan.md) | Standardizing multi-robot ingestion (`robot.yaml`, shared `mjlab_core`) and importing `Mondo-Robotics/open-beni` |
 | [proposal-spawn-multiprocessing.md](proposal-spawn-multiprocessing.md) | Switching parallel environment workers from fork to spawn |
 | [shared-mongodb-plan.md](shared-mongodb-plan.md) | Sharing the database with a second developer |
 | [install-script-plan.md](install-script-plan.md) | The Windows one-script installer and how to test it |
