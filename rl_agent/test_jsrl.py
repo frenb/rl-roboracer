@@ -82,6 +82,11 @@ def main():
     _expect("negative reference threshold sits below it",
             abs(neg.threshold + 11.0) < 1e-9)
 
+    capped = jsrl.JsrlCurriculum(stages=5, tolerance=0.85, consecutive=1)
+    capped.start(horizon=min(655, 200), reference=93.0)
+    _expect("capped horizon sets 200->160->120->80->40->0",
+            capped.guide_steps == 200 and capped.update(80.0) and capped.guide_steps == 160)
+
     with tempfile.TemporaryDirectory() as d:
         jsrl.save_state(d, cur)
         back = jsrl.JsrlCurriculum(stages=4, tolerance=0.9, consecutive=2)

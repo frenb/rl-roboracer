@@ -178,10 +178,29 @@ SCHEMA = {
         "default": 0.9,
         "min": 0.0, "max": 1.0,
         "doc": ("Jump-Start RL stage gate: hand the learner more of the episode once the guide+learner mix "
-                "scores at least this fraction of the guide-alone eval return, two evals in a row. Only used "
-                "when jsrl_stages > 0."),
+                "scores at least this fraction of the guide-alone eval return, consecutive evals in a row. "
+                "Only used when jsrl_stages > 0."),
         "paper_ref": "2204.02372",
         "kwarg": "jsrl_tolerance_val",
+    },
+    "jsrl_max_horizon": {
+        "type": "int",
+        "default": 0,
+        "min": 0, "max": 10000,
+        "doc": ("Cap on the starting JSRL guide_steps (0 = uncapped, uses the guide's full average episode "
+                "length). On long-surviving BC guides (~600+ steps) an uncapped horizon keeps eval cycles "
+                "long and fills the replay buffer with guide steps; ~150-200 (~1 lap) lets stages advance."),
+        "paper_ref": "2204.02372",
+        "kwarg": "jsrl_max_horizon_val",
+    },
+    "jsrl_consecutive": {
+        "type": "int",
+        "default": 2,
+        "min": 1, "max": 20,
+        "doc": ("Consecutive jsrl_eval passes above jsrl_tolerance required before advancing a JSRL stage. "
+                "Only used when jsrl_stages > 0."),
+        "paper_ref": "2204.02372",
+        "kwarg": "jsrl_consecutive_val",
     },
 
     "_section_replay": "Replay buffer",

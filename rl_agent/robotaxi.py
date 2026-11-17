@@ -1394,6 +1394,8 @@ def main(
     # Jump-Start RL guide/learner handoff stages (see jsrl.py). 0 = off.
     jsrl_stages_val=0,
     jsrl_tolerance_val=0.9,
+    jsrl_max_horizon_val=0,
+    jsrl_consecutive_val=2,
     batch_size_val=256,
     critic_learning_rate_val=3e-5,
     actor_learning_rate_val=3e-5,
@@ -1461,10 +1463,10 @@ def main(
     critic_joint_fc_layer_params_y=512,
     log_interval_val=5000,
     num_eval_episodes_val=10,
-    # New-job "Skip first eval": omit the two cold-start get_eval_metrics()
-    # runs (first_eval + pre_train_eval, 10 episodes each, 100 goals/ep
-    # on donut*). In-loop evals are unchanged. From-scratch vision jobs
-    # otherwise sit in EVAL begin for hours before TRAIN begin.
+    # New-job "Skip first eval": omit the cold-start get_eval_metrics()
+    # run (first_eval, 10 episodes, 100 goals/ep on donut*). In-loop
+    # evals are unchanged. From-scratch vision jobs otherwise sit in
+    # EVAL begin before TRAIN begin.
     skip_first_eval_val=False,
     eval_interval_val=5000,
     # Target fraction of training-loop WALL-CLOCK spent in eval (the rest is
@@ -2660,10 +2662,13 @@ def main(
         _jsrl_guide_policy = py_tf_eager_policy.PyTFEagerPolicy(
             _guide_tf_policy, use_tf_function=True)
         _jsrl_curriculum = jsrl.JsrlCurriculum(
-            jsrl_stages_val, jsrl_tolerance_val)
+            jsrl_stages_val, jsrl_tolerance_val,
+            consecutive=int(jsrl_consecutive_val or 2))
         print(f"main: JSRL ENABLED (stages={int(jsrl_stages_val)}, "
-              f"tolerance={float(jsrl_tolerance_val)}, guide="
-              f"{'restored' if is_resume_val else 'BC actor copy'})",
+              f"tolerance={float(jsrl_tolerance_val)}, "
+              f"consecutive={_jsrl_curriculum.consecutive}, "
+              f"max_horizon={int(jsrl_max_horizon_val or 0)}, "
+              f"guide={'restored' if is_resume_val else 'BC actor copy'})",
               flush=True)
 
     # ---- Reverb table restore (resume path) --------------------------------
@@ -2823,16 +2828,19 @@ def main(
 
     # JSRL gate evals (guide alone, then guide+learner) get their own actor
     # and TensorBoard run so they never mix into the learner's eval curve.
+    # Capped at 3 episodes so gate checks stay quick (~1-2 min instead of ~15 min)
+    # under eval_time_fraction while solo eval_actor keeps the full num_eval_episodes.
     _jsrl_eval_policy = None
     _jsrl_eval_actor = None
     if _jsrl_curriculum is not None:
+        _jsrl_eval_episodes = max(1, min(int(num_eval_episodes), 3))
         _jsrl_eval_policy = jsrl.JsrlPolicy(_jsrl_guide_policy, eval_policy)
         _jsrl_eval_actor = actor.Actor(
             eval_env,
             _jsrl_eval_policy,
             train_step,
-            episodes_per_run=num_eval_episodes,
-            metrics=actor.eval_metrics(num_eval_episodes),
+            episodes_per_run=_jsrl_eval_episodes,
+            metrics=actor.eval_metrics(_jsrl_eval_episodes),
             summary_dir=os.path.join(os.path.dirname(eval_dir), "jsrl_eval"),
             summary_interval=1)
 
@@ -2856,10 +2864,14 @@ def main(
             print(f"main: JSRL RESUME {_jsrl_curriculum.to_dict()}", flush=True)
         else:
             _g_ret, _g_len = _run_jsrl_eval(10 ** 9)
-            _jsrl_curriculum.start(_g_len, _g_ret)
+            _h0 = _g_len
+            if int(jsrl_max_horizon_val or 0) > 0:
+                _h0 = min(_h0, int(jsrl_max_horizon_val))
+            _jsrl_curriculum.start(_h0, _g_ret)
             print(f"main: JSRL guide alone: AverageReturn={_g_ret:.3f} "
                   f"AverageEpisodeLength={_g_len:.1f} -> horizon="
-                  f"{_jsrl_curriculum.horizon} steps, stage threshold="
+                  f"{_jsrl_curriculum.horizon} steps "
+                  f"(cap={int(jsrl_max_horizon_val or 0)}), stage threshold="
                   f"{_jsrl_curriculum.threshold:.3f}", flush=True)
         _jsrl_set_guide_steps()
 
@@ -3077,12 +3089,23 @@ def main(
     if skip_first_eval:
         print(
             "main: skip_first_eval - omitting cold-start eval "
-            "(first_eval + pre_train_eval). In-loop evals still run.",
+            "(first_eval). In-loop evals still run.",
             flush=True)
         metrics = {"AverageReturn": 0.0, "AverageEpisodeLength": 0.0}
     else:
         metrics = get_eval_metrics()
-        _save_if_new_best(metrics)
+        # Fresh JSRL starts with a static-BC policy whose return is already
+        # high; seeding max_avg_return from it would block every RL model
+        # checkpoint and clip until SAC surpasses BC. Keep max_avg_return at
+        # 0.0 for the RL loop (resumes still check the restored RL weights).
+        if _jsrl_curriculum is None or is_resume_val:
+            _save_if_new_best(metrics)
+        else:
+            print(
+                f"main: JSRL step-0 BC baseline={metrics['AverageReturn']:.4f} "
+                f"(not saved as model; max_avg_return stays at {max_avg_return:.4f} "
+                f"to track RL progress).",
+                flush=True)
 
     def log_eval_metrics(step, metrics):
         eval_results = (', ').join(
@@ -3179,15 +3202,10 @@ def main(
             f"{int(train_step.numpy())} (skipping post-BC reset).",
             flush=True)
 
-    _phase("pre_train_eval")
-    # Evaluate the agent's policy once before training (unless the job
-    # asked to skip both cold-start evals and go straight to TRAIN).
-    if skip_first_eval:
-        avg_return = metrics["AverageReturn"]
-    else:
-        pre_train_metrics = get_eval_metrics()
-        _save_if_new_best(pre_train_metrics)
-        avg_return = pre_train_metrics["AverageReturn"]
+    # Reuse first_eval's result rather than running a second identical
+    # 10-episode cold-start eval (pre_train_eval used to sit after a
+    # mid-startup bc_agent_training() call that no longer runs here).
+    avg_return = metrics["AverageReturn"]
     returns = [avg_return]
     curr_iteration=0
     print("Num iterations: " + str(num_iterations), flush=True)
