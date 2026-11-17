@@ -240,6 +240,7 @@ export const createServer = (config): express.Application => {
   // directories (see rl_agent/demos_registry.py). Selected per-job via
   // the New-Job dialog's "Expert demos" dropdown.
   var demosChanged = true;
+  var robotsChanged = true;
 
   // ----------------------------------------------------------------
   // Per-collection version cursor.
@@ -266,7 +267,7 @@ export const createServer = (config): express.Application => {
   // ----------------------------------------------------------------
   const collVersions: Record<string, number> = {
     jobs: 1, models: 1, leaderboard_scores: 1, env_specs: 1,
-    reward_designs: 1, experiment_designs: 1, gyms: 1, demos: 1,
+    reward_designs: 1, experiment_designs: 1, gyms: 1, demos: 1, robots: 1,
   };
   const bumpVersion = (name: string): number => {
     collVersions[name] = (collVersions[name] || 0) + 1;
@@ -317,6 +318,8 @@ export const createServer = (config): express.Application => {
     superviseChangeStream('experiment_designs', dbo.collection("experiment_designs"), () => { experimentDesignsChanged = true; return bumpVersion('experiment_designs'); });
     superviseChangeStream('gyms', dbo.collection("gyms"), () => { gymsChanged = true; return bumpVersion('gyms'); });
     superviseChangeStream('demos', dbo.collection("demos"), () => { demosChanged = true; return bumpVersion('demos'); });
+    superviseChangeStream('robots', dbo.collection("robots"), () => { robotsChanged = true; refreshRobotCacheFromDb().catch(() => {}); return bumpVersion('robots'); });
+    seedRobotsFromManifests().catch((e) => console.warn('robots seed failed:', e && e.message));
 
     // One demos row per DEMO job: the trainer and the backfill script both
     // upsert on source_job_id. Hand-registered rows carry no source job.
@@ -1658,14 +1661,75 @@ export const createServer = (config): express.Application => {
   });
 
   // Training videos and GIFs (rl_agent/media.py), stored on jobs as the
-  // trainer's own paths: the duck worker's under /microduck_rl/logs
-  // (saved_models/microduck on the host), the car trainer's under
-  // /saved_models. Both map into this container's /saved_models. sendFile
-  // answers Range requests, so videos seek.
-  const MEDIA_ROOTS: Array<[string, string]> = [
+  // trainer's own paths: mjlab workers under /<robot>_rl/logs (saved_models/<subdir>
+  // on the host), the car trainer under /saved_models. Registered robots from
+  // /get_robots extend this list dynamically via mediaRoots.
+  const DEFAULT_MEDIA_ROOTS: Array<[string, string]> = [
     ['/microduck_rl/logs/', '/saved_models/microduck'],
     ['/saved_models/', '/saved_models'],
   ];
+  let robotCache: any[] = [];
+  let mediaRoots: Array<[string, string]> = DEFAULT_MEDIA_ROOTS.slice();
+
+  function updateMediaRoots(robots: any[]): void {
+    const roots: Array<[string, string]> = [];
+    for (const r of robots || []) {
+      if (r && r.media_prefix && r.saved_models_subdir && r.media_prefix !== '/saved_models/') {
+        roots.push([String(r.media_prefix), path.posix.join('/saved_models', String(r.saved_models_subdir))]);
+      }
+    }
+    for (const pair of DEFAULT_MEDIA_ROOTS) {
+      if (!roots.some(([p]) => p === pair[0])) roots.push(pair);
+    }
+    mediaRoots = roots;
+  }
+
+  async function refreshRobotCacheFromDb(): Promise<any[]> {
+    if (!dbo) return robotCache;
+    const rows = await dbo.collection("robots").find({}).toArray();
+    if (rows && rows.length) {
+      robotCache = rows;
+      updateMediaRoots(rows);
+    }
+    return robotCache;
+  }
+
+  async function seedRobotsFromManifests(): Promise<void> {
+    const res = await runDuckScript('/python_ws/src/robots_registry.py', {});
+    const list = Array.isArray(res && res.robots) ? res.robots : [];
+    if (!list.length) {
+      await refreshRobotCacheFromDb();
+      return;
+    }
+    const now = new Date();
+    for (const r of list) {
+      await dbo.collection("robots").updateOne(
+        { _id: r.id } as any,
+        { $set: { ...r, updated_at: now }, $setOnInsert: { created_at: now } },
+        { upsert: true },
+      );
+    }
+    robotCache = list;
+    updateMediaRoots(list);
+    robotsChanged = true;
+  }
+
+  app.get('/get_robots', async (_req, res) => {
+    try {
+      let rows = dbo ? await dbo.collection("robots").find({}).toArray() : [];
+      if (!rows || !rows.length) {
+        const reg = await runDuckScript('/python_ws/src/robots_registry.py', {});
+        rows = Array.isArray(reg && reg.robots) ? reg.robots : [];
+      }
+      if (rows.length) {
+        robotCache = rows;
+        updateMediaRoots(rows);
+      }
+      res.json({ robots: rows });
+    } catch (err) {
+      res.status(500).json({ error: String(err && ((err as any).message || err)) });
+    }
+  });
 
   // One job by id, for tabs that don't hold the whole job list (the Models
   // tab's MicroDuck video button).
@@ -1691,9 +1755,9 @@ export const createServer = (config): express.Application => {
   // /duck_media is the old name, still in links shared before the car had videos.
   app.get(['/media', '/duck_media'], (req, res) => {
     const stored = String(req.query.path || '');
-    const match = MEDIA_ROOTS.find(([prefix]) => stored.startsWith(prefix));
+    const match = mediaRoots.find(([prefix]) => stored.startsWith(prefix));
     if (!match) {
-      res.status(400).json({ error: `path must start with ${MEDIA_ROOTS.map(([p]) => p).join(' or ')}` });
+      res.status(400).json({ error: `path must start with ${mediaRoots.map(([p]) => p).join(' or ')}` });
       return;
     }
     const [prefix, root] = match;
@@ -1971,13 +2035,26 @@ export const createServer = (config): express.Application => {
     return { strict_generated: !!(doc && doc.strict_generated) };
   }
 
+  function isMjlabRobot(robot: string): boolean {
+    if (!robot || robot === 'roboracer') return false;
+    const hit = robotCache.find((r) => r && r.id === robot);
+    return hit ? hit.engine === 'mjlab_rsl_rl' : robot === 'microduck';
+  }
+
+  function specRobotsList(): string[] {
+    const fromCache = robotCache
+      .filter((r) => r && r.supports && r.supports.reward_specs)
+      .map((r) => String(r.id));
+    return fromCache.length ? fromCache : ['roboracer', 'microduck'];
+  }
+
   async function lintSpecCode(robot: string, code: string, taskId: string): Promise<string[]> {
     let gym: any = null;
     let library: any[] = [];
-    if (robot === 'microduck') {
-      gym = await dbo.collection('gyms').findOne({ _id: 'microduck:' + taskId } as any,
+    if (isMjlabRobot(robot)) {
+      gym = await dbo.collection('gyms').findOne({ _id: `${robot}:${taskId}` } as any,
         { projection: { reward_defaults: 1 } });
-      const catalog = await dbo.collection('reward_term_catalog').findOne({ _id: 'microduck' } as any);
+      const catalog = await dbo.collection('reward_term_catalog').findOne({ _id: robot } as any);
       library = (catalog && catalog.functions) || [];
     }
     const r = await runDuckScript(SPEC_CLI, { op: 'lint', robot, code, gym, library });
@@ -1988,7 +2065,8 @@ export const createServer = (config): express.Application => {
   async function publishSpec(specId: any, summary: any): Promise<void> {
     const now = new Date();
     const designs = dbo.collection('reward_designs');
-    for (const robot of ['roboracer', 'microduck']) {
+    const allRobots = Array.from(new Set([...specRobotsList(), ...Object.keys(summary.compiled || {})]));
+    for (const robot of allRobots) {
       const _id = `spec:${String(specId)}:${robot}`;
       const compiled = summary.compiled[robot];
       if (!compiled || !summary.robots.includes(robot)) {
@@ -2438,8 +2516,9 @@ export const createServer = (config): express.Application => {
   // checked here with the same rl_agent/duck/experiment_design.validate the
   // worker runs, so a bad value fails on Save instead of minutes into a job.
   function checkExperimentDesign(robot: string, doc: any): Promise<any> {
-    if (robot !== 'microduck') return Promise.resolve({ ok: true });
-    return runDuckScript(DUCK_EXPERIMENT_CHECK_SCRIPT, doc);
+    if (!isMjlabRobot(robot)) return Promise.resolve({ ok: true });
+    const dir = robot === 'microduck' ? 'duck' : robot;
+    return runDuckScript(`/python_ws/src/${dir}/check_experiment_design.py`, doc);
   }
 
   app.post('/update_experiment_design', (req, res) => {
@@ -2797,19 +2876,21 @@ export const createServer = (config): express.Application => {
     });
   }
 
-  async function lintDuckDesign(code: string, taskId: string | null): Promise<any> {
+  async function lintMjlabDesign(robot: string, code: string, taskId: string | null): Promise<any> {
     let defaultTerms: string[] | null = null;
     if (taskId) {
+      const prefix = `${robot}:`;
       const gym = await dbo.collection("gyms").findOne(
-        { _id: taskId.startsWith('microduck:') ? taskId : 'microduck:' + taskId },
+        { _id: taskId.startsWith(prefix) ? taskId : prefix + taskId },
         { projection: { reward_terms: 1 } });
       if (gym && Array.isArray(gym.reward_terms)) defaultTerms = gym.reward_terms;
     }
     const catalog = await dbo.collection("reward_term_catalog").findOne(
-      { _id: 'microduck' }, { projection: { 'functions.name': 1 } });
+      { _id: robot }, { projection: { 'functions.name': 1 } });
     const library = catalog && Array.isArray(catalog.functions)
       ? catalog.functions.map((f: any) => f.name) : null;
-    const result = await runDuckScript(DUCK_LINT_SCRIPT, { code, default_terms: defaultTerms, library });
+    const dir = robot === 'microduck' ? 'duck' : robot;
+    const result = await runDuckScript(`/python_ws/src/${dir}/lint_design.py`, { code, default_terms: defaultTerms, library });
     return { funcs: [], ...result, task_checked: defaultTerms !== null };
   }
 
@@ -2858,8 +2939,9 @@ export const createServer = (config): express.Application => {
     // terms through a top-level TERMS dict plus optional term_<name>() functions.
     // They are linted by the same Python the duck worker runs at job start, so
     // a pass here means the design applies to the chosen task.
-    if (body.robot === 'microduck' || /(^|\n)TERMS\s*=/.test(code)) {
-      lintDuckDesign(code, body.task_id ? String(body.task_id) : null)
+    if (isMjlabRobot(String(body.robot || '')) || /(^|\n)TERMS\s*=/.test(code)) {
+      const r = isMjlabRobot(String(body.robot || '')) ? String(body.robot) : 'microduck';
+      lintMjlabDesign(r, code, body.task_id ? String(body.task_id) : null)
         .then((result) => res.json(result))
         .catch((err) => res.json({ ok: false, error: String(err && (err.message || err)), funcs: [] }));
       return;

@@ -139,7 +139,11 @@
     },
 
     robotTypeBadge(type) {
-      return badge('neutral', type || '?');
+      const id = type || 'roboracer';
+      const tone = ({ sky: 'info', emerald: 'ok', amber: 'warning', violet: 'info' })[
+        (robotsRegistry.get(id) || {}).badge_color
+      ] || ({ roboracer: 'info', microduck: 'ok' })[id] || 'neutral';
+      return badge(tone, type || '?');
     },
 
     // Reward / Experiment design "name + vN pill + click-to-view"
@@ -516,6 +520,63 @@
     });
   }
 
+  /* ---------- Robot registry (/get_robots) ----------------------- *
+   * Manifest-driven robot capabilities & display metadata, with synchronous
+   * defaults at boot so initial renders never wait on the network.
+   * -------------------------------------------------------------- */
+  const DEFAULT_ROBOTS = [
+    {
+      id: 'roboracer', display_name: 'Roboracer (car)', morphology: 'wheeled',
+      badge_color: 'sky', engine: 'tf_agents_unity', checkpoint_format: 'saved_model',
+      export_formats: [], recurrent: false, course_label: 'Course', iter_label: 'Iterations',
+      supports: { eval: true, export: false, video: true, weakness_map: true, demos: true, unity_clients: true, reward_specs: true, live_view: false },
+    },
+    {
+      id: 'microduck', display_name: 'MicroDuck', morphology: 'biped',
+      badge_color: 'emerald', engine: 'mjlab_rsl_rl', checkpoint_format: 'pt',
+      export_formats: ['onnx'], recurrent: false, course_label: 'Task', iter_label: 'Max iters',
+      supports: { eval: true, export: true, video: true, weakness_map: false, demos: false, unity_clients: false, reward_specs: true, live_view: true },
+    },
+  ];
+  let _robotsList = DEFAULT_ROBOTS.slice();
+  let _robotsById = Object.fromEntries(_robotsList.map((r) => [r.id, r]));
+  let _robotsLoaded = null;
+
+  const robotsRegistry = {
+    list: () => _robotsList.slice(),
+    id: (row) => (row && row.robot) || 'roboracer',
+    get: (idOrRow) => {
+      const id = typeof idOrRow === 'string' ? (idOrRow || 'roboracer') : robotsRegistry.id(idOrRow);
+      return _robotsById[id] || { id, display_name: id, engine: id === 'roboracer' ? 'tf_agents_unity' : 'mjlab_rsl_rl', supports: {} };
+    },
+    isCar: (idOrRow) => robotsRegistry.get(idOrRow).engine === 'tf_agents_unity',
+    isMjlab: (idOrRow) => robotsRegistry.get(idOrRow).engine === 'mjlab_rsl_rl',
+    supports: (idOrRow, cap) => !!(robotsRegistry.get(idOrRow).supports || {})[cap],
+    displayName: (id) => (robotsRegistry.get(id).display_name || id || 'roboracer'),
+    populateSelect(selectEl, selectedId) {
+      if (!selectEl) return;
+      const prev = selectedId || selectEl.value || 'roboracer';
+      selectEl.innerHTML = _robotsList.map((r) =>
+        `<option value="${String(r.id).replace(/"/g, '&quot;')}">${String(r.display_name || r.id).replace(/</g, '&lt;')}</option>`
+      ).join('');
+      selectEl.value = _robotsById[prev] ? prev : (_robotsList[0] ? _robotsList[0].id : 'roboracer');
+    },
+    async load() {
+      if (_robotsLoaded) return _robotsLoaded;
+      _robotsLoaded = fetch('/get_robots')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data && Array.isArray(data.robots) && data.robots.length) {
+            _robotsList = data.robots;
+            _robotsById = Object.fromEntries(_robotsList.map((r) => [r.id, r]));
+          }
+          return _robotsList;
+        })
+        .catch(() => _robotsList);
+      return _robotsLoaded;
+    },
+  };
+
   /* ---------- Training media ------------------------------------ *
    *
    * A TRAIN job of either robot (or a MicroDuck VIDEO job) stores
@@ -537,14 +598,14 @@
     pending(job) {
       if (!job || job.job_type !== 'TRAIN' || trainingMedia.progressVideo(job)) return false;
       if (['DONE', 'FAILED', 'CANCELLED', 'CANCELED'].includes(job.status)) return false;
-      // Duck jobs ask for one explicitly; car jobs make one unless told not to.
-      return job.robot === 'microduck' ? job.progress_video === true : job.progress_video !== false;
+      // mjlab jobs ask for one explicitly; car jobs make one unless told not to.
+      return robotsRegistry.isMjlab(job) ? job.progress_video === true : job.progress_video !== false;
     },
 
     open(job, title) {
       const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
         .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-      const isDuck = job && job.robot === 'microduck';
+      const isMjlab = robotsRegistry.isMjlab(job);
       const parts = [];
       const progress = trainingMedia.progressVideo(job);
       if (progress) {
@@ -563,13 +624,13 @@
       const clips = trainingMedia.clips(job).slice().sort((a, b) => (a.iteration || 0) - (b.iteration || 0));
       if (clips.length) {
         parts.push('<section class="flex flex-col gap-2">'
-          + `<h3 class="m-0 text-sm font-semibold">${isDuck ? 'Checkpoint' : 'Saved model'} clips (${clips.length})</h3>`
-          + (isDuck ? '' : '<p class="m-0 text-xs text-slate-500 dark:text-slate-400">The start of the eval that '
+          + `<h3 class="m-0 text-sm font-semibold">${isMjlab ? 'Checkpoint' : 'Saved model'} clips (${clips.length})</h3>`
+          + (isMjlab ? '' : '<p class="m-0 text-xs text-slate-500 dark:text-slate-400">The start of the eval that '
             + 'saved each best model, from the eval client\'s overhead camera.</p>')
           + '<div class="grid grid-cols-2 md:grid-cols-3 gap-3">'
           + clips.map((c) => '<figure class="m-0 flex flex-col gap-1">'
             + `<video controls muted playsinline preload="metadata" class="w-full rounded-md bg-black" src="${esc(trainingMedia.url(c.path))}"></video>`
-            + `<figcaption class="text-[11px] text-slate-500 dark:text-slate-400">${isDuck ? 'iteration' : 'step'} ${esc(c.iteration ?? '?')}`
+            + `<figcaption class="text-[11px] text-slate-500 dark:text-slate-400">${isMjlab ? 'iteration' : 'step'} ${esc(c.iteration ?? '?')}`
             + (c.gif ? ` · <a class="underline" href="${esc(trainingMedia.url(c.gif))}" target="_blank" rel="noopener">GIF</a>` : '')
             + '</figcaption>'
             + '</figure>').join('')
@@ -577,7 +638,7 @@
       }
       if (!parts.length) {
         parts.push('<p class="m-0 text-sm text-slate-500 dark:text-slate-400">This training job has no videos yet. '
-          + (isDuck
+          + (isMjlab
             ? 'The progression video is rendered when a TRAIN job with progress_video set finishes; '
               + "select the model on the Models tab and click 'Render video' to make one."
             : 'A clip is recorded each time an eval saves a new best model, and the progression video when '
@@ -2146,6 +2207,7 @@
     formatters,
     showToast,
     confirmDialog,
+    robots: robotsRegistry,
     trainingMedia,
     duckMedia: trainingMedia,
     TableView,

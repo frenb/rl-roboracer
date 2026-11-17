@@ -429,13 +429,14 @@
   <script src="/components.js?v=20261110-duck-media"></script>
   <script>
     (function () {
-      const { TableView, formatters, showToast, confirmDialog, trainingMedia } = window.RoboracerUI;
+      const { TableView, formatters, showToast, confirmDialog, trainingMedia, robots } = window.RoboracerUI;
+      robots.load();
 
-      // MicroDuck models (rl_agent/duck/worker.py upsert_model) carry task_id,
+      // mjlab models (microduck, openbeni, etc.) carry task_id,
       // onnx_location, obs_dim / act_dim and eval_results from their latest
       // EVAL job instead of course_type, observation_spec / action_spec and
       // leaderboard_scores rows.
-      const isDuckRow = (r) => !!r && !!r.robot && r.robot !== 'roboracer';
+      const isDuckRow = (r) => robots.isMjlab(r);
       const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
         .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
       const mutedCell = (text, tip) => '<span class="text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap"'
@@ -821,18 +822,22 @@
 
       function refreshButtons(selected) {
         const has = selected.length > 0;
-        const duckCount = selected.filter(isDuckRow).length;
-        const allDuck = has && duckCount === selected.length;
-        const mixed = duckCount > 0 && !allDuck;
+        const mjlabRows = selected.filter(isDuckRow);
+        const duckCount = mjlabRows.length;
+        const selectedRobots = new Set(selected.map((r) => robots.id(r)));
+        const sameRobot = selectedRobots.size === 1;
+        const allExportable = has && sameRobot && selected.every((r) => robots.supports(r, 'export'));
+        const allMjlab = has && sameRobot && duckCount === selected.length;
+        const mixed = has && !sameRobot;
         const canCompare = selected.length >= 2 && duckCount === 0;
         clearBtn.disabled   = !has;
         addJobsBtn.disabled = !has || mixed;
         addJobsBtn.title = mixed
-          ? 'Select only roboracer or only MicroDuck models: the two robots use different EVAL jobs.'
+          ? 'Select models from a single robot: different robots use different EVAL jobs.'
           : "Submit an EVAL job for each selected model. The job's location is auto-populated from the model's MongoDB record.";
         deleteBtn.disabled  = !has;
-        duckExportBtn.disabled = !allDuck;
-        duckVideoBtn.disabled  = !allDuck;
+        duckExportBtn.disabled = !allExportable;
+        duckVideoBtn.disabled  = !allMjlab;
         // Compare requires at least two models so there's something to
         // compare against. The button stays visible at all times so its
         // affordance is discoverable; we just disable until the user
@@ -1676,18 +1681,20 @@
       const DUCK_JOB_VERB = { EVAL: 'evaluate', EXPORT: 'export to ONNX', VIDEO: 'render a progression video for' };
       async function queueDuckJobs(jobType, rows) {
         const n = rows.length;
+        const robot = robots.id(rows[0]);
+        const label = robots.displayName(robot);
         const ok = await confirmDialog({
           confirmVariant: 'primary',
-          title: `Queue ${n} MicroDuck ${jobType} job${n === 1 ? '' : 's'}?`,
+          title: `Queue ${n} ${label} ${jobType} job${n === 1 ? '' : 's'}?`,
           message: `This will ${DUCK_JOB_VERB[jobType]} ${n === 1 ? 'the selected model' : `${n} selected models`} `
-            + 'on the duck-trainer.' + (jobType === 'VIDEO'
+            + `on the ${robot} worker.` + (jobType === 'VIDEO'
               ? ' The video covers every checkpoint of the training run, so it ends at its latest checkpoint.' : ''),
           confirmLabel: 'Queue',
         });
         if (!ok) return;
         const results = await Promise.all(rows.map((m) => {
           const body = {
-            robot: 'microduck', job_type: jobType, status: 'NOT_STARTED',
+            robot: robots.id(m), job_type: jobType, status: 'NOT_STARTED',
             create_date: new Date().toISOString(),
             task_id: m.task_id, source_job_id: m.job_id,
           };
@@ -1698,7 +1705,7 @@
         }));
         const errors = results.filter((e) => e !== null);
         if (errors.length === 0) {
-          showToast({ type: 'success', message: `Queued ${n} MicroDuck ${jobType} job${n === 1 ? '' : 's'}. Track ${n === 1 ? 'it' : 'them'} on the Jobs tab.` });
+          showToast({ type: 'success', message: `Queued ${n} ${label} ${jobType} job${n === 1 ? '' : 's'}. Track ${n === 1 ? 'it' : 'them'} on the Jobs tab.` });
           table.clearSelection();
         } else {
           showToast({ type: 'error', message: `${errors.length} of ${n} ${jobType} jobs failed to queue: ${errors[0]}` });

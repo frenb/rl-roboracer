@@ -6,7 +6,7 @@
 //   * the "trainer default" course is expressed by leaving course_type out.
 
 import { list, post } from './api.js';
-import { resolveRow, robotOf, isDuck } from './util.js';
+import { resolveRow, robotOf, isMjlab } from './util.js';
 
 export const JOB_TYPES = ['TRAIN', 'DEMO', 'EVAL', 'BC_TRAINING_ONLY'];
 // rl_agent/duck/worker.py do_job.
@@ -58,8 +58,9 @@ export function pickLists() {
     jobs: () => load('jobs', '/get_jobs'),
     models: () => load('models', '/get_models'),
     scores: () => load('scores', '/leaderboard_scores'),
-    // /get_models carries every car model; the duck's come from their own endpoint.
-    duckModels: () => (cache.dm ||= list('/get_robot_models?robot=microduck')),
+    // /get_models carries every car model; mjlab robots use /get_robot_models.
+    robotModels: (robot = 'microduck') => (cache[`rm:${robot}`] ||= list(`/get_robot_models?robot=${encodeURIComponent(robot)}`)),
+    duckModels: () => (cache['rm:microduck'] ||= list('/get_robot_models?robot=microduck')),
   };
 }
 
@@ -86,10 +87,10 @@ function robotRow(rows, ref, kind, robot) {
   return row;
 }
 
-/** Whether these create_job arguments describe a MicroDuck job. */
+/** Whether these create_job arguments describe an mjlab robot job (e.g. microduck, openbeni). */
 export async function wantsDuck(o, lists) {
-  if (o.robot) return o.robot === 'microduck';
-  if (o.gym) return isDuck(resolveGym(await lists.gyms(), o.gym));
+  if (o.robot) return isMjlab(o.robot);
+  if (o.gym) return isMjlab(resolveGym(await lists.gyms(), o.gym));
   return false;
 }
 
@@ -119,37 +120,48 @@ function positiveInt(v, label) {
  */
 export async function buildDuckJob(o, lists = pickLists()) {
   const notes = [];
+  let robot = o.robot ? String(o.robot) : '';
+  let resolvedGym = null;
+  if (!robot && o.gym) {
+    resolvedGym = resolveGym(await lists.gyms(), o.gym);
+    robot = robotOf(resolvedGym);
+  }
+  if (!robot) robot = 'microduck';
+  const modelsFn = () => (lists.robotModels ? lists.robotModels(robot) : lists.duckModels());
+
   const jobType = o.job_type;
   if (!DUCK_JOB_TYPES.includes(jobType)) {
-    throw new Error(`microduck jobs are ${DUCK_JOB_TYPES.join(', ')}; ${jobType} is a roboracer job type`);
+    throw new Error(`${robot} jobs are ${DUCK_JOB_TYPES.join(', ')}; ${jobType} is a roboracer job type`);
   }
   for (const k of CAR_ONLY_ARGS) {
     if (o[k] !== undefined && o[k] !== false && o[k] !== '') notes.push(`${k} ignored: roboracer only`);
   }
-  const payload = { robot: 'microduck', job_type: jobType, status: o.status || 'NOT_STARTED', create_date: new Date().toISOString() };
+  const payload = { robot, job_type: jobType, status: o.status || 'NOT_STARTED', create_date: new Date().toISOString() };
   if (o.name) payload.name = String(o.name);
 
   if (jobType === 'TRAIN') {
-    if (!o.gym) throw new Error('gym is required for a microduck TRAIN job: a microduck gym id, name or mjlab task id (list_gyms robot: microduck)');
-    const gym = resolveGym(await lists.gyms(), o.gym);
+    if (!o.gym) throw new Error(`gym is required for a ${robot} TRAIN job: a ${robot} gym id, name or mjlab task id (list_gyms robot: ${robot})`);
+    const gym = resolvedGym || resolveGym(await lists.gyms(), o.gym);
     if (gym.archived) throw new Error(`gym "${gym.name || gym._id}" is archived; unarchive it first`);
-    if (!isDuck(gym)) throw new Error(`gym "${gym.name || gym._id}" is a ${robotOf(gym)} gym`);
+    if (robotOf(gym) !== robot) throw new Error(`gym "${gym.name || gym._id}" is a ${robotOf(gym)} gym`);
     payload.gym_id = String(gym._id);
-    payload.task_id = String(gym.task_id || String(gym._id).replace(/^microduck:/, ''));
+    const prefix = `${robot}:`;
+    const rawId = String(gym.task_id || gym._id);
+    payload.task_id = rawId.startsWith(prefix) ? rawId.slice(prefix.length) : rawId;
     if (gym.name) payload.gym_name = gym.name;
     if (o.reward_design) {
-      const rd = robotRow(await lists.rewardDesigns(), o.reward_design, 'reward design', 'microduck');
+      const rd = robotRow(await lists.rewardDesigns(), o.reward_design, 'reward design', robot);
       payload.reward_design_id = String(rd._id);
       if (rd.name) payload.reward_design_name = rd.name;
     }
     if (o.experiment_design) {
-      const ed = robotRow(await lists.experimentDesigns(), o.experiment_design, 'experiment design', 'microduck');
+      const ed = robotRow(await lists.experimentDesigns(), o.experiment_design, 'experiment design', robot);
       payload.experiment_design_id = String(ed._id);
       if (ed.name) payload.experiment_design_name = ed.name;
     }
     // The form preselects the gym's default warm start; init_from "none" opts out.
     if (o.init_from && String(o.init_from).toLowerCase() !== 'none') {
-      const m = resolveRow(await lists.duckModels(), o.init_from, 'microduck model');
+      const m = resolveRow(await modelsFn(), o.init_from, `${robot} model`);
       payload.init_checkpoint = m.location;
     } else if (o.init_from === undefined && gym.default_init_checkpoint) {
       payload.init_checkpoint = gym.default_init_checkpoint;
@@ -168,8 +180,8 @@ export async function buildDuckJob(o, lists = pickLists()) {
     return { payload, notes };
   }
 
-  if (!o.model) throw new Error(`model is required for a microduck ${jobType} job (list_models robot: microduck)`);
-  const model = resolveRow(await lists.duckModels(), o.model, 'microduck model');
+  if (!o.model) throw new Error(`model is required for a ${robot} ${jobType} job (list_models robot: ${robot})`);
+  const model = resolveRow(await modelsFn(), o.model, `${robot} model`);
   payload.task_id = model.task_id;
   payload.source_job_id = model.job_id;
   if (jobType !== 'VIDEO') payload.checkpoint = model.location;

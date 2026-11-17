@@ -168,6 +168,10 @@ services:
         source: ./.git
         target: /git_meta
         read_only: true
+      - type: bind
+        source: ./robots
+        target: /robots
+        read_only: true
     ports:
       - "6006:6006"
     # `python -u` forces unbuffered stdout so the dashboard's live log
@@ -236,6 +240,10 @@ services:
       - type: bind
         source: ./rl_agent
         target: /python_ws/src
+      - type: bind
+        source: ./robots
+        target: /robots
+        read_only: true
       # Saved models, mounted at the SAME container path the trainer uses
       # (/saved_models) so the dashboard's /delete_model can remove a
       # model's on-disk files by its stored `location` (e.g.

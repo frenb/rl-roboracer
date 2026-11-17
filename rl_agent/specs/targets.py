@@ -12,7 +12,7 @@ signal maps onto it (or that it can't), and validates code for it:
     cover   every Encourage / Discourage / Never bullet is either implemented
             or reported as unsupported, with a reason
 
-Needs ``reward_designs`` (and for the duck ``duck/reward_design``) importable;
+Needs ``reward_designs`` and ``mjlab_core/reward_design`` importable;
 numpy is optional and only used to run car code.
 """
 import math
@@ -21,11 +21,11 @@ import re
 import sys
 
 _RL_AGENT = pathlib.Path(__file__).resolve().parents[1]
-for _p in (str(_RL_AGENT), str(_RL_AGENT / "duck")):
-    if _p not in sys.path:
-        sys.path.append(_p)
+if str(_RL_AGENT) not in sys.path:
+    sys.path.append(str(_RL_AGENT))
 
 import reward_designs  # noqa: E402
+from mjlab_core import reward_design as mjlab_reward_design  # noqa: E402
 
 SIGNALS = {
     "progress": "moving toward the objective (the next goal, the commanded velocity)",
@@ -236,15 +236,15 @@ DUCK_SIGNALS = {
 }
 
 
-def _duck_target(task_id, gym, library):
+def _mjlab_target(robot, task_id, gym, library, description, signals_map):
     defaults = gym.get("reward_defaults") or []
     rows = "\n".join(f"- {d['name']}: func={d.get('func')} weight={d.get('weight')} "
                      f"params={d.get('params') or {}}" for d in defaults)
     lib = "\n".join(f"- {f['name']}({', '.join(p if isinstance(p, str) else p.get('name', '?') for p in f.get('params') or [])})"
                     f": {(f.get('doc') or '').strip().splitlines()[0][:110] if f.get('doc') else ''}"
                     for f in library)
-    signals = "\n".join(f"- {s}: {DUCK_SIGNALS[s]}" for s in SIGNALS)
-    return f"""Target: microduck, a small bipedal robot trained with PPO in mjlab (thousands of
+    signals = "\n".join(f"- {s}: {signals_map[s]}" for s in SIGNALS)
+    return f"""Target: {robot}, {description} (trained with PPO in mjlab, thousands of
 robots in parallel on the GPU). Task: {task_id} ({gym.get('name', '')}).
 
 The reward is a weighted sum of named terms. A design is Python defining TERMS, a
@@ -280,10 +280,14 @@ How each signal maps:
 {signals}"""
 
 
+def _duck_target(task_id, gym, library):
+    return _mjlab_target("microduck", task_id, gym, library,
+                         "a small bipedal robot", DUCK_SIGNALS)
+
+
 def duck_effective_weights(code, gym):
     """``{term: weight or None if dropped}`` after applying the design to the defaults."""
-    import reward_design as duck
-    design = duck.compile_design("<spec>", code)
+    design = mjlab_reward_design.compile_design("<spec>", code)
     weights = {d["name"]: d.get("weight") for d in gym.get("reward_defaults") or []}
     for name, spec in design.terms.items():
         if spec is None:
@@ -321,10 +325,15 @@ def duck_checks(spec, code, rationale, gym):
 
 
 def duck_lint(code, gym, library):
-    import reward_design as duck
-    r = duck.lint(code, [d["name"] for d in gym.get("reward_defaults") or []] or None,
-                  [f["name"] for f in library] or None)
+    r = mjlab_reward_design.lint(
+        code, [d["name"] for d in gym.get("reward_defaults") or []] or None,
+        [f["name"] for f in library] or None)
     return [] if r["ok"] else [r["error"]]
+
+
+MJLAB_TARGETS = {
+    "microduck": ("a small bipedal robot", DUCK_SIGNALS),
+}
 
 
 # --- dispatch ------------------------------------------------------------------
@@ -332,7 +341,8 @@ def duck_lint(code, gym, library):
 def target_prompt(robot, *, gym=None, library=None, task_id=None):
     if robot == "roboracer":
         return _car_target()
-    return _duck_target(task_id, gym or {}, library or [])
+    desc, sigs = MJLAB_TARGETS.get(robot, ("an mjlab robot", DUCK_SIGNALS))
+    return _mjlab_target(robot, task_id, gym or {}, library or [], desc, sigs)
 
 
 def validate(robot, spec, code, *, rationale=(), unsupported=(), gym=None, library=None):

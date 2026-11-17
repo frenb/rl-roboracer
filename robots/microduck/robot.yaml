@@ -1,0 +1,37 @@
+# Declarative manifest for the MicroDuck biped robot.
+# Published to db.robots at duck-worker startup and read by rl_agent/robots_registry.py.
+
+id: microduck
+display_name: MicroDuck
+morphology: biped
+description: "14-DoF miniature biped with optional rollers (mjlab + MuJoCo Warp / Unity + rsl_rl PPO -> ONNX)"
+badge_color: emerald
+
+engine: mjlab_rsl_rl
+worker_queue_id: microduck
+models_dir: /microduck_rl/logs
+saved_models_subdir: microduck
+media_prefix: /microduck_rl/logs/
+checkpoint_format: pt
+export_formats: [onnx]
+recurrent: false
+
+course_label: Task
+iter_label: Max iters
+default_job_types: [TRAIN, EVAL, EXPORT, VIDEO]
+
+deploy_shapes:
+  "Mjlab-Velocity-": [61, 14]
+
+supports:
+  eval: true
+  export: true
+  video: true
+  weakness_map: false
+  demos: false
+  unity_clients: false
+  reward_specs: true
+  live_view: true
+
+assets:
+  mjcf: third_party/microduck_rl/src/mjlab_microduck/robot/microduck/robot_walk.xml

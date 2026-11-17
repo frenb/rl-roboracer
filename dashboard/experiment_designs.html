@@ -194,10 +194,18 @@
       // trainer default" from "user filled in zero / false / etc."
       let editorState = makeEmptyEditorState();
 
+      const { robots } = window.RoboracerUI;
       const CANONICAL_IDS = new Set(['experiment-default', 'microduck-experiment-default']);
       const designRobot = (d) => (d && d.robot) || 'roboracer';
-      let robot = localStorage.getItem('ed-robot') === 'microduck' ? 'microduck' : 'roboracer';
-      robotSel.value = robot;
+      let robot = localStorage.getItem('ed-robot') || 'roboracer';
+      robots.populateSelect(robotSel, robot);
+      robot = robotSel.value;
+      robots.load().then(() => {
+        robots.populateSelect(robotSel, localStorage.getItem('ed-robot') || robot);
+        robot = robotSel.value;
+        applyRobot();
+        renderList();
+      });
 
       function makeEmptyEditorState() {
         return {
@@ -369,7 +377,7 @@
           inputHtml =
             `<textarea data-field-name="${escapeAttr(name)}" data-field-type="json" rows="6"${ro}
                        spellcheck="false"
-                       placeholder="JSON; leave empty to use the ${robot === 'microduck' ? 'task' : 'trainer'} default"
+                       placeholder="JSON; leave empty to use the ${robots.isMjlab(robot) ? 'task' : 'trainer'} default"
                        class="w-full input-base text-sm font-mono ed-field-input ed-field-textarea"></textarea>` +
             `<div class="ed-field-error" data-error-for="${escapeAttr(name)}" hidden></div>`;
         } else {
@@ -1017,7 +1025,7 @@
 
       // ---- Robot switch ----------------------------------------------
       function applyRobot() {
-        const duck = robot === 'microduck';
+        const duck = robots.isMjlab(robot);
         document.querySelector('[data-role="help-microduck"]').hidden = !duck;
         document.querySelector('[data-role="help-roboracer"]').hidden = duck;
       }

@@ -61,6 +61,10 @@ services:
       - type: bind
         source: ./rl_agent
         target: /python_ws/src
+      - type: bind
+        source: ./robots
+        target: /robots
+        read_only: true
       # Linux build of the Unity duck env server (duck/unity_env.py copies it to local disk
       # to run it). Built from the MicroDuck Unity project with DuckBuild.BuildServerLinux.
       - type: bind

@@ -92,8 +92,12 @@
   <script src="/components.js?v=20261110-duck-media"></script>
   <script>
     (function () {
-      const { showToast, confirmDialog } = window.RoboracerUI;
-      const ROBOT_LABEL = { roboracer: 'Roboracer (car)', microduck: 'MicroDuck' };
+      const { showToast, confirmDialog, robots } = window.RoboracerUI;
+      const ROBOT_LABEL = {};
+      for (const r of robots.list()) ROBOT_LABEL[r.id] = r.display_name || r.id;
+      robots.load().then((list) => {
+        for (const r of list) ROBOT_LABEL[r.id] = r.display_name || r.id;
+      });
       const STATUS = {
         fresh: ['compiled', 'is-ok', 'Compiled from the current prose.'],
         edited: ['hand-edited', 'is-warn', 'The code was changed by hand after compiling; it no longer follows from the prose alone.'],

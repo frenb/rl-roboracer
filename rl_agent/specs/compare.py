@@ -143,8 +143,7 @@ def _norm_src(src):
 
 def duck_terms(code, gym):
     """``{term: (func, weight, params)}`` after applying the design to the task defaults."""
-    import reward_design as duck
-    design = duck.compile_design("<compare>", code)
+    design = targets.mjlab_reward_design.compile_design("<compare>", code)
     terms = {d["name"]: (d.get("func"), d.get("weight"), d.get("params") or {})
              for d in gym.get("reward_defaults") or []}
     for name, spec in design.terms.items():

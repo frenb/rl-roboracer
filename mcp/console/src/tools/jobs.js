@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import path from 'node:path';
 import { get, list, post, LOG_WS_URL, BASE_URL } from '../api.js';
-import { defineTool, confirmArg, requireConfirm, objectIdTime, resolveRow, compact, truncate, robotArg, robotOf, isDuck } from '../util.js';
+import { defineTool, confirmArg, requireConfirm, objectIdTime, resolveRow, compact, truncate, robotArg, robotOf, isMjlab } from '../util.js';
 import { buildJob, insertJob, pickLists, ALL_JOB_TYPES, MODEL_TYPES, JOB_STATUSES, COURSES } from '../jobPayload.js';
 import { planJob, loadPlanData, DEFAULTABLE } from '../jobDecisions.js';
 import { composeExec, composeLogs, REPO_ROOT } from '../docker.js';
@@ -303,22 +303,27 @@ export function register(server) {
     let text;
     let source = null;
     let target = null;
-    if (job || robot === 'microduck') {
+    const serviceFor = (r) => (r === 'microduck' ? 'duck-trainer' : `${r}-trainer`);
+    if (job || (robot && isMjlab(robot))) {
       const jobs = await list('/get_jobs');
-      target = job ? resolveRow(jobs, job, 'job') : jobs.filter((j) => isDuck(j) && j.status === 'IN_PROGRESS').sort(byNewest)[0];
-      if (target && !isDuck(target)) {
-        if (robot === 'microduck') throw new Error(`job ${target._id} is a roboracer job`);
+      target = job
+        ? resolveRow(jobs, job, 'job')
+        : jobs.filter((j) => robotOf(j) === robot && j.status === 'IN_PROGRESS').sort(byNewest)[0];
+      if (target && !isMjlab(target)) {
+        if (robot && isMjlab(robot)) throw new Error(`job ${target._id} is a roboracer job`);
         target = null;
       }
     }
     if (target) {
       if (!target.log_path) throw new Error(`job ${target._id} has no log yet (status ${target.status})`);
       const n = grep ? 5000 : lines;
-      text = await composeExec(['-T', 'duck-trainer', 'tail', '-n', String(n), target.log_path], { timeoutMs: 30000 });
+      const svc = serviceFor(robotOf(target));
+      text = await composeExec(['-T', svc, 'tail', '-n', String(n), target.log_path], { timeoutMs: 30000 });
       source = `${target.log_path} (job ${target._id}, ${target.status})`;
-    } else if (robot === 'microduck') {
-      text = await composeLogs('duck-trainer', grep ? 5000 : lines, { timeoutMs: 30000 });
-      source = 'duck-trainer worker output (no microduck job is running)';
+    } else if (robot && isMjlab(robot)) {
+      const svc = serviceFor(robot);
+      text = await composeLogs(svc, grep ? 5000 : lines, { timeoutMs: 30000 });
+      source = `${svc} worker output (no ${robot} job is running)`;
     } else {
       text = await readTrainerLog(wait_ms);
     }

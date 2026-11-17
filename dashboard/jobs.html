@@ -641,7 +641,8 @@
       // Duck jobs (rl_agent/duck/worker.py) carry task_id / max_iterations /
       // duck_checkpoint where car jobs carry course_type / num_iterations /
       // location, so the shared columns read whichever the row's robot writes.
-      const isDuckRow = (r) => !!r.robot && r.robot !== 'roboracer';
+      const { robots, trainingMedia } = window.RoboracerUI;
+      const isDuckRow = (r) => robots.isMjlab(r);
       const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
         .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
       const mutedCell = (text, tip) => '<span class="text-xs text-slate-500 dark:text-slate-400"'
@@ -652,12 +653,15 @@
         return v === '' || v == null || !Number.isFinite(n) || n <= 0 ? null : n;
       };
       const locationFor = (r) => (isDuckRow(r)
-        ? (r.duck_checkpoint || r.checkpoint || r.onnx_location || '') : (r.location || ''));
-      // progress_video is true (requested) until the worker swaps in the path.
-      const { trainingMedia } = window.RoboracerUI;
-      const courseFor = (r) => (isDuckRow(r)
-        ? String(r.task_id || r.gym_id || '').replace(/^microduck:/, '')
-        : ((r.course_type && r.course_type !== 'trainer default') ? r.course_type : 'donut'));
+        ? (r.duck_checkpoint || r.checkpoint_path || r.checkpoint || r.onnx_location || '') : (r.location || ''));
+      const courseFor = (r) => {
+        if (isDuckRow(r)) {
+          const prefix = robots.id(r) + ':';
+          const raw = String(r.task_id || r.gym_id || '');
+          return raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
+        }
+        return (r.course_type && r.course_type !== 'trainer default') ? r.course_type : 'donut';
+      };
 
       const tableHost = document.querySelector('[data-role="table"]');
       const table = new TableView(tableHost, {
@@ -1390,13 +1394,13 @@
       let duckModels = [];
 
       function applyRobotForm() {
-        const duck = robotEl.value === 'microduck';
-        duckFormEl.style.display = duck ? '' : 'none';
-        formEl.style.display = duck ? 'none' : '';
+        const mjlab = robots.isMjlab(robotEl.value);
+        duckFormEl.style.display = mjlab ? '' : 'none';
+        formEl.style.display = mjlab ? 'none' : '';
         localStorage.setItem('new-job-robot', robotEl.value);
-        if (duck) {
+        if (mjlab) {
           updateDuckRows();
-          loadDuckPickers().catch((err) => console.warn('duck pickers hydrate failed:', err));
+          loadDuckPickers().catch((err) => console.warn('mjlab pickers hydrate failed:', err));
         }
       }
 
@@ -1426,13 +1430,13 @@
       }
 
       async function loadDuckPickers() {
-        const robot = 'microduck';
+        const robot = robotEl.value || 'microduck';
         await Promise.all([
           RoboracerUI.loadJobListIntoSelect('gyms', document.getElementById('d-gym'), { robot }),
           RoboracerUI.loadJobListIntoSelect('reward_designs', document.getElementById('d-reward-design'), { robot }),
           RoboracerUI.loadJobListIntoSelect('experiment_designs', document.getElementById('d-experiment-design'), { robot }),
           (async () => {
-            const res = await fetch('/get_robot_models?robot=microduck');
+            const res = await fetch('/get_robot_models?robot=' + encodeURIComponent(robot));
             duckModels = res.ok ? await res.json() : [];
             for (const sel of [duckModelEl, duckInitEl]) {
               const keep = sel.value;
@@ -1480,8 +1484,9 @@
       }
 
       function buildDuckPayload() {
+        const robot = robotEl.value || 'microduck';
         const jt = duckJobTypeEl.value;
-        const payload = { robot: 'microduck', job_type: jt, status: 'NOT_STARTED',
+        const payload = { robot, job_type: jt, status: 'NOT_STARTED',
                           create_date: new Date().toISOString() };
         const name = document.getElementById('d-name').value.trim();
         if (name) payload.name = name;
@@ -1489,7 +1494,8 @@
           const gymId = document.getElementById('d-gym').value;
           if (!gymId) throw new Error('Pick a task');
           payload.gym_id = gymId;
-          payload.task_id = gymId.replace(/^microduck:/, '');
+          const prefix = robot + ':';
+          payload.task_id = gymId.startsWith(prefix) ? gymId.slice(prefix.length) : gymId;
           const rd = document.getElementById('d-reward-design');
           if (rd.value) {
             payload.reward_design_id = rd.value;
@@ -1545,7 +1551,7 @@
             body: JSON.stringify(payload),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          showToast({ type: 'success', message: `New MicroDuck ${payload.job_type} job created.` });
+          showToast({ type: 'success', message: `New ${robots.displayName(payload.robot)} ${payload.job_type} job created.` });
           closeModal();
           scheduleImmediatePoll();
         } catch (err) {
@@ -1553,12 +1559,17 @@
         }
       }
 
-      robotEl.value = localStorage.getItem('new-job-robot') === 'microduck' ? 'microduck' : 'roboracer';
+      const savedRobot = localStorage.getItem('new-job-robot') || 'roboracer';
+      robots.populateSelect(robotEl, savedRobot);
+      robots.load().then(() => {
+        robots.populateSelect(robotEl, localStorage.getItem('new-job-robot') || savedRobot);
+        applyRobotForm();
+      });
       robotEl.addEventListener('change', applyRobotForm);
       duckJobTypeEl.addEventListener('change', updateDuckRows);
 
       submitBtn.addEventListener('click', async () => {
-        if (robotEl.value === 'microduck') {
+        if (robots.isMjlab(robotEl.value)) {
           await submitDuck();
           return;
         }

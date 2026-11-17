@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { get, list, post, BASE_URL } from '../api.js';
-import { defineTool, confirmArg, requireConfirm, resolveRow, compact, robotArg, robotOf, isDuck } from '../util.js';
+import { defineTool, confirmArg, requireConfirm, resolveRow, compact, robotArg, robotOf, isMjlab } from '../util.js';
 import { buildJob, buildDuckJob, insertJob, pickLists, MODEL_TYPES, COURSES, SCRATCH_BUILT_POLICIES, FLY_POLICY_COURSE } from '../jobPayload.js';
 import { summary, compareSamples, round } from '../stats.js';
 import { METRICS, runsFor, pooled } from '../scores.js';
@@ -37,14 +37,14 @@ function evalSummary(runs) {
 }
 
 function modelRow(m, scores) {
-  if (isDuck(m)) return { _id: String(m._id), robot: 'microduck', ...compact(m, DUCK_MODEL_KEYS), eval: duckEval(m) };
+  if (isMjlab(m)) return { _id: String(m._id), robot: robotOf(m), ...compact(m, DUCK_MODEL_KEYS), eval: duckEval(m) };
   const row = { _id: String(m._id), robot: 'roboracer', ...compact(m, MODEL_ROW_KEYS) };
   if (scores) row.eval = evalSummary(runsFor(m, scores));
   return row;
 }
 
-/** Sort key for "best first": car mean eval score, duck mean eval return. */
-const bestKey = (row) => (row.robot === 'microduck' ? row.eval.mean_return : row.eval.mean_score) ?? -Infinity;
+/** Sort key for "best first": car mean eval score, mjlab mean eval return. */
+const bestKey = (row) => (isMjlab(row) ? row.eval.mean_return : row.eval.mean_score) ?? -Infinity;
 
 async function modelsAndScores() {
   const [models, scores] = await Promise.all([list('/get_models'), list('/leaderboard_scores')]);
@@ -165,9 +165,9 @@ export function register(server) {
     const carRefs = [];
     for (const ref of args.models) {
       const m = resolveRow(models, ref, 'model');
-      if (!isDuck(m)) { carRefs.push(ref); continue; }
+      if (!isMjlab(m)) { carRefs.push(ref); continue; }
       const { payload, notes } = await buildDuckJob({
-        job_type: 'EVAL', model: String(m._id), eval_num_envs: args.eval_num_envs, eval_steps: args.eval_steps,
+        robot: robotOf(m), job_type: 'EVAL', model: String(m._id), eval_num_envs: args.eval_num_envs, eval_steps: args.eval_steps,
       }, lists);
       const carOnly = ['num_trials', 'num_eval_episodes', 'gym', 'course_type', 'model_type', 'reward_design',
         'experiment_design', 'corner_radius_val', 'curvature_difficulty_val', 'eval_all_stages'].filter((k) => args[k] !== undefined);
@@ -269,10 +269,10 @@ export function register(server) {
     },
   }, async ({ robot = 'roboracer', course_type, task_id, metric = 'mean_return', min_trials = 1, limit = 20 }) => {
     const { models, scores } = await modelsAndScores();
-    if (robot === 'microduck') {
+    if (isMjlab(robot)) {
       const sign = DUCK_METRICS[metric].better === 'higher' ? -1 : 1;
       const ranked = models
-        .filter((m) => isDuck(m) && m.eval_results && Number.isFinite(Number(m.eval_results[metric])))
+        .filter((m) => robotOf(m) === robot && m.eval_results && Number.isFinite(Number(m.eval_results[metric])))
         .filter((m) => !task_id || String(m.task_id || '').toLowerCase().includes(task_id.toLowerCase()))
         .sort((a, b) => sign * (Number(a.eval_results[metric]) - Number(b.eval_results[metric])))
         .slice(0, limit)
@@ -321,15 +321,16 @@ export function register(server) {
   }, async ({ models: refs, metric }) => {
     const { models, scores } = await modelsAndScores();
     const picked = refs.map((ref) => resolveRow(models, ref, 'model'));
-    const ducks = picked.filter(isDuck).length;
-    if (ducks && ducks !== picked.length) throw new Error('compare models of one robot at a time');
-    if (ducks) {
+    const pickedRobots = new Set(picked.map(robotOf));
+    if (pickedRobots.size > 1) throw new Error('compare models of one robot at a time');
+    const targetRobot = robotOf(picked[0]);
+    if (isMjlab(targetRobot)) {
       const key = metric || 'mean_return';
-      if (!DUCK_METRICS[key]) throw new Error(`microduck metrics: ${Object.keys(DUCK_METRICS).join(', ')}`);
+      if (!DUCK_METRICS[key]) throw new Error(`${targetRobot} metrics: ${Object.keys(DUCK_METRICS).join(', ')}`);
       const value = (m) => (m.eval_results && Number.isFinite(Number(m.eval_results[key])) ? Number(m.eval_results[key]) : null);
       const base = value(picked[0]);
       return round({
-        robot: 'microduck',
+        robot: targetRobot,
         metric: key,
         better: DUCK_METRICS[key].better,
         baseline: String(picked[0]._id),

@@ -1,0 +1,34 @@
+# Declarative manifest for the JetRacer ("roboracer") car robot.
+# Published to db.robots at trainer startup and read by rl_agent/robots_registry.py.
+
+id: roboracer
+display_name: "Roboracer (car)"
+morphology: wheeled
+description: "1/18-scale Waveshare JetRacer rover (Unity 6.6 lockstep sim + TF-Agents SAC / AWAC / RLPD / JSRL)"
+badge_color: sky
+
+engine: tf_agents_unity
+worker_queue_id: roboracer
+models_dir: /saved_models/robotaxi
+saved_models_subdir: robotaxi
+media_prefix: /saved_models/
+checkpoint_format: saved_model
+export_formats: []
+recurrent: false
+
+course_label: Course
+iter_label: Iterations
+default_job_types: [TRAIN, DEMO, EVAL, BC_TRAINING_ONLY]
+
+supports:
+  eval: true
+  export: false
+  video: true
+  weakness_map: true
+  demos: true
+  unity_clients: true
+  reward_specs: true
+  live_view: false
+
+assets:
+  urdf: robots/jetracer/jetracer.urdf

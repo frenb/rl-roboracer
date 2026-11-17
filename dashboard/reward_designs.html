@@ -284,9 +284,17 @@ TERMS = {
       const duckDefaults = document.querySelector('[data-role="duck-defaults"]');
       const duckLibrary  = document.querySelector('[data-role="duck-library"]');
 
-      let robot = localStorage.getItem('rd-robot') === 'microduck' ? 'microduck' : 'roboracer';
-      robotSel.value = robot;
-      // MicroDuck reference data: gyms carry each task's default terms.
+      const { robots } = window.RoboracerUI;
+      let robot = localStorage.getItem('rd-robot') || 'roboracer';
+      robots.populateSelect(robotSel, robot);
+      robot = robotSel.value;
+      robots.load().then(() => {
+        robots.populateSelect(robotSel, localStorage.getItem('rd-robot') || robot);
+        robot = robotSel.value;
+        applyRobot();
+        renderList();
+      });
+      // mjlab reference data: gyms carry each task's default terms.
       let duckGyms = [];
       let duckLibraryRows = [];
 
@@ -629,14 +637,14 @@ TERMS = {
           const res = await fetch('/lint_reward_design', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(robot === 'microduck'
+            body: JSON.stringify(robots.isMjlab(robot)
               ? { code, robot, task_id: duckTaskSel.value || null }
               : { code }),
           });
           const json = await res.json();
           if (json.ok) {
             const notes = json.funcs || [];
-            if (robot === 'microduck') {
+            if (robots.isMjlab(robot)) {
               const taskNote = json.task_checked && duckTaskSel.value
                 ? `fits ${duckTaskSel.value}` : 'task not checked';
               showLintOk([`${(json.terms || []).length} TERMS entries`, ...notes, taskNote]);
@@ -900,12 +908,12 @@ TERMS = {
 
       // ---- Robot switch ----------------------------------------------
       function applyRobot() {
-        const duck = robot === 'microduck';
+        const duck = robots.isMjlab(robot);
         document.querySelector('[data-role="help-microduck"]').hidden = !duck;
         document.querySelector('[data-role="help-roboracer"]').hidden = duck;
         duckRef.hidden = !duck;
-        if (duck && !duckGyms.length) {
-          loadDuckReference().catch((err) => console.warn('duck reference load failed:', err));
+        if (duck) {
+          loadDuckReference().catch((err) => console.warn('mjlab reference load failed:', err));
         }
       }
 
@@ -931,11 +939,11 @@ TERMS = {
       // ---- MicroDuck reference panel -----------------------------------
       async function loadDuckReference() {
         const [gymsRes, catRes] = await Promise.all([
-          fetch('/get_gyms?force=true'), fetch('/get_reward_term_catalog?robot=microduck')]);
+          fetch('/get_gyms?force=true'), fetch('/get_reward_term_catalog?robot=' + encodeURIComponent(robot))]);
         const gymsText = await gymsRes.text();
         if (gymsText && gymsText !== 'NO_CHANGES') {
           duckGyms = (JSON.parse(gymsText) || [])
-            .filter((g) => g.robot === 'microduck' && !g.archived)
+            .filter((g) => g.robot === robot && !g.archived)
             .sort((a, b) => String(a.task_id).localeCompare(String(b.task_id)));
         }
         duckLibraryRows = ((await catRes.json()) || {}).functions || [];

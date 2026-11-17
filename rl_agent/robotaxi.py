@@ -7787,6 +7787,12 @@ def run_jobs_loop(num_envs=1):
     # Not a seed: re-published every start so the dashboard's form
     # always matches this trainer's SCHEMA. See the docstring.
     _publish_experiment_design_schema()
+    try:
+        import robots_registry
+        n_robots = robots_registry.seed_robots(db)
+        print(f"robots_registry: seeded {n_robots} robot manifest(s)", flush=True)
+    except Exception as _e:
+        print(f"robots_registry: seed skipped ({_e})", flush=True)
     job_queue.start_heartbeat(db, job_queue.DEFAULT_ROBOT)
     print(f"Polling for jobs (num_envs={num_envs})...")
     queue_paused_logged = False
