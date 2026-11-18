@@ -1,6 +1,6 @@
 # Standardizing Robot Ingestion and Importing OpenBeni
 
-**Status:** Planned (not yet started). Designed against `microduck-phase0` (`roboracer` + `microduck`) and [`Mondo-Robotics/open-beni`](https://github.com/Mondo-Robotics/open-beni).
+**Status:** In progress on `microduck-phase0`. Part 1 (manifests + `mjlab_core` + dashboard/MCP generalization) is landed. Phase A/B/C code for OpenBeni (submodule, `robot.yaml`, `beni_trainer` container, `rl_agent/openbeni/` worker, `openbeni` spec target) is committed but not yet exercised: the `beni_trainer` image has not been built and no `openbeni` gyms/designs/jobs exist in Mongo. Remaining: Phase A smoke test, the rest of the `isDuckRow` removal and CI coverage (Phase D), and Phase E end-to-end TRAIN/EXPORT/EVAL.
 
 With three distinct morphologies — **`roboracer`** (JetRacer 4-wheel Ackermann/parallel-steer rover), **`microduck`** (14-DoF walking/roller biped), and **`openbeni`** (7-DoF wheel-legged jumper with a 2-DoF gimbal) — the platform's two-robot shortcuts (`isDuckRow`, hardcoded `['roboracer', 'microduck']` enums, and duplicated mjlab worker code) break cleanly in one place. This plan uses the `openbeni` import to establish a standard **Robot Adapter Contract** across the whole stack.
 
