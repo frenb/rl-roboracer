@@ -65,9 +65,9 @@
         <button data-action="add-jobs" disabled class="btn-base btn-primary"
                 title="Submit an EVAL job for each selected model. The job's location is auto-populated from the model's MongoDB record.">+ Eval selected</button>
         <button data-action="duck-export" disabled class="btn-base btn-secondary"
-                title="MicroDuck models only: queue an EXPORT job that writes the checkpoint as ONNX and validates it.">Export ONNX</button>
+                title="mjlab models only (MicroDuck, OpenBeni): queue an EXPORT job that writes the checkpoint as ONNX (plus MNN for OpenBeni) and validates it.">Export ONNX</button>
         <button data-action="duck-video" disabled class="btn-base btn-secondary"
-                title="MicroDuck models only: queue a VIDEO job that renders a progression video of the training run's checkpoints.">Render video</button>
+                title="mjlab models only (MicroDuck, OpenBeni): queue a VIDEO job that renders a progression video of the training run's checkpoints.">Render video</button>
         <button data-action="delete" disabled class="btn-base btn-danger"
                 title="Delete the selected model record(s) from the database. Does not remove the saved-model files on disk.">Delete</button>
       </div>
@@ -436,12 +436,12 @@
       // onnx_location, obs_dim / act_dim and eval_results from their latest
       // EVAL job instead of course_type, observation_spec / action_spec and
       // leaderboard_scores rows.
-      const isDuckRow = (r) => robots.isMjlab(r);
+      const isMjlabRow = (r) => robots.isMjlab(r);
       const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
         .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
       const mutedCell = (text, tip) => '<span class="text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap"'
         + (tip ? ` title="${esc(tip)}"` : '') + '>' + esc(text) + '</span>';
-      const courseFor = (r) => (isDuckRow(r)
+      const courseFor = (r) => (isMjlabRow(r)
         ? String(r.task_id || '')
         : ((r.course_type && r.course_type !== 'trainer default') ? String(r.course_type) : 'donut'));
 
@@ -518,8 +518,8 @@
             render: (_v, row) => {
               const c = courseFor(row);
               if (!c) return mutedCell('—');
-              const label = isDuckRow(row) ? c.replace(/^Mjlab-/, '').replace(/-MicroDuck\b/, '') : c;
-              const cls = isDuckRow(row)
+              const label = isMjlabRow(row) ? c.replace(/^Mjlab-/, '').replace(/-MicroDuck\b/, '') : c;
+              const cls = isMjlabRow(row)
                 ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
                 : 'bg-slate-500/15 text-slate-300 border-slate-500/30';
               return '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border '
@@ -580,7 +580,7 @@
           // Progression video / training clips, from the TRAIN job. Car
           // models have them when the trainer stamped the model's own clip.
           { key: 'video',               label: 'Video',      sortable: false, filter: false,
-            render: (_v, row) => (row.job_id && (isDuckRow(row) || row.clip)
+            render: (_v, row) => (row.job_id && (isMjlabRow(row) || row.clip)
               ? `<button type="button" data-action="view-training-media" data-job-id="${esc(row.job_id)}" `
                 + 'class="px-2 py-0.5 rounded-md text-xs font-medium border border-emerald-500/40 '
                 + 'text-emerald-300 hover:bg-emerald-500/15">▶ View</button>'
@@ -600,7 +600,7 @@
       function renderDuckEvalCell(row) {
         const ev = row.eval_results;
         if (!ev) {
-          return mutedCell('—', 'No EVAL job has run on this MicroDuck model yet. '
+          return mutedCell('—', `No EVAL job has run on this ${esc(robots.displayName(robots.id(row)))} model yet. `
             + "Select the row and click '+ Eval selected'.");
         }
         const pct = (x) => (x == null ? '?' : `${Math.round(Number(x) * 100)}%`);
@@ -619,7 +619,7 @@
       }
 
       function renderEvalsCell(_v, row) {
-        if (isDuckRow(row)) return renderDuckEvalCell(row);
+        if (isMjlabRow(row)) return renderDuckEvalCell(row);
         const evals = Number(row.eval_count) || 0;
         const trials = Number(row.trial_count) || 0;
         if (evals === 0) {
@@ -822,7 +822,7 @@
 
       function refreshButtons(selected) {
         const has = selected.length > 0;
-        const mjlabRows = selected.filter(isDuckRow);
+        const mjlabRows = selected.filter(isMjlabRow);
         const duckCount = mjlabRows.length;
         const selectedRobots = new Set(selected.map((r) => robots.id(r)));
         const sameRobot = selectedRobots.size === 1;
@@ -844,7 +844,7 @@
         // makes a second selection.
         compareBtn.disabled = !canCompare;
         compareBtn.title = duckCount > 0
-          ? 'The Analysis tab compares roboracer leaderboard trials; MicroDuck models are not supported there yet.'
+          ? 'The Analysis tab compares roboracer leaderboard trials; mjlab models (MicroDuck, OpenBeni) are not supported there yet.'
           : COMPARE_TITLE;
         compareBtn.textContent = canCompare
           ? `Compare ${selected.length} in Analysis`
@@ -863,13 +863,14 @@
       deleteBtn.addEventListener('click', async () => {
         const sel = table.getSelectedRows();
         if (!sel.length) return;
-        const duckCount = sel.filter(isDuckRow).length;
+        const mjlabSel = sel.filter(isMjlabRow);
+        const mjlabDirs = [...new Set(mjlabSel.map((r) => `saved_models/${robots.id(r)}`))].join(' and ');
         const ok = await confirmDialog({
           title: `Delete ${sel.length} model${sel.length === 1 ? '' : 's'}?`,
           message: 'This permanently removes the model record, its saved-model '
             + 'files on disk, and its leaderboard scores. This cannot be undone.'
-            + (duckCount ? ` For the ${duckCount} MicroDuck model${duckCount === 1 ? '' : 's'}, only the record `
-              + 'is removed; checkpoints and videos stay under saved_models/microduck.' : ''),
+            + (mjlabSel.length ? ` For the ${mjlabSel.length} mjlab model${mjlabSel.length === 1 ? '' : 's'}, only the record `
+              + `is removed; checkpoints and videos stay under ${mjlabDirs}.` : ''),
           confirmLabel: 'Delete',
           confirmVariant: 'danger',
         });
@@ -1713,18 +1714,18 @@
       }
       duckExportBtn.addEventListener('click', () => {
         const sel = table.getSelectedRows();
-        if (sel.length && sel.every(isDuckRow)) queueDuckJobs('EXPORT', sel);
+        if (sel.length && sel.every(isMjlabRow)) queueDuckJobs('EXPORT', sel);
       });
       duckVideoBtn.addEventListener('click', () => {
         const sel = table.getSelectedRows();
-        if (sel.length && sel.every(isDuckRow)) queueDuckJobs('VIDEO', sel);
+        if (sel.length && sel.every(isMjlabRow)) queueDuckJobs('VIDEO', sel);
       });
 
       addJobsBtn.addEventListener('click', () => {
         const sel = table.getSelectedRows();
         if (!sel.length) return;
-        if (sel.some(isDuckRow)) {
-          if (sel.every(isDuckRow)) queueDuckJobs('EVAL', sel);
+        if (sel.some(isMjlabRow)) {
+          if (sel.every(isMjlabRow)) queueDuckJobs('EVAL', sel);
           return;
         }
         // Heads-up before opening the modal: any selected model that
@@ -2046,7 +2047,7 @@
       }
 
       function computeCompat(model, envSpecsByRobot) {
-        if (isDuckRow(model)) return computeDuckCompat(model);
+        if (isMjlabRow(model)) return computeDuckCompat(model);
         const envSpec = envSpecsByRobot.get(String(model.robot_type || ''));
         // We need the model's recorded specs to make any claim; anything
         // missing renders as "?".
@@ -2154,7 +2155,7 @@
           if (e && e.robot_type) envSpecsByRobot.set(String(e.robot_type), e);
         }
         return models.map((m) => {
-          if (isDuckRow(m)) {
+          if (isMjlabRow(m)) {
             const compat = computeDuckCompat(m);
             const evalAt = m.eval_at ? Date.parse(m.eval_at) : NaN;
             return Object.assign({}, m, {

@@ -105,8 +105,8 @@
                 class="px-2 py-1 text-sm rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400">×</button>
       </div>
       <div class="px-6 py-6 overflow-y-auto">
-        <!-- Robot switcher: the car and the MicroDuck have different job
-             fields, so each gets its own form. -->
+        <!-- Robot switcher: the car and the mjlab robots have different job
+             fields, so each engine gets its own form. -->
         <div class="grid grid-cols-[minmax(140px,max-content)_1fr] gap-4 items-center mb-4">
           <label for="f-robot" class="text-xs font-medium text-slate-600 dark:text-slate-300">Robot</label>
           <select id="f-robot" class="w-full input-base appearance-none select-chevron pr-8">
@@ -132,7 +132,7 @@
 
           <label for="d-gym" data-duck="TRAIN" class="text-xs font-medium text-slate-600 dark:text-slate-300">Task</label>
           <select id="d-gym" data-duck="TRAIN" class="w-full input-base appearance-none select-chevron pr-8">
-            <option value="">Pick a MicroDuck task</option>
+            <option value="">Pick a task</option>
           </select>
 
           <label for="d-reward-design" data-duck="TRAIN" class="text-xs font-medium text-slate-600 dark:text-slate-300"
@@ -142,7 +142,7 @@
           </select>
 
           <label for="d-experiment-design" data-duck="TRAIN" class="text-xs font-medium text-slate-600 dark:text-slate-300"
-                 title="PPO, network and environment settings; author designs on the Experiment Design tab with Robot = MicroDuck. Values typed below win over the design's.">Experiment design</label>
+                 title="PPO, network and environment settings; author designs on the Experiment Design tab with the same Robot picked. Values typed below win over the design's.">Experiment design</label>
           <select id="d-experiment-design" data-duck="TRAIN" class="w-full input-base appearance-none select-chevron pr-8">
             <option value="">Task default (no experiment design)</option>
           </select>
@@ -156,7 +156,7 @@
           <label for="d-model" data-duck="EVAL EXPORT VIDEO" class="hidden text-xs font-medium text-slate-600 dark:text-slate-300"
                  title="EVAL/EXPORT use this checkpoint; VIDEO renders the checkpoints of the TRAIN job that produced it.">Model</label>
           <select id="d-model" data-duck="EVAL EXPORT VIDEO" class="hidden w-full input-base appearance-none select-chevron pr-8">
-            <option value="">Pick a MicroDuck model</option>
+            <option value="">Pick a model</option>
           </select>
 
           <label for="d-num-envs" data-duck="TRAIN" class="text-xs font-medium text-slate-600 dark:text-slate-300"
@@ -642,21 +642,21 @@
       // duck_checkpoint where car jobs carry course_type / num_iterations /
       // location, so the shared columns read whichever the row's robot writes.
       const { robots, trainingMedia } = window.RoboracerUI;
-      const isDuckRow = (r) => robots.isMjlab(r);
+      const isMjlabRow = (r) => robots.isMjlab(r);
       const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
         .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
       const mutedCell = (text, tip) => '<span class="text-xs text-slate-500 dark:text-slate-400"'
         + (tip ? ` title="${tip}"` : '') + '>' + text + '</span>';
       const iterationsFor = (r) => {
-        const v = isDuckRow(r) ? r.max_iterations : r.num_iterations;
+        const v = isMjlabRow(r) ? r.max_iterations : r.num_iterations;
         const n = Number(v);
         return v === '' || v == null || !Number.isFinite(n) || n <= 0 ? null : n;
       };
-      const locationFor = (r) => (isDuckRow(r)
+      const locationFor = (r) => (isMjlabRow(r)
         ? (r.duck_checkpoint || r.openbeni_checkpoint || r.checkpoint_path || r.checkpoint || r.onnx_location || '')
         : (r.location || ''));
       const courseFor = (r) => {
-        if (isDuckRow(r)) {
+        if (isMjlabRow(r)) {
           const prefix = robots.id(r) + ':';
           const raw = String(r.task_id || r.gym_id || '');
           return raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
@@ -770,12 +770,12 @@
           // values for both; the formatters render those as em-dash.
           { key: 'reward_design_name', label: 'Reward design', sortable: true, filter: true,
             sortValue: (r) => r.reward_design_name || '',
-            render: (_v, row) => (isDuckRow(row) && !row.reward_design_name && row.job_type === 'TRAIN'
+            render: (_v, row) => (isMjlabRow(row) && !row.reward_design_name && row.job_type === 'TRAIN'
               ? mutedCell('task default', "No reward design: the task's own reward terms.")
               : formatters.rewardDesignBadge(row, { noTruncate: true })) },
           { key: 'experiment_design_name', label: 'Experiment design', sortable: true, filter: true,
             sortValue: (r) => r.experiment_design_name || '',
-            render: (_v, row) => (isDuckRow(row) && !row.experiment_design_name && row.job_type === 'TRAIN'
+            render: (_v, row) => (isMjlabRow(row) && !row.experiment_design_name && row.job_type === 'TRAIN'
               ? mutedCell('task default', "No experiment design: the task's own PPO settings.")
               : formatters.experimentDesignBadge(row, { noTruncate: true })) },
           // Course the job trains against. Stamped on the job doc by the
@@ -790,17 +790,17 @@
             sortValue: courseFor,
             render: (_v, row) => {
               const c = courseFor(row);
-              if (isDuckRow(row) && !c) return mutedCell('—');
+              if (isMjlabRow(row) && !c) return mutedCell('—');
               const isNoHint = c === 'donut_no_hint';
               const isCamera = c === 'donut_camera' || c === 'donut_camera_no_rays';
-              const cls = isDuckRow(row)
+              const cls = isMjlabRow(row)
                 ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
                 : isCamera
                 ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
                 : isNoHint
                 ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
                 : 'bg-slate-500/15 text-slate-300 border-slate-500/30';
-              const label = isDuckRow(row) ? c.replace(/^Mjlab-/, '').replace(/-MicroDuck\b/, '') : c;
+              const label = isMjlabRow(row) ? c.replace(/^Mjlab-/, '').replace(/-MicroDuck\b/, '') : c;
               return '<span class="inline-flex items-center px-2 py-0.5 rounded-full '
                 + 'text-[11px] font-medium border ' + cls + '" title="'
                 + esc(c) + '">' + esc(label) + '</span>';
@@ -810,9 +810,9 @@
           // build folder visible; the full path is in the tooltip.
           // Duck gyms are mjlab tasks with no executable; show the gym name.
           { key: 'gym_file_path', label: 'Gym', sortable: true, filter: true,
-            sortValue: (r) => (isDuckRow(r) ? r.gym_name || '' : r.gym_file_path || ''),
+            sortValue: (r) => (isMjlabRow(r) ? r.gym_name || '' : r.gym_file_path || ''),
             render: (v, row) => {
-              if (isDuckRow(row)) {
+              if (isMjlabRow(row)) {
                 return row.gym_name ? '<span class="text-xs text-slate-600 dark:text-slate-300">'
                   + esc(row.gym_name) + '</span>' : mutedCell('—');
               }
@@ -854,7 +854,7 @@
             render: (_v, row) => {
               const n = iterationsFor(row);
               if (n === null) {
-                return isDuckRow(row) && row.job_type === 'TRAIN'
+                return isMjlabRow(row) && row.job_type === 'TRAIN'
                   ? mutedCell('def', 'Task default iteration count') : '—';
               }
               // text-slate-50 (near-white) for high contrast against
@@ -867,7 +867,7 @@
           { key: 'num_trials',       label: 'Trials',   sortable: true,  filter: false,
             sortValue: (row) => Number(row.num_trials) || 0,
             render: (v, row) => {
-              if (row.job_type !== 'EVAL' || isDuckRow(row)) return '—';
+              if (row.job_type !== 'EVAL' || isMjlabRow(row)) return '—';
               const n = Number(v);
               return Number.isFinite(n) && n > 0
                 ? '<span class="font-mono text-xs tabular-nums text-slate-50">' + n + '</span>'
@@ -876,7 +876,7 @@
           { key: 'num_eval_episodes', label: 'Eps/trial', sortable: true, filter: false,
             sortValue: (row) => Number(row.num_eval_episodes) || 0,
             render: (v, row) => {
-              if (row.job_type !== 'EVAL' || isDuckRow(row)) return '—';
+              if (row.job_type !== 'EVAL' || isMjlabRow(row)) return '—';
               const n = Number(v);
               return Number.isFinite(n) && n > 0
                 ? '<span class="font-mono text-xs tabular-nums text-slate-50">' + n + '</span>'
@@ -885,7 +885,7 @@
           { key: 'max_goals_per_episode', label: 'Goal cap', sortable: true, filter: false,
             sortValue: (row) => Number(row.max_goals_per_episode) || 0,
             render: (v, row) => {
-              if (row.job_type !== 'EVAL' || isDuckRow(row)) return '—';
+              if (row.job_type !== 'EVAL' || isMjlabRow(row)) return '—';
               const n = Number(v);
               return Number.isFinite(n) && n > 0
                 ? '<span class="font-mono text-xs tabular-nums text-slate-50">' + n + '</span>'
@@ -1458,10 +1458,10 @@
         }
       });
 
-      /* ---------- MicroDuck job form ---------------------------
+      /* ---------- mjlab job form (MicroDuck, OpenBeni) ------------
        *
-       * Duck jobs are picked up by rl_agent/duck/worker.py; their fields are
-       * documented in rl_agent/duck/launch.py. /add_job stamps robot and
+       * Picked up by each robot's worker (rl_agent/duck, rl_agent/openbeni, on
+       * mjlab_core); fields are documented in mjlab_core/launch.py. /add_job stamps robot and
        * task_id from the gym, but the form sets both so EVAL/EXPORT/VIDEO
        * (which have no gym) route the same way.
        * ----------------------------------------------------- */
@@ -1505,8 +1505,15 @@
         const it = m.training_iterations != null ? `it ${m.training_iterations}` : '';
         const design = [m.reward_design_name, m.experiment_design_name].filter(Boolean)
           .map((n) => ` \u00b7 ${n}`).join('');
-        return `${m.task_id || '?'} \u00b7 ${it}${design} \u00b7 job \u2026${String(m.job_id || '').slice(-6)}`;
+        const source = m.job_id ? `job \u2026${String(m.job_id).slice(-6)}` : 'no training job (imported)';
+        return `${m.task_id || '?'} \u00b7 ${it}${design} \u00b7 ${source}`;
       }
+
+      // Task the form starts on: the robot's first curriculum stage.
+      const DEFAULT_MJLAB_GYM = {
+        microduck: 'microduck:Mjlab-Velocity-Flat-MicroDuck',
+        openbeni: 'openbeni:Beni-Velocity-Flat',
+      };
 
       async function loadDuckPickers() {
         const robot = robotEl.value || 'microduck';
@@ -1533,9 +1540,9 @@
         ]);
         const gymSel = document.getElementById('d-gym');
         if (!gymSel.value) {
-          const walk = [...gymSel.options].find((o) => o.value === 'microduck:Mjlab-Velocity-Flat-MicroDuck');
-          if (walk) {
-            gymSel.value = walk.value;
+          const first = [...gymSel.options].find((o) => o.value === DEFAULT_MJLAB_GYM[robot]);
+          if (first) {
+            gymSel.value = first.value;
             await preselectWarmStart();
           }
         }
