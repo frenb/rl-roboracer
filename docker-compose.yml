@@ -334,6 +334,35 @@ services:
     networks:
       default:
 
+  # ---- Curriculum runner --------------------------------------------------
+  #
+  # Chains curriculum runs (rl_agent/curriculum, docs/curriculum-builder-plan.md):
+  # queues each stage's TRAIN job, a gate EVAL job after it, then the next
+  # stage. Mongo only; the robot workers run the jobs. Safe to restart at any
+  # time: run state lives in curriculum_runs and every job it queues is keyed.
+  curriculum-runner:
+    image: ${IMAGE_PREFIX:-}curriculum_runner:latest
+    build:
+      context: ./docker/curriculum_runner
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    environment:
+      - MONGO_URL=${MONGO_URL:-mongodb://root:${MONGO_ROOT_PASSWORD:-example}@mongo:27017/}
+      - DATABASE_NAME=robotaxi
+    volumes:
+      - type: bind
+        source: ./rl_agent
+        target: /python_ws/src
+        read_only: true
+      - type: bind
+        source: ./robots
+        target: /robots
+        read_only: true
+    networks:
+      default:
+
   # See:
   #   docker/madscientist/Dockerfile            - container image
   #   docker/madscientist/entrypoint.sh         - boot + gating
