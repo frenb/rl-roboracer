@@ -15,6 +15,16 @@ import sys
 REQUIRED_FIELDS = ("id", "display_name", "morphology", "engine", "checkpoint_format", "supports")
 REQUIRED_SUPPORTS = ("eval", "export", "video", "weakness_map", "demos", "unity_clients")
 DEFAULT_ROBOT_ID = "roboracer"
+CARRY_ITEMS = ("weights", "optimizer", "entropy", "normalizer", "replay", "jsrl_guide")
+CURRICULUM_DEFAULTS = {
+    "enabled": False,
+    "budget_field": None,
+    "checkpoint_field": None,
+    "carry": [],
+    "carry_atomic": False,
+    "early_stop": False,
+    "gate_metrics": [],
+}
 
 
 class RobotManifestError(ValueError):
@@ -160,6 +170,24 @@ def validate_manifest(doc: dict, source: str = "<manifest>") -> dict:
     out.setdefault("default_job_types", ["TRAIN", "EVAL"])
     out.setdefault("deploy_shapes", {})
     out.setdefault("assets", {})
+    out["curriculum"] = _curriculum_block(out.get("curriculum"), source)
+    return out
+
+
+def _curriculum_block(block, source):
+    if block is None:
+        block = {}
+    if not isinstance(block, dict):
+        raise RobotManifestError(f"{source}: 'curriculum' must be a mapping")
+    out = {**copy.deepcopy(CURRICULUM_DEFAULTS), **copy.deepcopy(block)}
+    unknown = [c for c in out["carry"] if c not in CARRY_ITEMS]
+    if unknown:
+        raise RobotManifestError(f"{source}: curriculum.carry has unknown items {unknown}; "
+                                 f"known: {list(CARRY_ITEMS)}")
+    if out["enabled"] and not out["budget_field"]:
+        raise RobotManifestError(f"{source}: curriculum.enabled needs curriculum.budget_field")
+    if out["enabled"] and out["carry"] and not out["checkpoint_field"]:
+        raise RobotManifestError(f"{source}: curriculum.carry needs curriculum.checkpoint_field")
     return out
 
 
@@ -233,7 +261,7 @@ def load_manifests(base_dir: Path | str | None = None) -> dict[str, dict]:
 
 def list_robots(base_dir: Path | str | None = None) -> list[dict]:
     manifests = load_manifests(base_dir)
-    order = {"roboracer": 0, "microduck": 1}
+    order = {"roboracer": 0, "microduck": 1, "openbeni": 2}
     return sorted(manifests.values(), key=lambda r: (order.get(r["id"], 10), r["id"]))
 
 

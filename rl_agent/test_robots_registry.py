@@ -17,7 +17,7 @@ def test_repo_manifests_load_and_validate():
     base = robots_dir if robots_dir.is_dir() else None
     robots = robots_registry.list_robots(base)
     ids = [r["id"] for r in robots]
-    assert ids == ["roboracer", "microduck"]
+    assert ids == ["roboracer", "microduck", "openbeni"]
 
     car = robots_registry.get_robot("roboracer", base)
     assert car["engine"] == "tf_agents_unity"
@@ -96,6 +96,33 @@ def test_seed_robots_upserts_into_mongo_like_collection():
     db = FakeDb()
     base = (REPO_ROOT / "robots") if (REPO_ROOT / "robots").is_dir() else None
     count = robots_registry.seed_robots(db, base_dir=base)
-    assert count == 2
-    assert set(db.robots.docs) == {"roboracer", "microduck"}
+    assert count == 3
+    assert set(db.robots.docs) == {"roboracer", "microduck", "openbeni"}
     assert db.robots.docs["microduck"]["engine"] == "mjlab_rsl_rl"
+
+
+def test_curriculum_blocks():
+    base = (REPO_ROOT / "robots") if (REPO_ROOT / "robots").is_dir() else None
+    beni = robots_registry.get_robot("openbeni", base)["curriculum"]
+    assert beni["enabled"] is True
+    assert beni["carry_atomic"] is True
+    assert beni["checkpoint_field"] == "openbeni_checkpoint"
+    assert "fall_rate" in beni["gate_metrics"]
+    assert robots_registry.get_robot("roboracer", base)["curriculum"]["enabled"] is False
+    assert robots_registry.get_robot("microduck", base)["curriculum"]["enabled"] is False
+
+
+def test_curriculum_block_defaults_and_errors():
+    doc = {
+        "id": "foo", "display_name": "Foo", "morphology": "quadruped",
+        "engine": "mjlab_rsl_rl", "checkpoint_format": "pt",
+        "supports": {c: False for c in robots_registry.REQUIRED_SUPPORTS},
+    }
+    assert robots_registry.validate_manifest(doc)["curriculum"] == robots_registry.CURRICULUM_DEFAULTS
+    with pytest.raises(robots_registry.RobotManifestError, match="unknown items"):
+        robots_registry.validate_manifest({**doc, "curriculum": {"carry": ["brain"]}})
+    with pytest.raises(robots_registry.RobotManifestError, match="budget_field"):
+        robots_registry.validate_manifest({**doc, "curriculum": {"enabled": True}})
+    with pytest.raises(robots_registry.RobotManifestError, match="checkpoint_field"):
+        robots_registry.validate_manifest(
+            {**doc, "curriculum": {"enabled": True, "budget_field": "max_iterations", "carry": ["weights"]}})

@@ -30,5 +30,11 @@ supports:
   reward_specs: true
   live_view: false
 
+# Curriculum builder (rl_agent/curriculum): off until the trainer can start a
+# job from another job's learner + replay state (curriculum plan, Track 1).
+curriculum:
+  enabled: false
+  budget_field: num_iterations
+
 assets:
   urdf: robots/jetracer/jetracer.urdf

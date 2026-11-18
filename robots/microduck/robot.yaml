@@ -33,5 +33,16 @@ supports:
   reward_specs: true
   live_view: true
 
+# Curriculum builder (rl_agent/curriculum): same mjlab worker as OpenBeni;
+# off until MicroDuck gets its own stage settings.
+curriculum:
+  enabled: false
+  budget_field: max_iterations
+  checkpoint_field: duck_checkpoint
+  carry: [weights, optimizer, entropy, normalizer]
+  carry_atomic: true
+  early_stop: false
+  gate_metrics: [fall_rate, mean_return, mean_episode_length, mean_reward_per_step]
+
 assets:
   mjcf: third_party/microduck_rl/src/mjlab_microduck/robot/microduck/robot_walk.xml
