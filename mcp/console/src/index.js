@@ -15,6 +15,7 @@ import * as madscientist from './tools/madscientist.js';
 import * as releases from './tools/releases.js';
 import * as weakness from './tools/weakness.js';
 import * as unity from './tools/unity.js';
+import * as curricula from './tools/curricula.js';
 
 export function createServer() {
   const server = new McpServer(
@@ -26,12 +27,14 @@ export function createServer() {
         + 'microduck (mjlab + PPO, run by the duck worker). Jobs, models, gyms, reward and experiment designs and logs take '
         + 'a robot argument; the weakness map, demos, releases and Unity tools are roboracer only. '
         + 'Ids may be given in full or as the last 8 characters the dashboard shows; designs and gyms also by name. '
+        + 'Curricula chain training stages as jobs (one TRAIN job per stage, gated by an EVAL job); see '
+        + 'get_curriculum_capabilities for which robots support them. '
         + 'Creating training jobs: pass only the settings the user gave. create_job answers needs_decision when the expert '
         + 'demos, iterations, reward design or experiment design are open or ambiguous; ask the user those questions, '
         + 'options with the recommended one first, and call again with their answers. Don\'t fill them in yourself.',
     },
   );
-  for (const group of [jobs, weakness, models, designs, gymsDemos, madscientist, releases, unity]) group.register(server);
+  for (const group of [jobs, weakness, models, designs, gymsDemos, madscientist, releases, unity, curricula]) group.register(server);
   return server;
 }
 

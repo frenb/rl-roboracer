@@ -65,7 +65,28 @@ export function jobRow(j) {
   const media = jobMedia(j);
   if (media) row.media = { ...media, training_clips: media.training_clips && media.training_clips.length };
   if (j.eval_error) row.eval_error = truncate(j.eval_error, 300);
+  if (j.curriculum_run_id) {
+    row.curriculum = compact(j, ['curriculum_run_id', 'curriculum_name', 'curriculum_stage_id', 'curriculum_attempt', 'curriculum_role']);
+  }
   return row;
+}
+
+/** Fold each curriculum run's jobs under one entry, placed where its newest job falls. */
+function groupByCurriculum(rows) {
+  const out = [];
+  const runs = new Map();
+  for (const row of rows) {
+    const runId = row.curriculum && row.curriculum.curriculum_run_id;
+    if (!runId) { out.push(row); continue; }
+    let group = runs.get(runId);
+    if (!group) {
+      group = { curriculum_run_id: runId, curriculum_name: row.curriculum.curriculum_name, robot: row.robot, jobs: [] };
+      runs.set(runId, group);
+      out.push(group);
+    }
+    group.jobs.push(row);
+  }
+  return out;
 }
 
 const byNewest = (a, b) => String(b._id).localeCompare(String(a._id));
@@ -149,9 +170,12 @@ export function register(server) {
       job_type: z.enum(ALL_JOB_TYPES).optional(),
       course_type: z.string().optional().describe('roboracer course.'),
       task_id: z.string().optional().describe('microduck mjlab task id (substring match).'),
+      curriculum_run: z.string().optional().describe('Only the jobs of this curriculum run (full id, see list_curriculum_runs).'),
+      group_curricula: z.boolean().optional().describe('Fold each curriculum run\'s jobs into one entry with a jobs list, '
+        + 'as the Jobs tab does. limit then counts entries.'),
       limit: z.number().int().min(1).max(500).optional().describe('Default 50.'),
     },
-  }, async ({ status, robot, job_type, course_type, task_id, limit = 50 }) => {
+  }, async ({ status, robot, job_type, course_type, task_id, curriculum_run, group_curricula, limit = 50 }) => {
     const all = await list('/get_jobs');
     const rows = all
       .filter((j) => !robot || robotOf(j) === robot)
@@ -159,6 +183,7 @@ export function register(server) {
       .filter((j) => !job_type || j.job_type === job_type)
       .filter((j) => !course_type || (!isDuck(j) && j.course_type === course_type))
       .filter((j) => !task_id || String(j.task_id || '').toLowerCase().includes(task_id.toLowerCase()))
+      .filter((j) => !curriculum_run || String(j.curriculum_run_id || '') === curriculum_run)
       .sort(byNewest);
     const counts = {};
     const robots = {};
@@ -166,7 +191,9 @@ export function register(server) {
       counts[j.status] = (counts[j.status] || 0) + 1;
       robots[robotOf(j)] = (robots[robotOf(j)] || 0) + 1;
     }
-    return { total_jobs: all.length, status_counts: counts, robot_counts: robots, matched: rows.length, jobs: rows.slice(0, limit).map(jobRow) };
+    const mapped = rows.map(jobRow);
+    const entries = group_curricula ? groupByCurriculum(mapped) : mapped;
+    return { total_jobs: all.length, status_counts: counts, robot_counts: robots, matched: rows.length, jobs: entries.slice(0, limit) };
   });
 
   defineTool(server, 'get_job', {
