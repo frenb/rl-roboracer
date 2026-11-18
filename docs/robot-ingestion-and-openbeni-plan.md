@@ -113,7 +113,7 @@ Add an `openbeni` target alongside `roboracer` and `microduck` so robot-agnostic
 
 ## Part 3: Remote Simulation
 
-**Goal:** run training jobs on rented cloud GPUs as well as on this PC, from the same queue, dashboard and console. Scope for now: the shared groundwork, then persistent remote workers for the mjlab robots (`openbeni`, `microduck`). Two follow-ons are out of scope until this works: per-job on-demand cloud containers (SkyPilot / RunPod / Modal), and moving the car off this PC (it needs headless Linux Unity gyms next to the trainer, because the 0.4 s lockstep over ROS-TCP + gRPC shouldn't cross a network).
+**Goal:** run training jobs on rented cloud GPUs as well as on this PC, from the same queue, dashboard and console. Scope for now: the shared groundwork, then remote workers for the mjlab robots (`openbeni`, `microduck`). These can be persistent rented pods (R2) or one Hugging Face Job per queued job (R3). Out of scope until these work: other on-demand platforms (SkyPilot / RunPod / Modal), and moving the car off this PC (it needs headless Linux Unity gyms next to the trainer, because the 0.4 s lockstep over ROS-TCP + gRPC shouldn't cross a network).
 
 ### What ties the stack to one machine today
 
@@ -141,8 +141,9 @@ Add an `openbeni` target alongside `roboracer` and `microduck` so robot-agnostic
    | Cloudflare R2 | No egress fees (checkpoints and videos get read back a lot); S3 API | Another account and credentials; storage billed monthly |
    | AWS S3 / GCS | Mature; same region as some GPU providers | Egress fees when the dashboard or this PC downloads artifacts |
    | MinIO on this PC | Free; data stays here; S3 API, so it can switch to R2 later | Remote jobs upload over this PC's home uplink; the PC must stay on for remote jobs to start or finish |
+   | Hugging Face Storage Buckets | HF Jobs mount them read-write (`-v hf://buckets/<ns>/<bucket>:/artifacts`), so R3 jobs write checkpoints as plain files | Not the S3 API: needs its own backend in `artifacts.py` (`huggingface_hub`); the dashboard must sync or proxy files to serve them |
 
-   Recommendation: write against the S3 API (`boto3`, and `@aws-sdk/client-s3` in the dashboard) so the backend is a config choice. Start with MinIO for development, and choose R2 once real remote runs show the artifact volume.
+   Recommendation: write against the S3 API (`boto3`, and `@aws-sdk/client-s3` in the dashboard) so the backend is a config choice. Start with MinIO for development, and choose R2 once real remote runs show the artifact volume. If R3 becomes the main remote path, add an HF Buckets backend instead of copying from bucket to S3.
 4. **Remote logs and curves.**
    - Workers append log lines to a capped `job_logs` collection (job id, seq, text). The dashboard's log panel and the console's `tail_trainer_log` read it, falling back to the local file for local jobs.
    - TensorBoard event files sync to the artifact store every N minutes and when the job ends. The dashboard pulls a job's events into `/tmp/tb_compare/<job>` on demand, which is the mechanism the Compare view already uses.
@@ -162,6 +163,27 @@ Add an `openbeni` target alongside `roboracer` and `microduck` so robot-agnostic
    - The worker exits after an idle timeout with no claimable work, and `up.sh` stops the pod.
    - The dashboard shows each host's uptime and estimated spend from its registered hourly rate.
 5. **Verify.** Rerun Phase E steps 2–3 on the remote host while a car job trains locally. Compare its returns and fall rate with the same job run locally (same seed), and check that EVAL and EXPORT of a remote checkpoint work from either host.
+
+### Phase R3: On-demand Hugging Face Jobs (mjlab robots)
+
+Hugging Face Jobs run a Docker image on a chosen GPU, billed per minute while starting or running. Prices as of Nov 2026:
+- `h200`: 1× H200 141 GB, 23 vCPU, $5/h, up to `h200x8` at $40/h.
+- `rtx-pro-6000`: 96 GB, $2.75/h.
+- `l40s`: $1.80/h.
+
+ZeroGPU Spaces are not an option: each GPU call is capped at about 2 minutes, with a daily quota.
+
+1. **Benchmark first.** Run the same `Beni-Velocity-Flat` TRAIN (fixed seed and iteration count) on `h200`, `rtx-pro-6000` and this PC. Raise `num_envs` (8k / 16k / 32k) where memory allows. Record iterations per hour, dollars per 1,000 iterations, and final return. Prefer `rtx-pro-6000` unless the H200 is clearly cheaper per iteration. The RTX also has full graphics, so EGL checkpoint clips render normally. The H200 is a compute GPU with minimal graphics hardware.
+2. **Dispatcher.** A `hf-dispatcher` service (or a `curriculum-runner` sibling) watches for `NOT_STARTED` jobs with `run_on: "hf"`.
+   - For each one it calls `huggingface_hub.run_job` with the trainer image at the job's git SHA, the flavor, and `--timeout` set from the iteration budget plus a margin (the default is 30 minutes).
+   - It passes the artifact bucket volume and secrets (`MONGO_URL`, Tailscale auth key).
+   - It stamps the job with `hf_job_id`, flavor and `claimed_by: hf/<job_id>`, and polls the HF job state, so a crashed or timed-out Job marks the queue job `FAILED` with the HF log tail.
+3. **Inside the Job.** The container starts Tailscale in userspace mode (no extra privileges) and runs the worker with `--job <id> --exit-when-done`, so it handles exactly that job and exits. It writes artifacts to the mounted bucket and logs through the R1 log path. Cancel and pause from the dashboard map to `cancel_job` on the HF side once the worker has checkpointed.
+4. **Fan-out.** Sweeps and curriculum stages queue several `run_on: "hf"` jobs. The dispatcher caps concurrent Jobs and dollars per day, and the dashboard shows running HF Jobs with their cost so far.
+
+*Done when:* a `Beni-Velocity-Flat` TRAIN queued with `run_on: "hf"` runs on HF Jobs while a car job trains locally, and its checkpoints, clips, logs and curves show up in the dashboard. An EVAL and an EXPORT of that checkpoint must also succeed, both on this PC and as a second HF Job.
+
+The car stays local: its Unity rendering needs a graphics-capable GPU, and its speed is limited by the 0.4 s lockstep and CPU-side physics, not by GPU size.
 
 ### Risks and open questions
 
