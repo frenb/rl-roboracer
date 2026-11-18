@@ -108,3 +108,64 @@ Add an `openbeni` target alongside `roboracer` and `microduck` so robot-agnostic
 1. Register and `EVAL` `open-beni`'s pretrained `policy.pt` as a reference baseline (`mean_return`, `fall_rate`).
 2. Run a short `Beni-Velocity-Flat` `TRAIN` job from the console → verify live logs, checkpoint clips/GIFs, `progress_video`, `EXPORT` (`.onnx` + `.mnn` validated by `onnxruntime`), and `EVAL`.
 3. Warm-start a `Beni-Jump-Flat` `TRAIN` job with `init_from` pointing to the Velocity checkpoint → verify `recovery_gate`, jump normalizer priming, jump curriculum, and ONNX/MNN export.
+
+---
+
+## Part 3: Remote Simulation
+
+**Goal:** run training jobs on rented cloud GPUs as well as on this PC, from the same queue, dashboard and console. Scope for now: the shared groundwork, then persistent remote workers for the mjlab robots (`openbeni`, `microduck`). Two follow-ons are out of scope until this works: per-job on-demand cloud containers (SkyPilot / RunPod / Modal), and moving the car off this PC (it needs headless Linux Unity gyms next to the trainer, because the 0.4 s lockstep over ROS-TCP + gRPC shouldn't cross a network).
+
+### What ties the stack to one machine today
+
+| Coupling | Where | Remote consequence |
+|---|---|---|
+| One GPU, strict FCFS across robots | `rl_agent/job_queue.py` `may_claim` (no robot may start while another robot's job is `IN_PROGRESS`) | A remote GPU would sit idle waiting for the local one. |
+| One worker per robot | `job_queue.beat` keys `db.workers` by robot id | A second `openbeni` worker overwrites the first one's heartbeat. |
+| Artifacts on a bind mount | `../saved_models` mounted into trainers, ROS servers and the dashboard; the dashboard's `/media` serving and `/delete_model` read it directly | Remote checkpoints, clips and ONNX/MNN files are invisible to the dashboard and to later jobs (EVAL, EXPORT, warm start, curriculum carry). |
+| Logs and TensorBoard on local volumes | The dashboard tails `/tmp/trainer.log` and per-robot `/shared_tmp/*_trainer.log`; TensorBoard reads `/tmp/active` and `/tmp/tb_compare` | No live log panel or curves for remote jobs. |
+| Code via bind mount | `./rl_agent` → `/python_ws/src` in every worker | A remote host needs the code shipped at a known commit. |
+| Mongo on the Compose network | `MONGO_URL` → `mongo:27017` | Remote workers need a private route to it. This is already just a connection string. |
+
+### Phase R1: Shared groundwork
+
+1. **Private network.** Join this PC and each remote host to a Tailscale tailnet. Remote workers use `MONGO_URL=mongodb://…@<pc-tailnet-name>:27017/`. Mongo is never exposed publicly; keep auth on and use a dedicated worker user with access to the `robotaxi` database only.
+2. **Hosts and capacity in the queue.**
+   - Workers register as `<robot>@<host>`, with `{robot, host, gpus, gpu_name, labels, last_seen}`.
+   - `may_claim` changes from "one job at a time overall" to "one job per GPU slot". A job can carry an optional `host` / `labels` constraint, and car jobs keep `host: local` implicitly.
+   - **Claims become atomic.** Today `MjlabWorker.next_job` only reads the queue, and treats any of the robot's `IN_PROGRESS` jobs as its own to resume. With two workers for one robot, the second would adopt the first's running job. Claiming changes to one `find_one_and_update` from `NOT_STARTED` to `IN_PROGRESS` that stamps `claimed_by`.
+   - Pause, resume and crash recovery only touch jobs whose `claimed_by` is that worker. A job whose worker's heartbeat has expired goes back to `NOT_STARTED` for any worker to take.
+3. **Artifact store.** A small `rl_agent/artifacts.py` (`put` / `get` / `url` / `delete`) behind one interface. Model records gain `artifact_uri` next to `location`. Workers upload checkpoints, clips, progress videos and ONNX/MNN files when each is written, and download inputs (warm-start checkpoint, EVAL / EXPORT checkpoint) into a local cache before use. The dashboard serves media through the store (signed URLs or a proxy) and deletes through it. Local jobs can keep writing to `../saved_models` with a `file://` URI, so the car path is unchanged. The backend is still open:
+
+   | Backend | Pros | Cons |
+   |---|---|---|
+   | Cloudflare R2 | No egress fees (checkpoints and videos get read back a lot); S3 API | Another account and credentials; storage billed monthly |
+   | AWS S3 / GCS | Mature; same region as some GPU providers | Egress fees when the dashboard or this PC downloads artifacts |
+   | MinIO on this PC | Free; data stays here; S3 API, so it can switch to R2 later | Remote jobs upload over this PC's home uplink; the PC must stay on for remote jobs to start or finish |
+
+   Recommendation: write against the S3 API (`boto3`, and `@aws-sdk/client-s3` in the dashboard) so the backend is a config choice. Start with MinIO for development, and choose R2 once real remote runs show the artifact volume.
+4. **Remote logs and curves.**
+   - Workers append log lines to a capped `job_logs` collection (job id, seq, text). The dashboard's log panel and the console's `tail_trainer_log` read it, falling back to the local file for local jobs.
+   - TensorBoard event files sync to the artifact store every N minutes and when the job ends. The dashboard pulls a job's events into `/tmp/tb_compare/<job>` on demand, which is the mechanism the Compare view already uses.
+5. **Images instead of bind mounts.** CI builds and pushes `beni_trainer` and `duck_trainer` images to GHCR, tagged with the git SHA. Each image bakes in `rl_agent` at that commit. The job (or worker) records which image ran it. Remote hosts pull by tag; local development keeps the bind mount.
+
+*Done when:* a second `openbeni` worker on this PC, started with a different host name and the store backend, can take a job from the queue alongside the local one; and its checkpoints, clips, logs and curves show up in the dashboard while the car trains.
+
+### Phase R2: Persistent remote mjlab workers (rented GPU)
+
+1. **Provider.** Choose a persistent-pod provider (RunPod, Lambda or Vast.ai) on a single RTX 4090 / L40S / A100-class GPU. mjlab with MuJoCo Warp needs CUDA 12.8 and a recent driver; check the driver version before committing. Compare hourly price against measured iterations per hour for `Beni-Velocity-Flat` on this PC's GPU.
+2. **Bootstrap.**
+   - A `scripts/remote/up.sh` starts Tailscale and pulls the image at the requested SHA.
+   - It then runs the worker with `MONGO_URL`, store credentials, `WORKER_HOST`, and `--robots openbeni,microduck`.
+   - It keeps the MuJoCo Warp kernel cache (`/root/.cache/warp`) on the pod's persistent volume, so restarts don't recompile.
+3. **Routing.** The New-job form and console `create_job` gain an optional "Run on" field (any / local / a specific host). Curriculum runs can set it for the whole run or per stage.
+4. **Cost guard.**
+   - The worker exits after an idle timeout with no claimable work, and `up.sh` stops the pod.
+   - The dashboard shows each host's uptime and estimated spend from its registered hourly rate.
+5. **Verify.** Rerun Phase E steps 2–3 on the remote host while a car job trains locally. Compare its returns and fall rate with the same job run locally (same seed), and check that EVAL and EXPORT of a remote checkpoint work from either host.
+
+### Risks and open questions
+
+- **Checkpoint size and traffic.** rsl_rl checkpoints are tens of MB, and the car's Reverb checkpoints are far larger (another reason the car stays local). Measure upload cost per job before choosing the store.
+- **Mongo over the tailnet.** Change streams (Jobs tab, curriculum runner) work over a VPN, but a remote worker that loses the link mid-job must keep training and catch up on status writes, not fail the job.
+- **Reproducibility across GPUs.** MuJoCo Warp results can differ across GPU models and drivers. Record `gpu_name` and the driver version on the job, and compare like with like on the leaderboard.
+- **Secrets.** Store credentials and the Tailscale auth key go into the provider's secret store, never into images or job documents.
