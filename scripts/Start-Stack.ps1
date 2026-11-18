@@ -62,6 +62,11 @@
     no Unity clients, so -Duck -SkipUnity brings up a duck-only session.
     Also opens the duck's live 3D view window (scripts/Watch-Duck.ps1).
 
+.PARAMETER Beni
+    Also start the beni-trainer service from compose/beni.yml (OpenBeni
+    training with mjlab >=1.6 on MuJoCo Warp). Off by default; no Unity
+    clients required (-Beni -SkipUnity is a Beni-only session).
+
 .PARAMETER SkipDuckViewer
     With -Duck, don't open the live 3D view window.
 

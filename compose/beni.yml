@@ -1,0 +1,65 @@
+# OpenBeni overlay: adds the beni-trainer service (mjlab >=1.6 + rsl_rl PPO RNN
+# on MuJoCo Warp) next to the roboracer stack. Opt-in:
+#
+#   docker compose -f docker-compose.yml -f compose/scale.yml -f compose/beni.yml up -d
+#
+# or `.\scripts\Start-Stack.ps1 -Beni`. Paths are relative to the repo root
+# (the first compose file's directory), as in compose/scale.yml.
+#
+# The container runs the openbeni job worker (rl_agent/openbeni/worker.py), which
+# claims robot="openbeni" jobs from the shared queue. Checkpoints land in
+# ../saved_models/openbeni/rsl_rl/<experiment>/<run>/ and per-job logs in
+# ../saved_models/openbeni/jobs/.
+
+services:
+  beni-trainer:
+    image: ${IMAGE_PREFIX:-}beni_trainer:latest
+    build:
+      context: ./third_party/open-beni
+      dockerfile: ../../docker/beni_trainer/Dockerfile
+    restart: unless-stopped
+    command: python -u /python_ws/src/openbeni/worker.py
+    stop_grace_period: 60s
+    environment:
+      - ROBOT_TYPE=openbeni
+      - DATABASE_NAME=robotaxi
+      - MONGO_URL=${MONGO_URL:-mongodb://root:${MONGO_ROOT_PASSWORD:-example}@mongo:27017/}
+      - WANDB_MODE=disabled
+      - GALLIUM_DRIVER=d3d12
+      - MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
+      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    devices:
+      - /dev/dxg
+    volumes:
+      - type: bind
+        source: /usr/lib/wsl
+        target: /usr/lib/wsl
+        read_only: true
+      - type: bind
+        source: ../saved_models/openbeni
+        target: /openbeni_rl/logs
+      - type: bind
+        source: ./rl_agent
+        target: /python_ws/src
+      - type: bind
+        source: ./robots
+        target: /robots
+        read_only: true
+      - type: volume
+        source: tmpdata
+        target: /shared_tmp
+      - type: volume
+        source: beni_warp_cache
+        target: /root/.cache/warp
+    shm_size: 8gb
+
+volumes:
+  beni_warp_cache:

@@ -331,8 +331,23 @@ def duck_lint(code, gym, library):
     return [] if r["ok"] else [r["error"]]
 
 
+BENI_SIGNALS = {
+    "progress": "track_linear_velocity / track_angular_velocity (velocity) or jump height progress",
+    "heading": "track_angular_velocity, or a term on base orientation / gimbal",
+    "speed": "the commanded velocity (or jump command) sets the target; reward tracking it",
+    "stability": "upright / orientation / angular-velocity penalties from beni_rl.mdp",
+    "termination": "the task ends episodes on falls, which forfeits the rest of the episode's "
+                   f"reward; a Never item met by that alone cites the term {EPISODE_END!r}",
+    "smoothness": "action_rate_l2 and related beni_rl terms",
+    "effort": "library terms on joint torques / wheel effort",
+    "clearance": "joint / wheel limit terms",
+    "contact": "recovery / jump contact terms from beni_rl.recovery and beni_rl.jump",
+    "time": "per-step terms already accrue every step of an episode",
+}
+
 MJLAB_TARGETS = {
     "microduck": ("a small bipedal robot", DUCK_SIGNALS),
+    "openbeni": ("a 7-DoF wheel-legged jumper", BENI_SIGNALS),
 }
 
 

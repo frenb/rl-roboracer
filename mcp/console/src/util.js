@@ -9,6 +9,7 @@ const REPO_ROBOTS_DIR = path.resolve(HERE, '../../../robots');
 const DEFAULT_META = {
   roboracer: { id: 'roboracer', engine: 'tf_agents_unity' },
   microduck: { id: 'microduck', engine: 'mjlab_rsl_rl' },
+  openbeni: { id: 'openbeni', engine: 'mjlab_rsl_rl' },
 };
 
 function loadRobotMeta() {

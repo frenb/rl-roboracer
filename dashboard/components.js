@@ -231,8 +231,8 @@
                        'hover:decoration-indigo-400 underline-offset-2 ' +
                        'cursor-pointer bg-transparent border-0 p-0 m-0 ' +
                        'whitespace-nowrap" ' +
-                'title="Click to view this ' + kind + ' design\'s ' +
-                       (kind === 'reward' ? 'source code.' : 'field overrides.') + '">' +
+                'title="Click to view this ' + kind + ' design' +
+                       (kind === 'reward' ? '.' : '\'s field overrides.') + '">' +
                        safeName + '</button>' +
         verPill + canonicalTag + '</span>';
     },
@@ -536,6 +536,12 @@
       badge_color: 'emerald', engine: 'mjlab_rsl_rl', checkpoint_format: 'pt',
       export_formats: ['onnx'], recurrent: false, course_label: 'Task', iter_label: 'Max iters',
       supports: { eval: true, export: true, video: true, weakness_map: false, demos: false, unity_clients: false, reward_specs: true, live_view: true },
+    },
+    {
+      id: 'openbeni', display_name: 'OpenBeni', morphology: 'wheel_legged',
+      badge_color: 'amber', engine: 'mjlab_rsl_rl', checkpoint_format: 'pt',
+      export_formats: ['onnx', 'mnn'], recurrent: true, course_label: 'Task', iter_label: 'Max iters',
+      supports: { eval: true, export: true, video: true, weakness_map: false, demos: false, unity_clients: false, reward_specs: true, live_view: false },
     },
   ];
   let _robotsList = DEFAULT_ROBOTS.slice();
@@ -1845,10 +1851,17 @@
     experiment_designs: { url: '/get_experiment_designs', pinned: 'experiment-default' },
   };
   const ROBOT_SCOPED_LISTS = new Set(['gyms', 'reward_designs', 'experiment_designs']);
-  // Seeded designs pinned first for non-car robots (rl_agent/duck/reward_design.py
-  // and experiment_design.py).
-  const ROBOT_PINNED = { reward_designs: 'microduck-passthrough',
-                         experiment_designs: 'microduck-experiment-default' };
+  // Seeded designs pinned first per mjlab robot (rl_agent/<robot>/{reward,experiment}_design.py).
+  const ROBOT_PINNED = {
+    microduck: {
+      reward_designs: 'microduck-passthrough',
+      experiment_designs: 'microduck-experiment-default',
+    },
+    openbeni: {
+      reward_designs: 'openbeni-passthrough',
+      experiment_designs: 'openbeni-experiment-default',
+    },
+  };
   const JOB_LIST_TTL_MS = 30000;
   const _jobListCache = new Map();
 
@@ -1899,7 +1912,9 @@
   async function loadJobListIntoSelect(kind, sel, { force = true, robot = 'roboracer' } = {}) {
     if (!sel) return;
     const src = JOB_LIST_SOURCES[kind];
-    const pinned = robot === 'roboracer' ? src.pinned : ROBOT_PINNED[kind];
+    const pinned = robot === 'roboracer'
+      ? src.pinned
+      : ((ROBOT_PINNED[robot] || ROBOT_PINNED.microduck || {})[kind]);
     const rows = await fetchJobList(kind, { force });
     while (sel.options.length > 1) sel.remove(1);
     const visible = rows

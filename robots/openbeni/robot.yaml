@@ -1,0 +1,40 @@
+# Declarative manifest for Mondo Robotics OpenBeni (wheel-legged jumper).
+# Published to db.robots at beni-worker startup and read by rl_agent/robots_registry.py.
+
+id: openbeni
+display_name: OpenBeni
+morphology: wheel_legged
+description: "7-DoF wheel-legged jumper with gimbal (mjlab >=1.6 + MuJoCo Warp / rsl_rl PPO RNN GRU-512 -> ONNX + MNN)"
+badge_color: amber
+
+engine: mjlab_rsl_rl
+worker_queue_id: openbeni
+models_dir: /openbeni_rl/logs
+saved_models_subdir: openbeni
+media_prefix: /openbeni_rl/logs/
+checkpoint_format: pt
+export_formats: [onnx, mnn]
+recurrent: true
+
+course_label: Task
+iter_label: Max iters
+default_job_types: [TRAIN, EVAL, EXPORT, VIDEO]
+
+deploy_shapes:
+  "Beni-": [40, 7]
+
+supports:
+  eval: true
+  export: true
+  video: true
+  weakness_map: false
+  demos: false
+  unity_clients: false
+  reward_specs: true
+  live_view: false
+
+assets:
+  urdf: third_party/open-beni/assets/beni_base/urdf/beni.urdf
+  mjcf: third_party/open-beni/assets/beni_base/mjcf/beni.xml
+  meshes: third_party/open-beni/assets/beni_base/meshes
+  motions: third_party/open-beni/assets/motions

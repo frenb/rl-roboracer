@@ -26,6 +26,7 @@ def summary(spec):
         "goal": spec.section("goal"),
         "robots": spec.robots,
         "microduck_task": spec.setting("microduck", "microduck_task"),
+        "openbeni_task": spec.setting("openbeni", "openbeni_task"),
         "statuses": spec.statuses(),
         "inputs_sha": {r: spec.inputs_sha(r) for r in spec.robots},
         "compiled": {r: {"code": c.code, "meta": c.meta, "edited": c.edited}

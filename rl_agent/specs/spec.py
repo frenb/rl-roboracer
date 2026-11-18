@@ -7,8 +7,9 @@ and the compiled code is kept in the same document:
     ---
     name: steady-progress
     kind: reward
-    robots: [roboracer, microduck]
+    robots: [roboracer, microduck, openbeni]
     microduck_task: Mjlab-Velocity-Flat-MicroDuck
+    openbeni_task: Beni-Velocity-Flat
     ---
     # Steady progress
 
@@ -40,11 +41,16 @@ import hashlib
 import re
 
 KIND = "reward"
-ROBOTS = ("roboracer", "microduck")
+ROBOTS = ("roboracer", "microduck", "openbeni")
 DEFAULT_MICRODUCK_TASK = "Mjlab-Velocity-Flat-MicroDuck"
+DEFAULT_OPENBENI_TASK = "Beni-Velocity-Flat"
 SECTIONS = ("Goal", "Encourage", "Discourage", "Never", "Success looks like")
 # Frontmatter keys that change what a robot's code compiles from.
-ROBOT_INPUT_KEYS = {"roboracer": (), "microduck": ("microduck_task",)}
+ROBOT_INPUT_KEYS = {
+    "roboracer": (),
+    "microduck": ("microduck_task",),
+    "openbeni": ("openbeni_task",),
+}
 
 _COMPILED_RE = re.compile(r"^##\s+Compiled:\s*(\S+)\s*$", re.M)
 _META_RE = re.compile(r"<!--\s*compiled\s+(.*?)-->", re.S)
@@ -92,6 +98,8 @@ class Spec:
     def setting(self, robot, key):
         if key == "microduck_task":
             return self.frontmatter.get(key) or DEFAULT_MICRODUCK_TASK
+        if key == "openbeni_task":
+            return self.frontmatter.get(key) or DEFAULT_OPENBENI_TASK
         return self.frontmatter.get(key)
 
     def status(self, robot):
@@ -278,28 +286,30 @@ def unusable_reason(design, strict):
     name = design.get("name") or design.get("_id")
     if status == "stale":
         return (f"reward design {name!r} is compiled from a reward spec whose prose changed since; "
-                "recompile it (or keep the old code) on the Reward Specs tab")
+                "recompile it (or keep the old code) on the Rewards tab")
     if status == "edited" and strict:
         return (f"reward design {name!r} has hand-edited code and strict mode is on; "
-                "recompile it on the Reward Specs tab or turn strict mode off")
+                "recompile it on the Rewards tab or turn strict mode off")
     return None
 
 
 TEMPLATE = """---
 name: steady-progress
 kind: reward
-robots: [roboracer, microduck]
+robots: [roboracer, microduck, openbeni]
 microduck_task: Mjlab-Velocity-Flat-MicroDuck
+openbeni_task: Beni-Velocity-Flat
 ---
 # Steady progress
 
 ## Goal
 Make progress toward the objective as fast as is safe: the next goal on the
-course for the car, the commanded walking velocity for the duck.
+course for the car, the commanded walking velocity for the duck, or the
+commanded locomotion / jump for OpenBeni.
 
 ## Encourage
 - Progress toward the objective. This matters most.
-- Staying pointed at the objective (heading for the car, velocity tracking for the duck).
+- Staying pointed at the objective (heading for the car, velocity tracking for the duck / Beni).
 
 ## Discourage
 - Jerky or wasteful control (a small penalty).
@@ -310,4 +320,5 @@ course for the car, the commanded walking velocity for the duck.
 ## Success looks like
 - roboracer: reaches goals quickly and finishes episodes without crashing.
 - microduck: tracks the commanded velocity for a whole episode without falling.
+- openbeni: tracks commanded velocity (and recovers / jumps when that task asks) without falling.
 """

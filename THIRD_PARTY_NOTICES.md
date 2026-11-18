@@ -25,6 +25,7 @@ projects), not files of this repository. Their own licence files apply.
 |---|---|---|---|
 | microduck_rl (Microduck RL training environments) | `third_party/microduck_rl` | Apache 2.0, except the STL meshes (below) | [pollen-robotics/microduck_rl](https://github.com/pollen-robotics/microduck_rl) |
 | microduck (Microduck robot runtime) | `third_party/microduck` | Apache 2.0 | [pollen-robotics/microduck](https://github.com/pollen-robotics/microduck) |
+| open-beni (OpenBeni wheel-legged jumper + mjlab tasks) | `third_party/open-beni` | MIT | [Mondo-Robotics/open-beni](https://github.com/Mondo-Robotics/open-beni) |
 
 The Microduck STL meshes (`third_party/microduck_rl/src/mjlab_microduck/robot/*/assets/*.stl`)
 are © Pollen Robotics under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/):

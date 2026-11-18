@@ -28,8 +28,8 @@ GYM = {"name": "Walk", "reward_defaults": [
 class FormatTest(unittest.TestCase):
     def test_template_parses_with_every_robot_missing(self):
         s = specs.parse(specs.TEMPLATE)
-        self.assertEqual(s.robots, ["roboracer", "microduck"])
-        self.assertEqual(s.statuses(), {"roboracer": "missing", "microduck": "missing"})
+        self.assertEqual(s.robots, ["roboracer", "microduck", "openbeni"])
+        self.assertEqual(s.statuses(), {"roboracer": "missing", "microduck": "missing", "openbeni": "missing"})
         self.assertEqual(specs.warnings(s), [])
 
     def test_compile_then_prose_edit_makes_it_stale(self):
@@ -49,7 +49,8 @@ class FormatTest(unittest.TestCase):
         text = specs.set_compiled(specs.TEMPLATE, "roboracer", CAR_CODE)
         text = specs.set_compiled(text, "microduck", DUCK_CODE)
         moved = text.replace("Mjlab-Velocity-Flat-MicroDuck", "Mjlab-Velocity-Rough-MicroDuck", 1)
-        self.assertEqual(specs.parse(moved).statuses(), {"roboracer": "fresh", "microduck": "stale"})
+        self.assertEqual(specs.parse(moved).statuses(),
+                         {"roboracer": "fresh", "microduck": "stale", "openbeni": "missing"})
 
     def test_hand_edit_is_detected_and_repin_keeps_it(self):
         text = specs.set_compiled(specs.TEMPLATE, "roboracer", CAR_CODE)
@@ -181,7 +182,7 @@ class CliTest(unittest.TestCase):
         t = self.run_cli({"op": "set_compiled", "text": t, "robot": "microduck", "code": DUCK_CODE})["text"]
         s = self.run_cli({"op": "parse", "text": t})
         self.assertTrue(s["ok"])
-        self.assertEqual(s["statuses"], {"roboracer": "missing", "microduck": "fresh"})
+        self.assertEqual(s["statuses"], {"roboracer": "missing", "microduck": "fresh", "openbeni": "missing"})
         self.assertEqual(self.run_cli({"op": "lint", "robot": "roboracer", "code": "x = 1"})["problems"][0][:12],
                          "Reward desig")
         self.assertFalse(self.run_cli({"op": "parse", "text": "nope"})["ok"])

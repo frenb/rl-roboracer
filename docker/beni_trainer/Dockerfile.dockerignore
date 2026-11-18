@@ -1,0 +1,8 @@
+web/node_modules
+web/dist
+web/.generated
+**/.git
+**/__pycache__
+**/*.pyc
+**/.venv
+**/logs
