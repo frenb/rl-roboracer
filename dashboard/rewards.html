@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en" class="dark h-full">
+<head>
+  <meta charset="utf-8">
+  <title>Rewards · rl-roboracer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/tailwind.init.js"></script>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 h-full overflow-hidden flex flex-col">
+  <header class="shrink-0 flex items-center gap-3 px-4 py-1.5 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+    <div class="inline-flex rounded-md border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 p-0.5 text-xs"
+         role="tablist" aria-label="Rewards mode">
+      <button type="button" role="tab" data-mode="specs"
+              class="px-3 py-1 rounded font-medium transition-colors">
+        Specs (Markdown)
+      </button>
+      <button type="button" role="tab" data-mode="designs"
+              class="px-3 py-1 rounded font-medium transition-colors">
+        Raw Designs (Python)
+      </button>
+    </div>
+    <span id="mode-hint" class="text-[11px] text-slate-500 dark:text-slate-400 truncate"></span>
+  </header>
+
+  <main class="flex-1 min-h-0 relative">
+    <iframe id="frame-specs" title="Reward Specs"
+            class="w-full h-full border-0 block"></iframe>
+    <iframe id="frame-designs" title="Raw Reward Designs"
+            class="w-full h-full border-0 hidden"></iframe>
+  </main>
+
+  <script>
+    (function () {
+      const HINTS = {
+        specs: 'Robot-agnostic Markdown specs compiled per robot into published reward designs.',
+        designs: 'Per-robot Python reward modules, task default terms, and library functions.',
+      };
+      const SRCS = {
+        specs: '/reward_specs.html?v=3&embedded=1',
+        designs: '/reward_designs.html?v=3&embedded=1',
+      };
+      const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+      const frames = {
+        specs: document.getElementById('frame-specs'),
+        designs: document.getElementById('frame-designs'),
+      };
+      const hintEl = document.getElementById('mode-hint');
+      let mode = 'specs';
+      let pendingDesignFocus = null;
+
+      function postRedraw(frame) {
+        try {
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: 'roboracer:redraw' }, '*');
+          }
+        } catch (_e) { /* ignore */ }
+      }
+
+      function forwardDesignFocus(frame) {
+        if (!pendingDesignFocus || !frame || !frame.contentWindow) return;
+        try {
+          frame.contentWindow.postMessage(pendingDesignFocus, '*');
+        } catch (_e) { /* ignore */ }
+      }
+
+      function setMode(next, opts) {
+        if (next !== 'specs' && next !== 'designs') next = 'specs';
+        mode = next;
+        if (!(opts && opts.skipPersist)) {
+          try { localStorage.setItem('rewards-view', mode); } catch (_e) { /* ignore */ }
+        }
+        const frame = frames[mode];
+        if (!frame.getAttribute('src')) {
+          frame.setAttribute('src', SRCS[mode]);
+        }
+        for (const [key, f] of Object.entries(frames)) {
+          f.classList.toggle('hidden', key !== mode);
+          f.classList.toggle('block', key === mode);
+        }
+        for (const btn of tabs) {
+          const active = btn.dataset.mode === mode;
+          btn.setAttribute('aria-selected', active ? 'true' : 'false');
+          btn.className = 'px-3 py-1 rounded font-medium transition-colors ' + (active
+            ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm'
+            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200');
+        }
+        hintEl.textContent = HINTS[mode];
+        postRedraw(frame);
+        if (mode === 'designs') forwardDesignFocus(frame);
+      }
+
+      for (const btn of tabs) {
+        btn.addEventListener('click', () => setMode(btn.dataset.mode));
+      }
+
+      frames.designs.addEventListener('load', () => {
+        forwardDesignFocus(frames.designs);
+        postRedraw(frames.designs);
+      });
+      frames.specs.addEventListener('load', () => postRedraw(frames.specs));
+
+      window.addEventListener('message', (ev) => {
+        const data = ev && ev.data;
+        if (!data || typeof data !== 'object') return;
+
+        if (data.type === 'roboracer:redraw') {
+          postRedraw(frames[mode]);
+          return;
+        }
+
+        if (data.type === 'roboracer:open-reward-design') {
+          pendingDesignFocus = {
+            type: 'roboracer:open-reward-design',
+            id: String(data.id || ''),
+            robot: data.robot ? String(data.robot) : undefined,
+            ts: Date.now(),
+          };
+          try {
+            sessionStorage.setItem(
+              'roboracer:rewards-focus',
+              JSON.stringify(pendingDesignFocus));
+          } catch (_e) { /* ignore */ }
+          setMode('designs', { skipPersist: false });
+          forwardDesignFocus(frames.designs);
+        }
+      });
+
+      // First-load fallback if GoldenLayout forwarded before this page
+      // installed its listener.
+      try {
+        const raw = sessionStorage.getItem('roboracer:rewards-focus');
+        if (raw) {
+          const cached = JSON.parse(raw);
+          if (cached && cached.id && (Date.now() - (cached.ts || 0)) < 15000) {
+            pendingDesignFocus = cached;
+          }
+          sessionStorage.removeItem('roboracer:rewards-focus');
+        }
+      } catch (_e) { /* ignore */ }
+
+      const params = new URLSearchParams(window.location.search);
+      const initial = pendingDesignFocus
+        ? 'designs'
+        : (params.get('mode') || localStorage.getItem('rewards-view') || 'specs');
+      setMode(initial, { skipPersist: !!pendingDesignFocus });
+    })();
+  </script>
+</body>
+</html>

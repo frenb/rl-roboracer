@@ -18,7 +18,7 @@
     <div class="flex flex-wrap items-center gap-3 px-5 py-4
                 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700
                 shadow-card relative z-[3] flex-shrink-0">
-      <h1 class="text-2xl font-semibold tracking-tight m-0 mr-3">Reward Specs</h1>
+      <h1 data-role="page-title" class="text-2xl font-semibold tracking-tight m-0 mr-3">Reward Specs</h1>
       <span data-role="count" class="text-xs font-medium text-slate-500 dark:text-slate-400"></span>
       <div class="flex flex-wrap gap-2 ml-auto items-center">
         <label class="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 select-none"
@@ -113,6 +113,11 @@
       const btnNew = $('[data-action="new"]'), btnSave = $('[data-action="save"]');
       const btnCompile = $('[data-action="compile"]'), btnArchive = $('[data-action="archive"]');
       const tabChipsEl = $('[data-role="tab-chips"]'), compiledHelpEl = $('[data-role="compiled-help"]');
+
+      if (new URLSearchParams(window.location.search).get('embedded') === '1') {
+        const pageTitle = $('[data-role="page-title"]');
+        if (pageTitle) pageTitle.hidden = true;
+      }
 
       let specs = [];
       let settings = { strict_generated: false };

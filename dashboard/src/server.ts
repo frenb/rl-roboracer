@@ -915,20 +915,30 @@ export const createServer = (config): express.Application => {
     res.sendFile(lb);
   });
 
-  // Reward Design tab. Same pattern as /jobs / /models / /analysis -
-  // the static HTML is also served by express.static so this clean
-  // route is convenience; the iframe in goldenlayout requests the
-  // .html file directly to side-step any rebuild-lag on this route.
+  // Rewards tab (Markdown specs + raw Python designs). Same pattern
+  // as /jobs / /models / /analysis - the static HTML is also served
+  // by express.static so this clean route is convenience; the iframe
+  // in goldenlayout requests the .html file directly to side-step
+  // any rebuild-lag on this route.
+  app.get('/rewards', (req, res) => {
+    const f: string = path.join(__dirname, '/../rewards.html');
+    res.sendFile(f);
+  });
+
   app.get('/reward_designs', (req, res) => {
     const f: string = path.join(__dirname, '/../reward_designs.html');
     res.sendFile(f);
   });
 
-  // Experiment Design tab. Sibling of /reward_designs above. The
-  // iframe in goldenlayout requests the .html file directly so the
-  // tab works the moment the static file lands on disk, without
-  // needing the dashboard container to be rebuilt to pick up this
-  // route.
+  app.get('/reward_specs', (req, res) => {
+    const f: string = path.join(__dirname, '/../reward_specs.html');
+    res.sendFile(f);
+  });
+
+  // Experiment Design tab. Sibling of /rewards above. The iframe in
+  // goldenlayout requests the .html file directly so the tab works
+  // the moment the static file lands on disk, without needing the
+  // dashboard container to be rebuilt to pick up this route.
   app.get('/experiment_designs', (req, res) => {
     const f: string = path.join(__dirname, '/../experiment_designs.html');
     res.sendFile(f);
@@ -1871,7 +1881,7 @@ export const createServer = (config): express.Application => {
   // ---- reward_designs CRUD ----------------------------------------
   //
   // User-authored reward function modules (see rl_agent/reward_designs.py
-  // for the contract). The dashboard's future Reward Design tab and the
+  // for the contract). The dashboard's Rewards tab (Raw Designs) and the
   // New-Job form's reward-design dropdown both consume these.
   //
   // /get_reward_designs       : list current designs (with NO_CHANGES short-
@@ -1974,7 +1984,7 @@ export const createServer = (config): express.Application => {
           return;
         }
         if (body.code !== undefined && result && result.matchedCount === 0) {
-          res.status(409).json({ error: "no such design, or it is compiled from a reward spec: edit the spec on the Reward Specs tab" });
+          res.status(409).json({ error: "no such design, or it is compiled from a reward spec: edit the spec on the Rewards tab (Specs)" });
           return;
         }
         console.log('reward_design updated', body._id, result);
@@ -2045,7 +2055,13 @@ export const createServer = (config): express.Application => {
     const fromCache = robotCache
       .filter((r) => r && r.supports && r.supports.reward_specs)
       .map((r) => String(r.id));
-    return fromCache.length ? fromCache : ['roboracer', 'microduck'];
+    return fromCache.length ? fromCache : ['roboracer', 'microduck', 'openbeni'];
+  }
+
+  function specTaskId(robot: string, summary: any): string {
+    if (robot === 'openbeni') return String(summary.openbeni_task || 'Beni-Velocity-Flat');
+    if (robot === 'microduck') return String(summary.microduck_task || 'Mjlab-Velocity-Flat-MicroDuck');
+    return String(summary.microduck_task || '');
   }
 
   async function lintSpecCode(robot: string, code: string, taskId: string): Promise<string[]> {
@@ -2147,7 +2163,7 @@ export const createServer = (config): express.Application => {
         return;
       }
       for (const robot of edited.robots) {
-        const problems = await lintSpecCode(robot, summary.compiled[robot].code, summary.microduck_task);
+        const problems = await lintSpecCode(robot, summary.compiled[robot].code, specTaskId(robot, summary));
         if (problems.length) {
           res.status(400).json({ error: `hand-edited ${robot} code does not load: ${problems.join('; ')}` });
           return;
@@ -2227,7 +2243,7 @@ export const createServer = (config): express.Application => {
     const pinned = await runDuckScript(SPEC_CLI, { op: 'repin', text: doc.text, robot });
     if (!pinned.ok) { res.status(400).json({ error: pinned.error }); return; }
     const summary = await runDuckScript(SPEC_CLI, { op: 'parse', text: pinned.text });
-    const problems = await lintSpecCode(robot, summary.compiled[robot].code, summary.microduck_task);
+    const problems = await lintSpecCode(robot, summary.compiled[robot].code, specTaskId(robot, summary));
     if (problems.length) { res.status(400).json({ error: `${robot} code does not load: ${problems.join('; ')}` }); return; }
     await storeSpecText({ _id: doc._id }, pinned.text, summary);
     res.json({ ok: true, summary });

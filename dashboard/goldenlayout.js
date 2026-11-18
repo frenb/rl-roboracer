@@ -60,7 +60,7 @@ var config = {
     //     view fills it.
     //   * Right column: sim controller logs (top) + a stack of all
     //     the data / config tabs (Jobs, Models, Leaderboard,
-    //     Analysis, Reward Design, Experiment Design).
+    //     Analysis, Rewards, Experiment Design).
     //
     // Why a stack on the left (not two separately-mounted iframes
     // stacked vertically): the user wants to see one TB view at a
@@ -214,22 +214,11 @@ var config = {
                     },
                     {
                       type: 'component',
-                      title: 'Reward Design',
+                      title: 'Rewards',
                       componentName: 'iframeComponent',
-                      // Same ".html" rationale as Analysis: served by
-                      // express.static the moment the file lands on
-                      // disk, so the iframe works without waiting for
-                      // a dashboard image rebuild that registers the
-                      // matching /reward_designs route.
-                      componentState: { src: "http://localhost/reward_designs.html?v=ws1", id: 'reward_designs' }
-                    },
-                    {
-                      type: 'component',
-                      title: 'Reward Specs',
-                      componentName: 'iframeComponent',
-                      // Robot-agnostic reward specs in Markdown; Mad
-                      // Scientist compiles each into per-robot reward designs.
-                      componentState: { src: "http://localhost/reward_specs.html?v=ws1", id: 'reward_specs' }
+                      // Unified Rewards tab: robot-agnostic Markdown specs
+                      // (default) + per-robot raw Python designs.
+                      componentState: { src: "http://localhost/rewards.html?v=2", id: 'rewards' }
                     },
                     {
                       type: 'component',
@@ -389,6 +378,57 @@ myLayout.init();
 window.addEventListener('message', function (ev) {
   const data = ev && ev.data;
   if (!data || typeof data !== 'object') return;
+
+  // Rewards tab deep-link: Jobs/Models (or a sibling page) posts
+  // {type:'roboracer:open-reward-design', id, robot?} and we activate
+  // the unified Rewards tab, then forward into its iframe so the
+  // shell switches to Raw Designs and selects the target.
+  if (data.type === 'roboracer:open-reward-design') {
+    const target = iframeRegistry['rewards']
+      || iframeRegistry['reward_designs']; // legacy layout fallback
+    if (!target) {
+      console.warn('Rewards tab not registered yet; ignoring open-reward-design');
+      return;
+    }
+    try {
+      const item = target.container.parent;
+      if (item && item.parent && typeof item.parent.setActiveContentItem === 'function') {
+        item.parent.setActiveContentItem(item);
+      }
+    } catch (err) {
+      console.error('Failed to activate Rewards tab:', err);
+    }
+    try {
+      sessionStorage.setItem(
+        'roboracer:rewards-focus',
+        JSON.stringify({
+          type: 'roboracer:open-reward-design',
+          id: String(data.id || ''),
+          robot: data.robot ? String(data.robot) : undefined,
+          ts: Date.now(),
+        }));
+    } catch (_e) { /* swallow */ }
+    try {
+      if (target.iframe && target.iframe.contentWindow) {
+        target.iframe.contentWindow.postMessage(data, '*');
+      }
+    } catch (err) {
+      console.error('Failed to forward open-reward-design to iframe:', err);
+    }
+    try {
+      const ifr = target.iframe;
+      if (ifr && !ifr.__roboracerRewardDeferred) {
+        ifr.__roboracerRewardDeferred = true;
+        ifr.addEventListener('load', function () {
+          try {
+            if (ifr.contentWindow) ifr.contentWindow.postMessage(data, '*');
+          } catch (_e) { /* swallow */ }
+        }, { once: true });
+      }
+    } catch (_err) { /* swallow */ }
+    return;
+  }
+
   if (data.type === 'roboracer:open-job') {
     const target = iframeRegistry['jobs'];
     if (!target) {

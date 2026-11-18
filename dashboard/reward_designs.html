@@ -33,7 +33,7 @@
                 bg-white dark:bg-slate-900
                 border-b border-slate-200 dark:border-slate-700
                 shadow-card relative z-[3] flex-shrink-0">
-      <h1 class="text-2xl font-semibold tracking-tight m-0 mr-3">Reward Design</h1>
+      <h1 data-role="page-title" class="text-2xl font-semibold tracking-tight m-0 mr-3">Reward Design</h1>
       <span data-role="design-count"
             class="text-xs font-medium text-slate-500 dark:text-slate-400"
             aria-live="polite"></span>
@@ -285,6 +285,12 @@ TERMS = {
       const duckLibrary  = document.querySelector('[data-role="duck-library"]');
 
       const { robots } = window.RoboracerUI;
+      const pageParams = new URLSearchParams(window.location.search);
+      const embedded = pageParams.get('embedded') === '1';
+      if (embedded) {
+        const titleEl = document.querySelector('[data-role="page-title"]');
+        if (titleEl) titleEl.hidden = true;
+      }
       let robot = localStorage.getItem('rd-robot') || 'roboracer';
       robots.populateSelect(robotSel, robot);
       robot = robotSel.value;
@@ -304,6 +310,9 @@ TERMS = {
       // on `editorState` only and don't write back into `designs` until
       // the save round-trips.
       let designs = [];
+      // Deep-link target from the unified Rewards shell / Jobs badge.
+      // Applied once designs have been polled in.
+      let pendingFocusId = pageParams.get('id') || null;
       // editorState: the form's current dirty contents. When `id` is
       // null we're authoring a brand-new design (POST /add); otherwise
       // we're editing an existing one (POST /update).
@@ -849,6 +858,7 @@ TERMS = {
             renderEditorEmpty();
           }
           renderList();
+          maybeApplyPendingFocus();
         } catch (err) {
           console.error(err);
           if (!designs.length) listEl.innerHTML =
@@ -857,6 +867,49 @@ TERMS = {
           pollInFlight = false;
         }
       }
+
+      function queueFocusDesign(designId, robotHint) {
+        if (!designId) return;
+        pendingFocusId = String(designId);
+        if (robotHint && String(robotHint) !== String(robot)) {
+          robot = String(robotHint);
+          robotSel.value = robot;
+          try { localStorage.setItem('rd-robot', robot); } catch (_e) { /* ignore */ }
+          applyRobot();
+          renderList();
+        }
+        maybeApplyPendingFocus();
+      }
+
+      function maybeApplyPendingFocus() {
+        if (!pendingFocusId || !designs.length) return;
+        const id = String(pendingFocusId);
+        const design = designs.find((d) => String(d._id) === id);
+        if (!design) return;
+        // If the design belongs to another robot, switch first so the
+        // list filter doesn't hide the selection.
+        if (design.robot && String(design.robot) !== String(robot)) {
+          robot = String(design.robot);
+          robotSel.value = robot;
+          try { localStorage.setItem('rd-robot', robot); } catch (_e) { /* ignore */ }
+          applyRobot();
+          renderList();
+        }
+        pendingFocusId = null;
+        if (isDirty() || editorState.isNew) {
+          // Don't clobber in-progress edits from a deep-link.
+          return;
+        }
+        selectDesign(design);
+      }
+
+      window.addEventListener('message', (ev) => {
+        const data = ev && ev.data;
+        if (!data || typeof data !== 'object') return;
+        if (data.type === 'roboracer:open-reward-design') {
+          queueFocusDesign(data.id, data.robot);
+        }
+      });
 
       function handleWsChange(collection, change) {
         if (collection !== 'reward_designs') return;

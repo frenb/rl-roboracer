@@ -136,7 +136,7 @@
           </select>
 
           <label for="d-reward-design" data-duck="TRAIN" class="text-xs font-medium text-slate-600 dark:text-slate-300"
-                 title="Edits the task's reward terms; author designs on the Reward Design tab with Robot = MicroDuck.">Reward design</label>
+                 title="Edits the task's reward terms; author specs or raw designs on the Rewards tab.">Reward design</label>
           <select id="d-reward-design" data-duck="TRAIN" class="w-full input-base appearance-none select-chevron pr-8">
             <option value="">Task default (no reward design)</option>
           </select>
@@ -682,10 +682,9 @@
             render: (v) => formatters.robotTypeBadge(v || 'roboracer') },
           // Reward / Experiment design columns. Both names are stamped
           // on the job document at submit time by jobs.html's submit
-          // handler. Click the name to view the design's content via
-          // its own modal (reward = Python source from
-          // /get_reward_designs; experiment = field overrides table
-          // from /get_experiment_designs).
+          // handler. Click the reward name to open the Rewards tab on
+          // that design; click the experiment name for the field-
+          // overrides modal.
           //
           // Jobs submitted before the design-stamping feature have null
           // values for both; the formatters render those as em-dash.
@@ -1862,7 +1861,18 @@
           ev.stopPropagation();
           ev.preventDefault();
           const id = rdBtn.dataset.rewardDesignId;
-          if (id) openRewardDesignModal(id);
+          if (!id) return;
+          const row = (table._rows || []).find((r) => String(r.reward_design_id) === String(id));
+          try {
+            window.parent.postMessage({
+              type: 'roboracer:open-reward-design',
+              id: String(id),
+              robot: row && row.robot ? String(row.robot) : undefined,
+            }, '*');
+          } catch (err) {
+            console.warn('open-reward-design postMessage failed; falling back to modal', err);
+            openRewardDesignModal(id);
+          }
           return;
         }
         const edBtn = ev.target.closest('[data-action="view-experiment-design"]');
