@@ -6511,7 +6511,10 @@ def move_all_jobs_data(id, skip_current_cleanup=False):
             f"survive into main()).",
             flush=True)
     else:
-        move_data(id, folders=["eval", "metrics", "train", "learner"])
+        # eval_curve.csv is appended to, so a stale one would prefix the
+        # new run's curve with the previous attempt's rows.
+        move_data(id, folders=["eval", "metrics", "train", "learner",
+                               "jsrl_eval", "eval_curve.csv"])
 
 
 def archive_eval_active_dir(job_id):
@@ -6709,7 +6712,8 @@ def move_data(job_id, folders=[""]):
             src = os.path.join("/tmp/active/", str(job_id), folder)
             dst = os.path.join("/tmp/jobsdata/", str(job_id), folder)
         print(f"moving {src} to {dst}")
-        if os.path.isdir(src):
+        if os.path.exists(src):
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
             if os.path.isdir(dst):
                 print(f"  dst {dst} already exists from a previous run; replacing")
                 shutil.rmtree(dst)
