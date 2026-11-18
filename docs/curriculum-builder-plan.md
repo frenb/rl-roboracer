@@ -1,6 +1,6 @@
 # Curriculum Builder (cross-robot)
 
-**Status:** Planned. The OpenBeni track depends on `robot-ingestion-and-openbeni-plan.md` Phase E (an `openbeni` TRAIN → EXPORT → EVAL job working through the queue).
+**Status:** Phase 1 (core) done, Nov 17, 2026; see "Phases". The OpenBeni track depends on `robot-ingestion-and-openbeni-plan.md` Phase E (an `openbeni` TRAIN → EXPORT → EVAL job working through the queue).
 
 **Goal:** one cross-robot way to define and run a curriculum: an ordered list of training stages, each with a pass condition, that the platform trains stage by stage, advancing automatically. It replaces the car's `curriculum_stages` experiment-design field and is the only place curricula are authored, for `roboracer`, `openbeni` and later `microduck`. For OpenBeni it covers low-level control (balance, driving, running, jumping) up to obstacle avoidance and path planning.
 
@@ -181,6 +181,9 @@ Path planning starts classical (the planner produces waypoints, the learned poli
 ## Phases
 
 1. **Core.** Data model, validation (including `carry` rules), stage-schema publishing per robot, runner service, MCP tools, tested with fake jobs (no GPU). The Jobs-tab grouping (collapsible run rows) ships here too, before the first real chained runs add jobs to the table.
+   *Done (Nov 17, 2026):* `rl_agent/curriculum/` (model, runner, Mongo store, CLI, service; `test_curriculum.py` in CI), the `curriculum-runner` compose service, dashboard routes, console tools (`*_curriculum*`, `list_jobs` `group_curricula`), and Jobs-tab run rows with Cancel / Retry. Two departures from the text above:
+   - What a robot supports is declared in a `curriculum:` block of its `robots/<id>/robot.yaml` (enabled, budget unit, checkpoint field, restorable carry items, gate metrics, stage settings) rather than published by the worker. Only `openbeni` is enabled: its warm start restores the whole rsl_rl state, so carry is all-or-nothing there (`carry_atomic`), and it has no stage settings yet (phase 3). The car stays off until phase 2, so a car curriculum can't silently start each stage from scratch.
+   - With no early stop yet, a gated stage trains to its budget and is then judged by an EVAL job the runner queues on its checkpoint (`eval_results` against the gate); `consecutive > 1` is refused until a trainer supports early stop. A missed gate retries from the failed attempt's checkpoint with `on_fail.extra_budget`, then stops the run as `FAILED_GATE`.
 2. **Car migration (Track 1).** Seeded start with handoff restore, gate early stop, migration of the 4 designs, readers moved over, fields removed from the experiment-design schema. *Done when* the parity check passes and no code reads `curriculum_stages` from experiment designs.
 3. **OpenBeni low-level chain.** Command-range stage fields, velocity/recovery/jump metrics, seed `openbeni-lowlevel`. *Done when* a run goes from stage 1 to stage 4 unattended and its final model exports and evaluates.
 4. **Skill library + high-level environment.** Skill promotion, frozen low-level wrapper, `Beni-Nav-Goal-Flat` (stage 5).
