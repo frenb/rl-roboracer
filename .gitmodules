@@ -5,3 +5,6 @@
 [submodule "third_party/microduck"]
 	path = third_party/microduck
 	url = https://github.com/frenb/microduck.git
+[submodule "third_party/open-beni"]
+	path = third_party/open-beni
+	url = https://github.com/Mondo-Robotics/open-beni.git

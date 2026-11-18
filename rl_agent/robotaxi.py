@@ -1396,6 +1396,10 @@ def main(
     jsrl_tolerance_val=0.9,
     jsrl_max_horizon_val=0,
     jsrl_consecutive_val=2,
+    jsrl_window_val=0,
+    jsrl_gate_episodes_val=2,
+    jsrl_learner_scratch_val=0,
+    jsrl_eval_log_every_val=5,
     batch_size_val=256,
     critic_learning_rate_val=3e-5,
     actor_learning_rate_val=3e-5,
@@ -2612,6 +2616,14 @@ def main(
                           sample_batch_size=batch_size, num_steps=2).prefetch(5)
                       if demo_replay is not None else dataset)
         _critic_warmup_fn = _make_critic_warmup_fn(tf_agent, strategy, _warmup_ds)
+    # JSRL cold start (paper A.2.1, the Table 1 setting): BC trains the guide,
+    # then the learner goes back to these untrained weights.
+    _actor_init_weights = (
+        actor_net.get_weights()
+        if (int(jsrl_stages_val or 0) > 0
+            and int(jsrl_learner_scratch_val or 0) > 0
+            and not is_resume_val)
+        else None)
     if (_bc_steps > 0 or _critic_warmup_fn is not None) and not is_resume_val:
         collect_training_data.bc_pretrain_actor_net(
             actor_net=actor_net,
@@ -2641,6 +2653,7 @@ def main(
     # Jump-Start RL guide: a frozen copy of the BC actor, saved beside the
     # Learner checkpoint because on resume actor_net holds the learner.
     _jsrl_curriculum = None
+    _jsrl_train_gate = None
     _jsrl_guide_policy = None
     if int(jsrl_stages_val or 0) > 0:
         import jsrl
@@ -2659,16 +2672,30 @@ def main(
         else:
             _guide_net.set_weights(actor_net.get_weights())
             jsrl.save_guide(learner_dir, _guide_net)
+            if _actor_init_weights is not None:
+                actor_net.set_weights(_actor_init_weights)
         _jsrl_guide_policy = py_tf_eager_policy.PyTFEagerPolicy(
             _guide_tf_policy, use_tf_function=True)
         _jsrl_curriculum = jsrl.JsrlCurriculum(
             jsrl_stages_val, jsrl_tolerance_val,
-            consecutive=int(jsrl_consecutive_val or 2))
+            consecutive=int(jsrl_consecutive_val or 2),
+            window=int(jsrl_window_val or 0))
+        _jsrl_train_gate = (
+            jsrl.TrainingEpisodeGate(_jsrl_curriculum,
+                                     int(jsrl_gate_episodes_val or 1))
+            if _jsrl_curriculum.window > 0 else None)
+        if _jsrl_train_gate is not None:
+            _gate_desc = (
+                f"gate=collect episodes, {_jsrl_train_gate.episodes} per "
+                f"sample, moving average of {_jsrl_curriculum.window} vs best")
+        else:
+            _gate_desc = (f"gate=evals vs guide, consecutive="
+                          f"{_jsrl_curriculum.consecutive}")
         print(f"main: JSRL ENABLED (stages={int(jsrl_stages_val)}, "
-              f"tolerance={float(jsrl_tolerance_val)}, "
-              f"consecutive={_jsrl_curriculum.consecutive}, "
+              f"tolerance={float(jsrl_tolerance_val)}, {_gate_desc}, "
               f"max_horizon={int(jsrl_max_horizon_val or 0)}, "
-              f"guide={'restored' if is_resume_val else 'BC actor copy'})",
+              f"guide={'restored' if is_resume_val else 'BC actor copy'}, "
+              f"learner={'restored' if is_resume_val else 'from scratch' if _actor_init_weights is not None else 'BC actor copy'})",
               flush=True)
 
     # ---- Reverb table restore (resume path) --------------------------------
@@ -2789,7 +2816,8 @@ def main(
         steps_per_run=1,
         metrics=actor.collect_metrics(10),
         summary_dir=train_dir,
-        observers=[rb_observer, env_step_metric])
+        observers=[rb_observer, env_step_metric]
+                  + ([_jsrl_train_gate] if _jsrl_train_gate is not None else []))
 
     # On resume, re-seed the cumulative counters (EnvironmentSteps /
     # NumberOfEpisodes) from the pre-pause snapshot so their TensorBoard curves
@@ -2859,6 +2887,32 @@ def main(
         _jsrl_collect_policy.guide_steps = _jsrl_curriculum.guide_steps
         jsrl.save_state(learner_dir, _jsrl_curriculum)
 
+    def _jsrl_log_train_gate(step, sample, advanced):
+        """Log one collect-episode gate sample (and apply an advance)."""
+        _c = _jsrl_curriculum
+        _avg = _c.last_average
+        if advanced:
+            _jsrl_set_guide_steps()
+        else:
+            jsrl.save_state(learner_dir, _c)
+        tf.summary.scalar('jsrl/guide_steps', data=_c.guide_steps, step=step)
+        tf.summary.scalar('jsrl/stage', data=_c.stage, step=step)
+        tf.summary.scalar('jsrl/train_sample', data=sample, step=step)
+        if _c.best is not None:
+            tf.summary.scalar('jsrl/best_moving_average', data=_c.best,
+                              step=step)
+            tf.summary.scalar('jsrl/threshold', data=_c.threshold, step=step)
+        if _avg is not None:
+            tf.summary.scalar('jsrl/moving_average', data=_avg, step=step)
+        _avg_txt = "n/a" if _avg is None else f"{_avg:.3f}"
+        _best_txt = "n/a" if _c.best is None else f"{_c.best:.3f}"
+        print(f"JSRL train gate: train_step={step} sample={sample:.3f} "
+              f"moving_avg={_avg_txt} best={_best_txt} "
+              f"window={len(_c.samples)}/{_c.window} "
+              f"stage={_c.stage}/{_c.stages}"
+              f"{' ADVANCED -> guide_steps=' + str(_c.guide_steps) if advanced else ''}",
+              flush=True)
+
     if _jsrl_curriculum is not None:
         if is_resume_val and jsrl.load_state(learner_dir, _jsrl_curriculum):
             print(f"main: JSRL RESUME {_jsrl_curriculum.to_dict()}", flush=True)
@@ -2872,7 +2926,8 @@ def main(
                   f"AverageEpisodeLength={_g_len:.1f} -> horizon="
                   f"{_jsrl_curriculum.horizon} steps "
                   f"(cap={int(jsrl_max_horizon_val or 0)}), stage threshold="
-                  f"{_jsrl_curriculum.threshold:.3f}", flush=True)
+                  f"{'best moving average' if _jsrl_train_gate else f'{_jsrl_curriculum.threshold:.3f}'}",
+                  flush=True)
         _jsrl_set_guide_steps()
 
     # Triggers to save the agent's policy checkpoints.
@@ -3102,7 +3157,9 @@ def main(
             _save_if_new_best(metrics)
         else:
             print(
-                f"main: JSRL step-0 BC baseline={metrics['AverageReturn']:.4f} "
+                f"main: JSRL step-0 learner "
+                f"({'untrained' if _actor_init_weights is not None else 'BC'}) "
+                f"baseline={metrics['AverageReturn']:.4f} "
                 f"(not saved as model; max_avg_return stays at {max_avg_return:.4f} "
                 f"to track RL progress).",
                 flush=True)
@@ -3235,6 +3292,7 @@ def main(
                          if _eval_time_budgeted else 0.0)
     train_time_since_eval = 0.0
     last_eval_duration = None
+    _jsrl_eval_cycles = 0
     # Fixed training-time eval interval (seconds). When > 0 it takes precedence
     # over the time-fraction budget: eval fires after this many seconds of
     # TRAINING wall-clock (train_time_since_eval), giving a constant "eval every
@@ -3444,6 +3502,9 @@ def main(
         collect_start = time.time()
         collect_actor.run()
         collect_elapsed = time.time() - collect_start
+        if _jsrl_train_gate is not None:
+            for _sample, _advanced in _jsrl_train_gate.drain():
+                _jsrl_log_train_gate(train_step_before, _sample, _advanced)
 
         learner_start = time.time()
         loss_info = agent_learner.run(iterations=1)
@@ -3663,7 +3724,7 @@ def main(
             for name, value in timeout_counts.items():
                 tf.summary.scalar('timeouts/' + name, data=value, step=step)
             log_eval_metrics(step, metrics)
-            if _jsrl_curriculum is not None:
+            if _jsrl_curriculum is not None and _jsrl_train_gate is None:
                 _h = _jsrl_curriculum.guide_steps
                 if _h > 0:
                     _mix_ret, _ = _run_jsrl_eval(_h)
@@ -3687,6 +3748,22 @@ def main(
                       f"{_jsrl_curriculum.stages}"
                       f"{' ADVANCED -> guide_steps=' + str(_jsrl_curriculum.guide_steps) if _advanced else ''}",
                       flush=True)
+            elif (_jsrl_curriculum is not None
+                  and int(jsrl_eval_log_every_val or 0) > 0):
+                # Logging only: the train-episode gate decides stages, this
+                # keeps a deterministic guide+learner curve in 'jsrl_eval'.
+                _jsrl_eval_cycles += 1
+                _h = _jsrl_curriculum.guide_steps
+                if (_h > 0 and _jsrl_eval_cycles
+                        % int(jsrl_eval_log_every_val) == 0):
+                    _mix_ret, _mix_len = _run_jsrl_eval(_h)
+                    tf.summary.scalar('jsrl/mix_return', data=_mix_ret,
+                                      step=step)
+                    print(f"JSRL mix eval (logging only): train_step={step} "
+                          f"guide_steps={_h} mix_return={_mix_ret:.3f} "
+                          f"mix_length={_mix_len:.1f} "
+                          f"stage={_jsrl_curriculum.stage}/"
+                          f"{_jsrl_curriculum.stages}", flush=True)
             current_avg_return = metrics["AverageReturn"]
             avg_return_arr.append(current_avg_return)
             avg_return_arr = avg_return_arr[-100:]

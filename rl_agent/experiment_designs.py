@@ -202,6 +202,49 @@ SCHEMA = {
         "paper_ref": "2204.02372",
         "kwarg": "jsrl_consecutive_val",
     },
+    "jsrl_window": {
+        "type": "int",
+        "default": 0,
+        "min": 0, "max": 50,
+        "doc": ("JSRL stage gate on collect (training) episodes instead of extra evals, as in the paper's "
+                "A.4: a stage advances once the moving average of this many gate samples taken in the stage "
+                "is within jsrl_tolerance of the best moving average so far. Stage 0 (almost all guide) "
+                "advances on its first full window and never sets the best; stage 1's first window sets it. "
+                "Paper used 5 (D4RL) and 3 "
+                "(grasping). 0 = the eval gate (jsrl_consecutive evals vs the guide-alone return), which "
+                "adds a guide+learner eval to every eval cycle. jsrl_consecutive is unused when > 0."),
+        "paper_ref": "2204.02372",
+        "kwarg": "jsrl_window_val",
+    },
+    "jsrl_gate_episodes": {
+        "type": "int",
+        "default": 2,
+        "min": 1, "max": 100,
+        "doc": ("Collect episodes averaged into one jsrl_window gate sample. Only episodes that start and "
+                "end in the current stage count. Each stage needs at least jsrl_window x this many episodes."),
+        "paper_ref": "2204.02372",
+        "kwarg": "jsrl_gate_episodes_val",
+    },
+    "jsrl_learner_scratch": {
+        "type": "int",
+        "default": 0,
+        "min": 0, "max": 1,
+        "doc": ("1 = JSRL cold start: BC pretrain trains only the guide, and the learning actor starts from "
+                "untrained weights (the paper's Table 1 setting). 0 = the learner starts as a copy of the "
+                "BC actor (warm start)."),
+        "paper_ref": "2204.02372",
+        "kwarg": "jsrl_learner_scratch_val",
+    },
+    "jsrl_eval_log_every": {
+        "type": "int",
+        "default": 5,
+        "min": 0, "max": 100,
+        "doc": ("With jsrl_window > 0: run the deterministic guide+learner eval (TensorBoard run "
+                "'jsrl_eval', scalar jsrl/mix_return) every this many eval cycles, for logging only; it "
+                "never gates stages. Adds that eval's time to those cycles. 0 = off."),
+        "paper_ref": "2204.02372",
+        "kwarg": "jsrl_eval_log_every_val",
+    },
 
     "_section_replay": "Replay buffer",
     "replay_buffer_capacity": {
