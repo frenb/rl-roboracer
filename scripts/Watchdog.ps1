@@ -317,12 +317,21 @@ function Invoke-Recovery([string]$jobId, [string]$sig) {
     Write-WdLog "WEDGE detected: job=$jobId $sig -> starting recovery"
 
     # 1. graceful pause (best-effort checkpoint)
-    Invoke-Mongo "db.jobs.updateOne({_id:ObjectId('$jobId')},{`$set:{status:'PAUSE_REQUESTED'}})" | Out-Null
+    Invoke-Mongo "db.jobs.updateOne({_id:ObjectId('$jobId'),status:'IN_PROGRESS'},{`$set:{status:'PAUSE_REQUESTED'}})" | Out-Null
     $deadline = (Get-Date).AddSeconds(60)
     do {
         Start-Sleep -Seconds 5
         $st = (Invoke-Mongo "print(db.jobs.findOne({_id:ObjectId('$jobId')}).status)").Trim()
-    } while ($st -notmatch 'PAUSED' -and (Get-Date) -lt $deadline)
+    } while ($st -notmatch 'PAUSED|DONE|CANCELLED|FAILED' -and (Get-Date) -lt $deadline)
+    # A quiet log at the end of a job (final eval, progress video) reads as a
+    # silent hang; on 2026-11-17 the job finished mid-recovery, the trainer
+    # had already started the next job, and the reset below re-ran the
+    # finished one from scratch.
+    if ($st -match 'DONE|CANCELLED|FAILED') {
+        Write-WdLog "  job is $st (it ended on its own); skipping recovery."
+        $script:LastRestart = Get-Date
+        return
+    }
     if ($st -match 'PAUSED') { Write-WdLog "  job PAUSED (clean checkpoint)." }
     else { Write-WdLog "  pause not confirmed in 60s (trainer hung?); proceeding - crash-recovery will resume from the last auto-checkpoint." }
 
@@ -331,8 +340,8 @@ function Invoke-Recovery([string]$jobId, [string]$sig) {
     # and duck training down, and the watchdog never logged past it.
     Restart-RosAndClients
 
-    # 4. resume the job
-    Invoke-Mongo "db.jobs.updateOne({_id:ObjectId('$jobId')},{`$set:{status:'NOT_STARTED'}})" | Out-Null
+    # 4. resume the job, unless it reached a terminal status meanwhile
+    Invoke-Mongo "db.jobs.updateOne({_id:ObjectId('$jobId'),status:{`$in:['IN_PROGRESS','PAUSE_REQUESTED','PAUSED']}},{`$set:{status:'NOT_STARTED'}})" | Out-Null
 
     # 5. relaunch the trainer in the background
     Start-Trainer
