@@ -70,7 +70,7 @@
   // DevTools console which build of components.js is actually running.
   // Bump alongside the ?v=... query string in jobs/models/leaderboard/
   // analysis HTML when shipping a change to this file.
-  console.log('[RoboracerUI] components.js v20260920-job-dialogs loaded');
+  console.log('[RoboracerUI] components.js v20261117-curriculum-tree loaded');
 
   /* ---------- formatters ---------------------------------------- */
 
@@ -114,6 +114,11 @@
         FAILED: 'danger',
         PAUSED: 'warning',
         PAUSE_REQUESTED: 'warning',
+        // Curriculum run statuses (rl_agent/curriculum/runner.py).
+        RUNNING: 'info',
+        CANCEL_REQUESTED: 'warning',
+        PASSED: 'success',
+        FAILED_GATE: 'danger',
       })[status] || 'neutral';
       return badge(tone, status || '?');
     },
@@ -124,6 +129,7 @@
         DEMO: 'warning',
         EVAL: 'neutral',
         BC_TRAINING_ONLY: 'warning',
+        CURRICULUM: 'info',
       })[type] || 'neutral';
       return badge(tone, type || '?');
     },
@@ -776,6 +782,11 @@
    *   emptyMessage?: string             // default 'No data.'
    *   onRowClick?:   (row) => void
    *   rowClass?:     (row, ctx) => string
+   *   nestRows?:     (rows) => topLevelRows   // tree: children under `_children`;
+   *                                           // _rows stays the flat list given to setData
+   *   treeElementColumn?: string              // column key that shows the expand toggle
+   *   treeStartExpanded?: (row) => boolean    // until the user toggles that row
+   *   rowSelectable?: (row) => boolean        // selectable tables: rows that get a checkbox
    */
   class TableView {
     constructor(rootEl, options) {
@@ -816,7 +827,14 @@
         // table width. Grouped/accordion tables usually want
         // 'fitColumns' so the grid spans the full container width.
         layout: 'fitData',
+        nestRows: null,
+        treeElementColumn: null,
+        treeStartExpanded: null,
+        rowSelectable: null,
       }, options || {});
+      // Expand/collapse choices per row key, re-applied on every setData
+      // (replaceData rebuilds tree rows with their start state).
+      this._treeOpen = new Map();
 
       // Make the host fill its flex parent so Tabulator's internal
       // viewport has a defined height to scroll within. Every tab
@@ -895,6 +913,24 @@
         // is the checkbox column.
         selectable: this.opts.selectable ? true : false,
         selectableRangeMode: 'click',
+        ...(typeof this.opts.rowSelectable === 'function' ? {
+          selectableRowsCheck: (row) => {
+            try { return !!this.opts.rowSelectable(row.getData()); } catch (e) { return false; }
+          },
+        } : {}),
+        ...(typeof this.opts.nestRows === 'function' ? {
+          dataTree: true,
+          dataTreeChildField: '_children',
+          dataTreeChildIndent: 18,
+          dataTreeElementColumn: this.opts.treeElementColumn || false,
+          dataTreeStartExpanded: (row) => {
+            const data = row.getData();
+            const k = data.__rcRowKey;
+            if (this._treeOpen.has(k)) return this._treeOpen.get(k);
+            try { return !!(this.opts.treeStartExpanded && this.opts.treeStartExpanded(data)); }
+            catch (e) { return false; }
+          },
+        } : {}),
         // Pagination (callers can disable via pagination: false).
         pagination: this.opts.pagination !== false,
         paginationMode: 'local',
@@ -919,7 +955,7 @@
         persistence: (this.opts.persistColumnWidths === false)
           ? false
           : { columns: ['width'] },
-        rowFormatter: this.opts.rowClass ? this._buildRowFormatter() : undefined,
+        rowFormatter: (this.opts.rowClass || this.opts.rowSelectable) ? this._buildRowFormatter() : undefined,
         // Accordion-style grouping. Only set the group options when a
         // groupBy is supplied so non-grouped tables (Jobs / Models /
         // etc.) are unaffected. groupBy accepts a field name or a
@@ -1022,6 +1058,14 @@
             else this._openGroupKeys.delete(k);
           } catch (e) { /* ignore */ }
         });
+      }
+
+      if (typeof this.opts.nestRows === 'function') {
+        const remember = (open) => (row) => {
+          try { this._treeOpen.set(row.getData().__rcRowKey, open); } catch (e) { /* ignore */ }
+        };
+        this._tabulator.on('dataTreeRowExpanded', remember(true));
+        this._tabulator.on('dataTreeRowCollapsed', remember(false));
       }
 
       if (this.opts.selectable) {
@@ -1194,14 +1238,22 @@
 
     _buildRowFormatter() {
       const cb = this.opts.rowClass;
+      const selectableFn = this.opts.rowSelectable;
       return (row) => {
         let rowData;
         try { rowData = row.getData(); } catch (e) { return; }
         let isSelected = false;
         try { isSelected = !!row.isSelected(); } catch (e) {}
         let cls = '';
-        try { cls = cb(rowData, { isSelected }) || ''; } catch (e) {
-          console.error('rowClass callback threw:', e);
+        if (cb) {
+          try { cls = cb(rowData, { isSelected }) || ''; } catch (e) {
+            console.error('rowClass callback threw:', e);
+          }
+        }
+        if (typeof selectableFn === 'function') {
+          let ok = false;
+          try { ok = !!selectableFn(rowData); } catch (e) { /* treat as unselectable */ }
+          if (!ok) cls += ' rc-row-unselectable';
         }
         const el = row.getElement();
         // Track which classes WE added so we can remove them cleanly
@@ -1230,13 +1282,17 @@
       // selection persists across data updates. We always compute it
       // (cheap) so callers can pass anything through opts.rowKey.
       const keyFn = this.opts.rowKey;
-      const decorated = arr.map((r) => {
+      const decorate = (r) => {
         // Avoid mutating caller's object unless we have to. Spread
         // creates a shallow copy so the original row object the
         // caller keeps referencing isn't tagged with our key.
         const k = keyFn ? keyFn(r) : (r && (r._id || r.id));
-        return Object.assign({ __rcRowKey: String(k) }, r);
-      });
+        const out = Object.assign({ __rcRowKey: String(k) }, r);
+        if (Array.isArray(r && r._children)) out._children = r._children.map(decorate);
+        return out;
+      };
+      const top = typeof this.opts.nestRows === 'function' ? this.opts.nestRows(arr) : arr;
+      const decorated = top.map(decorate);
       if (!this._tabulator) return;
       // If tableBuilt hasn't fired yet, queue the data; Tabulator's
       // replaceData throws if called pre-init.

@@ -555,6 +555,11 @@ html.dark .tabulator .tabulator-row.tabulator-selected:hover {
 .tabulator .tabulator-header .tabulator-col.rc-select-col {
   padding: 0.5rem 0.25rem;
 }
+/* TableView rowSelectable: rows that can't be selected (e.g. a curriculum
+ * run's parent row on the Jobs tab) show no checkbox. */
+.tabulator .tabulator-row.rc-row-unselectable .tabulator-cell.rc-select-col input {
+  visibility: hidden;
+}
 /* Tabulator's titleFormatter renders into .tabulator-col-content;
  * we already zero its padding in the generic rule, but make extra
  * sure the inner element is centred and not constrained by the

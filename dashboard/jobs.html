@@ -571,7 +571,7 @@
        (Ctrl+Shift+R on the parent doesn't always force iframe
        subresources to re-fetch). Bump the version string whenever you
        change components.js. -->
-  <script src="/components.js?v=20261110-duck-media"></script>
+  <script src="/components.js?v=20261117-curriculum-tree"></script>
   <script>
     (function () {
       const { TableView, formatters, showToast, confirmDialog } = window.RoboracerUI;
@@ -588,7 +588,7 @@
         const ended   = row.ended_at   ? new Date(row.ended_at).getTime()   : null;
         if (!started) return null;
         if (ended) return Math.max(0, ended - started);
-        if (row.status === 'IN_PROGRESS') return Math.max(0, Date.now() - started);
+        if (row.status === 'IN_PROGRESS' || row.status === 'RUNNING') return Math.max(0, Date.now() - started);
         return null;  // started but not ended, not running -> crashed mid-way
       }
 
@@ -615,7 +615,7 @@
         if (ms === null) {
           return '<span class="font-mono tabular-nums text-right text-slate-500 dark:text-slate-400">—</span>';
         }
-        const isRunning = row.status === 'IN_PROGRESS' && !row.ended_at;
+        const isRunning = (row.status === 'IN_PROGRESS' || row.status === 'RUNNING') && !row.ended_at;
         const cls = 'duration-cell font-mono tabular-nums text-right ' +
                     (isRunning
                       ? 'text-indigo-300 font-medium'
@@ -653,7 +653,8 @@
         return v === '' || v == null || !Number.isFinite(n) || n <= 0 ? null : n;
       };
       const locationFor = (r) => (isDuckRow(r)
-        ? (r.duck_checkpoint || r.checkpoint_path || r.checkpoint || r.onnx_location || '') : (r.location || ''));
+        ? (r.duck_checkpoint || r.openbeni_checkpoint || r.checkpoint_path || r.checkpoint || r.onnx_location || '')
+        : (r.location || ''));
       const courseFor = (r) => {
         if (isDuckRow(r)) {
           const prefix = robots.id(r) + ':';
@@ -663,15 +664,94 @@
         return (r.course_type && r.course_type !== 'trainer default') ? r.course_type : 'donut';
       };
 
+      /* ---------- Curriculum runs ------------------------------
+       *
+       * A curriculum run's stage jobs (rl_agent/curriculum) fold under
+       * one parent row. Runs come from /get_curriculum_runs and the
+       * curriculum_runs change stream; a job whose run isn't known (not
+       * loaded yet, or deleted) shows as a plain row. table._rows stays
+       * the flat job list: TableView nests it on every setData.
+       */
+      const curriculumRuns = new Map();
+      const ACTIVE_RUN = new Set(['RUNNING', 'CANCEL_REQUESTED']);
+      const RETRYABLE_RUN = new Set(['FAILED_GATE', 'FAILED', 'CANCELLED']);
+
+      function curriculumParent(run, jobs) {
+        const stages = Array.isArray(run.stages) ? run.stages : [];
+        const results = Array.isArray(run.results) ? run.results : [];
+        const pendingId = run.pending ? String(run.pending.job_id) : '';
+        const pendingJob = jobs.find((j) => mongoId(j._id) === pendingId);
+        const partial = pendingJob && pendingJob.curriculum_role === 'train'
+          ? (Number(pendingJob.percent_complete) || 0) / 100 : 0;
+        const passed = new Set(results.filter((x) => x.passed).map((x) => x.stage_index)).size;
+        const stage = stages[run.stage_index];
+        const withCheckpoint = results.filter((x) => x.checkpoint);
+        return {
+          _id: `run:${mongoId(run._id)}`,
+          __curriculumRun: run,
+          job_type: 'CURRICULUM',
+          robot: run.robot,
+          status: run.status,
+          percent_complete: run.status === 'PASSED' ? 100
+            : Math.round(1000 * (passed + partial) / Math.max(1, stages.length)) / 10,
+          gym_name: stage ? `Stage ${run.stage_index + 1}/${stages.length}: ${stage.name}` : '',
+          task_id: pendingJob ? pendingJob.task_id : '',
+          checkpoint: withCheckpoint.length ? withCheckpoint[withCheckpoint.length - 1].checkpoint : '',
+          started_at: run.created_at,
+          ended_at: run.ended_at || null,
+          _children: jobs.slice().sort((a, b) => String(a._id).localeCompare(String(b._id))),
+        };
+      }
+
+      // Each run's row takes the place of its newest job; runs that have
+      // not queued a job yet go on top.
+      function nestCurriculumJobs(rows) {
+        const out = [];
+        const groups = new Map();
+        for (const r of rows) {
+          const runId = r.curriculum_run_id ? String(r.curriculum_run_id) : '';
+          const run = runId && curriculumRuns.get(runId);
+          if (!run) { out.push(r); continue; }
+          let g = groups.get(runId);
+          if (!g) { g = { run, jobs: [], at: out.length }; groups.set(runId, g); out.push(null); }
+          g.jobs.push(r);
+        }
+        for (const g of groups.values()) out[g.at] = curriculumParent(g.run, g.jobs);
+        const waiting = [...curriculumRuns.entries()]
+          .filter(([id, run]) => !groups.has(id) && ACTIVE_RUN.has(run.status))
+          .map(([, run]) => curriculumParent(run, []));
+        return waiting.concat(out);
+      }
+
+      function curriculumIdCell(run) {
+        const id = mongoId(run._id);
+        const stages = Array.isArray(run.stages) ? run.stages.length : 0;
+        const tip = esc(`Curriculum run ${id}` + (run.error ? `\n${run.error}` : ''));
+        const action = (op, label) => `<button type="button" data-action="curriculum-run" data-op="${op}" `
+          + `data-run-id="${esc(id)}" class="ml-2 px-1.5 py-0.5 rounded border border-slate-500/40 `
+          + `text-[11px] text-slate-200 hover:bg-slate-500/20">${label}</button>`;
+        return `<span class="text-xs font-semibold text-slate-100 whitespace-nowrap" title="${tip}">`
+          + `${esc(run.curriculum_name || 'Curriculum')}</span>`
+          + `<span class="ml-2 font-mono text-[11px] text-slate-400">${stages} stage${stages === 1 ? '' : 's'}`
+          + ` · …${esc(id.slice(-8))}</span>`
+          + (ACTIVE_RUN.has(run.status) && run.status !== 'CANCEL_REQUESTED' ? action('cancel', 'Cancel run') : '')
+          + (RETRYABLE_RUN.has(run.status) ? action('retry', 'Retry') : '');
+      }
+
       const tableHost = document.querySelector('[data-role="table"]');
       const table = new TableView(tableHost, {
         selectable: true,
         rowKey: (row) => row._id,
+        nestRows: nestCurriculumJobs,
+        treeElementColumn: '_id',
+        treeStartExpanded: (row) => !!row.__curriculumRun && ACTIVE_RUN.has(row.status),
+        rowSelectable: (row) => !row.__curriculumRun,
         pageSize: 25,
         emptyMessage: 'No jobs yet — create one to start training, evaluation, or demo collection.',
         columns: [
           { key: '_id',              label: 'ID',       sortable: true,  filter: true,
-            render: (v) => {
+            render: (v, row) => {
+              if (row.__curriculumRun) return curriculumIdCell(row.__curriculumRun);
               const s = String(v && (v.$oid || v));
               return `<span class="font-mono text-xs tabular-nums text-slate-200 dark:text-slate-200 whitespace-nowrap select-all" title="${s}">${s}</span>`;
             } },
@@ -1890,7 +1970,68 @@
           openTrainingMedia(dmBtn.dataset.jobId);
           return;
         }
+        const runBtn = ev.target.closest('[data-action="curriculum-run"]');
+        if (runBtn) {
+          ev.stopPropagation();
+          ev.preventDefault();
+          curriculumRunAction(runBtn.dataset.runId, runBtn.dataset.op);
+        }
       }, true);
+
+      async function curriculumRunAction(runId, op) {
+        const run = curriculumRuns.get(runId);
+        const name = (run && run.curriculum_name) || 'curriculum';
+        if (op === 'cancel') {
+          const ok = await confirmDialog({
+            title: `Cancel the ${name} run?`,
+            message: 'Its queued or running stage job is cancelled and no further stages are queued. Finished stages and their models are kept; Retry re-runs the cancelled stage.',
+            confirmLabel: 'Cancel run',
+            confirmVariant: 'danger',
+          });
+          if (!ok) return;
+        }
+        try {
+          const res = await fetch(`/${op}_curriculum_run`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ _id: runId }),
+          });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+          showToast({ type: 'success', message: op === 'cancel' ? `Cancelling ${name}` : `${name} will continue shortly` });
+          fetchCurriculumRuns(true);
+          scheduleImmediatePoll();
+        } catch (err) {
+          showToast({ type: 'error', message: `${op === 'cancel' ? 'Cancel' : 'Retry'} failed: ${err.message || err}` });
+        }
+      }
+
+      let runsVer = 0;
+      async function fetchCurriculumRuns(force = false) {
+        try {
+          const url = force ? '/get_curriculum_runs?force=true' : `/get_curriculum_runs?since=${runsVer}`;
+          const res = await fetch(url, { cache: 'no-store' });
+          if (!res.ok) return;
+          const v = parseInt(res.headers.get('X-Coll-Version') || '', 10);
+          if (!isNaN(v)) runsVer = v;
+          const text = await res.text();
+          if (text === 'NO_CHANGES') return;
+          const rows = JSON.parse(text);
+          if (!Array.isArray(rows)) return;
+          curriculumRuns.clear();
+          for (const r of rows) curriculumRuns.set(mongoId(r._id), r);
+          if (table._rows.length) paintRows();
+        } catch (err) {
+          console.warn('curriculum runs refresh failed:', err);
+        }
+      }
+
+      function handleRunChange(msg) {
+        const id = mongoId(msg.documentKey && msg.documentKey._id);
+        if (msg.operationType === 'delete') curriculumRuns.delete(id);
+        else if (msg.fullDocument) curriculumRuns.set(id, msg.fullDocument);
+        else { fetchCurriculumRuns(true); return; }
+        if (typeof msg.version === 'number' && msg.version > runsVer) runsVer = msg.version;
+        paintRows();
+      }
 
       /* ---------- WebSocket + Polling ----------------------------------- */
       // WebSocket for real-time incremental updates from MongoDB change streams.
@@ -2047,7 +2188,7 @@
           wsLastMessageAt = Date.now();
           armWsStaleTimer();
           // Subscribe to jobs collection
-          ws.send(JSON.stringify({ type: 'subscribe', collections: ['jobs'] }));
+          ws.send(JSON.stringify({ type: 'subscribe', collections: ['jobs', 'curriculum_runs'] }));
           // Switch to slower polling as fallback
           updatePollInterval();
         };
@@ -2059,6 +2200,8 @@
             console.log('[WS] Received:', msg.type, msg.collection || '');
             if (msg.type === 'change' && msg.collection === 'jobs') {
               handleWsChange(msg);
+            } else if (msg.type === 'change' && msg.collection === 'curriculum_runs') {
+              handleRunChange(msg);
             } else if (msg.type === 'subscribed') {
               console.log('[WS] Subscribed to:', msg.collections);
             } // 'heartbeat' falls through: liveness only.
@@ -2139,7 +2282,7 @@
         // can stall (stream goes quiet without error) and then
         // ?since=<v> returns NO_CHANGES forever — the table only
         // moved on a hard refresh. force=true always re-reads Mongo.
-        pollHandle = setInterval(() => fetchFullData(true), interval);
+        pollHandle = setInterval(() => { fetchFullData(true); fetchCurriculumRuns(true); }, interval);
         console.log('[Polling] Interval set to', interval, 'ms (WS connected:', wsConnected, ')');
       }
 
@@ -2227,6 +2370,7 @@
       // Force the first paint (see fetchFullData's note on the shared
       // server-side change flag); the recurring poll below stays un-forced.
       fetchFullData(true);
+      fetchCurriculumRuns(true);
       connectWebSocket();
       updatePollInterval();
 

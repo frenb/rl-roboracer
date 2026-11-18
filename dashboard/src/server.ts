@@ -241,6 +241,8 @@ export const createServer = (config): express.Application => {
   // the New-Job dialog's "Expert demos" dropdown.
   var demosChanged = true;
   var robotsChanged = true;
+  var curriculaChanged = true;
+  var curriculumRunsChanged = true;
 
   // ----------------------------------------------------------------
   // Per-collection version cursor.
@@ -268,6 +270,7 @@ export const createServer = (config): express.Application => {
   const collVersions: Record<string, number> = {
     jobs: 1, models: 1, leaderboard_scores: 1, env_specs: 1,
     reward_designs: 1, experiment_designs: 1, gyms: 1, demos: 1, robots: 1,
+    curricula: 1, curriculum_runs: 1,
   };
   const bumpVersion = (name: string): number => {
     collVersions[name] = (collVersions[name] || 0) + 1;
@@ -319,6 +322,12 @@ export const createServer = (config): express.Application => {
     superviseChangeStream('gyms', dbo.collection("gyms"), () => { gymsChanged = true; return bumpVersion('gyms'); });
     superviseChangeStream('demos', dbo.collection("demos"), () => { demosChanged = true; return bumpVersion('demos'); });
     superviseChangeStream('robots', dbo.collection("robots"), () => { robotsChanged = true; refreshRobotCacheFromDb().catch(() => {}); return bumpVersion('robots'); });
+    superviseChangeStream('curricula', dbo.collection("curricula"), () => { curriculaChanged = true; return bumpVersion('curricula'); });
+    superviseChangeStream('curriculum_runs', dbo.collection("curriculum_runs"), () => { curriculumRunsChanged = true; return bumpVersion('curriculum_runs'); });
+    dbo.collection("jobs").createIndex(
+      { curriculum_key: 1 },
+      { name: "jobs_curriculum_key", partialFilterExpression: { curriculum_key: { $type: "string" } } }
+    ).catch((e: any) => console.warn('jobs curriculum_key index failed:', e && e.message));
     seedRobotsFromManifests().catch((e) => console.warn('robots seed failed:', e && e.message));
 
     // One demos row per DEMO job: the trainer and the backfill script both
@@ -2022,6 +2031,250 @@ export const createServer = (config): express.Application => {
         console.log('reward_design archived', body._id);
         res.json(result);
       });
+  });
+
+  // ---- curricula + curriculum runs (rl_agent/curriculum) ------------ *
+  //
+  // A curriculum is an ordered list of training stages for one robot. A run
+  // chains them as jobs on the shared queue (one TRAIN job per stage, plus
+  // an EVAL job for a gated stage); the curriculum-runner service owns run
+  // state after it is created here. Validation and run construction go
+  // through rl_agent/curriculum/cli.py so the rules live in one place.
+  //
+  // /get_curricula, /get_curriculum_runs   change-gated lists
+  // /get_curriculum_capabilities          per-robot carry items, gate metrics
+  // /validate_curriculum                  dry run: resolved stages or problems
+  // /create_curriculum, /update_curriculum, /set_curriculum_archived
+  // /start_curriculum_run, /cancel_curriculum_run, /retry_curriculum_run,
+  // /delete_curriculum_run
+  const CURRICULUM_CLI = '/python_ws/src/curriculum/cli.py';
+  const ACTIVE_RUN_STATUSES = ['RUNNING', 'CANCEL_REQUESTED'];
+  const ACTIVE_JOB_STATUSES = ['NOT_STARTED', 'IN_PROGRESS', 'PAUSE_REQUESTED', 'PAUSED'];
+
+  function anyIdFilter(id: any): any {
+    const s = String(id);
+    return /^[0-9a-f]{24}$/i.test(s) ? { _id: { $in: [ObjectID(s), s] } } : { _id: s };
+  }
+
+  function curriculumProblem(res: any, out: any) {
+    res.status(400).json({ error: out.error || 'invalid curriculum', problems: out.problems || [] });
+  }
+
+  // id -> row maps the validator checks stage references against.
+  async function curriculumContext(robot: string): Promise<any> {
+    const rows = async (coll: string, query: any, projection: any) => {
+      const docs = await dbo.collection(coll).find(query, { projection }).toArray();
+      const out: any = {};
+      for (const d of docs) out[String(d._id)] = d;
+      return out;
+    };
+    const mine = robot === 'roboracer' ? { robot: { $in: [null, 'roboracer'] } } : { robot };
+    return {
+      gyms: await rows('gyms', {}, { robot: 1, archived: 1 }),
+      reward_designs: await rows('reward_designs', {}, { robot: 1, archived: 1 }),
+      experiment_designs: await rows('experiment_designs', {}, { robot: 1, archived: 1 }),
+      models: await rows('models', mine, { robot: 1, location: 1 }),
+    };
+  }
+
+  async function validateCurriculum(doc: any): Promise<any> {
+    return runDuckScript(CURRICULUM_CLI, {
+      op: 'validate', curriculum: doc, context: await curriculumContext(String(doc.robot || '')),
+    });
+  }
+
+  const sendError = (res: any, where: string, e: any) => {
+    console.error(`${where} failed:`, e);
+    res.status(500).json({ error: String((e && e.message) || e) });
+  };
+
+  app.get('/get_curricula', (req, res) => {
+    if (!needsUpdate(req, res, curriculaChanged, 'curricula')) { res.status(200).send('NO_CHANGES'); return; }
+    curriculaChanged = false;
+    dbo.collection('curricula').find({}).toArray()
+      .then((rows: any[]) => res.json(rows))
+      .catch((e: any) => { curriculaChanged = true; sendError(res, 'get_curricula', e); });
+  });
+
+  app.get('/get_curriculum_runs', (req, res) => {
+    if (!needsUpdate(req, res, curriculumRunsChanged, 'curriculum_runs')) { res.status(200).send('NO_CHANGES'); return; }
+    curriculumRunsChanged = false;
+    dbo.collection('curriculum_runs').find({}).toArray()
+      .then((rows: any[]) => res.json(rows))
+      .catch((e: any) => { curriculumRunsChanged = true; sendError(res, 'get_curriculum_runs', e); });
+  });
+
+  app.get('/get_curriculum_capabilities', async (req, res) => {
+    const out = await runDuckScript(CURRICULUM_CLI, { op: 'capabilities' });
+    if (!out.ok) { res.status(500).json({ error: out.error }); return; }
+    res.json(out);
+  });
+
+  app.post('/validate_curriculum', async (req, res) => {
+    try {
+      const out = await validateCurriculum(req.body || {});
+      if (!out.ok) { curriculumProblem(res, out); return; }
+      res.json(out);
+    } catch (e) { sendError(res, 'validate_curriculum', e); }
+  });
+
+  app.post('/create_curriculum', async (req, res) => {
+    // Body: { robot, name, description?, author?, stages: [...] }. Stored as
+    // authored (stages that leave a field out inherit it) plus the resolved
+    // stages for display; runs snapshot the resolved stages when they start.
+    const body = req.body || {};
+    try {
+      const out = await validateCurriculum(body);
+      if (!out.ok) { curriculumProblem(res, out); return; }
+      const now = new Date();
+      const doc: any = {
+        robot: out.curriculum.robot,
+        name: out.curriculum.name,
+        description: out.curriculum.description,
+        author: String(body.author || ''),
+        stages: body.stages,
+        resolved_stages: out.curriculum.stages,
+        archived: false,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+      };
+      const result = await dbo.collection('curricula').insertOne(doc);
+      res.json({ ...result, curriculum: { ...doc, _id: result.insertedId } });
+    } catch (e) { sendError(res, 'create_curriculum', e); }
+  });
+
+  app.post('/update_curriculum', async (req, res) => {
+    // Body: { _id, name?, description?, stages? }. Bumps version; runs already
+    // started keep the stages they snapshotted.
+    const body = req.body || {};
+    if (!body._id) { res.status(400).json({ error: '_id is required' }); return; }
+    try {
+      const filter = anyIdFilter(body._id);
+      const current = await dbo.collection('curricula').findOne(filter);
+      if (!current) { res.status(404).json({ error: `curriculum ${body._id} not found` }); return; }
+      const merged: any = {
+        robot: current.robot,
+        name: body.name !== undefined ? body.name : current.name,
+        description: body.description !== undefined ? body.description : current.description,
+        stages: body.stages !== undefined ? body.stages : current.stages,
+      };
+      const out = await validateCurriculum(merged);
+      if (!out.ok) { curriculumProblem(res, out); return; }
+      const result = await dbo.collection('curricula').updateOne(filter, {
+        $set: {
+          name: out.curriculum.name, description: out.curriculum.description,
+          stages: merged.stages, resolved_stages: out.curriculum.stages, updated_at: new Date(),
+        },
+        $inc: { version: 1 },
+      });
+      res.json({ ...result, curriculum: await dbo.collection('curricula').findOne(filter) });
+    } catch (e) { sendError(res, 'update_curriculum', e); }
+  });
+
+  app.post('/set_curriculum_archived', async (req, res) => {
+    const body = req.body || {};
+    if (!body._id) { res.status(400).json({ error: '_id is required' }); return; }
+    try {
+      const result = await dbo.collection('curricula').updateOne(
+        anyIdFilter(body._id), { $set: { archived: body.archived !== false, updated_at: new Date() } });
+      if (!result.matchedCount) { res.status(404).json({ error: `curriculum ${body._id} not found` }); return; }
+      res.json(result);
+    } catch (e) { sendError(res, 'set_curriculum_archived', e); }
+  });
+
+  app.post('/start_curriculum_run', async (req, res) => {
+    // Body: { curriculum_id, start_stage? (id or index), priority? "front" | "normal" }.
+    const body = req.body || {};
+    if (!body.curriculum_id) { res.status(400).json({ error: 'curriculum_id is required' }); return; }
+    try {
+      const cur = await dbo.collection('curricula').findOne(anyIdFilter(body.curriculum_id));
+      if (!cur) { res.status(404).json({ error: `curriculum ${body.curriculum_id} not found` }); return; }
+      if (cur.archived) { res.status(409).json({ error: `curriculum "${cur.name}" is archived; unarchive it first` }); return; }
+      const out = await runDuckScript(CURRICULUM_CLI, {
+        op: 'new_run',
+        curriculum: { ...cur, _id: String(cur._id) },
+        context: await curriculumContext(String(cur.robot)),
+        start_stage: body.start_stage,
+        priority: body.priority,
+      });
+      if (!out.ok) { curriculumProblem(res, out); return; }
+      const now = new Date();
+      const run = { ...out.run, created_at: now, updated_at: now };
+      const result = await dbo.collection('curriculum_runs').insertOne(run);
+      res.json({ ...result, run: { ...run, _id: result.insertedId } });
+    } catch (e) { sendError(res, 'start_curriculum_run', e); }
+  });
+
+  app.post('/cancel_curriculum_run', async (req, res) => {
+    // The runner finishes the cancel; the pending job is cancelled here too
+    // so the GPU frees up without waiting for the runner's next tick.
+    const body = req.body || {};
+    if (!body._id) { res.status(400).json({ error: '_id is required' }); return; }
+    try {
+      const filter = anyIdFilter(body._id);
+      const run = await dbo.collection('curriculum_runs').findOne(filter);
+      if (!run) { res.status(404).json({ error: `curriculum run ${body._id} not found` }); return; }
+      if (!ACTIVE_RUN_STATUSES.includes(run.status)) {
+        res.status(409).json({ error: `run is ${run.status}; only a running run can be cancelled` });
+        return;
+      }
+      await dbo.collection('curriculum_runs').updateOne(
+        { ...filter, status: { $in: ACTIVE_RUN_STATUSES } },
+        { $set: { status: 'CANCEL_REQUESTED', updated_at: new Date() } });
+      if (run.pending && run.pending.job_id) {
+        await dbo.collection('jobs').updateOne(
+          { ...anyIdFilter(run.pending.job_id), status: { $in: ACTIVE_JOB_STATUSES } },
+          { $set: { status: 'CANCELLED' } });
+      }
+      res.json({ ok: true, status: 'CANCEL_REQUESTED' });
+    } catch (e) { sendError(res, 'cancel_curriculum_run', e); }
+  });
+
+  app.post('/retry_curriculum_run', async (req, res) => {
+    // FAILED_GATE: one more attempt, continuing from the last attempt's
+    // checkpoint. FAILED / CANCELLED: the same attempt again, as new jobs.
+    const body = req.body || {};
+    if (!body._id) { res.status(400).json({ error: '_id is required' }); return; }
+    try {
+      const filter = anyIdFilter(body._id);
+      const run = await dbo.collection('curriculum_runs').findOne(filter);
+      if (!run) { res.status(404).json({ error: `curriculum run ${body._id} not found` }); return; }
+      const set: any = { status: 'RUNNING', pending: null, error: null, ended_at: null, updated_at: new Date() };
+      const update: any = { $set: set };
+      if (run.status === 'FAILED_GATE') {
+        set.attempt = (run.attempt || 0) + 1;
+      } else if (run.status === 'FAILED' || run.status === 'CANCELLED') {
+        update.$inc = { generation: 1 };
+      } else {
+        res.status(409).json({ error: `run is ${run.status}; only FAILED_GATE, FAILED or CANCELLED runs can be retried` });
+        return;
+      }
+      await dbo.collection('curriculum_runs').updateOne({ ...filter, status: run.status }, update);
+      res.json({ ok: true, status: 'RUNNING' });
+    } catch (e) { sendError(res, 'retry_curriculum_run', e); }
+  });
+
+  app.post('/delete_curriculum_run', async (req, res) => {
+    // Body: { _id, delete_jobs? }. Keeps the stage jobs (and their models)
+    // unless delete_jobs is true; a running run must be cancelled first.
+    const body = req.body || {};
+    if (!body._id) { res.status(400).json({ error: '_id is required' }); return; }
+    try {
+      const filter = anyIdFilter(body._id);
+      const run = await dbo.collection('curriculum_runs').findOne(filter);
+      if (!run) { res.status(404).json({ error: `curriculum run ${body._id} not found` }); return; }
+      if (ACTIVE_RUN_STATUSES.includes(run.status)) {
+        res.status(409).json({ error: 'cancel the run before deleting it' });
+        return;
+      }
+      let jobsDeleted = 0;
+      if (body.delete_jobs) {
+        jobsDeleted = (await dbo.collection('jobs').deleteMany({ curriculum_run_id: String(run._id) })).deletedCount || 0;
+      }
+      await dbo.collection('curriculum_runs').deleteOne(filter);
+      res.json({ ok: true, jobs_deleted: jobsDeleted });
+    } catch (e) { sendError(res, 'delete_curriculum_run', e); }
   });
 
   // ---- design_specs: robot-agnostic reward specs -------------------- *
