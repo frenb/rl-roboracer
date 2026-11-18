@@ -2313,10 +2313,12 @@ def main(
         trajectory_dataset, _dataset_with_source = (
             collect_training_data.camera_train_datasets(
                 _camera_demo_dirs, _course_type,
-                source_counts=demo_source_counts_val))
+                source_counts=demo_source_counts_val,
+                env_discount=env_discount_val))
         print(
             f"main: streaming camera demos for BC and Reverb prefill "
-            f"from {_camera_demo_dirs}",
+            f"from {_camera_demo_dirs} (non-terminal demo discount "
+            f"relabelled to env_discount={env_discount_val})",
             flush=True)
 
     _phase("agent_build (SAC)")

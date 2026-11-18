@@ -705,12 +705,16 @@ def validate_camera_demo_dirs(directories, course_type):
             validate_demo_record(path, course_type)
 
 
-def _camera_rows_to_trajectories(dataset):
+def _camera_rows_to_trajectories(dataset, env_discount=None):
     """Stream rows into unbatched Trajectories. Does not stack images.
 
     ``step_type`` is the previous row's ``next_step_type``, and FIRST
     after a LAST, so a Reverb sequence does not cross an episode end.
-    Reward and discount are the values stored in the file.
+    Reward is the value stored in the file. Discount is too, unless
+    ``env_discount`` is set: then every nonzero stored discount becomes
+    ``env_discount`` and terminal zeros stay zero. A demo recorded under
+    a different env_discount otherwise gives the critic Bellman targets
+    on a different horizon from the online data it is mixed with.
     """
     from tf_agents.trajectories import time_step as ts
     from tf_agents.trajectories import trajectory as trajectory_lib
@@ -725,6 +729,11 @@ def _camera_rows_to_trajectories(dataset):
     scanned = dataset.scan(first, scan_fn)
 
     def to_traj(row, step_type):
+        discount = tf.cast(row["discount"], tf.float32)
+        if env_discount is not None:
+            discount = tf.where(
+                tf.equal(discount, 0.0), discount,
+                tf.constant(float(env_discount), tf.float32))
         return trajectory_lib.Trajectory(
             step_type=tf.cast(step_type, tf.int32),
             observation=row["observation"],
@@ -732,14 +741,14 @@ def _camera_rows_to_trajectories(dataset):
             policy_info=(),
             next_step_type=tf.cast(row["next_step_type"], tf.int32),
             reward=tf.cast(row["reward"], tf.float32),
-            discount=tf.cast(row["discount"], tf.float32),
+            discount=discount,
         )
 
     return scanned.map(to_traj, num_parallel_calls=tf.data.AUTOTUNE)
 
 
 def camera_train_datasets(directories, course_type, source_counts=None,
-                          min_accel=0.05):
+                          min_accel=0.05, env_discount=None):
     """Stream camera demos for BC and Reverb prefill.
 
     Returns ``(trajectory_dataset, dataset_with_source)``. The first is
@@ -750,6 +759,8 @@ def camera_train_datasets(directories, course_type, source_counts=None,
 
     ``source_counts``, when set, is one target length per directory.
     A short directory is cycled. A long one is shuffled and cut.
+    ``env_discount`` relabels stored discounts; see
+    ``_camera_rows_to_trajectories``.
     """
     validate_camera_demo_dirs(directories, course_type)
     dirs = [d for d in directories if d]
@@ -765,7 +776,7 @@ def camera_train_datasets(directories, course_type, source_counts=None,
             rows = rows.shuffle(
                 CAMERA_SHUFFLE_BUFFER, seed=42,
                 reshuffle_each_iteration=False).repeat().take(target)
-        trajs = _camera_rows_to_trajectories(rows)
+        trajs = _camera_rows_to_trajectories(rows, env_discount=env_discount)
         source_id = tf.constant(index, tf.int32)
 
         def _tag(traj, sid=source_id):

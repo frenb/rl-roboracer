@@ -149,6 +149,18 @@ def _bc_and_reverb(cam_dir, narrow_dir, flat_dir):
     _expect("dataset element is one step",
             lambda: tuple(first_traj.action.shape) == (2,))
 
+    def _discounts(env_discount):
+        ds, _ = ctd.camera_train_datasets(
+            [cam_dir], "donut_camera", min_accel=None,
+            env_discount=env_discount)
+        return sorted(round(float(t.discount.numpy()), 4) for t in ds)
+
+    _expect("stored discount is kept by default",
+            lambda: _discounts(None) == [0.0, 0.9, 0.9, 0.9])
+    _expect("env_discount relabels nonzero discounts, terminal stays 0",
+            lambda: _discounts(1.0) == [0.0, 1.0, 1.0, 1.0],
+            "got %s" % _discounts(1.0))
+
     # Both directories contribute. sample_from_datasets mixes them, so
     # a short prefix is not all source 0.
     mixed, mixed_tagged = ctd.camera_train_datasets(
@@ -287,7 +299,8 @@ def main():
         }
         action = np.asarray([0.2, 0.1 * i], dtype=np.float32)
         step = 2 if i == 2 else 1
-        rows.append((obs, action, 0.25, 0.9, step))
+        discount = 0.0 if i == 2 else 0.9
+        rows.append((obs, action, 0.25, discount, step))
     narrow_rows = []
     for i in range(4):
         obs = {"vector": narrow, "image": image}
