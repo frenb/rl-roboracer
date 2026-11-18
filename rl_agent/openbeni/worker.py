@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from mjlab_core import worker as _core  # noqa: E402
 from mjlab_core.worker import DESIGN_FIELDS, EXPERIMENT_FIELDS, validate_onnx  # noqa: E402,F401
-from openbeni import experiment_design, gyms, launch, reward_design  # noqa: E402
+from openbeni import baseline, experiment_design, gyms, launch, reward_design  # noqa: E402
 
 ROBOT = "openbeni"
 WORKDIR = pathlib.Path(os.environ.get("OPENBENI_RL_DIR", "/openbeni_rl"))
@@ -36,6 +36,7 @@ CONFIG = _core.MjlabRobotConfig(
     effective_job_fn=experiment_design.effective_job,
     check_warm_start_fn=experiment_design.check_warm_start,
     seed_experiment_fn=experiment_design.seed,
+    seed_models_fn=baseline.seed,
     experiment_error_cls=experiment_design.ExperimentDesignError,
     deploy_shapes=DEPLOY_SHAPE,
     run_dirs_field="openbeni_run_dirs",

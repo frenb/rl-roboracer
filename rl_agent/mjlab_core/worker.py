@@ -97,6 +97,7 @@ class MjlabRobotConfig:
     effective_job_fn: Callable[[dict], dict]
     check_warm_start_fn: Callable[[dict, dict], None]
     seed_experiment_fn: Callable[[object, datetime.datetime], None]
+    seed_models_fn: Optional[Callable[[object, datetime.datetime], list]] = None
     experiment_error_cls: type = ValueError
     deploy_shapes: dict = field(default_factory=dict)
     run_dirs_field: str = "run_dirs"
@@ -619,6 +620,13 @@ class MjlabWorker:
                   f"{archived} archived; {len(listing['functions'])} library reward functions", flush=True)
         except Exception as exc:  # noqa: BLE001
             print(f"[{self.cfg.tag}] gym sync failed: {exc}", flush=True)
+        if self.cfg.seed_models_fn is not None:
+            try:
+                seeded = self.cfg.seed_models_fn(self.db, now())
+                if seeded:
+                    print(f"[{self.cfg.tag}] baseline models registered: {seeded}", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[{self.cfg.tag}] baseline model seed failed: {exc}", flush=True)
 
     def do_job(self, job):
         job_id = job["_id"]
